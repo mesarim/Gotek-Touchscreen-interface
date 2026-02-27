@@ -22,6 +22,7 @@ If you need to make changes, and reboot the device into programming mode, press 
 now your machine should see the Waveshare again and the com port it is on.
 
 For the 7 inch version, Gotek-Touchscreen-interface-7
+(more testing and adjusting to make it work, so not complete)
 
 This version of the GTI (ADF/DSK browser) is slightly different, as the hardware for the Waveshare ESP32-S3-TOUCH-LCD-7 Rev 1.2, needs a bit of rework.
 
