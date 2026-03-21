@@ -1,0 +1,13 @@
+{
+  "name": "Gotek Touchscreen Interface — CYD",
+  "version": "3.9.0",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        { "path": "Gotek_CYD.ino.merged.bin",  "offset": 0 }
+      ]
+    }
+  ]
+}

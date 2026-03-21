@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gotek Touchscreen Interface — Web Flasher</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
+
+    :root {
+      --bg:       #0a0a0f;
+      --panel:    #0f0f1a;
+      --border:   #1a1a2e;
+      --copper1:  #ff6b00;
+      --copper2:  #ffaa00;
+      --green:    #00ff88;
+      --dim:      #3a3a5c;
+      --text:     #c8c8e8;
+      --bright:   #ffffff;
+      --blue:     #4488ff;
+      --red:      #ff4444;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Share Tech Mono', monospace;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Scanline overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.15) 2px,
+        rgba(0,0,0,0.15) 4px
+      );
+      pointer-events: none;
+      z-index: 1000;
+    }
+
+    /* Copper bar top */
+    .copper-top {
+      height: 6px;
+      background: linear-gradient(90deg,
+        #ff0000, #ff6b00, #ffaa00, #ffff00, #00ff88, #0088ff, #8800ff, #ff0088, #ff0000);
+      background-size: 200% 100%;
+      animation: copper-scroll 3s linear infinite;
+    }
+    @keyframes copper-scroll {
+      from { background-position: 0% 0%; }
+      to   { background-position: 200% 0%; }
+    }
+
+    header {
+      text-align: center;
+      padding: 2.5rem 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      position: relative;
+    }
+
+    .logo-sub {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.4em;
+      color: var(--copper1);
+      text-transform: uppercase;
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: 'Orbitron', monospace;
+      font-size: clamp(1.4rem, 4vw, 2.4rem);
+      font-weight: 900;
+      color: var(--bright);
+      letter-spacing: 0.05em;
+      line-height: 1.1;
+    }
+
+    h1 span {
+      color: var(--copper2);
+    }
+
+    .tagline {
+      margin-top: 0.6rem;
+      font-size: 0.75rem;
+      color: var(--dim);
+      letter-spacing: 0.2em;
+    }
+
+    .stars {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      overflow: hidden;
+      pointer-events: none;
+    }
+    .star {
+      position: absolute;
+      width: 2px; height: 2px;
+      background: var(--bright);
+      border-radius: 50%;
+      opacity: 0;
+      animation: twinkle var(--d, 3s) var(--delay, 0s) infinite;
+    }
+    @keyframes twinkle {
+      0%, 100% { opacity: 0; }
+      50% { opacity: var(--bright, 0.8); }
+    }
+
+    main {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 2rem 1rem 4rem;
+    }
+
+    /* Step indicator */
+    .steps {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      margin-bottom: 2.5rem;
+      justify-content: center;
+    }
+    .step {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.68rem;
+      letter-spacing: 0.15em;
+      color: var(--dim);
+      text-transform: uppercase;
+    }
+    .step.active { color: var(--copper2); }
+    .step.done   { color: var(--green); }
+    .step-num {
+      width: 22px; height: 22px;
+      border: 1px solid currentColor;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.65rem;
+      flex-shrink: 0;
+    }
+    .step-line {
+      width: 40px; height: 1px;
+      background: var(--border);
+      margin: 0 0.3rem;
+    }
+
+    /* Device selector */
+    .section-label {
+      font-size: 0.65rem;
+      letter-spacing: 0.3em;
+      color: var(--copper1);
+      text-transform: uppercase;
+      margin-bottom: 0.8rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .section-label::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    .device-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .device-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1.2rem;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      position: relative;
+      overflow: hidden;
+    }
+    .device-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: var(--copper1);
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    .device-card:hover {
+      border-color: var(--dim);
+      background: #12121f;
+    }
+    .device-card.selected {
+      border-color: var(--copper2);
+      background: #15120a;
+    }
+    .device-card.selected::before {
+      opacity: 1;
+    }
+
+    .device-name {
+      font-family: 'Orbitron', monospace;
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--bright);
+      margin-bottom: 0.3rem;
+    }
+    .device-chip {
+      font-size: 0.62rem;
+      color: var(--blue);
+      letter-spacing: 0.1em;
+      margin-bottom: 0.6rem;
+    }
+    .device-desc {
+      font-size: 0.68rem;
+      color: var(--dim);
+      line-height: 1.5;
+    }
+    .device-badge {
+      display: inline-block;
+      font-size: 0.55rem;
+      padding: 0.15rem 0.4rem;
+      border-radius: 2px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-top: 0.5rem;
+    }
+    .badge-standalone { background: #1a2a1a; color: var(--green); border: 1px solid #2a4a2a; }
+    .badge-dongle     { background: #1a1a2a; color: var(--blue);  border: 1px solid #2a2a4a; }
+    .badge-wireless   { background: #2a1a0a; color: var(--copper2); border: 1px solid #4a2a0a; }
+
+    .selected-indicator {
+      position: absolute;
+      top: 0.5rem; right: 0.5rem;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--copper2);
+      display: none;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    .device-card.selected .selected-indicator { display: block; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.5; transform: scale(1.3); }
+    }
+
+    /* Flash panel */
+    .flash-panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+      min-height: 120px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      text-align: center;
+    }
+
+    .flash-panel.no-selection {
+      border-style: dashed;
+    }
+
+    .no-sel-text {
+      color: var(--dim);
+      font-size: 0.72rem;
+      letter-spacing: 0.15em;
+    }
+
+    .flash-device-name {
+      font-family: 'Orbitron', monospace;
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--copper2);
+    }
+
+    .flash-version {
+      font-size: 0.65rem;
+      color: var(--dim);
+      letter-spacing: 0.1em;
+      margin-top: -0.5rem;
+    }
+
+    esp-web-install-button {
+      --esp-tools-button-color: var(--copper1);
+      --esp-tools-button-text-color: var(--bright);
+    }
+
+    esp-web-install-button::part(button) {
+      font-family: 'Orbitron', monospace;
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      background: transparent;
+      border: 2px solid var(--copper1);
+      color: var(--copper2);
+      padding: 0.7rem 2rem;
+      border-radius: 2px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    esp-web-install-button::part(button):hover {
+      background: var(--copper1);
+      color: #000;
+    }
+
+    /* Instructions */
+    .instructions {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .instructions ol {
+      padding-left: 1.5rem;
+      font-size: 0.73rem;
+      line-height: 2;
+      color: var(--text);
+    }
+
+    .instructions li { margin-bottom: 0.1rem; }
+    .instructions li strong { color: var(--copper2); }
+    .instructions li code {
+      background: #1a1a2e;
+      padding: 0.1rem 0.3rem;
+      border-radius: 2px;
+      color: var(--green);
+      font-size: 0.7rem;
+    }
+
+    .warn-box {
+      background: #1a0a0a;
+      border: 1px solid #3a1a1a;
+      border-radius: 4px;
+      padding: 0.8rem 1rem;
+      font-size: 0.68rem;
+      color: #cc8888;
+      margin-top: 1rem;
+      line-height: 1.6;
+    }
+    .warn-box strong { color: var(--red); }
+
+    /* Browser warning */
+    .browser-warn {
+      background: #1a1200;
+      border: 1px solid #3a2800;
+      border-radius: 4px;
+      padding: 0.8rem 1rem;
+      font-size: 0.68rem;
+      color: #cc9900;
+      margin-bottom: 1.5rem;
+      display: none;
+    }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      padding: 1.5rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.62rem;
+      color: var(--dim);
+      letter-spacing: 0.15em;
+    }
+    footer a { color: var(--copper1); text-decoration: none; }
+    footer a:hover { color: var(--copper2); }
+
+    .scrolltext {
+      overflow: hidden;
+      white-space: nowrap;
+      border-top: 1px solid var(--border);
+      padding: 0.4rem 0;
+      font-size: 0.6rem;
+      color: var(--copper1);
+      letter-spacing: 0.2em;
+    }
+    .scrolltext-inner {
+      display: inline-block;
+      animation: scroll-text 30s linear infinite;
+    }
+    @keyframes scroll-text {
+      from { transform: translateX(100vw); }
+      to   { transform: translateX(-100%); }
+    }
+  </style>
+</head>
+<body>
+
+<div class="copper-top"></div>
+
+<header>
+  <div class="stars" id="stars"></div>
+  <div class="logo-sub">OmegaWare 2026</div>
+  <h1>GOTEK <span>TOUCHSCREEN</span> INTERFACE</h1>
+  <div class="tagline">WEB FLASHER &nbsp;·&nbsp; NO ARDUINO IDE REQUIRED &nbsp;·&nbsp; CHROME / EDGE ONLY</div>
+</header>
+
+<main>
+
+  <div class="browser-warn" id="browserWarn">
+    ⚠ Web Serial is not supported in this browser. Please use <strong>Chrome</strong> or <strong>Edge</strong>.
+  </div>
+
+  <div class="steps">
+    <div class="step active" id="step1">
+      <div class="step-num">1</div>
+      <div>Choose device</div>
+    </div>
+    <div class="step-line"></div>
+    <div class="step" id="step2">
+      <div class="step-num">2</div>
+      <div>Connect USB</div>
+    </div>
+    <div class="step-line"></div>
+    <div class="step" id="step3">
+      <div class="step-num">3</div>
+      <div>Flash</div>
+    </div>
+  </div>
+
+  <div class="section-label">Select your device</div>
+
+  <div class="device-grid">
+
+    <div class="device-card" data-manifest="firmware/waveshare7/manifest.json" onclick="selectDevice(this)">
+      <div class="selected-indicator"></div>
+      <div class="device-name">Waveshare 7"</div>
+      <div class="device-chip">ESP32-S3 · 800×480 RGB</div>
+      <div class="device-desc">Full standalone controller with 7" touchscreen, cover art browser, and WiFi web server.</div>
+      <div><span class="device-badge badge-standalone">Standalone</span></div>
+    </div>
+
+    <div class="device-card" data-manifest="firmware/xiao/manifest.json" onclick="selectDevice(this)">
+      <div class="selected-indicator"></div>
+      <div class="device-name">XIAO Dongle</div>
+      <div class="device-chip">XIAO ESP32-S3 · 21×17mm</div>
+      <div class="device-desc">Plugs directly into Gotek USB port. Controlled wirelessly from the touchscreen or phone.</div>
+      <div><span class="device-badge badge-dongle">USB Dongle</span></div>
+    </div>
+
+    <div class="device-card" data-manifest="firmware/cyd/manifest.json" onclick="selectDevice(this)">
+      <div class="selected-indicator"></div>
+      <div class="device-name">CYD</div>
+      <div class="device-chip">ESP32 · 320×240 ILI9341</div>
+      <div class="device-desc">Cheap Yellow Display (~£10). Wireless remote — pairs with XIAO dongle over ESP-NOW.</div>
+      <div><span class="device-badge badge-wireless">Wireless Remote</span></div>
+    </div>
+
+  </div>
+
+  <div class="section-label">Flash firmware</div>
+
+  <div class="flash-panel no-selection" id="flashPanel">
+    <div class="no-sel-text" id="noSelText">← SELECT A DEVICE ABOVE TO BEGIN</div>
+    <div id="flashContent" style="display:none; flex-direction:column; align-items:center; gap:0.8rem;">
+      <div class="flash-device-name" id="flashDeviceName"></div>
+      <div class="flash-version" id="flashVersion"></div>
+      <esp-web-install-button id="installBtn" manifest="" hide-progress></esp-web-install-button>
+    </div>
+  </div>
+
+  <div class="section-label">How to flash</div>
+
+  <div class="instructions">
+    <ol>
+      <li><strong>Select your device</strong> from the cards above.</li>
+      <li><strong>Connect your ESP32</strong> to this computer via USB. Use a data cable, not a charge-only cable.</li>
+      <li>If prompted, put the device in <strong>bootloader mode</strong>: hold <code>BOOT</code>, tap <code>RESET</code>, release <code>BOOT</code>.</li>
+      <li>Click <strong>Install</strong> and select the correct COM port when asked.</li>
+      <li>Wait for flashing to complete — typically 30–60 seconds.</li>
+      <li><strong>After flashing:</strong> insert a blank FAT32 SD card and power on. The device will auto-generate <code>CONFIG.TXT</code> and create the <code>/ADF</code> and <code>/DSK</code> folders.</li>
+    </ol>
+    <div class="warn-box">
+      <strong>⚠ XIAO only:</strong> Make sure the external WiFi antenna is plugged in before powering on. Without it, wireless range will be very poor.
+    </div>
+    <div class="warn-box" style="margin-top:0.5rem;">
+      <strong>⚠ All devices:</strong> USB CDC On Boot must be <strong>Disabled</strong> — this is already set in the pre-built firmware. If you rebuild from source, ensure this setting is correct or the Gotek will not recognise the device.
+    </div>
+  </div>
+
+  <div class="section-label">After flashing</div>
+
+  <div class="instructions">
+    <ol>
+      <li>Place your <code>.adf</code> or <code>.dsk</code> files in the <code>/ADF</code> or <code>/DSK</code> folders on the SD card.</li>
+      <li>Optionally add <code>GameName.jpg</code> (cover art) and <code>GameName.nfo</code> (info text) alongside each game.</li>
+      <li>Connect the device to your Gotek via USB and power on your retro machine.</li>
+      <li>Tap a game and press <strong>INSERT</strong>. Your retro machine sees a freshly loaded floppy.</li>
+      <li>To manage games wirelessly: connect to the <code>GotekWifi</code> WiFi network and open <code>http://192.168.4.1</code> (Waveshare 7" only).</li>
+    </ol>
+  </div>
+
+</main>
+
+<div class="scrolltext">
+  <span class="scrolltext-inner">
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+    GOTEK TOUCHSCREEN INTERFACE &nbsp;*&nbsp;
+    CODED BY MEZ AND DIMMY OF OMEGAWARE &nbsp;*&nbsp;
+    THE ULTIMATE RETRO DISK LOADER FOR AMIGA · CPC · ZX SPECTRUM &nbsp;*&nbsp;
+    FAT12 USB RAM DISK · ESP-NOW WIRELESS · TOUCHSCREEN UI &nbsp;*&nbsp;
+    GREETINGS TO THE GREENFORD COMPUTER CLUB &nbsp;*&nbsp;
+    KEEP THE SCENE ALIVE &nbsp;*&nbsp;
+    OMEGAWARE 2026 &nbsp;*&nbsp;
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  </span>
+</div>
+
+<footer>
+  <a href="https://github.com/mesarim/Gotek-Touchscreen-interface">GitHub</a>
+  &nbsp;·&nbsp;
+  MIT Licence
+  &nbsp;·&nbsp;
+  Requires Chrome or Edge for Web Serial
+</footer>
+
+<script>
+  // Scatter stars in header
+  const starsEl = document.getElementById('stars');
+  for (let i = 0; i < 40; i++) {
+    const s = document.createElement('div');
+    s.className = 'star';
+    s.style.left = Math.random() * 100 + '%';
+    s.style.top  = Math.random() * 100 + '%';
+    s.style.setProperty('--d',     (2 + Math.random() * 4) + 's');
+    s.style.setProperty('--delay', (Math.random() * 4) + 's');
+    s.style.setProperty('--bright', 0.3 + Math.random() * 0.7);
+    starsEl.appendChild(s);
+  }
+
+  // Browser check
+  if (!('serial' in navigator)) {
+    document.getElementById('browserWarn').style.display = 'block';
+  }
+
+  // Device versions — update these when you build new firmware
+  const deviceInfo = {
+    'firmware/waveshare7/manifest.json': { name: 'Waveshare 7"',  version: 'Firmware v3.4.7' },
+    'firmware/xiao/manifest.json':       { name: 'XIAO Dongle',   version: 'Firmware v3.2.0' },
+    'firmware/cyd/manifest.json':        { name: 'CYD',           version: 'Firmware v3.9.0' },
+  };
+
+  function selectDevice(card) {
+    document.querySelectorAll('.device-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+
+    const manifest = card.dataset.manifest;
+    const info = deviceInfo[manifest];
+
+    document.getElementById('installBtn').setAttribute('manifest', manifest);
+    document.getElementById('flashDeviceName').textContent = info.name;
+    document.getElementById('flashVersion').textContent    = info.version;
+
+    document.getElementById('noSelText').style.display    = 'none';
+    document.getElementById('flashContent').style.display = 'flex';
+    document.getElementById('flashPanel').classList.remove('no-selection');
+
+    // Update steps
+    document.getElementById('step1').classList.add('done');
+    document.getElementById('step1').classList.remove('active');
+    document.getElementById('step2').classList.add('active');
+  }
+</script>
+
+</body>
+</html>

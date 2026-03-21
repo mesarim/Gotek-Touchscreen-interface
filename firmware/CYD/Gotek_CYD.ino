@@ -159,6 +159,8 @@ static int    g_sel=0,g_scroll=0,g_disk_sel=0;
 static String g_loaded_name="";
 static bool   g_loaded=false;
 static int    g_loaded_game_idx=-1,g_loaded_disk_idx=-1;
+static bool   g_loop_cracktro = false;  // LOOP=1 in CONFIG.TXT (no cracktro on CYD but kept for config parity)
+static bool   g_wireless_mode = false;  // MODE=WIRELESS in CONFIG.TXT
 
 // ── Double-tap ───────────────────────────────────────────────────────────────
 static int g_last_tap=-1; static uint32_t g_last_tap_ms=0;
@@ -200,8 +202,138 @@ static void listImages(std::vector<String>& out){
 static void buildGames(){ g_games.clear(); std::vector<bool> used(g_files.size(),false); for(int i=0;i<(int)g_files.size();i++){ if(used[i]) continue; String base=gameBase(g_files[i]); int dn=diskNum(g_files[i]); String dir=parentDir(g_files[i]); GameEntry e; e.first_file_idx=i; e.disk_count=1; e.disk_indices.push_back(i); if(dn>0){ e.name=base; for(int j=i+1;j<(int)g_files.size();j++){ if(used[j]) continue; if(parentDir(g_files[j])==dir&&gameBase(g_files[j])==base&&diskNum(g_files[j])>0){ used[j]=true; e.disk_count++; e.disk_indices.push_back(j); if(diskNum(g_files[j])<diskNum(g_files[e.first_file_idx])) e.first_file_idx=j; } } for(int a=0;a<(int)e.disk_indices.size();a++) for(int b=a+1;b<(int)e.disk_indices.size();b++) if(diskNum(g_files[e.disk_indices[b]])<diskNum(g_files[e.disk_indices[a]])) std::swap(e.disk_indices[a],e.disk_indices[b]); } else { e.name=noExt(fnOnly(g_files[i])); } used[i]=true; String np,nt,nb; if(findNFO(g_files[e.first_file_idx],np)){ parseNFO(readFile(np,256),nt,nb); if(nt.length()) e.name=nt; } String jpg; if(findJPG(g_files[e.first_file_idx],jpg)) e.jpg_path=jpg; g_games.push_back(e); } for(int i=0;i<(int)g_games.size();i++) for(int j=i+1;j<(int)g_games.size();j++){ String a=g_games[i].name,b=g_games[j].name; a.toLowerCase(); b.toLowerCase(); if(a.compareTo(b)>0) std::swap(g_games[i],g_games[j]); } }
 
 // ── Config ────────────────────────────────────────────────────────────────────
-static void ensureConfig(){ File f=SD.open("/CONFIG.TXT",FILE_READ); bool n=true; if(f){ if(f.size()>4) n=false; f.close(); } if(n){ SD.remove("/CONFIG.TXT"); File fw=SD.open("/CONFIG.TXT",FILE_WRITE); if(fw){ fw.print("THEME=0\nLASTMODE=ADF\n"); fw.close(); } } if(!SD.exists("/ADF")) SD.mkdir("/ADF"); if(!SD.exists("/DSK")) SD.mkdir("/DSK"); }
-static void loadConfig(){ File f=SD.open("/CONFIG.TXT",FILE_READ); if(!f){ applyTheme(0); return; } while(f.available()){ String l=f.readStringUntil('\n'); l.trim(); if(l.startsWith("#")) continue; int eq=l.indexOf('='); if(eq<0) continue; String k=l.substring(0,eq); k.trim(); String v=l.substring(eq+1); v.trim(); if(k=="THEME") applyTheme(v.toInt()); else if(k=="LASTMODE") g_mode=(v=="DSK")?MODE_DSK:MODE_ADF; } f.close(); }
+static void ensureConfig() {
+  // Write full CONFIG.TXT if missing or empty (< 4 bytes)
+  File f = SD.open("/CONFIG.TXT", FILE_READ);
+  bool needsWrite = true;
+  if (f) {
+    if (f.size() > 4) needsWrite = false;
+    f.close();
+  }
+  if (needsWrite) {
+    SD.remove("/CONFIG.TXT");
+    File fw = SD.open("/CONFIG.TXT", FILE_WRITE);
+    if (fw) {
+      fw.print(
+        "# ============================================================\r\n"
+        "# Gotek Touchscreen Interface — CONFIG.TXT\r\n"
+        "# ============================================================\r\n"
+        "# This file was auto-generated on first boot.\r\n"
+        "# Edit values to customise behaviour.\r\n"
+        "# Lines starting with # are comments and are ignored.\r\n"
+        "# ============================================================\r\n"
+        "\r\n"
+        "# Theme colour scheme (0=NAVY  1=EMBER  2=MATRIX  3=SYNTH)\r\n"
+        "THEME=0\r\n"
+        "\r\n"
+        "# Boot animation — 0=play once, 1=loop (Waveshare 7\" only)\r\n"
+        "LOOP=0\r\n"
+        "\r\n"
+        "# Last used disk format, restored on boot (ADF or DSK)\r\n"
+        "LASTMODE=ADF\r\n"
+        "\r\n"
+        "# Operating mode\r\n"
+        "# STANDALONE = SD card in this device, USB goes to Gotek\r\n"
+        "# WIRELESS   = send disk images to a paired XIAO dongle\r\n"
+        "MODE=STANDALONE\r\n"
+        "\r\n"
+        "# WiFi AP settings (Waveshare 7\" web server)\r\n"
+        "WIFI_SSID=GotekWifi\r\n"
+        "WIFI_PASS=gotek1234\r\n"
+        "WIFI_CHANNEL=6\r\n"
+        "WIFI_IP=192.168.4.1\r\n"
+        "\r\n"
+        "# XIAO pairing — written automatically when you tap PAIR\r\n"
+        "# Delete these lines to unpair and re-pair a new XIAO.\r\n"
+        "#XIAO_MAC=AA:BB:CC:DD:EE:FF\r\n"
+        "#XIAO_NAME=XIAO-AABB\r\n"
+        "#XIAO_IP=192.168.4.1\r\n"
+      );
+      fw.close();
+    }
+  }
+
+  // Create /ADF folder with README if missing
+  if (!SD.exists("/ADF")) {
+    SD.mkdir("/ADF");
+    File r = SD.open("/ADF/README.TXT", FILE_WRITE);
+    if (r) {
+      r.print(
+        "GOTEK TOUCHSCREEN — ADF GAMES FOLDER\r\n"
+        "=====================================\r\n"
+        "\r\n"
+        "Place Amiga floppy disk images (.adf) in this folder.\r\n"
+        "\r\n"
+        "SINGLE DISK GAME:\r\n"
+        "  /ADF/GameName/GameName.adf\r\n"
+        "\r\n"
+        "MULTI DISK GAME:\r\n"
+        "  /ADF/GameName/GameName-1.adf\r\n"
+        "  /ADF/GameName/GameName-2.adf\r\n"
+        "  /ADF/GameName/GameName-3.adf\r\n"
+        "\r\n"
+        "OPTIONAL EXTRAS (in same folder as the .adf files):\r\n"
+        "  GameName.jpg  - cover art (JPEG, any size)\r\n"
+        "  GameName.nfo  - info text (plain text, first line = title)\r\n"
+        "\r\n"
+        "SUPPORTED FORMATS: .adf  .img  .adz\r\n"
+        "\r\n"
+        "See https://github.com/mesarim/Gotek-Touchscreen-interface\r\n"
+      );
+      r.close();
+    }
+  }
+
+  // Create /DSK folder with README if missing
+  if (!SD.exists("/DSK")) {
+    SD.mkdir("/DSK");
+    File r = SD.open("/DSK/README.TXT", FILE_WRITE);
+    if (r) {
+      r.print(
+        "GOTEK TOUCHSCREEN — DSK GAMES FOLDER\r\n"
+        "=====================================\r\n"
+        "\r\n"
+        "Place ZX Spectrum / Amstrad CPC disk images (.dsk) here.\r\n"
+        "\r\n"
+        "SINGLE DISK GAME:\r\n"
+        "  /DSK/GameName/GameName.dsk\r\n"
+        "\r\n"
+        "MULTI DISK GAME:\r\n"
+        "  /DSK/GameName/GameName-1.dsk\r\n"
+        "  /DSK/GameName/GameName-2.dsk\r\n"
+        "\r\n"
+        "OPTIONAL EXTRAS (in same folder as the .dsk files):\r\n"
+        "  GameName.jpg  - cover art (JPEG, any size)\r\n"
+        "  GameName.nfo  - info text (plain text, first line = title)\r\n"
+        "\r\n"
+        "SUPPORTED FORMATS: .dsk  .img\r\n"
+        "\r\n"
+        "See https://github.com/mesarim/Gotek-Touchscreen-interface\r\n"
+      );
+      r.close();
+    }
+  }
+}
+
+static void loadConfig() {
+  File f = SD.open("/CONFIG.TXT", FILE_READ);
+  if (!f) { applyTheme(0); return; }
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.startsWith("#")) continue;
+    int eq = line.indexOf('=');
+    if (eq < 0) continue;
+    String key = line.substring(0, eq); key.trim();
+    String val = line.substring(eq + 1); val.trim();
+    if      (key == "THEME")    applyTheme(val.toInt());
+    else if (key == "LASTMODE") g_mode = (val == "DSK") ? MODE_DSK : MODE_ADF;
+    else if (key == "LOOP")     g_loop_cracktro = (val == "1" || val == "true");
+    else if (key == "MODE")     g_wireless_mode = (val == "WIRELESS");
+    // WIFI_* and XIAO_* are consumed by espnow_server.cpp
+  }
+  f.close();
+}
 static void saveKey(const String& key,const String& val){ String lines=""; bool written=false; File fr=SD.open("/CONFIG.TXT",FILE_READ); if(fr){ while(fr.available()){ String ln=fr.readStringUntil('\n'); ln.trim(); if(ln.startsWith(key+"=")){ lines+=key+"="+val+"\n"; written=true; } else lines+=ln+"\n"; } fr.close(); } if(!written) lines+=key+"="+val+"\n"; SD.remove("/CONFIG.TXT"); File fw=SD.open("/CONFIG.TXT",FILE_WRITE); if(fw){ fw.print(lines); fw.close(); } }
 
 // ── Touch read (XPT2046 on VSPI) ─────────────────────────────────────────────
