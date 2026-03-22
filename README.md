@@ -25,7 +25,7 @@ The key trick: the ESP32-S3 presents a **FAT12 RAM disk over TinyUSB** directly 
 | **Waveshare 7"** | Waveshare ESP32-S3-Touch-LCD-7 | Standalone touchscreen controller | 800×480 RGB parallel, GT911 | ✅ Supported |
 | **XIAO Dongle** | Seeed XIAO ESP32-S3 | Headless USB dongle (phone/web control) | Optional SSD1306 OLED | ✅ Supported |
 | **CYD** | ESP32-2432S028R ("Cheap Yellow Display") | Wireless touchscreen remote | 320×240 ILI9341, XPT2046 | ✅ Supported |
-| **Waveshare 2.8"** | Waveshare ESP32-S3-Touch-LCD-2.8 | Compact standalone controller | 320×240 ST7789, CST328 | 🔜 Coming soon |
+| **Waveshare 2.8"** | Waveshare ESP32-S3-Touch-LCD-2.8 | Compact standalone controller | 320×240 ST7789, CST328 | ✅ Supported |
 | **Waveshare 2.8B** | Waveshare ESP32-S3-Touch-LCD-2.8B | Compact standalone controller | 320×240 ST7789 variant | 🔜 Coming soon |
 
 > The CYD is widely available for under £10, making this one of the cheapest possible setups.
