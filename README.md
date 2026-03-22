@@ -232,6 +232,12 @@ All onboard. SD card uses HSPI (SCK=18, MISO=19, MOSI=23, CS=5). No external wir
 
 ---
 
+## Known Issues:
+Massive load times when indexing around 1000 disks.
+Currently working on resolving this.
+
+---
+
 ## Credits & Acknowledgements
 
 - **mesarim** — original concept, FAT12 USB RAM disk core, 7" Waveshare port, XIAO dongle, CYD variant
