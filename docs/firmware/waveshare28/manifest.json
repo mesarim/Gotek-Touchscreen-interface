@@ -1,0 +1,13 @@
+{
+  "name": "Gotek Touchscreen Interface — Waveshare 2.8\"",
+  "version": "3.4.7",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        { "path": "merged.bin", "offset": 0 }
+      ]
+    }
+  ]
+}
