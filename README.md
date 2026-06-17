@@ -34,7 +34,7 @@ Flash `Gotek_JC3248/Gotek_JC3248.ino`; keep the other four files in the folder b
 `esp_lcd_axs15231b.c` / `.h` (display driver) and `espnow_server.cpp` / `.h` (wireless layer).
 
 ### Hardware
-- **Board:** Guition JC3248W535C (ESP32-S3)
+- **Board:** Guition JC3248W535C (ESP32-S3) https://a.aliexpress.com/_EyxPAFg
 - **Display:** AXS15231B 480x320, QSPI (driven by the included driver)
 - **Touch:** CST816 capacitive (I2C)
 - **SD:** SD_MMC, 1-bit
@@ -63,7 +63,7 @@ handled in the `.ino`.
 Plugs into the Gotek's USB and receives disk images from the interface over WiFi, so the screen
 need not be tethered to the host. Only needed if you want **WIRELESS** mode.
 
-- **Board:** generic ESP32-S3 Super Mini (**ESP32-S3FH4R2**, 4MB flash / 2MB PSRAM)
+- **Board:** generic ESP32-S3 Super Mini (**ESP32-S3FH4R2**, 4MB flash / 2MB PSRAM) https://a.aliexpress.com/_Ejwh2cS
 - Flash `Gotek_SuperMini/Gotek_SuperMini.ino`
 
 ### Build settings (select "ESP32S3 Dev Module")
