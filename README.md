@@ -1,254 +1,175 @@
 # Gotek Touchscreen Interface
 
-**A touchscreen-driven disk image browser for retro computing.**  
-Load Amiga ADF, ZX Spectrum and Amstrad CPC DSK files from an SD card onto a FAT12 USB RAM disk — presented directly to a Gotek/FlashFloppy as a standard USB stick. No PC needed. No USB swapping. Just tap and play.
+A touchscreen front-end for [Gotek](https://en.wikipedia.org/wiki/Gotek_Floppy_Emulator)-style
+floppy emulators. It browses `.ADF` (Amiga) and `.DSK` (ZX / CPC) disk images from an SD card,
+shows cover art and game info, and presents the selected image to the host machine as a USB
+floppy — wrapped in a demoscene-flavoured UI (cracktro splash, copper bars, scroller, six themes).
 
-> **Coded by Mez and Dimmy of OmegaWare · 2026**  
-> *Keep the scene alive.*
-
----
-
-## What is this?
-
-A Gotek floppy emulator normally needs a USB stick full of disk images. You pull it out, plug it into a PC, copy files, put it back. Every time.
-
-This project replaces that USB stick with an ESP32-S3 that **pretends to be a USB stick** — but one that you control wirelessly from a touchscreen. Pick a game, tap INSERT, and your retro machine sees a freshly loaded floppy in under a second.
-
-The key trick: the ESP32-S3 presents a **FAT12 RAM disk over TinyUSB** directly to the Gotek's USB port. No Linux. No Raspberry Pi. No boot delay. Instant on.
+Built by **Mez** and **Dimmy** (Dimitri Hilverda) — **OMEGAWARE**.
 
 ---
 
-## Hardware Variants
+## Which board do I have?
 
-| Variant | Board | Role | Display | Status |
-|---|---|---|---|---|
-| **Waveshare 7"** | Waveshare ESP32-S3-Touch-LCD-7 | Standalone touchscreen controller | 800×480 RGB parallel, GT911 | ✅ Supported |
-| **XIAO Dongle** | Seeed XIAO ESP32-S3 | Headless USB dongle (phone/web control) | Optional SSD1306 OLED | ✅ Supported |
-| **CYD** | ESP32-2432S028R ("Cheap Yellow Display") | Wireless touchscreen remote | 320×240 ILI9341, XPT2046 | ✅ Supported |
-| **Waveshare 2.8"** | Waveshare ESP32-S3-Touch-LCD-2.8 | Compact standalone controller | 320×240 ST7789, CST328 | ✅ Supported |
-| **Waveshare 2.8B** | Waveshare ESP32-S3-Touch-LCD-2.8B | Compact standalone controller | 320×240 ST7789 variant | 🔜 Coming soon |
+| Your hardware | Use | Status |
+|---|---|---|
+| **Guition JC3248W535C** (3.5", 480x320) | [`Gotek_JC3248/`](Gotek_JC3248/) | **Recommended — current build** |
+| ESP32-S3 **Super Mini** (wireless dongle) | [`Gotek_SuperMini/`](Gotek_SuperMini/) | Companion to the interface (optional) |
+| Waveshare **ESP32-S3-Touch-LCD-2.8** | [`Gotek_Waveshare28/`](Gotek_Waveshare28/) | **Legacy / out of date** |
+| `Version 0.5.2/` | archive | **Legacy / out of date** |
 
-> The CYD is widely available for under £10, making this one of the cheapest possible setups.
-
----
-
-## Features
-
-- **FAT12 USB RAM disk** — ESP32-S3 presents a TinyUSB mass storage device directly to the Gotek. FlashFloppy sees a standard USB stick and needs no modification whatsoever.
-- **Touchscreen game browser** — scrollable list with cover art (JPEG), game names, and multi-disk grouping
-- **Detail view** — full cover art, `.nfo` game info, INSERT/EJECT buttons, disk selector for multi-disk titles
-- **Six built-in themes** — NAVY, EMBER, MATRIX, PAPER, SYNTHWAVE, GOLD — cycle with a tap
-- **ADF and DSK modes** — switch between Amiga (ADF/IMG/ADZ) and ZX Spectrum/Amstrad CPC (DSK) from the UI
-- **WiFi web server** — built-in access point with browser-based game manager (upload, delete, configure)
-- **ESP-NOW + WiFi TCP wireless mode** — touchscreen variants can wirelessly control the XIAO dongle over ESP-NOW for pairing and TCP for fast disk transfers
-- **Auto-resume** — last loaded disk and theme saved to `CONFIG.TXT` and restored on boot
-- **Cracktro boot screen** — animated starfield, copper bars, and scrolling text on the 7" variant (touch to skip)
+Each firmware is a separate Arduino sketch and must live in a folder whose name matches its `.ino`
+(an Arduino requirement). Don't mix board settings between sections — the PSRAM and partition
+options differ per board, and the wrong ones will fail to boot or won't be seen by the Gotek.
 
 ---
 
-## How It Works
+## JC3248 — 3.5" interface (recommended)
 
-### Standalone mode (Waveshare 7" / CYD with SD card)
+The most developed build: fast cached boot, cover art, six themes, multi-disk grouping with a
+paginated disk selector, A-Z jump, and optional wireless loading via a Super Mini dongle.
 
-```
-SD Card ──► ESP32-S3 ──► TinyUSB FAT12 RAM disk ──► Gotek USB port ──► Retro machine
-                │
-            Touchscreen UI
-            WiFi web server
-```
+### Files
+Flash `Gotek_JC3248/Gotek_JC3248.ino`; keep the other four files in the folder beside it:
+`esp_lcd_axs15231b.c` / `.h` (display driver) and `espnow_server.cpp` / `.h` (wireless layer).
 
-The ESP32 reads the disk image from SD, builds a FAT12 filesystem in PSRAM, and presents it to the Gotek as a USB mass storage device. When you swap disks, it detaches the USB, rebuilds the RAM disk with the new image, and reattaches — FlashFloppy sees a new disk inserted.
+### Hardware
+- **Board:** Guition JC3248W535C (ESP32-S3)
+- **Display:** AXS15231B 480x320, QSPI (driven by the included driver)
+- **Touch:** CST816 capacitive (I2C)
+- **SD:** SD_MMC, 1-bit
+- Presents the chosen image to the host over **USB Mass Storage** (TinyUSB)
 
-### Wireless mode (Touchscreen → XIAO Dongle)
-
-```
-SD Card ──► Waveshare/CYD ──[ESP-NOW pairing]──► XIAO ──► Gotek USB port
-               Touchscreen UI          └─[WiFi TCP data]─┘
-```
-
-The XIAO plugs permanently into the Gotek. The touchscreen pairs with it over ESP-NOW, then transfers disk images over WiFi TCP (fast, reliable). The XIAO presents the RAM disk to the Gotek. The touchscreen shows status and handles all UI.
-
----
-
-## SD Card Layout
-
-```
-SD Card Root/
-├── CONFIG.TXT              ← auto-generated on first boot
-├── ADF/                    ← Amiga disk images
-│   ├── Speedball 2/
-│   │   ├── Speedball 2.adf
-│   │   ├── Speedball 2.jpg     ← cover art (any JPEG)
-│   │   └── Speedball 2.nfo     ← plain text: line 1=title, rest=description
-│   ├── Cannon Fodder/
-│   │   ├── Cannon Fodder-1.adf ← multi-disk: suffix -1, -2, -3 ...
-│   │   ├── Cannon Fodder-2.adf
-│   │   ├── Cannon Fodder-3.adf
-│   │   ├── Cannon Fodder.jpg
-│   │   └── Cannon Fodder.nfo
-│   └── Worms.adf               ← flat layout also works
-└── DSK/                    ← ZX Spectrum / Amstrad CPC disk images
-    └── Dizzy/
-        ├── Dizzy.dsk
-        └── Dizzy.jpg
-```
-
-**File naming rules:**
-- Single-disk games: `GameName.adf` / `GameName.dsk`
-- Multi-disk games: `GameName-1.adf`, `GameName-2.adf`, etc.
-- Cover art: `GameName.jpg` or `GameName.jpeg` (any resolution, displayed scaled)
-- Game info: `GameName.nfo` (plain text — line 1 is the title, subsequent lines are description)
-- Supported image formats: `.adf`, `.img`, `.adz` (ADF mode) · `.dsk` (DSK mode)
-
----
-
-## CONFIG.TXT
-
-Auto-generated on first boot. Edit manually or via the web UI.
-
-```ini
-MODE=STANDALONE        # STANDALONE or WIRELESS
-THEME=0                # 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTHWAVE 5=GOLD
-LASTFILE=Worms.adf     # restored on boot
-LOOP=0                 # 1=loop cracktro boot screen forever
-XIAO_MAC=AA:BB:CC:DD:EE:FF   # auto-written when XIAO pairs
-XIAO_IP=192.168.4.1          # auto-written when XIAO pairs
-```
-
----
-
-## WiFi Web Server
-
-When WiFi is enabled, the ESP32 creates an access point:
-
-- **SSID:** `GotekSetup` (configurable)
-- **Password:** `retrogaming`
-- **URL:** `http://192.168.4.1`
-
-The web UI lets you upload ADF/DSK files, cover art and NFO files, manage your library, and edit `CONFIG.TXT` — all from a phone or laptop without touching the SD card.
-
----
-
-## Building & Flashing
-
-> **⚡ A one-click web flasher is coming.** For now, use Arduino IDE.
-
-### Waveshare 7" (Gotek_7inch.ino)
-
-**Libraries:**
-- `LovyanGFX` by lovyan03
-- `ESP32 by Espressif` board package
-
-**Arduino IDE board settings:**
-
+### Build settings (Arduino IDE — select "ESP32S3 Dev Module")
 | Setting | Value |
 |---|---|
-| Board | ESP32S3 Dev Module |
 | USB Mode | USB-OTG (TinyUSB) |
-| USB CDC On Boot | **Disabled** ← critical |
-| PSRAM | OPI PSRAM |
-| Flash Size | 16MB (128Mb) |
-| Partition Scheme | 3MB APP / 9.9MB FATFS |
-| CPU Frequency | 240MHz |
+| **USB CDC On Boot** | **Disabled** (required, or the Gotek won't see the drive) |
+| USB Firmware MSC On Boot | Disabled |
+| PSRAM | **OPI PSRAM** |
+| Flash Size | 16MB |
 | Flash Mode | QIO 120MHz |
-
-### XIAO Dongle (Gotek_XIAO.ino)
-
-**Libraries:**
-- `Adafruit SSD1306` (optional — for status OLED)
-- `Adafruit GFX`
-
-**Arduino IDE board settings:**
-
-| Setting | Value |
-|---|---|
-| Board | XIAO_ESP32S3 |
-| USB Mode | USB-OTG (TinyUSB) |
-| USB CDC On Boot | **Disabled** ← critical |
-| PSRAM | OPI PSRAM |
-| Flash Size | 8MB |
-| Partition Scheme | Default with SPIFFS |
-
-> **Important:** Plug in the external WiFi antenna before use.
-
-### CYD — Cheap Yellow Display (Gotek_CYD.ino)
-
-**Libraries:**
-- `TFT_eSPI` by Bodmer
-- `XPT2046_Touchscreen` by Paul Stoffregen
-- `TJpg_Decoder` by Bodmer
-
-**You must copy the provided `User_Setup.h`** into your TFT_eSPI library folder before compiling.
-
-**Arduino IDE board settings:**
-
-| Setting | Value |
-|---|---|
-| Board | ESP32 Dev Module |
-| Partition Scheme | Huge APP (3MB No OTA) |
-| Flash Frequency | 40MHz |
+| Partition Scheme | Huge APP (3MB No OTA / 1MB SPIFFS) |
 | CPU Frequency | 240MHz |
-| PSRAM | Disabled |
+
+**Library:** `JPEGDEC` by Larry Bank (Library Manager) for cover-art decoding.
+**Do not** add the ESP-IDF `esp_lcd_touch.c/.h` files — they crash the Arduino build; touch is
+handled in the `.ino`.
 
 ---
 
-## Pairing the XIAO Dongle
+## Super Mini — wireless dongle (optional)
 
-1. Flash and connect the XIAO to the Gotek USB port
-2. Flash the touchscreen variant (Waveshare 7" or CYD)
-3. On the touchscreen, go to the **Info screen** and tap **PAIR**
-4. The devices pair automatically over ESP-NOW — MAC address and IP are saved to `CONFIG.TXT`
-5. Switch to **WIRELESS** mode — the touchscreen now sends disk images to the XIAO over WiFi TCP
+Plugs into the Gotek's USB and receives disk images from the interface over WiFi, so the screen
+need not be tethered to the host. Only needed if you want **WIRELESS** mode.
 
-Pairing is persistent. Once paired, power cycling both devices will restore the connection automatically.
+- **Board:** generic ESP32-S3 Super Mini (**ESP32-S3FH4R2**, 4MB flash / 2MB PSRAM)
+- Flash `Gotek_SuperMini/Gotek_SuperMini.ino`
 
----
-
-## Wiring
-
-### Waveshare 7" — no external wiring needed
-The display, touch, SD card, and USB OTG are all onboard.
-
-### XIAO Dongle
-| Connection | Detail |
+### Build settings (select "ESP32S3 Dev Module")
+| Setting | Value |
 |---|---|
-| USB port → Gotek | Standard USB-A cable |
-| Optional OLED | SSD1306 128×32 on I2C (SDA/SCL) |
-| WiFi antenna | External antenna — **must be connected** |
+| USB Mode | USB-OTG (TinyUSB) |
+| **USB CDC On Boot** | **Disabled** |
+| USB Firmware MSC On Boot | Disabled |
+| PSRAM | **QSPI PSRAM** (NOT OPI — the FH4R2 has 2MB quad PSRAM; OPI = dead boot) |
+| Flash Size | 4MB |
+| Flash Mode | QIO 80MHz |
+| Partition Scheme | Default 4MB with spiffs (1.2MB APP / 1.5MB SPIFFS) |
+| CPU Frequency | 240MHz |
 
-### CYD
-All onboard. SD card uses HSPI (SCK=18, MISO=19, MOSI=23, CS=5). No external wiring.
-
----
-
-## Roadmap
-
-- [ ] Waveshare 2.8" and 2.8B variants
-- [ ] ESP Web Tools one-click browser flasher
-- [ ] PC companion app (Windows/macOS)
-- [ ] iPhone / Android app
-- [ ] OTA firmware update via web UI
-- [ ] More disk formats (HFE, ST, D64)
+Two optional internal diagnostic LEDs (red on GP1, blue on GP2) show pair/transfer state; the
+dongle runs fine without them fitted. The interface and dongle share SSID `GotekOMEGA` — if you
+change it, change it in both places or wireless won't connect.
 
 ---
 
-## Known Issues:
-Massive load times when indexing around 1000 disks.
-Currently working on resolving this.
+## Waveshare 2.8" — legacy / out of date
+
+The original build for the Waveshare ESP32-S3-Touch-LCD-2.8. It is **superseded by the JC3248
+build** and is kept here for existing users. It uses a different display library (LovyanGFX) and
+includes an experimental web-server UI that was never fully verified.
+
+If you have a Waveshare 2.8", the files are in [`Gotek_Waveshare28/`](Gotek_Waveshare28/).
+
+### Build settings (select "Waveshare ESP32-S3-Touch-LCD-2.8")
+| Setting | Value |
+|---|---|
+| USB CDC On Boot | Disabled |
+| CPU Frequency | 240MHz (WiFi) |
+| Flash Mode | QIO 80MHz |
+| Flash Size | 16MB (128Mb) |
+| Partition Scheme | 16M Flash (3MB APP / 9.9MB FATFS) |
+| PSRAM | Enabled |
+| USB Mode | USB-OTG (TinyUSB) |
+
+**Libraries:** ESP32 core 3.3.7, LovyanGFX 1.2.19.
+
+> The bundled web-server interface is included but **not fully tested** — no guarantee it works on
+> the Waveshare.
 
 ---
 
-## Credits & Acknowledgements
+## Features (JC3248)
 
-- **mesarim** — original concept, FAT12 USB RAM disk core, 7" Waveshare port, XIAO dongle, CYD variant
-- **dimitrihilverda** — fork, JC3248 support, WiFi web server, theme engine
-- **Keir Fraser** — [FlashFloppy](https://github.com/keirf/flashfloppy) firmware
-- **Jean-François Del Nero** — [HxC Floppy Emulator](https://hxc2001.com) — original Gotek community pioneer
-- **Jeff (HxC author)** — first to demonstrate Pi Zero W as USB mass storage for Gotek
-- **lovyan03** — [LovyanGFX](https://github.com/lovyan03/LovyanGFX)
+- **Index + game caches** on the SD card — first boot of a large collection is slow (it reads every
+  NFO/cover once); later boots read the cache and are fast. Caches self-heal if the card changes.
+- **Lazy loading** — cover art / NFO read only when a game is selected, not for the whole list.
+- **Multi-disk grouping** — `Game-1.adf ... Game-N.adf` collapse into one entry with a paginated
+  disk selector (6 per page; handles 10+ disk sets such as Monkey Island 2).
+- **Six themes** (NAVY, EMBER, MATRIX, PAPER, SYNTH, GOLD), cycled on-device, saved to `CONFIG.TXT`.
+- **A-Z jump bar**, now-playing bar, cracktro splash.
+- **STANDALONE** (direct USB) or **WIRELESS** (Super Mini dongle) transfer.
+- Auto-generates a commented `CONFIG.TXT` on a blank card.
+
+### SD card layout
+```
+/ADF/<Game Name>/<Game Name>.adf      (+ optional .nfo and .jpg alongside)
+/DSK/<Game Name>/<Game Name>.dsk
+/CONFIG.TXT                            (auto-created if missing)
+```
+Multi-disk: name files `<Game>-1.adf`, `<Game>-2.adf`, ... (digits after the final dash).
+
+### First-time setup
+Insert a blank **FAT32** SD card, flash the board, and reboot. The firmware creates the folder
+structure and a sample `CONFIG.TXT`. Populate the card from your PC, then reboot again.
+
+To reboot into programming mode: hold **BOOT** and **RESET**, release **RESET**, then release
+**BOOT** — the board re-enumerates on its COM port.
 
 ---
+
+## Tested / not tested
+
+Being straight so nobody gets surprised:
+
+- **JC3248 interface** (works) — fast cached boot, 1000+ games, image loading, themes, cover art,
+  multi-disk pagination: exercised on real hardware.
+- **Single-dongle wireless** (works) — interface to one Super Mini, pair and load.
+- **Multi-dongle switching** (beta) — code to drive several dongles from one screen (BSSID-targeted
+  WiFi) is implemented but **not yet hardware-verified with two or more dongles**.
+- **Waveshare 2.8" / Version 0.5.2** (legacy) — not maintained against the current feature set.
+
+---
+
+## Demo
+
+[`demo/index.html`](demo/) is a self-contained browser preview of the interface — open it locally
+or host it (e.g. GitHub Pages). It uses mock game data to show the look and feel; it does **not**
+talk to hardware and contains none of the firmware's SD/USB/wireless logic.
+
+---
+
+## Credits
+
+- **Mez** — UI, firmware
+- **Dimmy** (Dimitri Hilverda) — hardware layer, display driver, original ESP-NOW/USB work
+  ([fork](https://github.com/dimitrihilverda/Gotek-Touchscreen-interface))
+- OMEGAWARE
+
+Libraries: [JPEGDEC](https://github.com/bitbank2/JPEGDEC) (Larry Bank), LovyanGFX (Waveshare build),
+ESP32 Arduino core.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT — see [`LICENSE`](LICENSE).
