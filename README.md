@@ -15,7 +15,7 @@ Built by **Mez** and **Dimmy** (Dimitri Hilverda) — **OMEGAWARE**.
 |---|---|---|
 | **Guition JC3248W535C** (3.5", 480x320) | [`Gotek_JC3248/`](firmware/Gotek_JC3248) | **Recommended — current build** |
 | ESP32-S3 **Super Mini** (wireless dongle) | [`Gotek_SuperMini/`](firmware/SuperMini-S3) | Companion to the interface (optional) |
-| Waveshare **ESP32-S3-Touch-LCD-2.8** | [`Gotek_Waveshare28/`](Gotek_Waveshare28/) | **Legacy / out of date** |
+| Waveshare **ESP32-S3-Touch-LCD-2.8** | [`Gotek_Waveshare28/`](firmware/Waveshare_28) | **Legacy / out of date** |
 | `Version 0.5.2/` | archive | **Legacy / out of date** |
 
 Each firmware is a separate Arduino sketch and must live in a folder whose name matches its `.ino`
