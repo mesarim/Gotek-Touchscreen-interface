@@ -13,78 +13,69 @@ Works in Chrome and Edge only (Web Serial API requirement).
 docs/
 ├── index.html                        ← flasher page (GitHub Pages root)
 └── firmware/
+    ├── jc3248/
+    │   ├── manifest.json
+    │   └── Gotek_JC3248.ino.merged.bin   ← single merged image (offset 0)
     ├── waveshare7/
     │   ├── manifest.json
-    │   ├── bootloader.bin            ← built from Arduino IDE
-    │   ├── partitions.bin
-    │   ├── boot_app0.bin
-    │   └── firmware.bin
+    │   └── Gotek_7inch.ino.merged.bin
+    ├── waveshare28/
+    │   ├── manifest.json
+    │   └── merged.bin
     ├── xiao/
     │   ├── manifest.json
-    │   ├── bootloader.bin
-    │   ├── partitions.bin
-    │   ├── boot_app0.bin
-    │   └── firmware.bin
+    │   └── Gotek_XIAO.ino.merged.bin
     └── cyd/
         ├── manifest.json
-        ├── bootloader.bin
-        ├── partitions.bin
-        ├── boot_app0.bin
-        └── firmware.bin
+        └── Gotek_CYD.ino.merged.bin
 ```
+
+Each manifest points at **one merged binary flashed at offset 0** — no separate
+bootloader/partitions/boot_app0 parts. The ESP32 Arduino core builds this merged
+image automatically on every compile, so releasing a new version is just a copy.
 
 ---
 
 ## How to build and update binaries
 
-When you release a new firmware version, rebuild the binaries and commit them here.
+When you release a new firmware version, rebuild the binary and commit it here.
 
 ### Step 1 — Export from Arduino IDE
 
-1. Open the `.ino` file for the variant you want to build
-2. Set all board settings as documented in the main README
-3. Go to **Sketch → Export Compiled Binary**
-4. Arduino saves the files to the same folder as the `.ino`
+1. Open the `.ino` for the variant you want to build.
+2. Set **all** board settings exactly as documented in the main README for that
+   board (PSRAM / flash size / partition scheme differ per board — the wrong ones
+   produce a binary that won't boot or won't be seen by the Gotek).
+3. **Sketch → Export Compiled Binary.**
 
-### Step 2 — Find the four required files
+### Step 2 — Grab the merged binary
 
-Arduino outputs several files. You need these four:
-
-| File | What it is | Offset |
-|---|---|---|
-| `Gotek_xxx.ino.bootloader.bin` | Bootloader | 0x1000 (4096) |
-| `Gotek_xxx.ino.partitions.bin` | Partition table | 0x8000 (32768) |
-| `boot_app0.bin` | OTA boot selector | 0xe000 (57344) |
-| `Gotek_xxx.ino.bin` | Main firmware | 0x10000 (65536) |
-
-`boot_app0.bin` is not in the sketch output folder — find it here:
-```
-Windows: C:\Users\<you>\AppData\Local\Arduino15\packages\esp32\hardware\esp32\<version>\tools\partitions\boot_app0.bin
-```
-
-### Step 3 — Copy and rename
-
-Copy the four files into the appropriate `docs/firmware/<variant>/` folder,
-renaming them to match the manifest:
+Arduino writes several files into a `build/` subfolder beside the `.ino`, e.g.:
 
 ```
-bootloader.bin   ← Gotek_xxx.ino.bootloader.bin
-partitions.bin   ← Gotek_xxx.ino.partitions.bin
-boot_app0.bin    ← boot_app0.bin  (no rename needed)
-firmware.bin     ← Gotek_xxx.ino.bin
+build/esp32.esp32.esp32s3/Gotek_JC3248.ino.merged.bin
 ```
 
-### Step 4 — Update the manifest version
+The `*.merged.bin` is the one you want — it already contains the bootloader,
+partition table, boot_app0 selector and app in a single image. Ignore the
+separate `.bootloader.bin` / `.partitions.bin` / `.bin` pieces; you don't need
+to merge anything by hand.
 
-Edit `docs/firmware/<variant>/manifest.json` and bump the `version` field.
+### Step 3 — Copy into the flasher
 
-Also update the version string in `docs/index.html` in the `deviceInfo` object.
+Copy that `*.merged.bin` into `docs/firmware/<variant>/`, keeping the filename
+the manifest references (see the manifest's `parts[].path`).
+
+### Step 4 — Update the version
+
+Edit `docs/firmware/<variant>/manifest.json` and bump the `version` field, then
+update the matching entry in the `deviceInfo` object in `docs/index.html`.
 
 ### Step 5 — Commit and push
 
 ```bash
 git add docs/
-git commit -m "Release firmware vX.X.X — Waveshare7/XIAO/CYD"
+git commit -m "Release firmware vX.X.X — <variant>"
 git push origin main
 ```
 

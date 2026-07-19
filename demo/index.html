@@ -83,7 +83,7 @@ const THEMES=[
  {name:"NAVY",  v:[0x1082,0x18C3,0x2104,0x2945,0x2103,0x4A8A,0x6B6D,0x9BD6,0x2D6B,0xFC60,0xFD00,0x4C5F,0x0B26,0x5D1F,0x3186,0xFFFF]},
  {name:"EMBER", v:[0x0800,0x1000,0x1800,0x5820,0x1000,0x5820,0x8440,0xC8A0,0x0560,0xFF40,0xFC00,0x4A9F,0x1000,0x7800,0x3800,0xFFFF]},
  {name:"MATRIX",v:[0x0020,0x0040,0x0060,0x0340,0x0040,0x0340,0x0580,0x07C0,0x07E0,0x07E0,0x0FE0,0x07FF,0x0060,0x0380,0x0300,0x07C0]},
- {name:"PAPER", v:[0xEF5C,0xF7BE,0xFFFF,0xC618,0xCE59,0x8C51,0x6B4D,0x2124,0x0680,0xE880,0xFD00,0x0C5F,0xCE59,0x4810,0xC618,0xFFFF]},
+ {name:"PAPER", v:[0xEF5C,0xF7BE,0xFFFF,0x39E7,0xCE59,0x8C51,0x6B4D,0x2124,0x0680,0xE880,0xFD00,0x0C5F,0x0A44,0x4810,0xC618,0x2124]},
  {name:"SYNTH", v:[0x1001,0x2003,0x3005,0x5008,0x2003,0x600C,0x900F,0xC09F,0x4BE0,0xFC1F,0xE81F,0xA01F,0x2003,0x8010,0x5008,0xE81F]},
  {name:"GOLD",  v:[0x1000,0x1800,0x2000,0x4200,0x1800,0x5240,0x7440,0xC5A0,0x0560,0xFCA0,0xFCC0,0xFCA0,0x1800,0x3200,0x3200,0xFCC0]},
 ];
@@ -94,8 +94,9 @@ function applyTheme(i){ TI=(i%THEMES.length+THEMES.length)%THEMES.length; THEMES
 applyTheme(0);
 
 // ---- framebuffer primitives (mirror firmware gfx_*) ----
-function px(x,y,c){ if(x<0||x>=VW||y<0||y>=VH)return; const o=(y*VW+x)*4, r=rgb(c); fb[o]=r[0];fb[o+1]=r[1];fb[o+2]=r[2];fb[o+3]=255; }
-function fillRect(x,y,w,h,c){ const r=rgb(c); for(let yy=Math.max(0,y);yy<Math.min(VH,y+h);yy++){ let o=(yy*VW+Math.max(0,x))*4; for(let xx=Math.max(0,x);xx<Math.min(VW,x+w);xx++){ fb[o]=r[0];fb[o+1]=r[1];fb[o+2]=r[2];fb[o+3]=255;o+=4; } } }
+let clipY0=0, clipY1=VH, clipX0=0, clipX1=VW;   // clip window (vertical for scroll, horizontal for marquee)
+function px(x,y,c){ if(x<clipX0||x>=clipX1||y<clipY0||y>=clipY1)return; const o=(y*VW+x)*4, r=rgb(c); fb[o]=r[0];fb[o+1]=r[1];fb[o+2]=r[2];fb[o+3]=255; }
+function fillRect(x,y,w,h,c){ const r=rgb(c); for(let yy=Math.max(clipY0,y);yy<Math.min(clipY1,y+h);yy++){ let o=(yy*VW+Math.max(clipX0,x))*4; for(let xx=Math.max(clipX0,x);xx<Math.min(clipX1,x+w);xx++){ fb[o]=r[0];fb[o+1]=r[1];fb[o+2]=r[2];fb[o+3]=255;o+=4; } } }
 function fillScreen(c){ fillRect(0,0,VW,VH,c); }
 function hline(x,y,w,c){ fillRect(x,y,w,1,c); }
 function vline(x,y,h,c){ fillRect(x,y,1,h,c); }
@@ -109,6 +110,12 @@ function drawRound(x,y,w,h,rad,c){ hline(x+rad,y,w-2*rad,c);hline(x+rad,y+h-1,w-
 let tsize=1;
 function setSize(s){ tsize=s<1?1:s; }
 function textW(s){ return s.length*6*tsize; }
+// Greedy word-wrap at the current text size; returns up to maxLines lines
+function wrapText(str, maxW, maxLines){ const words=(""+str).split(/\s+/); const out=[]; let line="";
+  for(const w of words){ if(!w) continue; const cand=line?line+" "+w:w;
+    if(textW(cand)>maxW && line){ out.push(line); line=w; if(out.length>=maxLines) return out; } else line=cand; }
+  if(line && out.length<maxLines) out.push(line);
+  return out; }
 function text(x,y,s,fg,bg){ for(let i=0;i<s.length;i++){ let ch=s.charCodeAt(i); if(ch<32||ch>126){x+=6*tsize;continue;} const base=(ch-32)*6; for(let col=0;col<6;col++){ const bits=FONT[base+col]; for(let row=0;row<8;row++){ const on=bits&(1<<row); const c=on?fg:bg; if(c===null&&!on)continue; for(let dy=0;dy<tsize;dy++)for(let dx=0;dx<tsize;dx++) px(x+col*tsize+dx,y+row*tsize+dy,c); } } x+=6*tsize; } }
 
 function blit(){ imgData.data.set(fb); ctx.putImageData(imgData,0,0); }
@@ -117,15 +124,21 @@ function blit(){ imgData.data.set(fb); ctx.putImageData(imgData,0,0); }
 //  Layout constants (exact)
 // ============================================================================
 const STATUS_H=20, COVER_W=150, COVER_ART_X=4, COVER_ART_Y=24, COVER_ART_W=142, COVER_ART_H=130;
-const AZ_W=18, AZ_X=VW-AZ_W, LIST_X=COVER_W, LIST_W=VW-COVER_W-AZ_W, MODE_BAR_H=18;
+const AZ_W=30, AZ_X=VW-AZ_W, LIST_X=COVER_W, LIST_W=VW-COVER_W-AZ_W, MODE_BAR_H=18;
 const LIST_TOP=STATUS_H+MODE_BAR_H, NOW_PLAY_H=22, BOTTOM_H=40;
-const LIST_BOTTOM=VH-BOTTOM_H-NOW_PLAY_H, LIST_ITEM_H=Math.floor((LIST_BOTTOM-LIST_TOP)/6), ITEMS_VIS=6;
+const LIST_BOTTOM=VH-BOTTOM_H-NOW_PLAY_H;
+// Font size profile: 0=SMALL 1=NORMAL 2=LARGE 3=BLIND. Drives rows-per-screen + name text size.
+let LIST_ITEM_H=Math.floor((LIST_BOTTOM-LIST_TOP)/4), ITEMS_VIS=4, nameSz=2, fontMode=1;
+function applyFont(f){ fontMode=f; let rows;
+  if(f===0){rows=6;nameSz=1;} else if(f===2){rows=3;nameSz=3;} else {rows=4;nameSz=2;}
+  LIST_ITEM_H=Math.floor((LIST_BOTTOM-LIST_TOP)/rows); ITEMS_VIS=rows; }
 const DISKS_PER_PAGE=6;
 
 // ============================================================================
 //  Mock game data (real Amiga titles; MI2 has 11 disks)
 // ============================================================================
 const RAW=[
+ ["1943",1],["4D Sports Boxing",1],["720 Degrees",1],
  ["Arcade Pool",1],["Barbarian",1],["Cannon Fodder",1],["Chaos Engine",2],
  ["Dune II - Battle for Arrakis",3],["Elite",1],["Eye of the Beholder",4],
  ["Flashback",4],["Gods",1],["Hired Guns",4],["IK+",1],["James Pond 2",2],
@@ -144,18 +157,28 @@ const BLURBS={
  "Lemmings":"Guide the suicidal little fellows to safety. DMA Design. Let's go!",
  "Worms":"Turn-based artillery mayhem. Team17. Holy hand grenade incoming.",
 };
+// First-letter bucket: A-Z as themselves, anything else (digits, symbols) -> "#"
+function bucket(name){ const c=name[0].toUpperCase(); return (c>="A"&&c<="Z")?c:"#"; }
 const games=RAW.map(([name,dc])=>({name,disk_count:dc,
-  letter:name[0].toUpperCase(),
+  letter:bucket(name),
   blurb:BLURBS[name]||""}));
 
-// active A-Z letters
+// active buckets: "#" sorts before A, then A-Z
 const letters=[...new Set(games.map(g=>g.letter))].sort();
 
 // ============================================================================
 //  State
 // ============================================================================
 let mode="ADF";                 // ADF/DSK
-let sel=0, scroll=0, diskSel=0, diskPage=0;
+let sel=0, scroll=0, diskSel=0, diskPage=0, azPage=0;
+let scrollPx=0;                      // smooth pixel scroll offset (source of truth)
+let drag=null, inertiaV=0, inertiaOn=false;
+let marqueeOff=0, marqueeSel=-1, marqueeDir=1, marqueePause=0;   // bounce scroll of the selected over-long name
+function selOverflows(){ if(sel<0||sel>=games.length)return false; const g=games[sel]; setSize(nameSz);
+  const r=8+nameSz*3, nx=LIST_X+6+r+r+6, maxNW=LIST_W-(nx-LIST_X)-8-(g.disk_count>1?36:0); return textW(g.name)>maxNW; }
+function marqueeMax(){ const g=games[sel]; setSize(nameSz); const r=8+nameSz*3, nx=LIST_X+6+r+r+6, maxNW=LIST_W-(nx-LIST_X)-8-(g.disk_count>1?36:0); return Math.max(0, textW(g.name)-maxNW+8); }
+let activeLetter=games.length?games[0].letter:"A";   // the letter the index highlights / pages to
+function setActiveLetter(l){ activeLetter=l; azPage=(l<="M")?0:1; }   // auto-flip page to the half holding l
 let loaded=false, loadedIdx=-1, loadedDisk=-1, loadedName="";
 let infoShowing=false, wireless=false;
 let screen="cracktro";          // cracktro | ui
@@ -196,7 +219,7 @@ function drawCracktro(){
 function drawStatusBar(){
   fillRect(0,0,VW,STATUS_H,C.bar); setSize(1);
   text(6,6,"OMEGAWARE",C.orange,C.bar);
-  text(6+textW("OMEGAWARE"),6,"  v3.6.2-JC3248",C.mid,C.bar);
+  text(6+textW("OMEGAWARE"),6,"  v3.7.1-JC3248",C.mid,C.bar);
   if(wireless){ const t="WIRELESS:PAIR"; text(VW/2-40,6,t,0xFD20,C.bar); }
   else { const t="STANDALONE"; text((VW-textW(t))/2|0,6,t,0x07FF,C.bar); }
   fillCircle(VW-8,STATUS_H/2,3, loaded?0xE8C4:C.green);
@@ -204,24 +227,18 @@ function drawStatusBar(){
 function drawCover(){
   fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,C.panel);
   if(!games.length)return; const g=games[sel];
-  // art box
+  // Cover art box + wrapped title + wrapped blurb
   fillRound(COVER_ART_X,COVER_ART_Y,COVER_ART_W,COVER_ART_H,5,C.bar);
   drawRound(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,6,C.accent);
-  // placeholder: big initial (firmware behaviour when no JPG)
-  setSize(2); const ib=g.name[0].toUpperCase();
-  // draw a few decorative bars to evoke cover art
+  const ib=g.name[0].toUpperCase();
   for(let i=0;i<5;i++) fillRect(COVER_ART_X+8,COVER_ART_Y+12+i*22,COVER_ART_W-16,3, [C.accent,C.blue,C.amber,C.green,C.orange][i]);
   fillCircle(COVER_ART_X+COVER_ART_W/2, COVER_ART_Y+COVER_ART_H/2, 26, C.bar);
   drawCircle(COVER_ART_X+COVER_ART_W/2, COVER_ART_Y+COVER_ART_H/2, 26, C.lit);
-  text(COVER_ART_X+COVER_ART_W/2-6,COVER_ART_Y+COVER_ART_H/2-8,ib,C.lit,null);
-  // title
+  setSize(2); text(COVER_ART_X+COVER_ART_W/2-6,COVER_ART_Y+COVER_ART_H/2-8,ib,C.lit,null);
   let ty=COVER_ART_Y+COVER_ART_H+4; setSize(1);
-  let title=g.name; while(textW(title)>COVER_W-8&&title.length>3) title=title.slice(0,-1);
-  text(4,ty,title,C.lit,C.panel); ty+=10;
-  // blurb (wrapped, 3 lines)
-  if(g.blurb){ let line="",word="",lines=0; const words=(g.blurb+" ").split(" ");
-    for(const w of words){ const cand=line?line+" "+w:w; if(textW(cand)>COVER_W-8&&line){ text(4,ty,line,C.dim,C.panel); ty+=9; if(++lines>=3)break; line=w;} else line=cand; }
-    if(lines<3&&line){ text(4,ty,line,C.dim,C.panel); ty+=9; } }
+  const cb=(g.disk_count>1)?(diskLayout(g).labelY-2):(VH-BOTTOM_H-38);   // don't cross the disk grid / INSERT
+  for(const l of wrapText(g.name, COVER_W-8, 2)){ if(ty+8>cb)break; text(4,ty,l,C.lit,C.panel); ty+=10; }
+  if(g.blurb){ setSize(1); for(const l of wrapText(g.blurb, COVER_W-8, 12)){ if(ty+8>cb)break; text(4,ty,l,C.dim,C.panel); ty+=9; } }
   // disk selector (paginated)
   if(g.disk_count>1) drawDiskSelector(g);
   // INSERT/EJECT
@@ -261,22 +278,37 @@ function drawModeBar(){
   fillRound(LIST_X+44,STATUS_H+2,36,14,7,!isA?C.accent:C.bg); text(LIST_X+50,STATUS_H+6,"DSK",!isA?C.amber:C.dim,!isA?C.accent:C.bg);
   text(LIST_X+86,STATUS_H+6,games.length+" games",C.mid,C.bar);
 }
+function maxScrollPx(){ return Math.max(0, games.length*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP)); }
 function drawList(){
   fillRect(LIST_X,LIST_TOP,LIST_W,LIST_BOTTOM-LIST_TOP,C.bg);
-  const mx=Math.max(0,games.length-ITEMS_VIS); if(scroll>mx)scroll=mx; if(scroll<0)scroll=0;
-  for(let vi=0;vi<ITEMS_VIS;vi++){ const gi=scroll+vi; if(gi>=games.length)break; const g=games[gi];
-    const isS=gi===sel, isL=loaded&&loadedIdx===gi, y=LIST_TOP+vi*LIST_ITEM_H;
+  if(scrollPx<0)scrollPx=0; const mp=maxScrollPx(); if(scrollPx>mp)scrollPx=mp;
+  const first=Math.floor(scrollPx/LIST_ITEM_H), off=scrollPx-first*LIST_ITEM_H;
+  scroll=first;                                   // keep integer scroll in sync (A-Z thumb, etc.)
+  clipY0=LIST_TOP; clipY1=LIST_BOTTOM;             // clip partial rows to the list window
+  for(let vi=0;vi<=ITEMS_VIS+1;vi++){ const gi=first+vi; if(gi>=games.length)break; const g=games[gi];
+    const isS=gi===sel, isL=loaded&&loadedIdx===gi, y=LIST_TOP-off+vi*LIST_ITEM_H;
+    if(y>=LIST_BOTTOM)break;
     if(isS){ fillRound(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,4,C.sel); drawRound(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,4,C.amber); }
     else fillRound(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,3,C.panel);
     fillRect(LIST_X+3,y+3,3,LIST_ITEM_H-4, isL?C.green:(isS?C.amber:C.accent));
-    const cx=LIST_X+18, cy=y+LIST_ITEM_H/2|0;
-    fillCircle(cx,cy,10, isS?C.amber:(isL?C.green:C.circ));
-    const ib=g.name[0].toUpperCase(); setSize(1);
-    text(cx-textW(ib)/2|0,cy-4,ib,(isS||isL)?BLACK:C.circ_text, isS?C.amber:C.circ);
-    let nm=g.name; const maxNW=LIST_W-50-(g.disk_count>1?36:0); while(textW(nm)>maxNW&&nm.length>3)nm=nm.slice(0,-1);
-    text(LIST_X+34,cy-4,nm, isS?WHITE:C.lit, isS?C.sel:C.panel);
-    if(g.disk_count>1){ fillRound(LIST_X+LIST_W-38,cy-6,34,12,4,C.accent); text(LIST_X+LIST_W-34,cy-4,g.disk_count+"DSK",WHITE,C.accent); }
+    const r=8+nameSz*3, cx=LIST_X+6+r, cy=y+(LIST_ITEM_H>>1);
+    fillCircle(cx,cy,r, isS?C.amber:(isL?C.green:C.circ));
+    const ib=g.name[0].toUpperCase(); setSize(nameSz);
+    text(cx-textW(ib)/2|0,cy-4*nameSz,ib,(isS||isL)?BLACK:C.circ_text, isS?C.amber:C.circ);
+    const nx=cx+r+6; setSize(nameSz);
+    const maxNW=LIST_W-(nx-LIST_X)-8-(g.disk_count>1?36:0), fg=isS?WHITE:C.lit, bg=isS?C.sel:C.panel;
+    if(isS && textW(g.name)>maxNW){
+      // marquee the selected name: bounce within its lane (offset 0..max, pause at each end)
+      clipX0=nx; clipX1=nx+maxNW;
+      text(nx-marqueeOff, cy-4*nameSz, g.name, fg, bg);
+      clipX0=0; clipX1=VW;
+    } else {
+      let nm=g.name; while(textW(nm)>maxNW&&nm.length>3)nm=nm.slice(0,-1);
+      text(nx,cy-4*nameSz,nm, fg, bg);
+    }
+    if(g.disk_count>1){ setSize(1); fillRound(LIST_X+LIST_W-38,cy-6,34,12,4,C.accent); text(LIST_X+LIST_W-34,cy-4,g.disk_count+"DSK",WHITE,C.accent); }
   }
+  clipY0=0; clipY1=VH;
 }
 function drawNowPlaying(){
   const y=LIST_BOTTOM;
@@ -285,15 +317,27 @@ function drawNowPlaying(){
     let n=loadedName; while(textW(n)>LIST_W-24&&n.length>3)n=n.slice(0,-1); text(LIST_X+16,y+12,n,WHITE,C.now);
   } else { fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,C.bg); setSize(1); text(LIST_X+8,y+NOW_PLAY_H/2-4,games.length+" games - tap INSERT",C.mid,C.bg); }
 }
+const AZ_TOG_H=32;    // taller A-M/N-Z toggle so it's easy to hit without catching the INFO button
 function drawAZ(){
-  if(!letters.length)return; const barH=LIST_BOTTOM-LIST_TOP;
-  fillRect(AZ_X,LIST_TOP,AZ_W,barH+NOW_PLAY_H,C.panel);
-  let cur=(scroll>=0&&scroll<games.length)?games[scroll].letter:"A";
-  let lh=Math.max(7,barH/letters.length|0); setSize(1);
-  letters.forEach((ltr,i)=>{ const ly=LIST_TOP+i*lh; if(ly+lh>LIST_BOTTOM)return;
-    if(ltr===cur){ fillRect(AZ_X,ly,AZ_W,lh,C.amber); text(AZ_X+(AZ_W-6)/2|0,ly+(lh-7)/2|0,ltr,BLACK,C.amber); }
-    else text(AZ_X+(AZ_W-6)/2|0,ly+(lh-7)/2|0,ltr,C.dim,C.panel);
+  if(!letters.length)return;
+  const togY=LIST_BOTTOM+NOW_PLAY_H-AZ_TOG_H, barH=togY-LIST_TOP;
+  fillRect(AZ_X,LIST_TOP,AZ_W,(LIST_BOTTOM+NOW_PLAY_H)-LIST_TOP,C.panel);
+  let cur=activeLetter;                         // highlight follows where you are (set on tap / scroll)
+  const p0=letters.filter(l=>l<="M"), p1=letters.filter(l=>l>="N");
+  const half = azPage===0 ? p0 : p1;
+  const SLOTS=Math.max(13,p0.length,p1.length);
+  const lh=Math.max(7,(barH/SLOTS)|0);
+  const lsz=(lh>=15)?2:1; setSize(lsz);
+  half.forEach((ltr,i)=>{ const ly=LIST_TOP+i*lh; if(ly+lh>togY)return;
+    const lx=AZ_X+(AZ_W-6*lsz)/2|0, lyy=ly+(lh-8*lsz)/2|0;
+    if(ltr===cur){ fillRect(AZ_X,ly,AZ_W,lh,C.amber); text(lx,lyy,ltr,BLACK,C.amber); }
+    else text(lx,lyy,ltr,C.dim,C.panel);
   });
+  // Toggle button — taller, fills the strip bottom
+  fillRound(AZ_X+1,togY+1,AZ_W-2,(LIST_BOTTOM+NOW_PLAY_H)-togY-2,5,C.accent);
+  setSize(1);
+  const blbl=azPage===0?"N-Z":"A-M";
+  text(AZ_X+(AZ_W-textW(blbl))/2|0, togY+(AZ_TOG_H-8)/2|0, blbl, WHITE, C.accent);
   const maxOff=games.length-ITEMS_VIS;
   if(maxOff>0){ const th=Math.max(4,barH*ITEMS_VIS/games.length|0); const tyy=LIST_TOP+(barH-th)*scroll/maxOff|0; fillRect(AZ_X-2,tyy,2,th,C.blue); }
 }
@@ -346,11 +390,18 @@ function hit(mx,my){
   if(screen==="cracktro"){ screen="ui"; drawUI(); return; }
   const g=games[sel];
   // A-Z bar
-  if(mx>=AZ_X&&my>=LIST_TOP&&my<LIST_BOTTOM&&letters.length){
-    const barH=LIST_BOTTOM-LIST_TOP, lh=Math.max(7,barH/letters.length|0);
-    const idx=Math.min(letters.length-1,Math.max(0,(my-LIST_TOP)/lh|0));
-    const L=letters[idx]; let target=0; for(let i=0;i<games.length;i++){ if(games[i].letter>=L){target=i;break;} }
-    sel=target; scroll=Math.min(target,Math.max(0,games.length-ITEMS_VIS)); diskSel=0; diskPage=0; drawUI(); return;
+  if(mx>=AZ_X&&my>=LIST_TOP&&my<LIST_BOTTOM+NOW_PLAY_H&&letters.length){
+    // toggle button (taller bottom cell of the strip)
+    const togY=LIST_BOTTOM+NOW_PLAY_H-AZ_TOG_H;
+    if(my>=togY){ azPage=azPage?0:1; drawUI(); return; }
+    const barH=togY-LIST_TOP;
+    const p0=letters.filter(l=>l<="M"), p1=letters.filter(l=>l>="N");
+    const half = azPage===0 ? p0 : p1;
+    if(!half.length){ azPage=azPage?0:1; drawUI(); return; }
+    const SLOTS=Math.max(13,p0.length,p1.length), lh=Math.max(7,(barH/SLOTS)|0);
+    const r=Math.min(half.length-1,Math.max(0,((my-LIST_TOP)/lh)|0));
+    const L=half[r]; let target=0; for(let i=0;i<games.length;i++){ if(games[i].letter>=L){target=i;break;} }
+    setActiveLetter(L); sel=target; scrollPx=Math.min(target*LIST_ITEM_H,maxScrollPx()); diskSel=0; diskPage=0; inertiaOn=false; drawUI(); return;
   }
   // INFO panel interactions
   if(infoShowing&&mx<COVER_W){
@@ -382,24 +433,46 @@ function hit(mx,my){
   }
   // file list
   if(mx>=LIST_X&&mx<AZ_X&&my>=LIST_TOP&&my<LIST_BOTTOM){
-    infoShowing=false; const gi=scroll+((my-LIST_TOP)/LIST_ITEM_H|0);
-    if(gi>=0&&gi<games.length){ if(gi===sel){ if(loaded&&loadedIdx===sel)unload(); else load(sel,0); } else { sel=gi; diskSel=0; diskPage=0; } drawUI(); }
+    infoShowing=false; const gi=Math.floor((scrollPx+(my-LIST_TOP))/LIST_ITEM_H);
+    if(gi>=0&&gi<games.length){ if(gi===sel){ if(loaded&&loadedIdx===sel)unload(); else load(sel,0); } else { sel=gi; setActiveLetter(games[gi].letter); diskSel=0; diskPage=0; } drawUI(); }
     return;
   }
   // bottom bar
   if(my>=VH-BOTTOM_H){ const bw=VW/4|0, b=mx/bw|0;
-    if(b===0&&sel>0){ sel--; diskSel=0; diskPage=0; if(sel<scroll)scroll=sel; }
-    else if(b===1&&sel<games.length-1){ sel++; diskSel=0; diskPage=0; if(sel>=scroll+ITEMS_VIS)scroll=sel-ITEMS_VIS+1; }
+    if(b===0&&sel>0){ sel--; setActiveLetter(games[sel].letter); diskSel=0; diskPage=0; if(sel*LIST_ITEM_H<scrollPx)scrollPx=sel*LIST_ITEM_H; }
+    else if(b===1&&sel<games.length-1){ sel++; setActiveLetter(games[sel].letter); diskSel=0; diskPage=0; if((sel+1)*LIST_ITEM_H>scrollPx+(LIST_BOTTOM-LIST_TOP))scrollPx=(sel+1)*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP); }
     else if(b===2){ applyTheme(TI+1); }
     else if(b===3){ infoShowing=!infoShowing; }
     drawUI(); return;
   }
 }
 
-// pointer mapping (canvas is scaled 1.5x via CSS)
-function evtXY(e){ const r=cv.getBoundingClientRect(); const cx=(e.touches?e.touches[0].clientX:e.clientX)-r.left; const cy=(e.touches?e.touches[0].clientY:e.clientY)-r.top; return [cx*VW/r.width|0, cy*VH/r.height|0]; }
-cv.addEventListener('mousedown',e=>{ const [x,y]=evtXY(e); hit(x,y); });
-cv.addEventListener('touchstart',e=>{ e.preventDefault(); const [x,y]=evtXY(e); hit(x,y); },{passive:false});
+// pointer mapping
+function evtXY(e){ const r=cv.getBoundingClientRect(); const t=e.touches&&e.touches[0]?e.touches[0]:(e.changedTouches&&e.changedTouches[0]?e.changedTouches[0]:e); const cx=t.clientX-r.left, cy=t.clientY-r.top; return [cx*VW/r.width|0, cy*VH/r.height|0]; }
+
+// Drag-to-scroll with flick inertia. A near-still press is a tap (hit); a moved
+// press over the list scrolls it and coasts on release.
+const DRAG_THRESH=5;
+function pDown(x,y){ inertiaOn=false; inertiaV=0;
+  drag={x0:x,y0:y,px0:scrollPx,lastY:y,lastT:performance.now(),v:0,moved:false,
+        inList:(screen==="ui"&&!infoShowing&&x>=LIST_X&&x<AZ_X&&y>=LIST_TOP&&y<LIST_BOTTOM)}; }
+function pMove(x,y){ if(!drag)return;
+  if(Math.abs(y-drag.y0)>DRAG_THRESH||Math.abs(x-drag.x0)>DRAG_THRESH)drag.moved=true;
+  if(drag.inList&&drag.moved){ scrollPx=drag.px0-(y-drag.y0);
+    const now=performance.now(),dt=now-drag.lastT; if(dt>0){ drag.v=(y-drag.lastY)/dt; drag.lastY=y; drag.lastT=now; }
+    syncIndexToScroll(); drawUI(); } }
+// While the list scrolls, keep the A-Z index (highlight + page) tracking the top-visible item
+function syncIndexToScroll(){ const s=Math.min(Math.max(scrollPx,0),maxScrollPx()); const ti=Math.floor(s/LIST_ITEM_H); if(games[ti])setActiveLetter(games[ti].letter); }
+function pUp(){ if(!drag)return; const d=drag; drag=null;
+  if(!d.moved){ hit(d.x0,d.y0); return; }                 // it was a tap
+  if(d.inList){ inertiaV=-d.v*16; inertiaOn=Math.abs(inertiaV)>0.5; } }   // flick -> coast
+
+cv.addEventListener('mousedown',e=>{ const [x,y]=evtXY(e); pDown(x,y); });
+window.addEventListener('mousemove',e=>{ if(!drag)return; const [x,y]=evtXY(e); pMove(x,y); });
+window.addEventListener('mouseup',()=>pUp());
+cv.addEventListener('touchstart',e=>{ e.preventDefault(); const [x,y]=evtXY(e); pDown(x,y); },{passive:false});
+cv.addEventListener('touchmove',e=>{ e.preventDefault(); const [x,y]=evtXY(e); pMove(x,y); },{passive:false});
+window.addEventListener('touchend',()=>pUp());
 
 // ============================================================================
 //  Boot
@@ -410,6 +483,22 @@ document.getElementById('btnSkip').onclick=()=>{ if(screen==="cracktro"){ screen
 initStars(); craStart=performance.now();
 function frame(now){
   if(screen==="cracktro"){ drawCracktro(); if(now-craStart>9000){ screen="ui"; drawUI(); } }
+  else if(inertiaOn){
+    scrollPx+=inertiaV; inertiaV*=0.92;                          // friction
+    if(scrollPx<0){ scrollPx=0; inertiaOn=false; }
+    const mp=maxScrollPx(); if(scrollPx>mp){ scrollPx=mp; inertiaOn=false; }
+    if(Math.abs(inertiaV)<0.3) inertiaOn=false;
+    syncIndexToScroll(); drawUI();
+  }
+  else if(screen==="ui" && !drag && !infoShowing && selOverflows()){
+    if(marqueeSel!==sel){ marqueeSel=sel; marqueeOff=0; marqueeDir=1; marqueePause=now; }   // pause at start on new selection
+    const mx=marqueeMax();
+    if(marqueePause){ if(now-marqueePause>=1000){ marqueePause=0; marqueeDir=(marqueeOff<=0)?1:-1; } }
+    else { marqueeOff += marqueeDir*2;
+      if(marqueeOff>=mx){ marqueeOff=mx; marqueePause=now; }
+      else if(marqueeOff<=0){ marqueeOff=0; marqueePause=now; } }
+    drawUI();
+  }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

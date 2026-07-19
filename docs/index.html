@@ -241,6 +241,7 @@
     .badge-standalone { background: #1a2a1a; color: var(--green); border: 1px solid #2a4a2a; }
     .badge-dongle     { background: #1a1a2a; color: var(--blue);  border: 1px solid #2a2a4a; }
     .badge-wireless   { background: #2a1a0a; color: var(--copper2); border: 1px solid #4a2a0a; }
+    .badge-current    { background: #2a2410; color: #ffd75e; border: 1px solid #6a5a1a; }
 
     .selected-indicator {
       position: absolute;
@@ -440,6 +441,14 @@
 
   <div class="device-grid">
 
+    <div class="device-card" data-manifest="firmware/jc3248/manifest.json" onclick="selectDevice(this)">
+      <div class="selected-indicator"></div>
+      <div class="device-name">Guition JC3248</div>
+      <div class="device-chip">ESP32-S3 · 3.5" 480×320</div>
+      <div class="device-desc">The current interface — cached boot, cover art, six themes, multi-disk selector, scalable fonts, A-Z jump. Optional wireless via a Super Mini dongle.</div>
+      <div><span class="device-badge badge-current">Recommended</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
+    </div>
+
     <div class="device-card" data-manifest="firmware/waveshare7/manifest.json" onclick="selectDevice(this)">
       <div class="selected-indicator"></div>
       <div class="device-name">Waveshare 7"</div>
@@ -596,7 +605,7 @@ function blit(){ imgData.data.set(fb); ctx.putImageData(imgData,0,0); }
 //  Layout constants (exact)
 // ============================================================================
 const STATUS_H=20, COVER_W=150, COVER_ART_X=4, COVER_ART_Y=24, COVER_ART_W=142, COVER_ART_H=130;
-const AZ_W=18, AZ_X=VW-AZ_W, LIST_X=COVER_W, LIST_W=VW-COVER_W-AZ_W, MODE_BAR_H=18;
+const AZ_W=30, AZ_X=VW-AZ_W, LIST_X=COVER_W, LIST_W=VW-COVER_W-AZ_W, MODE_BAR_H=18;
 const LIST_TOP=STATUS_H+MODE_BAR_H, NOW_PLAY_H=22, BOTTOM_H=40;
 const LIST_BOTTOM=VH-BOTTOM_H-NOW_PLAY_H, LIST_ITEM_H=Math.floor((LIST_BOTTOM-LIST_TOP)/6), ITEMS_VIS=6;
 const DISKS_PER_PAGE=6;
@@ -675,7 +684,7 @@ function drawCracktro(){
 function drawStatusBar(){
   fillRect(0,0,VW,STATUS_H,C.bar); setSize(1);
   text(6,6,"OMEGAWARE",C.orange,C.bar);
-  text(6+textW("OMEGAWARE"),6,"  v3.6.2-JC3248",C.mid,C.bar);
+  text(6+textW("OMEGAWARE"),6,"  v3.8.2-JC3248",C.mid,C.bar);
   if(wireless){ const t="WIRELESS:PAIR"; text(VW/2-40,6,t,0xFD20,C.bar); }
   else { const t="STANDALONE"; text((VW-textW(t))/2|0,6,t,0x07FF,C.bar); }
   fillCircle(VW-8,STATUS_H/2,3, loaded?0xE8C4:C.green);
@@ -768,11 +777,14 @@ function drawAZ(){
   if(!letters.length)return; const barH=LIST_BOTTOM-LIST_TOP;
   fillRect(AZ_X,LIST_TOP,AZ_W,barH+NOW_PLAY_H,C.panel);
   let cur=(scroll>=0&&scroll<games.length)?games[scroll].letter:"A";
-  let lh=Math.max(7,barH/letters.length|0); setSize(1);
+  let lh=Math.max(7,barH/letters.length|0);
+  const lsz=(lh>=16&&AZ_W>=12)?2:1; setSize(lsz);
   letters.forEach((ltr,i)=>{ const ly=LIST_TOP+i*lh; if(ly+lh>LIST_BOTTOM)return;
-    if(ltr===cur){ fillRect(AZ_X,ly,AZ_W,lh,C.amber); text(AZ_X+(AZ_W-6)/2|0,ly+(lh-7)/2|0,ltr,BLACK,C.amber); }
-    else text(AZ_X+(AZ_W-6)/2|0,ly+(lh-7)/2|0,ltr,C.dim,C.panel);
+    const lx=AZ_X+(AZ_W-6*lsz)/2|0, lyy=ly+(lh-8*lsz)/2|0;
+    if(ltr===cur){ fillRect(AZ_X,ly,AZ_W,lh,C.amber); text(lx,lyy,ltr,BLACK,C.amber); }
+    else text(lx,lyy,ltr,C.dim,C.panel);
   });
+  setSize(1);
   const maxOff=games.length-ITEMS_VIS;
   if(maxOff>0){ const th=Math.max(4,barH*ITEMS_VIS/games.length|0); const tyy=LIST_TOP+(barH-th)*scroll/maxOff|0; fillRect(AZ_X-2,tyy,2,th,C.blue); }
 }
@@ -940,7 +952,9 @@ requestAnimationFrame(frame);
 
   // Device versions — update these when you build new firmware
   const deviceInfo = {
+    'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware v3.8.2' },
     'firmware/waveshare7/manifest.json': { name: 'Waveshare 7"',  version: 'Firmware v3.4.7' },
+    'firmware/waveshare28/manifest.json':{ name: 'Waveshare 2.8"', version: 'Firmware v3.4.7' },
     'firmware/xiao/manifest.json':       { name: 'XIAO Dongle',   version: 'Firmware v3.2.0' },
     'firmware/cyd/manifest.json':        { name: 'CYD',           version: 'Firmware v3.9.0' },
   };
