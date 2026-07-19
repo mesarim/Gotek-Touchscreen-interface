@@ -68,7 +68,7 @@ let loaded=false,loadedIdx=-1,loadedDisk=-1,loadedName="";
 let infoShowing=false,wireless=false;
 let orient='L',compact=false,fontMode=1,nameSz=2;
 let screen="cracktro";
-let infoFontY=0,infoRotY=0,infoCompY=0,infoSaY=0,infoWiY=0,infoRescanY=0,infoResetY=0;
+let infoFontY=0,infoRotY=0,infoCompY=0,infoModeY=0,infoBH=22,infoRescanY=0,infoResetY=0;
 
 // ---- layout ----
 let STATUS_H,BOTTOM_H,MODE_BAR_H,NOW_PLAY_H,AZ_W,AZ_X;
@@ -94,11 +94,11 @@ function relayout(){
       INS_X=4;INS_W=COVER_W-8;INS_H=28;INS_Y=VH-BOTTOM_H-36;STRIP_ON=false;
     }else{
       COVER_ON=true;COVER_X=0;COVER_Y=mb+2;COVER_W=VW;COVER_H=190;
-      ART_X=8;ART_Y=COVER_Y+8;ART_W=118;ART_H=118;
+      ART_X=8;ART_Y=COVER_Y+8;ART_W=108;ART_H=108;
       LIST_X=0;LIST_TOP=COVER_Y+COVER_H+4;LIST_W=AZ_X;
       NOW_ON=true;NOW_Y=VH-BOTTOM_H-NOW_PLAY_H;LIST_BOTTOM=NOW_Y;
       AZ_TOP=LIST_TOP;AZ_H=(VH-BOTTOM_H)-LIST_TOP;
-      INS_X=8;INS_W=118;INS_H=24;INS_Y=COVER_Y+134;STRIP_ON=false;
+      INS_X=8;INS_W=VW-16;INS_H=28;INS_Y=COVER_Y+COVER_H-32;STRIP_ON=false;
     }
   }else{
     COVER_ON=false;STRIP_ON=true;STRIP_H=(orient==='P')?46:44;STRIP_Y=VH-BOTTOM_H-STRIP_H;
@@ -131,7 +131,7 @@ function drawCracktro(){const copperY=VH/2-30+Math.sin(craFrame*0.05)*40|0;fillR
   craScroll+=2;craFrame++;blit();}
 
 // ---- draw ----
-function drawStatusBar(){fillRect(0,0,VW,STATUS_H,C.bar);setSize(1);text(6,6,"OMEGAWARE",C.orange,C.bar);text(6+textW("OMEGAWARE"),6," v3.9.0",C.mid,C.bar);const t=wireless?"WIRELESS":"STANDALONE";text((VW-textW(t))/2|0,6,t,wireless?0xFD20:0x07FF,C.bar);fillCircle(VW-8,STATUS_H/2,3,loaded?0xE8C4:C.green);}
+function drawStatusBar(){fillRect(0,0,VW,STATUS_H,C.bar);setSize(1);text(6,6,"OMEGAWARE",C.orange,C.bar);text(6+textW("OMEGAWARE"),6," v4.0.0",C.mid,C.bar);const t=wireless?"WIRELESS":"STANDALONE";text((VW-textW(t))/2|0,6,t,wireless?0xFD20:0x07FF,C.bar);fillCircle(VW-8,STATUS_H/2,3,loaded?0xE8C4:C.green);}
 function drawModeBar(){const mx=(COVER_ON&&orient==='L')?COVER_W:0,mw=VW-mx;fillRect(mx,STATUS_H,mw,MODE_BAR_H,C.bar);setSize(1);const isA=mode==="ADF";
   fillRound(mx+4,STATUS_H+2,36,14,7,isA?C.accent:C.bg);text(mx+10,STATUS_H+6,"ADF",isA?C.amber:C.dim,isA?C.accent:C.bg);
   fillRound(mx+44,STATUS_H+2,36,14,7,!isA?C.accent:C.bg);text(mx+50,STATUS_H+6,"DSK",!isA?C.amber:C.dim,!isA?C.accent:C.bg);
@@ -150,8 +150,8 @@ function drawCover(){if(!COVER_ON||!games.length)return;const g=games[sel];fillR
     const rx=ART_X+ART_W+8,rw=VW-rx-6;let ty=ART_Y;setSize(2);
     for(const l of wrapText(g.name,rw,3)){text(rx,ty,l,WHITE,C.panel);ty+=18;}
     if(g.blurb){setSize(1);ty+=3;const bb=ART_Y+ART_H+2;for(const l of wrapText(g.blurb,rw,6)){if(ty+8>bb)break;text(rx,ty,l,C.dim,C.panel);ty+=10;}}
-    if(g.disk_count>1){dsStepper(INS_X+INS_W+8,INS_Y,VW-(INS_X+INS_W+8)-6,INS_H,g);}
-    else{setSize(1);text(INS_X+INS_W+8,INS_Y+2,"1 disk",C.dim,C.panel);text(INS_X+INS_W+8,INS_Y+13,"ADF 880KB",C.dim,C.panel);}
+    if(g.disk_count>1)dsStepper(8,COVER_Y+COVER_H-70,VW-16,26,g);
+    else{setSize(1);text(12,COVER_Y+COVER_H-58,"Single disk  -  ADF 880KB",C.dim,C.panel);}
   }
   if(g.disk_count>1&&orient==='L')drawDiskSelector(g);
   fillRound(INS_X,INS_Y,INS_W,INS_H,8,isL?0x4000:0x0340);drawRound(INS_X,INS_Y,INS_W,INS_H,8,isL?0xE8C4:C.green);
@@ -168,11 +168,11 @@ function drawDiskSelector(g){const L=diskLayout(g);if(diskPage>=L.pages)diskPage
     fillRound(bx,by,L.dbw,L.dbh,4,bc);drawRound(bx,by,L.dbw,L.dbh,4,isSel?C.amber:C.dim);const dl="D"+(d+1);text(bx+(L.dbw-textW(dl))/2|0,by+(L.dbh-8)/2|0,dl,(isLd||isSel)?BLACK:C.lit,bc);}
   if(L.multi){const pby=L.gridY+L.gridH+L.pageGap;fillRound(L.gx,pby,L.gridW,L.pageBtnH,4,C.accent);const pl=(diskPage+1<L.pages)?`MORE D${end+1}+  >`:"<  BACK TO D1";text(L.gx+(L.gridW-textW(pl))/2|0,pby+(L.pageBtnH-8)/2|0,pl,WHITE,C.accent);}}
 let stepOn=false,stepX=0,stepY=0,stepW=0,stepH=0;
-function dsStepper(x,y,w,h,g){stepOn=true;stepX=x;stepY=y;stepW=w;stepH=h;const a=h+4;
-  fillRound(x,y,w,h,5,C.bar);
-  fillRound(x,y,a,h,5,C.accent);setSize(2);text(x+(a-textW("<"))/2|0,y+(h-16)/2|0,"<",WHITE,C.accent);
-  fillRound(x+w-a,y,a,h,5,C.accent);text(x+w-a+(a-textW(">"))/2|0,y+(h-16)/2|0,">",WHITE,C.accent);
-  setSize(1);const lbl="D"+(diskSel+1)+"/"+g.disk_count;text(x+(w-textW(lbl))/2|0,y+(h-8)/2|0,lbl,C.lit,C.bar);}
+function dsStepper(x,y,w,h,g){stepOn=true;stepX=x;stepY=y;stepW=w;stepH=h;const bw=w/4|0;
+  fillRound(x,y,w,h,6,C.bar);
+  fillRound(x,y,bw,h,6,C.accent);setSize(3);text(x+(bw-18)/2|0,y+(h-24)/2|0,"<",WHITE,C.accent);
+  fillRound(x+w-bw,y,bw,h,6,C.accent);text(x+w-bw+(bw-18)/2|0,y+(h-24)/2|0,">",WHITE,C.accent);
+  setSize(2);const lbl="Disk "+(diskSel+1)+" of "+g.disk_count;text(x+(w-textW(lbl))/2|0,y+(h-16)/2|0,lbl,C.lit,C.bar);}
 function drawList(){fillRect(LIST_X,LIST_TOP,LIST_W,LIST_BOTTOM-LIST_TOP,C.bg);
   if(scrollPx<0)scrollPx=0;const mp=maxScrollPx();if(scrollPx>mp)scrollPx=mp;
   const first=Math.floor(scrollPx/LIST_ITEM_H),off=scrollPx-first*LIST_ITEM_H;scroll=first;clipY0=LIST_TOP;clipY1=LIST_BOTTOM;
@@ -208,17 +208,16 @@ function drawInfo(){
   if(orient==='L'){ix=0;iy=STATUS_H;iw=150;ih=VH-STATUS_H-BOTTOM_H;}
   else{ix=0;iy=STATUS_H+MODE_BAR_H;iw=VW;ih=(VH-BOTTOM_H)-iy;}
   fillRect(ix,iy,iw,ih,C.panel);
+  const isz=(orient==='P')?2:1, bh=(orient==='P')?28:22, lh=(orient==='P')?17:9, btn=bh+3, tyo=((bh-8*isz)/2)|0; infoBH=bh;
   let y=iy+4,pw=iw-8,x=ix+4;setSize(1);text(x+2,y,"SETTINGS",C.dim,C.panel);y+=11;
-  infoSaY=y;let saCol=!wireless?C.green:C.bar;fillRound(x,y,pw,26,6,saCol);text(x+(pw-textW("STANDALONE"))/2|0,y+9,"STANDALONE",!wireless?BLACK:C.dim,saCol);y+=30;
-  infoWiY=y;let wiCol=wireless?C.blue:C.bar;fillRound(x,y,pw,26,6,wiCol);text(x+(pw-textW("WIRELESS"))/2|0,y+9,"WIRELESS",wireless?WHITE:C.dim,wiCol);y+=30;
+  infoModeY=y;{const mc=wireless?C.blue:C.green,ml="MODE: "+(wireless?"WIRELESS":"STANDALONE");fillRound(x,y,pw,bh,6,mc);setSize(isz);text(x+(pw-textW(ml))/2|0,y+tyo,ml,BLACK,mc);}y+=btn;
+  infoFontY=y;{fillRound(x,y,pw,bh,6,C.amber);setSize(isz);const fl="FONT: "+fontName(fontMode);text(x+(pw-textW(fl))/2|0,y+tyo,fl,BLACK,C.amber);}y+=btn;
+  infoRotY=y;{fillRound(x,y,pw,bh,6,C.blue);setSize(isz);const rl="ROTATE: "+(orient==='P'?"PORTRAIT":"LANDSCAPE");text(x+(pw-textW(rl))/2|0,y+tyo,rl,WHITE,C.blue);}y+=btn;
+  infoCompY=y;{const cc=compact?C.green:C.bar;fillRound(x,y,pw,bh,6,cc);setSize(isz);const cl="COMPACT: "+(compact?"ON":"OFF");text(x+(pw-textW(cl))/2|0,y+tyo,cl,compact?BLACK:C.lit,cc);}y+=btn;
   hline(x+2,y,pw-4,C.sep);y+=4;
-  infoFontY=y;fillRound(x,y,pw,22,6,C.amber);text(x+(pw-textW("FONT: "+fontName(fontMode)))/2|0,y+7,"FONT: "+fontName(fontMode),BLACK,C.amber);y+=26;
-  infoRotY=y;fillRound(x,y,pw,22,6,C.blue);text(x+(pw-textW("ROTATE: "+(orient==='P'?"PORTRAIT":"LANDSCAPE")))/2|0,y+7,"ROTATE: "+(orient==='P'?"PORTRAIT":"LANDSCAPE"),WHITE,C.blue);y+=26;
-  infoCompY=y;fillRound(x,y,pw,22,6,compact?C.green:C.bar);text(x+(pw-textW("COMPACT: "+(compact?"ON":"OFF")))/2|0,y+7,"COMPACT: "+(compact?"ON":"OFF"),compact?BLACK:C.lit,compact?C.green:C.bar);y+=26;
-  hline(x+2,y,pw-4,C.sep);y+=4;
-  setSize(1);text(x+2,y,"Heap:212K  PSRAM:2048K",C.lit,C.panel);y+=10;text(x+2,y,"Games: "+games.length,C.lit,C.panel);y+=12;
-  infoRescanY=y;fillRound(x,y,pw,22,6,C.blue);text(x+(pw-textW("RESCAN SD"))/2|0,y+7,"RESCAN SD",WHITE,C.blue);y+=26;
-  infoResetY=y;fillRound(x,y,pw,22,6,0x8000);text(x+(pw-textW("SOFT RESET"))/2|0,y+7,"SOFT RESET",WHITE,0x8000);}
+  setSize(1);text(x+2,y,"Heap:212K  PSRAM:2048K",C.lit,C.panel);y+=lh;text(x+2,y,"Games: "+games.length,C.lit,C.panel);y+=lh+2;
+  infoRescanY=y;{fillRound(x,y,pw,bh,6,C.blue);setSize(isz);text(x+(pw-textW("RESCAN SD"))/2|0,y+tyo,"RESCAN SD",WHITE,C.blue);}y+=btn;
+  infoResetY=y;{fillRound(x,y,pw,bh,6,0x8000);setSize(isz);text(x+(pw-textW("SOFT RESET"))/2|0,y+tyo,"SOFT RESET",WHITE,0x8000);}}
 function drawUI(){fillScreen(C.bg);drawStatusBar();if(infoShowing){drawModeBar();drawList();if(STRIP_ON)drawActionStrip();drawNowPlaying();drawAZ();drawInfo();}else{drawModeBar();drawCover();drawList();drawActionStrip();drawNowPlaying();drawAZ();}drawBottom();blit();}
 
 // ---- interaction ----
@@ -230,15 +229,14 @@ function hit(mx,my){
   if(screen==="cracktro"){screen="ui";drawUI();return;}
   const g=games[sel];
   if(infoShowing){
-    const ix=0,iw=(orient==='L')?150:VW;
+    const ix=0,iw=(orient==='L')?150:VW,bh=infoBH;
     if(mx<ix+iw){
-      if(my>=infoFontY&&my<infoFontY+22){applyFont((fontMode+1)%3);drawUI();return;}
-      if(my>=infoRotY&&my<infoRotY+22){orient=(orient==='P')?'L':'P';relayout();drawUI();return;}
-      if(my>=infoCompY&&my<infoCompY+22){compact=!compact;relayout();drawUI();return;}
-      if(my>=infoSaY&&my<infoSaY+26){wireless=false;infoShowing=false;drawUI();return;}
-      if(my>=infoWiY&&my<infoWiY+26){wireless=true;infoShowing=false;drawUI();return;}
-      if(my>=infoRescanY&&my<infoRescanY+22){infoShowing=false;drawUI();return;}
-      if(my>=infoResetY&&my<infoResetY+22){infoShowing=false;drawUI();return;}
+      if(my>=infoModeY&&my<infoModeY+bh){wireless=!wireless;drawUI();return;}
+      if(my>=infoFontY&&my<infoFontY+bh){applyFont((fontMode+1)%3);relayout();drawUI();return;}
+      if(my>=infoRotY&&my<infoRotY+bh){orient=(orient==='P')?'L':'P';relayout();drawUI();return;}
+      if(my>=infoCompY&&my<infoCompY+bh){compact=!compact;relayout();drawUI();return;}
+      if(my>=infoRescanY&&my<infoRescanY+bh){drawUI();return;}
+      if(my>=infoResetY&&my<infoResetY+bh){screen="cracktro";craFrame=0;craScroll=0;craStart=performance.now();initStars();infoShowing=false;return;}
       return;
     }
   }
@@ -250,7 +248,7 @@ function hit(mx,my){
   // INSERT/EJECT (cover or strip)
   if(insHit(mx,my)&&!infoShowing){doInsert();drawUI();return;}
   // disk stepper (portrait cover)
-  if(stepOn&&COVER_ON&&orient==='P'&&g.disk_count>1&&!infoShowing&&mx>=stepX&&my>=stepY&&my<stepY+stepH){const a=stepH+4;if(mx<stepX+a)diskSel=(diskSel-1+g.disk_count)%g.disk_count;else if(mx>=stepX+stepW-a)diskSel=(diskSel+1)%g.disk_count;if(loaded&&loadedIdx===sel)load(sel,diskSel);drawUI();return;}
+  if(stepOn&&COVER_ON&&orient==='P'&&g.disk_count>1&&!infoShowing&&mx>=stepX&&mx<stepX+stepW&&my>=stepY&&my<stepY+stepH){if(mx<stepX+stepW/2)diskSel=(diskSel-1+g.disk_count)%g.disk_count;else diskSel=(diskSel+1)%g.disk_count;if(loaded&&loadedIdx===sel)load(sel,diskSel);drawUI();return;}
   // disk selector grid (landscape cover)
   if(COVER_ON&&orient==='L'&&g.disk_count>1&&!infoShowing){const L=diskLayout(g);
     if(L.multi){const pby=L.gridY+L.gridH+L.pageGap;if(my>=pby&&my<pby+L.pageBtnH&&mx>=L.gx&&mx<L.gx+L.gridW){diskPage=(diskPage+1)%L.pages;drawUI();return;}}

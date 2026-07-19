@@ -751,7 +751,7 @@ function drawCracktro(){
 function drawStatusBar(){
   fillRect(0,0,VW,STATUS_H,C.bar); setSize(1);
   text(6,6,"OMEGAWARE",C.orange,C.bar);
-  text(6+textW("OMEGAWARE"),6,"  v3.8.3-JC3248",C.mid,C.bar);
+  text(6+textW("OMEGAWARE"),6,"  v4.0.0-JC3248",C.mid,C.bar);
   if(wireless){ const t="WIRELESS:PAIR"; text(VW/2-40,6,t,0xFD20,C.bar); }
   else { const t="STANDALONE"; text((VW-textW(t))/2|0,6,t,0x07FF,C.bar); }
   fillCircle(VW-8,STATUS_H/2,3, loaded?0xE8C4:C.green);
@@ -1087,7 +1087,7 @@ requestAnimationFrame(frame);
 
   // Device versions — update these when you build new firmware
   const deviceInfo = {
-    'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware v3.8.3' },
+    'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware v4.0.0' },
     'firmware/waveshare7/manifest.json': { name: 'Waveshare 7"',  version: 'Firmware v3.4.7' },
     'firmware/waveshare28/manifest.json':{ name: 'Waveshare 2.8"', version: 'Firmware v3.4.7' },
     'firmware/supermini/manifest.json':  { name: 'Super Mini Dongle', version: 'Firmware v3.2.0' },

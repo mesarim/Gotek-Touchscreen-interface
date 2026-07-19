@@ -21,7 +21,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "v3.8.3-JC3248"
+#define FW_VERSION "v4.0.0-JC3248"
 #include "espnow_server.h"
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
@@ -31,8 +31,15 @@ extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect
 // ════════════════════════════════════════════════════════════════════════════
 #define LCD_WIDTH  320
 #define LCD_HEIGHT 480
-#define gW 480
-#define gH 320
+// Virtual canvas + rotation. g_rot: 0=landscape, 1=portrait, 2=landscape-flipped,
+// 3=portrait-flipped. Each ROTATE tap advances 90 degrees. gW/gH swap for portrait.
+static int gW=480, gH=320;
+static int g_rot=0;
+static bool g_compact=false;
+#define g_portrait (g_rot==1||g_rot==3)
+// Disk-selector grid geometry — declared up here so the Arduino auto-prototype
+// for diskGrid() (which returns this type) sees it before use.
+struct DiskGrid{int pages,pageStart,pageEnd,COLS,dbw,dbh,dgap,gridW,gx,gridY,gridH,pageBtnH,pageGap,labelY;bool multiPage;};
 #define LCD_PIN_CS 45
 #define LCD_PIN_CLK 47
 #define LCD_PIN_MOSI 21
@@ -148,7 +155,13 @@ static JPEGDEC jpegdec;
 
 static inline uint16_t swap16(uint16_t c){return(c>>8)|(c<<8);}
 static inline void fb_setPixel(int vx,int vy,uint16_t color){
-  int px=vy,py=(LCD_HEIGHT-1)-vx;
+  int px,py;
+  switch(g_rot){
+    case 1: px=vx; py=vy; break;                              // 90  portrait
+    case 2: px=(LCD_WIDTH-1)-vy; py=vx; break;                // 180 landscape flipped
+    case 3: px=(LCD_WIDTH-1)-vx; py=(LCD_HEIGHT-1)-vy; break; // 270 portrait flipped
+    default: px=vy; py=(LCD_HEIGHT-1)-vx; break;              // 0   landscape
+  }
   if(px>=0&&px<LCD_WIDTH&&py>=0&&py<LCD_HEIGHT) framebuffer[py*LCD_WIDTH+px]=swap16(color);
 }
 
@@ -164,10 +177,14 @@ static void gfx_fillRect(int x,int y,int w,int h,uint16_t color){
   int vx0=max(g_clip_x0,x),vy0=max(g_clip_y0,y),vx1=min(g_clip_x1,x+w),vy1=min(g_clip_y1,y+h);
   if(vx0>=vx1||vy0>=vy1)return;
   uint16_t sc=swap16(color);
-  for(int py=LCD_HEIGHT-vx1;py<=LCD_HEIGHT-1-vx0;py++){
-    uint16_t*row=&framebuffer[py*LCD_WIDTH];
-    for(int px=vy0;px<vy1;px++) row[px]=sc;
+  int px0,px1,py0,py1;               // rotations map a virtual rect to a physical rect
+  switch(g_rot){
+    case 1: px0=vx0;py0=vy0;px1=vx1;py1=vy1;break;
+    case 2: px0=LCD_WIDTH-vy1;py0=vx0;px1=LCD_WIDTH-vy0;py1=vx1;break;
+    case 3: px0=LCD_WIDTH-vx1;py0=LCD_HEIGHT-vy1;px1=LCD_WIDTH-vx0;py1=LCD_HEIGHT-vy0;break;
+    default: px0=vy0;py0=LCD_HEIGHT-vx1;px1=vy1;py1=LCD_HEIGHT-vx0;break;
   }
+  for(int py=py0;py<py1;py++){uint16_t*row=&framebuffer[py*LCD_WIDTH];for(int px=px0;px<px1;px++)row[px]=sc;}
 }
 
 static void gfx_drawRect(int x,int y,int w,int h,uint16_t c){gfx_fillRect(x,y,w,1,c);gfx_fillRect(x,y+h-1,w,1,c);gfx_fillRect(x,y,1,h,c);gfx_fillRect(x+w-1,y,1,h,c);}
@@ -281,7 +298,13 @@ static bool Touch_ReadFrame(){
   if(buf[1]==0){gTouchPts=0;return false;}
   uint16_t rx=((buf[2]&0x0F)<<8)|buf[3],ry=((buf[4]&0x0F)<<8)|buf[5];
   if(rx>=LCD_WIDTH||ry>=LCD_HEIGHT){gTouchPts=0;return false;}
-  gTouchX=(LCD_HEIGHT-1)-ry; gTouchY=rx; gTouchPts=1; return true;
+  switch(g_rot){                                   // inverse of fb_setPixel mapping
+    case 1: gTouchX=rx; gTouchY=ry; break;
+    case 2: gTouchX=ry; gTouchY=(LCD_WIDTH-1)-rx; break;
+    case 3: gTouchX=(LCD_WIDTH-1)-rx; gTouchY=(LCD_HEIGHT-1)-ry; break;
+    default: gTouchX=(LCD_HEIGHT-1)-ry; gTouchY=rx; break;
+  }
+  gTouchPts=1; return true;
 }
 static bool getTouchXY(uint16_t*x,uint16_t*y){if(!gTouchPts)return false;*x=constrain(gTouchX,0,gW-1);*y=constrain(gTouchY,0,gH-1);return true;}
 
@@ -424,8 +447,8 @@ static bool g_wireless_mode=false,g_loop_cracktro=false,g_info_showing=false;
 static bool g_tapload=false;    // ON = tapping the already-selected row loads it (old double-tap behaviour)
 static bool g_hotswap=false;    // ON = tapping another disk while loaded swaps to it instantly
 static bool g_forceswap=false;  // ON = swap disk bytes in place without the USB eject/re-attach cycle
-static int g_info_pair_btn_y=0;
 static int g_info_rescan_btn_y=0,g_info_reset_btn_y=0,g_info_pair_now_btn_y=0,g_info_font_btn_y=0;
+static int g_info_x=0,g_info_w=150,g_info_rot_btn_y=0,g_info_comp_btn_y=0,g_info_mode_btn_y=0,g_info_bottom=0,g_info_bh=22;
 struct GameEntry{String name;int first_file_idx;int disk_count;String jpg_path;std::vector<int>disk_indices;};
 static std::vector<String>g_files;static std::vector<GameEntry>g_games;
 static int g_sel=0,g_scroll=0,g_disk_sel=0,g_loaded_game_idx=-1,g_loaded_disk_idx=-1;
@@ -575,7 +598,6 @@ static void doUnload();
 static void cycleTheme(){applyTheme((g_theme_idx+1)%NUM_THEMES);saveConfigKey("THEME",String(g_theme_idx));drawFullUI();gfx_flush();}
 static bool g_espnow_started=false;
 static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=true;}}
-static void setWirelessMode(bool w){g_wireless_mode=w;saveConfigKey("MODE",w?"WIRELESS":"STANDALONE");if(w)ensureEspNow();drawFullUI();gfx_flush();}
 
 static void generateDefaultConfig(){
   if(SD_MMC.exists("/CONFIG.TXT"))return;  // never overwrite an existing config
@@ -594,6 +616,13 @@ static void generateDefaultConfig(){
   f.println("");
   f.println("# Font size: SMALL, NORMAL, LARGE");
   f.println("FONT=NORMAL");
+  f.println("");
+  f.println("# Screen rotation in degrees: 0 or 180 = landscape, 90 or 270 = portrait.");
+  f.println("# Easiest to set with the ROTATE button on the INFO screen (each tap = +90).");
+  f.println("ROTATE=0");
+  f.println("");
+  f.println("# COMPACT: OFF = cover art + list, ON = maximise the game list (cover collapses to a strip)");
+  f.println("COMPACT=OFF");
   f.println("");
   f.println("# Load/eject behaviour (all OFF = safest: select, then press the button)");
   f.println("# TAPLOAD: ON = tapping the already-highlighted game row loads it (old double-tap)");
@@ -618,38 +647,65 @@ static void loadConfig(){
     int eq=l.indexOf('=');if(eq<0)continue;String k=l.substring(0,eq),v=l.substring(eq+1);k.trim();v.trim();
     if(k=="THEME")applyTheme(v.toInt());else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");
     else if(k=="TAPLOAD")g_tapload=(v=="ON"||v=="1");else if(k=="HOTSWAP")g_hotswap=(v=="ON"||v=="1");else if(k=="FORCESWAP")g_forceswap=(v=="ON"||v=="1");
-    else if(k=="FONT"){int f=1;if(v=="SMALL")f=0;else if(v=="LARGE")f=2;applyFont(f);}}
+    else if(k=="FONT"){int f=1;if(v=="SMALL")f=0;else if(v=="LARGE")f=2;applyFont(f);}
+    else if(k=="ROTATE"){g_rot=((v.toInt()/90)%4+4)%4;}
+    else if(k=="COMPACT"){g_compact=(v=="ON"||v=="1");}}
   f.close();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
 // LAYOUT — 480×320
 // ════════════════════════════════════════════════════════════════════════════
-#define VW 480
-#define VH 320
-#define STATUS_H 20
-#define COVER_W 150
-#define COVER_ART_X 4
-#define COVER_ART_Y (STATUS_H+4)
-#define COVER_ART_W 142
-#define COVER_ART_H 130
-#define AZ_W 30
-#define AZ_X (VW-AZ_W)
-#define LIST_X COVER_W
-#define LIST_W (VW-COVER_W-AZ_W)
+#define VW gW
+#define VH gH
+#define STATUS_H   20
 #define MODE_BAR_H 18
-#define LIST_TOP (STATUS_H+MODE_BAR_H)
 #define NOW_PLAY_H 22
-#define BOTTOM_H 40
-#define LIST_BOTTOM (VH-BOTTOM_H-NOW_PLAY_H)
+#define BOTTOM_H   40
+#define AZ_W       30
+// Layout is computed by relayout() for the current rotation + compact mode.
+static int AZ_X=450, COVER_W=150, COVER_X=0, COVER_Y=20, COVER_H=260;
+static int COVER_ART_X=4, COVER_ART_Y=24, COVER_ART_W=142, COVER_ART_H=116;
+static int LIST_X=150, LIST_W=300, LIST_TOP=38, LIST_BOTTOM=258, AZ_TOP=38, AZ_H=242;
+static int INS_X=4, INS_Y=244, INS_W=142, INS_H=28;
+static int STRIP_Y=0, STRIP_H=0, NOW_Y=258;
+static bool COVER_ON=true, STRIP_ON=false, NOW_ON=true;
 // Font profile: 0=SMALL 1=NORMAL 2=LARGE. Runtime row height / rows-per-screen / name size.
-static int g_font=1, g_item_h=(LIST_BOTTOM-LIST_TOP)/4, g_items_vis=4, g_name_sz=2;
+static int g_font=1, g_item_h=55, g_items_vis=4, g_name_sz=2;
 #define LIST_ITEM_H g_item_h
 #define ITEMS_VIS   g_items_vis
-static void applyFont(int f){if(f<0||f>2)f=1;g_font=f;int rows;
-  if(f==0){rows=6;g_name_sz=1;}else if(f==2){rows=3;g_name_sz=3;}else{rows=4;g_name_sz=2;}
-  g_item_h=(LIST_BOTTOM-LIST_TOP)/rows;g_items_vis=rows;}
+static void applyFont(int f){if(f<0||f>2)f=1;g_font=f;g_name_sz=(f==0?1:f==2?3:2);
+  int target=(f==0?34:f==2?70:50),listH=LIST_BOTTOM-LIST_TOP,rows=listH/target;
+  if(listH%target>=target/2)rows++; if(rows<1)rows=1;
+  g_item_h=listH/rows; g_items_vis=rows;}
 static const char* fontName(int f){return f==0?"SMALL":f==2?"LARGE":"NORMAL";}
+static void relayout(){
+  if(g_portrait){gW=320;gH=480;}else{gW=480;gH=320;}
+  AZ_X=VW-AZ_W; int mb=STATUS_H+MODE_BAR_H;
+  if(!g_compact){
+    if(!g_portrait){
+      COVER_ON=true;COVER_X=0;COVER_Y=STATUS_H;COVER_W=150;COVER_H=VH-STATUS_H-BOTTOM_H;
+      COVER_ART_X=4;COVER_ART_Y=STATUS_H+4;COVER_ART_W=142;COVER_ART_H=116;
+      LIST_X=COVER_W;LIST_TOP=mb;LIST_W=AZ_X-COVER_W;
+      NOW_ON=true;NOW_Y=VH-BOTTOM_H-NOW_PLAY_H;LIST_BOTTOM=NOW_Y;
+      AZ_TOP=LIST_TOP;AZ_H=(VH-BOTTOM_H)-LIST_TOP;
+      INS_X=4;INS_W=COVER_W-8;INS_H=28;INS_Y=VH-BOTTOM_H-36;STRIP_ON=false;
+    }else{
+      COVER_ON=true;COVER_X=0;COVER_Y=mb+2;COVER_W=VW;COVER_H=190;
+      COVER_ART_X=8;COVER_ART_Y=COVER_Y+8;COVER_ART_W=108;COVER_ART_H=108;
+      LIST_X=0;LIST_TOP=COVER_Y+COVER_H+4;LIST_W=AZ_X;
+      NOW_ON=true;NOW_Y=VH-BOTTOM_H-NOW_PLAY_H;LIST_BOTTOM=NOW_Y;
+      AZ_TOP=LIST_TOP;AZ_H=(VH-BOTTOM_H)-LIST_TOP;
+      INS_X=8;INS_W=VW-16;INS_H=28;INS_Y=COVER_Y+COVER_H-32;STRIP_ON=false;   // full-width INSERT at panel bottom
+    }
+  }else{
+    COVER_ON=false;STRIP_ON=true;STRIP_H=(g_portrait?46:44);STRIP_Y=VH-BOTTOM_H-STRIP_H;
+    LIST_X=0;LIST_TOP=mb+(g_portrait?2:0);LIST_W=AZ_X;LIST_BOTTOM=STRIP_Y;
+    AZ_TOP=LIST_TOP;AZ_H=STRIP_Y-LIST_TOP;NOW_ON=false;
+    INS_W=(g_portrait?66:80);INS_H=26;INS_X=VW-INS_W-6;INS_Y=STRIP_Y+((STRIP_H-INS_H)/2);
+  }
+  applyFont(g_font);
+}
 
 // ── Smooth-scroll / A-Z index helpers ──
 static int  maxScrollPx(){int t=(int)g_games.size()*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP);return t<0?0:t;}
@@ -729,85 +785,104 @@ static void drawStatusBar(){
   uint16_t ic=g_loaded?0xE8C4:COL_GREEN;gfx_fillCircle(VW-8,STATUS_H/2,3,ic);
 }
 
+// disk grid geometry (landscape cover) — shared by draw + touch (struct declared up top)
+static DiskGrid diskGrid(int nd){DiskGrid L;L.pages=(nd+DISKS_PER_PAGE-1)/DISKS_PER_PAGE;if(g_disk_page>=L.pages)g_disk_page=0;
+  L.pageStart=g_disk_page*DISKS_PER_PAGE;L.pageEnd=min(L.pageStart+DISKS_PER_PAGE,nd);L.COLS=3;L.dbw=44;L.dbh=20;L.dgap=4;
+  L.gridW=L.COLS*L.dbw+(L.COLS-1)*L.dgap;L.gx=max(4,(COVER_W-L.gridW)/2);L.multiPage=(L.pages>1);
+  L.pageBtnH=L.multiPage?16:0;L.pageGap=L.multiPage?4:0;L.gridH=2*L.dbh+L.dgap;L.labelY=INS_Y-L.gridH-L.pageBtnH-L.pageGap-12;L.gridY=L.labelY+10;return L;}
+static void drawDiskGrid(int nd){DiskGrid L=diskGrid(nd);
+  gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_PANEL);gfx_setCursor(4,L.labelY);
+  gfx_print(L.multiPage?("DISK ("+String(g_disk_page+1)+"/"+String(L.pages)+"):"):"DISK:");
+  for(int d=L.pageStart;d<L.pageEnd;d++){int slot=d-L.pageStart,col=slot%L.COLS,row=slot/L.COLS;int bx=L.gx+col*(L.dbw+L.dgap),by=L.gridY+row*(L.dbh+L.dgap);
+    bool isSel=d==g_disk_sel,isLd=(g_loaded_game_idx==g_sel&&g_loaded_disk_idx==d);uint16_t bc=isLd?COL_GREEN:(isSel?COL_AMBER:COL_BAR);
+    gfx_fillRoundRect(bx,by,L.dbw,L.dbh,4,bc);gfx_drawRoundRect(bx,by,L.dbw,L.dbh,4,isSel?COL_AMBER:COL_DIM);
+    gfx_setTextColor(isLd||isSel?TFT_BLACK:COL_LIT,bc);String dl="D"+String(d+1);gfx_setCursor(bx+(L.dbw-gfx_textWidth(dl))/2,by+(L.dbh-8)/2);gfx_print(dl);}
+  if(L.multiPage){int pby=L.gridY+L.gridH+L.pageGap;gfx_fillRoundRect(L.gx,pby,L.gridW,L.pageBtnH,4,COL_ACCENT);gfx_setTextColor(TFT_WHITE,COL_ACCENT);
+    String pl=(g_disk_page+1<L.pages)?("MORE D"+String(L.pageEnd+1)+"+  >"):("<  BACK TO D1");gfx_setCursor(L.gx+(L.gridW-gfx_textWidth(pl))/2,pby+(L.pageBtnH-8)/2);gfx_print(pl);}}
+// disk stepper (portrait cover / compact) — < Dn/total >
+static int g_step_x=0,g_step_y=0,g_step_w=0,g_step_h=0;static bool g_step_on=false;
+static void drawDiskStepper(int x,int y,int w,int h,int nd){g_step_on=true;g_step_x=x;g_step_y=y;g_step_w=w;g_step_h=h;
+  int bw=w/4;                                       // wide < / > buttons (quarter width each) — easy to hit
+  gfx_fillRoundRect(x,y,w,h,6,COL_BAR);
+  gfx_fillRoundRect(x,y,bw,h,6,COL_ACCENT);gfx_setTextSize(3);gfx_setTextColor(TFT_WHITE,COL_ACCENT);gfx_setCursor(x+(bw-18)/2,y+(h-24)/2);gfx_print("<");
+  gfx_fillRoundRect(x+w-bw,y,bw,h,6,COL_ACCENT);gfx_setCursor(x+w-bw+(bw-18)/2,y+(h-24)/2);gfx_print(">");
+  gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BAR);String lbl="Disk "+String(g_disk_sel+1)+" of "+String(nd);int tw=gfx_textWidth(lbl);gfx_setCursor(x+(w-tw)/2,y+(h-16)/2);gfx_print(lbl);}
+
 static void drawCoverPanel(){
-  gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);if(g_games.empty())return;
+  if(!COVER_ON)return;
+  gfx_fillRect(COVER_X,COVER_Y,COVER_W,COVER_H,COL_PANEL);if(g_games.empty())return;
   auto&game=g_games[g_sel];
-  // Lazy load: find JPG on first view of this game
-  if(!game.jpg_path.length()){
-    String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg)) game.jpg_path=jpg;
-    else game.jpg_path="?"; // mark as checked so we don't search again
-  }
-  // Lazy load: NFO title on first view
+  if(!game.jpg_path.length()){String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg))game.jpg_path=jpg;else game.jpg_path="?";}
   static int lastNfoSel=-1;static String cachedNfoBlurb="";
-  if(lastNfoSel!=g_sel){
-    lastNfoSel=g_sel;cachedNfoBlurb="";
-    String nfoP,nT,nB;
-    if(findNFOFor(g_files[game.first_file_idx],nfoP)){
-      File nf=SD_MMC.open(nfoP,FILE_READ);if(nf){String txt;while(nf.available()&&txt.length()<512)txt+=(char)nf.read();nf.close();parseNFO(txt,nT,nB);
-        if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx]))) game.name=nT;
-        cachedNfoBlurb=nB;}}
-  }
-  // Content bottom: title+blurb must not cross the disk grid (multi-disk) or the INSERT button (single-disk)
-  int cb;
-  if(game.disk_count>1){int nd=game.disk_count,pages=(nd+DISKS_PER_PAGE-1)/DISKS_PER_PAGE;int insertY=VH-BOTTOM_H-36;bool mp=(pages>1);int pbh=mp?16:0,pg=mp?4:0,gh=2*20+4;cb=insertY-gh-pbh-pg-12-2;}
-  else cb=VH-BOTTOM_H-38;
-  // Cover art + wrapped title + wrapped blurb
+  if(lastNfoSel!=g_sel){lastNfoSel=g_sel;cachedNfoBlurb="";String nfoP,nT,nB;
+    if(findNFOFor(g_files[game.first_file_idx],nfoP)){File nf=SD_MMC.open(nfoP,FILE_READ);if(nf){String txt;while(nf.available()&&txt.length()<512)txt+=(char)nf.read();nf.close();parseNFO(txt,nT,nB);
+      if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=nT;cachedNfoBlurb=nB;}}}
+  // Cover art
   gfx_fillRoundRect(COVER_ART_X,COVER_ART_Y,COVER_ART_W,COVER_ART_H,5,COL_BAR);
   gfx_drawRoundRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,6,COL_ACCENT);
-  if(game.jpg_path.length()>0&&game.jpg_path!="?") gfx_drawJpgFile(game.jpg_path,COVER_ART_X+2,COVER_ART_Y+2,COVER_ART_W-4,COVER_ART_H-4);
+  if(game.jpg_path.length()>0&&game.jpg_path!="?")gfx_drawJpgFile(game.jpg_path,COVER_ART_X+2,COVER_ART_Y+2,COVER_ART_W-4,COVER_ART_H-4);
   else{char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setCursor(COVER_ART_X+COVER_ART_W/2-6,COVER_ART_Y+COVER_ART_H/2-8);gfx_print(ib);}
-  {int ty=COVER_ART_Y+COVER_ART_H+4;gfx_setTextSize(1);
-   ty=drawWrapped(4,ty,game.name,COVER_W-8,10,2,cb,COL_LIT,COL_PANEL);
-   if(cachedNfoBlurb.length()>0) drawWrapped(4,ty,cachedNfoBlurb,COVER_W-8,9,12,cb,COL_DIM,COL_PANEL);}
-  // Disk selector — paginated, 6 disks per page (3 cols x 2 rows), NEXT button below
-  if(game.disk_count>1){
-    int nd=game.disk_count;
-    int pages=(nd+DISKS_PER_PAGE-1)/DISKS_PER_PAGE;
-    if(g_disk_page>=pages)g_disk_page=0;
-    int pageStart=g_disk_page*DISKS_PER_PAGE;
-    int pageEnd=min(pageStart+DISKS_PER_PAGE,nd);   // exclusive
-    const int COLS=3;
-    int dbw=44, dbh=20, dgap=4;
-    int gridW=COLS*dbw+(COLS-1)*dgap;
-    int gx=max(4,(COVER_W-gridW)/2);
-    int insertY=VH-BOTTOM_H-36;
-    bool multiPage=(pages>1);
-    int pageBtnH=multiPage?16:0, pageGap=multiPage?4:0;
-    int gridH=2*dbh+dgap;                            // always reserve 2 rows
-    int labelY=insertY-gridH-pageBtnH-pageGap-12;
-    int gridY=labelY+10;
-    // Label with page indicator
-    gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_PANEL);gfx_setCursor(4,labelY);
-    if(multiPage)gfx_print("DISK ("+String(g_disk_page+1)+"/"+String(pages)+"):");
-    else gfx_print("DISK:");
-    // Disk buttons for this page
-    for(int d=pageStart;d<pageEnd;d++){
-      int slot=d-pageStart;
-      int col=slot%COLS, row=slot/COLS;
-      int bx=gx+col*(dbw+dgap), by=gridY+row*(dbh+dgap);
-      bool isSel=d==g_disk_sel, isLd=(g_loaded_game_idx==g_sel&&g_loaded_disk_idx==d);
-      uint16_t bc=isLd?COL_GREEN:(isSel?COL_AMBER:COL_BAR);
-      gfx_fillRoundRect(bx,by,dbw,dbh,4,bc);
-      gfx_drawRoundRect(bx,by,dbw,dbh,4,isSel?COL_AMBER:COL_DIM);
-      gfx_setTextColor(isLd||isSel?TFT_BLACK:COL_LIT,bc);
-      String dl="D"+String(d+1);
-      gfx_setCursor(bx+(dbw-gfx_textWidth(dl))/2,by+(dbh-8)/2);gfx_print(dl);
-    }
-    // NEXT-page button (full width under grid) when multipage
-    if(multiPage){
-      int pby=gridY+gridH+pageGap;
-      gfx_fillRoundRect(gx,pby,gridW,pageBtnH,4,COL_ACCENT);
-      gfx_setTextColor(TFT_WHITE,COL_ACCENT);
-      String pl=(g_disk_page+1<pages)?("MORE D"+String(pageEnd+1)+"+  >"):("<  BACK TO D1");
-      gfx_setCursor(gx+(gridW-gfx_textWidth(pl))/2,pby+(pageBtnH-8)/2);gfx_print(pl);
-    }
+  bool isL=g_loaded&&g_loaded_game_idx==g_sel;
+  if(!g_portrait){
+    int cb;
+    if(game.disk_count>1){DiskGrid L=diskGrid(game.disk_count);cb=L.labelY-2;}
+    else cb=INS_Y-2;
+    int ty=COVER_ART_Y+COVER_ART_H+4;gfx_setTextSize(1);
+    ty=drawWrapped(4,ty,game.name,COVER_W-8,10,2,cb,COL_LIT,COL_PANEL);
+    if(cachedNfoBlurb.length()>0)drawWrapped(4,ty,cachedNfoBlurb,COVER_W-8,9,12,cb,COL_DIM,COL_PANEL);
+    if(game.disk_count>1)drawDiskGrid(game.disk_count);
+  }else{
+    int rx=COVER_ART_X+COVER_ART_W+8,rw=VW-rx-6;int ty=COVER_ART_Y;gfx_setTextSize(1);
+    ty=drawWrapped(rx,ty,game.name,rw,10,3,COVER_ART_Y+COVER_ART_H,COL_LIT,COL_PANEL);
+    if(cachedNfoBlurb.length()>0)drawWrapped(rx,ty+3,cachedNfoBlurb,rw,9,6,COVER_ART_Y+COVER_ART_H+2,COL_DIM,COL_PANEL);
+    if(game.disk_count>1)drawDiskStepper(8,COVER_Y+COVER_H-70,VW-16,26,game.disk_count);   // full-width disk row above INSERT
+    else{gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_PANEL);gfx_setCursor(12,COVER_Y+COVER_H-58);gfx_print("Single disk  -  ADF 880KB");}
   }
   // INSERT/EJECT
-  int btnY=VH-BOTTOM_H-36;bool isL=g_loaded&&g_loaded_game_idx==g_sel;
-  gfx_fillRoundRect(4,btnY,COVER_W-8,28,8,isL?(uint16_t)0x4000:(uint16_t)0x0340);
-  gfx_drawRoundRect(4,btnY,COVER_W-8,28,8,isL?(uint16_t)0xE8C4:COL_GREEN);
-  gfx_setTextSize(1);gfx_setTextColor(TFT_WHITE,isL?(uint16_t)0x4000:(uint16_t)0x0340);
-  const char*lbl=isL?"EJECT":"INSERT";int tw=gfx_textWidth(lbl);gfx_setCursor(4+(COVER_W-8-tw)/2,btnY+10);gfx_print(lbl);
+  gfx_fillRoundRect(INS_X,INS_Y,INS_W,INS_H,8,isL?(uint16_t)0x4000:(uint16_t)0x0340);
+  gfx_drawRoundRect(INS_X,INS_Y,INS_W,INS_H,8,isL?(uint16_t)0xE8C4:COL_GREEN);
+  gfx_setTextSize(2);gfx_setTextColor(TFT_WHITE,isL?(uint16_t)0x4000:(uint16_t)0x0340);
+  const char*lbl=isL?"EJECT":"INSERT";int tw=gfx_textWidth(lbl);gfx_setCursor(INS_X+(INS_W-tw)/2,INS_Y+(INS_H-16)/2);gfx_print(lbl);
+}
+
+// Compact action strip (both orientations): thumbnail + selected name + INSERT
+static void drawActionStrip(){
+  if(!STRIP_ON||g_games.empty())return;auto&game=g_games[g_sel];bool isL=g_loaded&&g_loaded_game_idx==g_sel;
+  gfx_fillRect(0,STRIP_Y,VW,STRIP_H,COL_PANEL);gfx_hline(0,STRIP_Y,VW,COL_SEP);
+  int th=STRIP_H-12;gfx_fillRoundRect(6,STRIP_Y+6,th,th,4,COL_BG);gfx_drawRoundRect(6,STRIP_Y+6,th,th,4,COL_ACCENT);
+  char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setTextSize(3);gfx_setTextColor(COL_ACCENT,COL_BG);gfx_setCursor(6+(th-18)/2,STRIP_Y+6+(th-24)/2);gfx_print(ib);
+  gfx_setTextSize(2);gfx_setTextColor(TFT_WHITE,COL_PANEL);String nm=game.name;int maxw=INS_X-(th+16)-6;while(gfx_textWidth(nm)>maxw&&nm.length()>3)nm=nm.substring(0,nm.length()-1);gfx_setCursor(th+16,STRIP_Y+8);gfx_print(nm);
+  gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_PANEL);gfx_setCursor(th+16,STRIP_Y+26);gfx_print(game.disk_count>1?("disk "+String(g_disk_sel+1)+"/"+String(game.disk_count)+"  < tap >"):"1 disk  ADF 880KB");
+  gfx_fillRoundRect(INS_X,INS_Y,INS_W,INS_H,6,isL?(uint16_t)0x4000:COL_GREEN);gfx_drawRoundRect(INS_X,INS_Y,INS_W,INS_H,6,isL?(uint16_t)0xE8C4:COL_GREEN);
+  gfx_setTextSize(2);gfx_setTextColor(isL?TFT_WHITE:TFT_BLACK,isL?(uint16_t)0x4000:COL_GREEN);const char*lbl=isL?"EJECT":"INSERT";int tw=gfx_textWidth(lbl);gfx_setCursor(INS_X+(INS_W-tw)/2,INS_Y+(INS_H-16)/2);gfx_print(lbl);
+}
+
+// INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
+static void drawInfoPanel(){
+  int ix,iy,iw,ih;
+  // Larger text in portrait (wide panel); size 1 in the narrow 150px landscape column.
+  int isz=g_portrait?2:1, bh=g_portrait?28:22, lh=g_portrait?17:9, btn=bh+3, ty=(bh-8*isz)/2;
+  int contentH=4+11+btn+4+btn*3+4+lh*2+(g_wireless_mode?(lh+btn):0)+btn+bh+6;
+  if(!g_portrait){ix=0;iy=STATUS_H;iw=150;ih=VH-STATUS_H-BOTTOM_H;}
+  else{ix=0;iy=STATUS_H+MODE_BAR_H;iw=VW;ih=min(contentH,(VH-BOTTOM_H)-iy);}
+  g_info_x=ix;g_info_w=iw;g_info_bottom=iy+ih;g_info_bh=bh;
+  gfx_fillRect(ix,iy,iw,ih,COL_PANEL);gfx_drawRect(ix,iy,iw,ih,COL_SEP);
+  int y=iy+4,pw=iw-8,x=ix+4;gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_PANEL);gfx_setCursor(x+2,y);gfx_print("SETTINGS");y+=11;
+  {uint16_t c=g_wireless_mode?COL_BLUE:COL_GREEN;gfx_fillRoundRect(x,y,pw,bh,6,c);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,c);String s=String("MODE: ")+(g_wireless_mode?"WIRELESS":"STANDALONE");int tw=gfx_textWidth(s);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(s);}g_info_mode_btn_y=y;y+=btn;
+  gfx_hline(x+2,y,pw-4,COL_SEP);y+=4;
+  {gfx_fillRoundRect(x,y,pw,bh,6,COL_AMBER);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,COL_AMBER);String s=String("FONT: ")+fontName(g_font);int tw=gfx_textWidth(s);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(s);}g_info_font_btn_y=y;y+=btn;
+  {const char*rn=g_portrait?"PORTRAIT":"LANDSCAPE";gfx_fillRoundRect(x,y,pw,bh,6,COL_BLUE);gfx_setTextSize(isz);gfx_setTextColor(TFT_WHITE,COL_BLUE);String s=String("ROTATE: ")+rn;int tw=gfx_textWidth(s);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(s);}g_info_rot_btn_y=y;y+=btn;
+  {uint16_t cc=g_compact?COL_GREEN:COL_BAR;gfx_fillRoundRect(x,y,pw,bh,6,cc);gfx_setTextSize(isz);gfx_setTextColor(g_compact?TFT_BLACK:COL_LIT,cc);String s=String("COMPACT: ")+(g_compact?"ON":"OFF");int tw=gfx_textWidth(s);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(s);}g_info_comp_btn_y=y;y+=btn;
+  gfx_hline(x+2,y,pw-4,COL_SEP);y+=4;
+  gfx_setTextSize(isz);gfx_setTextColor(COL_LIT,COL_PANEL);gfx_setCursor(x+2,y);gfx_print("Heap:"+String(ESP.getFreeHeap()/1024)+"K PSRAM:"+String(ESP.getFreePsram()/1024)+"K");y+=lh;
+  gfx_setCursor(x+2,y);gfx_print("Games: "+String(g_games.size()));y+=lh;
+  if(g_wireless_mode){
+    if(espnowIsPaired()){bool on=espnowXiaoOnline();gfx_setTextColor(on?COL_GREEN:COL_ORANGE,COL_PANEL);gfx_setCursor(x+2,y);gfx_print(on?"DONGLE: ONLINE":"DONGLE: OFFLINE");y+=lh;}
+    else{gfx_setTextColor(COL_ORANGE,COL_PANEL);gfx_setCursor(x+2,y);gfx_print("Not paired");y+=lh;}
+    {gfx_fillRoundRect(x,y,pw,bh,6,espnowIsPaired()?COL_GREEN:COL_AMBER);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,espnowIsPaired()?COL_GREEN:COL_AMBER);const char*pl=espnowIsPaired()?"SWITCH DONGLE":"SCAN DONGLES";int tw=gfx_textWidth(pl);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(pl);}g_info_pair_now_btn_y=y;y+=btn;
+  } else g_info_pair_now_btn_y=0;
+  {gfx_fillRoundRect(x,y,pw,bh,6,COL_BLUE);gfx_setTextSize(isz);gfx_setTextColor(TFT_WHITE,COL_BLUE);int tw=gfx_textWidth("RESCAN SD");gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print("RESCAN SD");}g_info_rescan_btn_y=y;y+=btn;
+  {gfx_fillRoundRect(x,y,pw,bh,6,0x8000);gfx_setTextSize(isz);gfx_setTextColor(TFT_WHITE,0x8000);int tw=gfx_textWidth("SOFT RESET");gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print("SOFT RESET");}g_info_reset_btn_y=y;
 }
 
 static void drawModeBar(){
@@ -852,7 +927,8 @@ static void drawFileList(){
 }
 
 static void drawNowPlayingBar(){
-  int y=LIST_BOTTOM;
+  if(!NOW_ON)return;
+  int y=NOW_Y;
   if(g_loaded&&g_loaded_name.length()){gfx_fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_NOW);gfx_drawRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_GREEN);
     gfx_fillCircle(LIST_X+8,y+NOW_PLAY_H/2,3,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(COL_GREEN,COL_NOW);gfx_setCursor(LIST_X+16,y+3);gfx_print("NOW PLAYING");
     gfx_setTextColor(TFT_WHITE,COL_NOW);gfx_setCursor(LIST_X+16,y+12);String n=g_loaded_name;while(gfx_textWidth(n)>LIST_W-24&&n.length()>3)n=n.substring(0,n.length()-1);gfx_print(n);}
@@ -864,39 +940,39 @@ static int azHalf(int page,char*out){int n=0;for(int i=0;i<active_letter_count;i
 #define AZ_TOG_H 32   // A-M/N-Z toggle button height (taller = easier to hit, away from the INFO button)
 static void drawAZBar(){
   if(!active_letter_count)return;
-  int togY=LIST_BOTTOM+NOW_PLAY_H-AZ_TOG_H;         // toggle top; letters occupy the strip above it
-  int barH=togY-LIST_TOP;
-  gfx_fillRect(AZ_X,LIST_TOP,AZ_W,(LIST_BOTTOM+NOW_PLAY_H)-LIST_TOP,COL_PANEL);
+  int azBottom=AZ_TOP+AZ_H;
+  int togY=azBottom-AZ_TOG_H;                       // toggle top; letters occupy the strip above it
+  int barH=togY-AZ_TOP;
+  gfx_fillRect(AZ_X,AZ_TOP,AZ_W,AZ_H,COL_PANEL);
   char p0[27],p1[27];int n0=azHalf(0,p0),n1=azHalf(1,p1);
   char*half=g_az_page==0?p0:p1;int hn=g_az_page==0?n0:n1;
   int slots=max(13,max(n0,n1));                    // enough rows for the bigger half ('#' can push it to 14)
   int letterH=barH/slots;if(letterH<7)letterH=7;
   int lsz=(letterH>=15)?2:1;
   gfx_setTextSize(lsz);
-  for(int i=0;i<hn;i++){char letter=half[i];int ly=LIST_TOP+i*letterH;if(ly+letterH>togY)break;
+  for(int i=0;i<hn;i++){char letter=half[i];int ly=AZ_TOP+i*letterH;if(ly+letterH>togY)break;
     if(letter==g_active_letter){gfx_fillRect(AZ_X,ly,AZ_W,letterH,COL_AMBER);gfx_setTextColor(TFT_BLACK,COL_AMBER);}
     else gfx_setTextColor(COL_DIM,COL_PANEL);
     gfx_setCursor(AZ_X+(AZ_W-6*lsz)/2,ly+(letterH-8*lsz)/2);char lb[2]={letter,0};gfx_print(lb);}
   // Toggle button — taller, fills the strip bottom
-  int togBottom=LIST_BOTTOM+NOW_PLAY_H;
-  gfx_fillRoundRect(AZ_X+1,togY+1,AZ_W-2,togBottom-togY-2,5,COL_ACCENT);
+  gfx_fillRoundRect(AZ_X+1,togY+1,AZ_W-2,azBottom-togY-2,5,COL_ACCENT);
   gfx_setTextSize(1);gfx_setTextColor(TFT_WHITE,COL_ACCENT);
   const char*blbl=g_az_page==0?"N-Z":"A-M";
   gfx_setCursor(AZ_X+(AZ_W-gfx_textWidth(blbl))/2,togY+(AZ_TOG_H-8)/2);gfx_print(blbl);
-  int maxOff=(int)g_games.size()-ITEMS_VIS;if(maxOff>0){int thumbH=max(4,barH*ITEMS_VIS/(int)g_games.size());int thumbY=LIST_TOP+(barH-thumbH)*g_scroll/maxOff;gfx_fillRect(AZ_X-2,thumbY,2,thumbH,COL_BLUE);}
+  int maxOff=(int)g_games.size()-ITEMS_VIS;if(maxOff>0){int thumbH=max(4,barH*ITEMS_VIS/(int)g_games.size());int thumbY=AZ_TOP+(barH-thumbH)*g_scroll/maxOff;gfx_fillRect(AZ_X-2,thumbY,2,thumbH,COL_BLUE);}
 }
 
 static bool handleAlphabetTouch(uint16_t px,uint16_t py){
-  if(px<AZ_X||py<LIST_TOP||py>=(uint16_t)(LIST_BOTTOM+NOW_PLAY_H)||!active_letter_count)return false;
-  int togY=LIST_BOTTOM+NOW_PLAY_H-AZ_TOG_H;
+  if(px<AZ_X||py<AZ_TOP||py>=(uint16_t)(AZ_TOP+AZ_H)||!active_letter_count)return false;
+  int togY=AZ_TOP+AZ_H-AZ_TOG_H;
   // Toggle button (taller hit region at the strip bottom) — manual page peek
   if(py>=(uint16_t)togY){g_az_page=g_az_page?0:1;return true;}
-  int barH=togY-LIST_TOP;
+  int barH=togY-AZ_TOP;
   char p0[27],p1[27];int n0=azHalf(0,p0),n1=azHalf(1,p1);
   char*half=g_az_page==0?p0:p1;int hn=g_az_page==0?n0:n1;
   if(hn==0){g_az_page=g_az_page?0:1;return true;}
   int slots=max(13,max(n0,n1));int letterH=barH/slots;if(letterH<7)letterH=7;
-  int r=constrain((int)(py-LIST_TOP)/letterH,0,hn-1);
+  int r=constrain((int)(py-AZ_TOP)/letterH,0,hn-1);
   char letter=half[r];
   int target=0;for(int i=0;i<(int)g_games.size();i++){if(bucketOf(g_games[i].name)>=letter){target=i;break;}}
   setActiveLetter(letter);
@@ -915,8 +991,8 @@ static void drawBottomBar(){
   gfx_setTextColor((uint16_t)(COL_AMBER>>1),COL_BAR);String tn=THEMES[g_theme_idx].name;int tw=gfx_textWidth(tn);gfx_setCursor(2*bw+(bw-tw)/2,y+33);gfx_print(tn);
 }
 
-static void drawFullUI(){gfx_fillScreen(COL_BG);drawStatusBar();drawCoverPanel();drawModeBar();drawFileList();drawNowPlayingBar();drawAZBar();drawBottomBar();}
-static void drawListAndCover(){gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);gfx_fillRect(LIST_X,LIST_TOP,LIST_W,LIST_BOTTOM-LIST_TOP,COL_BG);drawCoverPanel();drawFileList();drawNowPlayingBar();drawAZBar();}
+static void drawFullUI(){gfx_fillScreen(COL_BG);drawStatusBar();drawCoverPanel();drawActionStrip();drawModeBar();drawFileList();drawNowPlayingBar();drawAZBar();drawBottomBar();}
+static void drawListAndCover(){drawCoverPanel();drawActionStrip();drawFileList();drawNowPlayingBar();drawAZBar();}
 
 // ════════════════════════════════════════════════════════════════════════════
 // LOAD / UNLOAD
@@ -1115,6 +1191,7 @@ void setup(){
     if(!SD_MMC.exists("/ADF"))SD_MMC.mkdir("/ADF");if(!SD_MMC.exists("/DSK"))SD_MMC.mkdir("/DSK");
     generateDefaultConfig();
     loadConfig();
+    relayout();                 // apply ROTATE/COMPACT from config before first draw
     listImages(SD_MMC,g_files);
     if(!readGameCache()){buildGameList();}
     buildActiveLetters();
@@ -1142,35 +1219,32 @@ static bool selNameOverflows(){
 
 // Dispatch a completed tap (finger down + up with no drag) to the right UI region
 static void handleTap(uint16_t px,uint16_t py){
-  // ── A-Z bar (letters + toggle button) ──
-  if(px>=AZ_X&&py>=LIST_TOP&&py<(uint16_t)(LIST_BOTTOM+NOW_PLAY_H)){if(handleAlphabetTouch(px,py)){drawListAndCover();gfx_flush();}return;}
-
-  // ── INFO panel touches ──
-  if(g_info_showing&&px<COVER_W){
-    int pw=COVER_W-8,saY=g_info_pair_btn_y,wiY=saY+38;
-    // STANDALONE tap (switch from wireless)
-    if(py>=(uint16_t)saY&&py<(uint16_t)(saY+34)&&g_wireless_mode){setWirelessMode(false);g_info_showing=false;return;}
-    // WIRELESS tap (switch from standalone)
-    if(py>=(uint16_t)wiY&&py<(uint16_t)(wiY+34)&&!g_wireless_mode){setWirelessMode(true);g_info_showing=false;return;}
-    // RESCAN button
-    if(g_info_rescan_btn_y&&py>=(uint16_t)g_info_rescan_btn_y&&py<(uint16_t)(g_info_rescan_btn_y+22)){doRescan();return;}
-    // SOFT RESET button
-    if(g_info_reset_btn_y&&py>=(uint16_t)g_info_reset_btn_y&&py<(uint16_t)(g_info_reset_btn_y+22)){
-      gfx_fillRoundRect(4,g_info_reset_btn_y,pw,22,6,0xE8C4);gfx_setTextColor(TFT_BLACK,0xE8C4);gfx_setCursor(12,g_info_reset_btn_y+7);gfx_print("RESTARTING...");gfx_flush();delay(800);ESP.restart();}
-    // PAIR NOW button (wireless mode only)
-    if(g_wireless_mode&&g_info_pair_now_btn_y&&py>=(uint16_t)g_info_pair_now_btn_y&&py<(uint16_t)(g_info_pair_now_btn_y+24)){doPairNow();return;}
-    // FONT selector (cycle SMALL/NORMAL/LARGE) — keep INFO open, update the label
-    // in place and re-render the list at the new size (don't drop back to the cover)
-    if(g_info_font_btn_y&&py>=(uint16_t)g_info_font_btn_y&&py<(uint16_t)(g_info_font_btn_y+22)){
-      applyFont((g_font+1)%3);saveConfigKey("FONT",fontName(g_font));
-      int pw=COVER_W-8;gfx_fillRoundRect(4,g_info_font_btn_y,pw,22,6,COL_ACCENT);
-      gfx_setTextColor(inkFor(COL_ACCENT),COL_ACCENT);{String fl=String("FONT: ")+fontName(g_font);int tw=gfx_textWidth(fl);gfx_setCursor(4+(pw-tw)/2,g_info_font_btn_y+7);gfx_print(fl);}
-      redrawListArea();return;}
+  // ── INFO / SETTINGS panel touches (only within the panel; taps below it fall through to the list) ──
+  if(g_info_showing&&px<(uint16_t)(g_info_x+g_info_w)&&py<(uint16_t)g_info_bottom){
+    if(g_info_mode_btn_y&&py>=(uint16_t)g_info_mode_btn_y&&py<(uint16_t)(g_info_mode_btn_y+g_info_bh)){g_wireless_mode=!g_wireless_mode;saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE");if(g_wireless_mode)ensureEspNow();drawFullUI();drawInfoPanel();gfx_flush();return;}
+    // FONT — cycle SMALL/NORMAL/LARGE, keep INFO open, list re-renders
+    if(g_info_font_btn_y&&py>=(uint16_t)g_info_font_btn_y&&py<(uint16_t)(g_info_font_btn_y+g_info_bh)){
+      applyFont((g_font+1)%3);saveConfigKey("FONT",fontName(g_font));drawFullUI();drawInfoPanel();gfx_flush();return;}
+    // ROTATE — +90 each tap; reflow layout, keep INFO open
+    if(g_info_rot_btn_y&&py>=(uint16_t)g_info_rot_btn_y&&py<(uint16_t)(g_info_rot_btn_y+g_info_bh)){
+      g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));
+      {float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;} drawFullUI();drawInfoPanel();gfx_flush();return;}
+    // COMPACT — toggle cover vs list-maximised, keep INFO open
+    if(g_info_comp_btn_y&&py>=(uint16_t)g_info_comp_btn_y&&py<(uint16_t)(g_info_comp_btn_y+g_info_bh)){
+      g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");
+      {float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;} drawFullUI();drawInfoPanel();gfx_flush();return;}
+    if(g_wireless_mode&&g_info_pair_now_btn_y&&py>=(uint16_t)g_info_pair_now_btn_y&&py<(uint16_t)(g_info_pair_now_btn_y+g_info_bh)){doPairNow();return;}
+    if(g_info_rescan_btn_y&&py>=(uint16_t)g_info_rescan_btn_y&&py<(uint16_t)(g_info_rescan_btn_y+g_info_bh)){doRescan();return;}
+    if(g_info_reset_btn_y&&py>=(uint16_t)g_info_reset_btn_y&&py<(uint16_t)(g_info_reset_btn_y+g_info_bh)){
+      int pw=g_info_w-8;gfx_fillRoundRect(g_info_x+4,g_info_reset_btn_y,pw,g_info_bh,6,0xE8C4);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0xE8C4);gfx_setCursor(g_info_x+12,g_info_reset_btn_y+(g_info_bh-8)/2);gfx_print("RESTARTING...");gfx_flush();delay(800);ESP.restart();}
     return;
   }
 
-  // ── INSERT/EJECT ──
-  {int btnY=VH-BOTTOM_H-36;if(px<COVER_W&&py>=btnY&&py<VH-BOTTOM_H&&!g_games.empty()){
+  // ── A-Z bar (letters + toggle button) — suppressed where the INFO panel covers it ──
+  if(px>=AZ_X&&py>=AZ_TOP&&py<(uint16_t)(AZ_TOP+AZ_H)&&!(g_info_showing&&px<(uint16_t)(g_info_x+g_info_w)&&py<(uint16_t)g_info_bottom)){if(handleAlphabetTouch(px,py)){drawListAndCover();gfx_flush();}return;}
+
+  // ── INSERT/EJECT (cover button or compact action strip) ──
+  {if(!g_games.empty()&&px>=(uint16_t)INS_X&&px<(uint16_t)(INS_X+INS_W)&&py>=(uint16_t)INS_Y&&py<(uint16_t)(INS_Y+INS_H)){
     auto&gm=g_games[g_sel];int idx=gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[min(g_disk_sel,(int)gm.disk_indices.size()-1)];
     if(g_loaded&&g_loaded_game_idx==g_sel){
       if(g_loaded_disk_idx==g_disk_sel)doUnload();          // pressing on exactly what's mounted = eject
@@ -1178,41 +1252,20 @@ static void handleTap(uint16_t px,uint16_t py){
     } else doLoadSelected(g_files[idx]);                     // load the selected game/disk
     return;}}
 
-  // ── Disk selector (paginated, 6/page) ──
-  if(px<COVER_W&&!g_games.empty()){auto&game=g_games[g_sel];if(game.disk_count>1){
-    int nd=game.disk_count;
-    int pages=(nd+DISKS_PER_PAGE-1)/DISKS_PER_PAGE;
-    int pageStart=g_disk_page*DISKS_PER_PAGE;
-    int pageEnd=min(pageStart+DISKS_PER_PAGE,nd);
-    const int COLS=3;
-    int dbw=44, dbh=20, dgap=4;
-    int gridW=COLS*dbw+(COLS-1)*dgap;
-    int gx=max(4,(COVER_W-gridW)/2);
-    int insertY=VH-BOTTOM_H-36;
-    bool multiPage=(pages>1);
-    int pageBtnH=multiPage?16:0, pageGap=multiPage?4:0;
-    int gridH=2*dbh+dgap;
-    int gridY=insertY-gridH-pageBtnH-pageGap-12+10;
-    // NEXT/BACK page button
-    if(multiPage){
-      int pby=gridY+gridH+pageGap;
-      if(py>=(uint16_t)pby&&py<(uint16_t)(pby+pageBtnH)&&px>=gx&&px<gx+gridW){
-        g_disk_page=(g_disk_page+1)%pages;   // cycle pages (wraps to 1 after last)
-        drawCoverPanel();gfx_flush();return;
-      }
-    }
-    // Disk buttons on current page
-    for(int d=pageStart;d<pageEnd;d++){
-      int slot=d-pageStart;
-      int col=slot%COLS, row=slot/COLS;
-      int bx=gx+col*(dbw+dgap), by=gridY+row*(dbh+dgap);
-      if(px>=(uint16_t)bx&&px<(uint16_t)(bx+dbw)&&py>=(uint16_t)by&&py<(uint16_t)(by+dbh)){
-        g_disk_sel=d;
-        // Default: just select the disk (press INSERT to mount). HOTSWAP=ON = swap instantly while loaded.
-        if(g_hotswap&&g_loaded&&g_loaded_game_idx==g_sel){doLoadSelected(g_files[game.disk_indices[g_disk_sel]]);}
-        else{drawCoverPanel();gfx_flush();}
-        return;
-      }
+  // ── Disk selection (landscape grid / portrait stepper / compact thumbnail) ──
+  if(!g_games.empty()){auto&game=g_games[g_sel];if(game.disk_count>1){
+    if(COVER_ON&&!g_portrait){
+      DiskGrid L=diskGrid(game.disk_count);
+      if(L.multiPage){int pby=L.gridY+L.gridH+L.pageGap;if(py>=(uint16_t)pby&&py<(uint16_t)(pby+L.pageBtnH)&&px>=(uint16_t)L.gx&&px<(uint16_t)(L.gx+L.gridW)){g_disk_page=(g_disk_page+1)%L.pages;drawCoverPanel();gfx_flush();return;}}
+      for(int d=L.pageStart;d<L.pageEnd;d++){int slot=d-L.pageStart,col=slot%L.COLS,row=slot/L.COLS;int bx=L.gx+col*(L.dbw+L.dgap),by=L.gridY+row*(L.dbh+L.dgap);
+        if(px>=(uint16_t)bx&&px<(uint16_t)(bx+L.dbw)&&py>=(uint16_t)by&&py<(uint16_t)(by+L.dbh)){g_disk_sel=d;if(g_hotswap&&g_loaded&&g_loaded_game_idx==g_sel)doLoadSelected(g_files[game.disk_indices[g_disk_sel]]);else{drawCoverPanel();gfx_flush();}return;}}
+    } else if(COVER_ON&&g_portrait&&g_step_on){
+      if(px>=(uint16_t)g_step_x&&px<(uint16_t)(g_step_x+g_step_w)&&py>=(uint16_t)(g_step_y-6)&&py<(uint16_t)(g_step_y+g_step_h)){
+        if(px<(uint16_t)(g_step_x+g_step_w/2))g_disk_sel=(g_disk_sel-1+game.disk_count)%game.disk_count;   // left half = prev
+        else g_disk_sel=(g_disk_sel+1)%game.disk_count;                                                    // right half = next
+        if(g_hotswap&&g_loaded&&g_loaded_game_idx==g_sel)doLoadSelected(g_files[game.disk_indices[g_disk_sel]]);else{drawCoverPanel();gfx_flush();}return;}
+    } else if(STRIP_ON){
+      if(px<(uint16_t)INS_X&&py>=(uint16_t)STRIP_Y&&py<(uint16_t)(STRIP_Y+STRIP_H)){if(px<(uint16_t)(INS_X/2))g_disk_sel=(g_disk_sel-1+game.disk_count)%game.disk_count;else g_disk_sel=(g_disk_sel+1)%game.disk_count;if(g_hotswap&&g_loaded&&g_loaded_game_idx==g_sel)doLoadSelected(g_files[game.disk_indices[g_disk_sel]]);else{drawActionStrip();gfx_flush();}return;}
     }
   }}
 
@@ -1223,65 +1276,24 @@ static void handleTap(uint16_t px,uint16_t py){
 
   // ── File list ──
   if(px>=LIST_X&&px<AZ_X&&py>=LIST_TOP&&py<LIST_BOTTOM){
-    g_info_showing=false;int gi=(int)((g_scrollPx+(py-LIST_TOP))/LIST_ITEM_H);if(gi>=0&&gi<(int)g_games.size()){
+    bool wasInfo=g_info_showing; g_info_showing=false;
+    int gi=(int)((g_scrollPx+(py-LIST_TOP))/LIST_ITEM_H);if(gi>=0&&gi<(int)g_games.size()){
       if(gi==g_sel){
         // Default: tapping the already-selected row does nothing (load only via INSERT).
         // TAPLOAD=ON restores the old tap-again-to-load/eject behaviour.
         if(g_tapload){if(g_loaded&&g_loaded_game_idx==g_sel)doUnload();else{auto&gm=g_games[g_sel];g_disk_sel=0;g_disk_page=0;doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[0]]);}}
+        else if(wasInfo){drawFullUI();gfx_flush();}
       }
-      else{g_sel=gi;setActiveLetter(bucketOf(g_games[gi].name));g_disk_sel=0;g_disk_page=0;drawListAndCover();gfx_flush();}}return;}
+      else{g_sel=gi;setActiveLetter(bucketOf(g_games[gi].name));g_disk_sel=0;g_disk_page=0;if(wasInfo)drawFullUI();else drawListAndCover();gfx_flush();}}
+    else if(wasInfo){drawFullUI();gfx_flush();}
+    return;}
 
   // ── Bottom bar ──
   if(py>=VH-BOTTOM_H){int bw=VW/4,btn=px/bw;
     if(btn==0&&g_sel>0){g_sel--;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[g_sel].name));if((float)(g_sel*LIST_ITEM_H)<g_scrollPx)g_scrollPx=g_sel*LIST_ITEM_H;drawListAndCover();gfx_flush();}
     else if(btn==1&&g_sel<(int)g_games.size()-1){g_sel++;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[g_sel].name));if((float)((g_sel+1)*LIST_ITEM_H)>g_scrollPx+(LIST_BOTTOM-LIST_TOP))g_scrollPx=(g_sel+1)*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP);drawListAndCover();gfx_flush();}
     else if(btn==2){cycleTheme();}
-    else if(btn==3){
-      // INFO panel
-      g_info_showing=true;gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
-      int y=STATUS_H+4,pw=COVER_W-8;
-      gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_PANEL);gfx_setCursor(6,y);gfx_print("TRANSFER MODE");y+=10;
-      // STANDALONE
-      uint16_t saCol=!g_wireless_mode?COL_GREEN:COL_BAR;gfx_fillRoundRect(4,y,pw,34,6,saCol);gfx_drawRoundRect(4,y,pw,34,6,!g_wireless_mode?COL_GREEN:COL_DIM);
-      gfx_setTextColor(!g_wireless_mode?TFT_BLACK:COL_DIM,saCol);{int tw=gfx_textWidth("STANDALONE");gfx_setCursor(4+(pw-tw)/2,y+6);}gfx_print("STANDALONE");
-      gfx_setTextColor(!g_wireless_mode?TFT_BLACK:COL_DIM,saCol);{int tw=gfx_textWidth("direct USB");gfx_setCursor(4+(pw-tw)/2,y+20);}gfx_print("direct USB");
-      g_info_pair_btn_y=y;y+=38;
-      // WIRELESS
-      uint16_t wiCol=g_wireless_mode?COL_BLUE:COL_BAR;gfx_fillRoundRect(4,y,pw,34,6,wiCol);gfx_drawRoundRect(4,y,pw,34,6,g_wireless_mode?COL_BLUE:COL_DIM);
-      gfx_setTextColor(g_wireless_mode?TFT_WHITE:COL_DIM,wiCol);{int tw=gfx_textWidth("WIRELESS");gfx_setCursor(4+(pw-tw)/2,y+6);}gfx_print("WIRELESS");
-      gfx_setTextColor(g_wireless_mode?TFT_WHITE:COL_DIM,wiCol);{int tw=gfx_textWidth("WiFi to dongle");gfx_setCursor(4+(pw-tw)/2,y+20);}gfx_print("WiFi to dongle");
-      y+=38;gfx_hline(6,y,pw,COL_SEP);y+=4;
-      // System info
-      gfx_setTextColor(COL_LIT,COL_PANEL);gfx_setCursor(6,y);gfx_print("Heap:"+String(ESP.getFreeHeap()/1024)+"K");y+=9;
-      gfx_setCursor(6,y);gfx_print("PSRAM:"+String(ESP.getFreePsram()/1024)+"K");y+=9;
-      gfx_setCursor(6,y);gfx_print("Games: "+String(g_games.size()));y+=10;
-      // FONT size selector (tap to cycle SMALL/NORMAL/LARGE)
-      gfx_hline(6,y,pw,COL_SEP);y+=4;
-      gfx_fillRoundRect(4,y,pw,22,6,COL_ACCENT);
-      gfx_setTextColor(inkFor(COL_ACCENT),COL_ACCENT);{String fl=String("FONT: ")+fontName(g_font);int tw=gfx_textWidth(fl);gfx_setCursor(4+(pw-tw)/2,y+7);gfx_print(fl);}
-      g_info_font_btn_y=y;y+=26;
-      // Wireless status
-      if(g_wireless_mode){gfx_hline(6,y,pw,COL_SEP);y+=4;
-        if(espnowIsPaired()){bool on=espnowXiaoOnline();gfx_setTextColor(on?COL_GREEN:COL_ORANGE,COL_PANEL);gfx_setCursor(6,y);gfx_print(on?"DONGLE: ONLINE":"DONGLE: OFFLINE");y+=9;
-          String dn=getDongleName(espnowGetXiaoMac());
-          gfx_setTextColor(COL_AMBER,COL_PANEL);gfx_setCursor(6,y);gfx_print(dn.length()?dn:espnowGetXiaoMac());y+=9;}
-        else{gfx_setTextColor(COL_ORANGE,COL_PANEL);gfx_setCursor(6,y);gfx_print("Not paired");y+=9;}
-        y+=2;
-        // PAIR NOW button - stacked after wireless info
-        gfx_fillRoundRect(4,y,pw,24,6,espnowIsPaired()?COL_GREEN:COL_AMBER);
-        gfx_setTextColor(TFT_BLACK,espnowIsPaired()?COL_GREEN:COL_AMBER);const char*pl=espnowIsPaired()?"SWITCH DONGLE":"SCAN DONGLES";{int tw=gfx_textWidth(pl);gfx_setCursor(4+(pw-tw)/2,y+8);}gfx_print(pl);
-        g_info_pair_now_btn_y=y;y+=28;}
-      gfx_hline(6,y,pw,COL_SEP);y+=4;
-      // RESCAN button
-      gfx_fillRoundRect(4,y,pw,22,6,COL_BLUE);gfx_drawRoundRect(4,y,pw,22,6,COL_ACCENT);
-      gfx_setTextColor(TFT_WHITE,COL_BLUE);{int tw=gfx_textWidth("RESCAN SD");gfx_setCursor(4+(pw-tw)/2,y+7);}gfx_print("RESCAN SD");
-      g_info_rescan_btn_y=y;y+=26;
-      // SOFT RESET button
-      gfx_fillRoundRect(4,y,pw,22,6,0x8000);gfx_drawRoundRect(4,y,pw,22,6,0xE8C4);
-      gfx_setTextColor(TFT_WHITE,0x8000);{int tw=gfx_textWidth("SOFT RESET");gfx_setCursor(4+(pw-tw)/2,y+7);}gfx_print("SOFT RESET");
-      g_info_reset_btn_y=y;
-      gfx_flush();
-    }
+    else if(btn==3){ g_info_showing=!g_info_showing; if(g_info_showing)drawInfoPanel(); else drawFullUI(); gfx_flush(); }
     return;
   }
 }
