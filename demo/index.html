@@ -56,7 +56,7 @@
   </div>
   <p class="hint">
     Tap a game to select · tap again (or INSERT) to mount · the A–Z strip on the right jumps by letter ·
-    THEME cycles all six palettes · INFO shows the wireless panel · try <b>Monkey Island 2</b> for the 11-disk paginated selector.
+    THEME cycles all six palettes · INFO shows the wireless panel + FONT size selector (Small/Normal/Large) · try <b>Monkey Island 2</b> for the 11-disk paginated selector.
     <br><span class="badge">This is a faithful re-creation of the device UI for preview purposes — not the firmware itself.</span>
   </p>
 
@@ -132,6 +132,7 @@ let LIST_ITEM_H=Math.floor((LIST_BOTTOM-LIST_TOP)/4), ITEMS_VIS=4, nameSz=2, fon
 function applyFont(f){ fontMode=f; let rows;
   if(f===0){rows=6;nameSz=1;} else if(f===2){rows=3;nameSz=3;} else {rows=4;nameSz=2;}
   LIST_ITEM_H=Math.floor((LIST_BOTTOM-LIST_TOP)/rows); ITEMS_VIS=rows; }
+function fontName(f){ return f===0?"SMALL":f===2?"LARGE":"NORMAL"; }
 const DISKS_PER_PAGE=6;
 
 // ============================================================================
@@ -180,7 +181,7 @@ function marqueeMax(){ const g=games[sel]; setSize(nameSz); const r=8+nameSz*3, 
 let activeLetter=games.length?games[0].letter:"A";   // the letter the index highlights / pages to
 function setActiveLetter(l){ activeLetter=l; azPage=(l<="M")?0:1; }   // auto-flip page to the half holding l
 let loaded=false, loadedIdx=-1, loadedDisk=-1, loadedName="";
-let infoShowing=false, wireless=false;
+let infoShowing=false, wireless=false, infoFontBtnY=0;
 let screen="cracktro";          // cracktro | ui
 
 // ============================================================================
@@ -219,7 +220,7 @@ function drawCracktro(){
 function drawStatusBar(){
   fillRect(0,0,VW,STATUS_H,C.bar); setSize(1);
   text(6,6,"OMEGAWARE",C.orange,C.bar);
-  text(6+textW("OMEGAWARE"),6,"  v3.7.1-JC3248",C.mid,C.bar);
+  text(6+textW("OMEGAWARE"),6,"  v3.8.2-JC3248",C.mid,C.bar);
   if(wireless){ const t="WIRELESS:PAIR"; text(VW/2-40,6,t,0xFD20,C.bar); }
   else { const t="STANDALONE"; text((VW-textW(t))/2|0,6,t,0x07FF,C.bar); }
   fillCircle(VW-8,STATUS_H/2,3, loaded?0xE8C4:C.green);
@@ -368,6 +369,10 @@ function drawInfo(){
   text(6,y,"Heap:212K",C.lit,C.panel); y+=9;
   text(6,y,"PSRAM:2048K",C.lit,C.panel); y+=9;
   text(6,y,"Games: "+games.length,C.lit,C.panel); y+=10;
+  // FONT size selector (tap to cycle SMALL/NORMAL/LARGE) — matches the device INFO screen
+  hline(6,y,pw,C.sep); y+=4;
+  infoFontBtnY=y; fillRound(4,y,pw,22,6,C.amber); drawRound(4,y,pw,22,6,C.accent);
+  text(4+(pw-textW("FONT: "+fontName(fontMode)))/2|0,y+7,"FONT: "+fontName(fontMode),BLACK,C.amber); y+=26;
   if(wireless){ hline(6,y,pw,C.sep); y+=4; text(6,y,"DONGLE: OFFLINE",C.orange,C.panel); y+=11;
     fillRound(4,y,pw,24,6,C.amber); text(4+(pw-textW("SCAN DONGLES"))/2|0,y+8,"SCAN DONGLES",BLACK,C.amber); y+=28; }
   hline(6,y,pw,C.sep); y+=4;
@@ -405,6 +410,8 @@ function hit(mx,my){
   }
   // INFO panel interactions
   if(infoShowing&&mx<COVER_W){
+    // FONT size selector — cycle SMALL/NORMAL/LARGE, stay on the INFO screen
+    if(infoFontBtnY&&my>=infoFontBtnY&&my<infoFontBtnY+22){ applyFont((fontMode+1)%3); drawUI(); return; }
     // toggle standalone/wireless by tapping the two buttons (approx y)
     if(my>=STATUS_H+14&&my<STATUS_H+48){ wireless=false; infoShowing=false; drawUI(); return; }
     if(my>=STATUS_H+52&&my<STATUS_H+86){ wireless=true; infoShowing=false; drawUI(); return; }
