@@ -220,6 +220,21 @@
       background: #0a0a12;
       border: 1px solid var(--border);
     }
+    .board-ref {
+      display: block;
+      width: 100%;
+      max-width: 480px;
+      margin: 0.4rem auto 0;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .board-ref-cap {
+      font-size: 0.62rem;
+      color: var(--dim);
+      text-align: center;
+      margin-top: 0.5rem;
+      letter-spacing: 0.05em;
+    }
     .device-name {
       font-family: 'Orbitron', monospace;
       font-size: 0.8rem;
@@ -452,6 +467,7 @@
 
     <div class="device-card" data-manifest="firmware/jc3248/manifest.json" onclick="selectDevice(this)">
       <div class="selected-indicator"></div>
+      <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC3248 3.5-inch touchscreen" loading="lazy">
       <div class="device-name">Guition JC3248</div>
       <div class="device-chip">ESP32-S3 · 3.5" 480×320</div>
       <div class="device-desc">The current interface — cached boot, cover art, six themes, multi-disk selector, scalable fonts, A-Z jump. Optional wireless via a Super Mini dongle.</div>
@@ -530,6 +546,14 @@
     <div class="warn-box" style="margin-top:0.5rem;">
       <strong>⚠ All devices:</strong> USB CDC On Boot must be <strong>Disabled</strong> — this is already set in the pre-built firmware. If you rebuild from source, ensure this setting is correct or the Gotek will not recognise the device.
     </div>
+  </div>
+
+  <div class="section-label">JC3248 board reference</div>
+
+  <div class="instructions">
+    <p style="margin-bottom:0.6rem;">Back of the Guition JC3248 with every button and connector labelled — including the <code>Boot</code> and <code>Reset</code> buttons used to enter bootloader mode for flashing, the Type-C port, the battery switch, and the JST IO / power / speaker connectors.</p>
+    <img class="board-ref" src="img/jc3248-back.jpg" alt="Guition JC3248W535 back, with Boot, Reset, Type-C, battery switch and JST connectors labelled">
+    <div class="board-ref-cap">Guition JC3248W535 — reverse side, buttons and connectors labelled</div>
   </div>
 
   <div class="section-label">After flashing</div>
