@@ -220,7 +220,7 @@ function drawCracktro(){
 function drawStatusBar(){
   fillRect(0,0,VW,STATUS_H,C.bar); setSize(1);
   text(6,6,"OMEGAWARE",C.orange,C.bar);
-  text(6+textW("OMEGAWARE"),6,"  v3.8.2-JC3248",C.mid,C.bar);
+  text(6+textW("OMEGAWARE"),6,"  v3.8.3-JC3248",C.mid,C.bar);
   if(wireless){ const t="WIRELESS:PAIR"; text(VW/2-40,6,t,0xFD20,C.bar); }
   else { const t="STANDALONE"; text((VW-textW(t))/2|0,6,t,0x07FF,C.bar); }
   fillCircle(VW-8,STATUS_H/2,3, loaded?0xE8C4:C.green);
