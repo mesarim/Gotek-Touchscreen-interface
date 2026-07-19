@@ -211,6 +211,15 @@
       opacity: 1;
     }
 
+    .device-photo {
+      width: 100%;
+      height: 130px;
+      object-fit: cover;
+      border-radius: 4px;
+      margin-bottom: 0.7rem;
+      background: #0a0a12;
+      border: 1px solid var(--border);
+    }
     .device-name {
       font-family: 'Orbitron', monospace;
       font-size: 0.8rem;
@@ -465,11 +474,21 @@
       <div><span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
     </div>
 
+    <div class="device-card" data-manifest="firmware/supermini/manifest.json" onclick="selectDevice(this)">
+      <div class="selected-indicator"></div>
+      <img class="device-photo" src="img/supermini.jpg" alt="Generic ESP32-S3 Super Mini board" loading="lazy">
+      <div class="device-name">Super Mini Dongle</div>
+      <div class="device-chip">Generic ESP32-S3 · Super Mini (FH4R2)</div>
+      <div class="device-desc">The recommended wireless dongle. Plugs into the Gotek's USB port and loads disks over WiFi from the touchscreen. Generic ESP32-S3 Super Mini — the wider board with two side buttons.</div>
+      <div><span class="device-badge badge-current">Preferred dongle</span> <span class="device-badge badge-dongle">USB Dongle</span></div>
+    </div>
+
     <div class="device-card" data-manifest="firmware/xiao/manifest.json" onclick="selectDevice(this)">
       <div class="selected-indicator"></div>
+      <img class="device-photo" src="img/xiao.jpg" alt="Seeed Studio XIAO ESP32-S3 board" loading="lazy">
       <div class="device-name">XIAO Dongle</div>
-      <div class="device-chip">XIAO ESP32-S3 · 21×17mm</div>
-      <div class="device-desc">Plugs directly into Gotek USB port. Controlled wirelessly from the touchscreen or phone.</div>
+      <div class="device-chip">Seeed XIAO ESP32-S3 · 21×17mm</div>
+      <div class="device-desc">Alternative wireless dongle. The Seeed Studio XIAO ESP32-S3 — the smaller board with the metal-shielded module marked “seeed studio”. Same wireless loading as the Super Mini.</div>
       <div><span class="device-badge badge-dongle">USB Dongle</span></div>
     </div>
 
@@ -955,6 +974,7 @@ requestAnimationFrame(frame);
     'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware v3.8.2' },
     'firmware/waveshare7/manifest.json': { name: 'Waveshare 7"',  version: 'Firmware v3.4.7' },
     'firmware/waveshare28/manifest.json':{ name: 'Waveshare 2.8"', version: 'Firmware v3.4.7' },
+    'firmware/supermini/manifest.json':  { name: 'Super Mini Dongle', version: 'Firmware v3.2.0' },
     'firmware/xiao/manifest.json':       { name: 'XIAO Dongle',   version: 'Firmware v3.2.0' },
     'firmware/cyd/manifest.json':        { name: 'CYD',           version: 'Firmware v3.9.0' },
   };
