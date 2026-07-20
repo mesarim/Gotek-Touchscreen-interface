@@ -21,7 +21,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "v4.0.0-JC3248"
+#define FW_VERSION "v4.2.1-JC3248"
 #include "espnow_server.h"
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
@@ -443,6 +443,16 @@ static bool findJPGFor(const String&p,String&out){
 // STATE
 // ════════════════════════════════════════════════════════════════════════════
 static bool g_wireless_mode=false,g_loop_cracktro=false,g_info_showing=false;
+// ── Screensaver (undocumented, folder-gated /screensaver/*.jpg) ──
+static std::vector<String> g_ss_paths;
+static bool g_ss_have=false, g_ss_enabled=true;
+static uint32_t g_last_touch_ms=0;
+static uint16_t* g_ss_buf=NULL; static int g_ss_w=0, g_ss_h=0;
+#define SS_MAX      150        // longest side of the bouncing image (virtual-canvas px)
+#define SS_IDLE_MS  600000UL   // 10 min idle (browsing / nothing loaded)
+#define SS_LOAD_MS  120000UL   // 2 min idle once a game is loaded (showcase)
+static uint32_t g_ss_idle_ms=SS_IDLE_MS, g_ss_load_ms=SS_LOAD_MS;   // hidden SS_IDLE=/SS_LOAD= override (seconds)
+static int g_dongle_cap=32;   // CONFIG.TXT CAP= : max wireless dongles to discover/cast (1..64)
 // ── Item 4: load/eject behaviour toggles (all default OFF = safest) ──
 static bool g_tapload=false;    // ON = tapping the already-selected row loads it (old double-tap behaviour)
 static bool g_hotswap=false;    // ON = tapping another disk while loaded swaps to it instantly
@@ -587,6 +597,22 @@ static void setDongleName(const String&mac,const String&name){String key=macKey(
     if(l.startsWith(key+"=")){lines+=key+"="+name+"\n";written=true;}else lines+=l+"\n";}fr.close();}
   if(!written){if(!hasHeading)lines+="\n# Dongle names\n";lines+=key+"="+name+"\n";}
   File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);if(fw){fw.print(lines);fw.close();}}
+static uint8_t hexNib(char c){ if(c>='0'&&c<='9')return c-'0'; c=(char)toupper(c); if(c>='A'&&c<='F')return c-'A'+10; return 0; }
+// Collect MACs of dongles named with a "MuCa-" prefix (the undocumented multicast group), from CONFIG.TXT.
+static int enumMuCaDongles(uint8_t macs[][6], int maxN){
+  int n=0; File f=SD_MMC.open("/CONFIG.TXT",FILE_READ); if(!f)return 0;
+  while(f.available()&&n<maxN){
+    String l=f.readStringUntil('\n'); l.trim();
+    if(!l.startsWith("DONGLE_"))continue;
+    int eq=l.indexOf('='); if(eq<0)continue;
+    String key=l.substring(0,eq), val=l.substring(eq+1); val.trim();
+    String vu=val; vu.toUpperCase(); if(!vu.startsWith("MUCA-"))continue;
+    String hex=key.substring(7); if(hex.length()<12)continue;   // strip "DONGLE_"
+    for(int i=0;i<6;i++) macs[n][i]=(uint8_t)((hexNib(hex[i*2])<<4)|hexNib(hex[i*2+1]));
+    n++;
+  }
+  f.close(); return n;
+}
 
 // Forward decls
 static void applyFont(int f);   // defined with the layout section; used by loadConfig
@@ -624,6 +650,9 @@ static void generateDefaultConfig(){
   f.println("# COMPACT: OFF = cover art + list, ON = maximise the game list (cover collapses to a strip)");
   f.println("COMPACT=OFF");
   f.println("");
+  f.println("# CAP: max wireless dongles the scan will list (default 32, up to 64)");
+  f.println("CAP=32");
+  f.println("");
   f.println("# Load/eject behaviour (all OFF = safest: select, then press the button)");
   f.println("# TAPLOAD: ON = tapping the already-highlighted game row loads it (old double-tap)");
   f.println("TAPLOAD=OFF");
@@ -649,7 +678,11 @@ static void loadConfig(){
     else if(k=="TAPLOAD")g_tapload=(v=="ON"||v=="1");else if(k=="HOTSWAP")g_hotswap=(v=="ON"||v=="1");else if(k=="FORCESWAP")g_forceswap=(v=="ON"||v=="1");
     else if(k=="FONT"){int f=1;if(v=="SMALL")f=0;else if(v=="LARGE")f=2;applyFont(f);}
     else if(k=="ROTATE"){g_rot=((v.toInt()/90)%4+4)%4;}
-    else if(k=="COMPACT"){g_compact=(v=="ON"||v=="1");}}
+    else if(k=="COMPACT"){g_compact=(v=="ON"||v=="1");}
+    else if(k=="SCREENSAVER"){g_ss_enabled=(v!="OFF"&&v!="0");}
+    else if(k=="SS_IDLE"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_idle_ms=s*1000UL;}
+    else if(k=="SS_LOAD"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_load_ms=s*1000UL;}
+    else if(k=="CAP"){int c=v.toInt(); if(c>=1&&c<=64)g_dongle_cap=c;}}
   f.close();
 }
 
@@ -1026,12 +1059,103 @@ static bool doLoadSelected(const String&adfPath){
   while(remain&&buf){size_t n=remain>16384?16384:remain;int rd=f.read(buf,n);if(rd<=0)break;memcpy(dst+copied,buf,rd);remain-=rd;copied+=rd;}
   if(buf)free(buf);f.close();
   hardAttach();g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
-  if(g_wireless_mode&&g_espnow_started&&espnowIsPaired()){espnowSendNotify(g_loaded_name,g_mode==MODE_ADF?"ADF":"DSK",copied);espnowSendDisk(copied);}
+  if(g_wireless_mode&&g_espnow_started){
+    uint8_t mcMacs[64][6]; int mcN=enumMuCaDongles(mcMacs,g_dongle_cap);
+    if(mcN>0){                                              // multicast: fan the disk out to every MuCa- dongle in turn
+      for(int i=0;i<mcN;i++){
+        gfx_setTextSize(1);gfx_setTextColor(TFT_CYAN,COL_PANEL);gfx_fillRect(4,STATUS_H+24,150,12,COL_PANEL);
+        gfx_setCursor(6,STATUS_H+26);gfx_print("Multicast "+String(i+1)+"/"+String(mcN));gfx_flush();
+        espnowSendDiskTo(mcMacs[i],copied);
+      }
+    } else if(espnowIsPaired()){                            // single paired dongle — unchanged
+      espnowSendNotify(g_loaded_name,g_mode==MODE_ADF?"ADF":"DSK",copied);espnowSendDisk(copied);
+    }
+  }
   drawStatusBar();drawListAndCover();gfx_flush();return true;
 }
 
 static void doUnload(){hardDetach();g_loaded=false;g_loaded_name="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
   if(g_wireless_mode&&g_espnow_started&&espnowIsPaired())espnowSendEject();drawStatusBar();drawListAndCover();gfx_flush();}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SCREENSAVER (undocumented) — bouncing gallery from /screensaver/*.jpg
+//   Armed only when the folder exists with >=1 JPG. Fires after 10 min idle,
+//   or 2 min idle once a game is loaded (showcase). Any touch wakes it.
+//   Purely cosmetic: USB floppy emulation keeps running underneath.
+// ════════════════════════════════════════════════════════════════════════════
+static void ssFree(){ if(g_ss_buf){free(g_ss_buf);g_ss_buf=NULL;} g_ss_w=g_ss_h=0; }
+static bool ssDecode(const String&path){                     // decode one JPG -> downscaled RGB565 buffer
+  ssFree();
+  String vfsPath="/sdcard"+path; struct stat st;
+  if(stat(vfsPath.c_str(),&st)!=0||st.st_size==0||st.st_size>500000)return false;
+  size_t sz=(size_t)st.st_size;
+  File f=SD_MMC.open(path.c_str(),"r"); if(!f)return false;
+  uint8_t*buf=(uint8_t*)ps_malloc(sz); if(!buf){f.close();return false;}
+  f.read(buf,sz); f.close();
+  if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return false;}
+  int jw=jpegdec.getWidth(),jh=jpegdec.getHeight();
+  if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return false;}
+  if((size_t)jw*jh*2>1500000){jpegdec.close();free(buf);return false;}   // decoded bitmap too big for PSRAM budget
+  jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)jw*jh*2);
+  if(!jpeg_tmp_buf){jpegdec.close();free(buf);return false;}
+  memset(jpeg_tmp_buf,0,(size_t)jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
+  jpegdec.decode(0,0,0); jpegdec.close(); free(buf);
+  float sc=(float)SS_MAX/(jw>jh?jw:jh); if(sc>1.0f)sc=1.0f;
+  int dw=(int)(jw*sc),dh=(int)(jh*sc); if(dw<1)dw=1; if(dh<1)dh=1;
+  g_ss_buf=(uint16_t*)ps_malloc((size_t)dw*dh*2);
+  if(!g_ss_buf){free(jpeg_tmp_buf);jpeg_tmp_buf=NULL;return false;}
+  for(int r=0;r<dh;r++){int sy=(int)(r/sc); if(sy>=jh)sy=jh-1;
+    for(int c=0;c<dw;c++){int sx=(int)(c/sc); if(sx>=jw)sx=jw-1;
+      g_ss_buf[r*dw+c]=jpeg_tmp_buf[sy*jw+sx];}}
+  free(jpeg_tmp_buf); jpeg_tmp_buf=NULL;
+  g_ss_w=dw; g_ss_h=dh; return true;
+}
+static void ssBlit(int x,int y){ if(!g_ss_buf)return;
+  for(int r=0;r<g_ss_h;r++){int vy=y+r; if(vy<0||vy>=gH)continue;
+    for(int c=0;c<g_ss_w;c++){int vx=x+c; if(vx<0||vx>=gW)continue;
+      fb_setPixel(vx,vy,g_ss_buf[r*g_ss_w+c]);}}}
+static void scanScreensaver(){                               // arm iff /screensaver/ has >=1 JPG
+  g_ss_paths.clear(); g_ss_have=false;
+  File dir=SD_MMC.open("/screensaver"); if(!dir)return;
+  if(!dir.isDirectory()){dir.close();return;}
+  File e;
+  while((e=dir.openNextFile())){
+    if(!e.isDirectory()){
+      String nm=e.name(); int sl=nm.lastIndexOf('/'); if(sl>=0)nm=nm.substring(sl+1);
+      String low=nm; low.toLowerCase();
+      if(low.endsWith(".jpg")||low.endsWith(".jpeg")) g_ss_paths.push_back(String("/screensaver/")+nm);
+    }
+    e.close();
+    if(g_ss_paths.size()>=64)break;
+  }
+  dir.close();
+  g_ss_have=!g_ss_paths.empty();
+}
+static void runScreensaver(){                                // blocking bounce loop; any touch exits
+  if(g_ss_paths.empty()){g_ss_have=false;return;}
+  int idx=0; bool ok=false;
+  for(int t=0;t<(int)g_ss_paths.size();t++){ if(ssDecode(g_ss_paths[t])){idx=t;ok=true;break;} }
+  if(!ok){ssFree();g_ss_have=false;return;}   // no decodable image -> disarm, back to UI
+  int x=(gW-g_ss_w)/2, y=(gH-g_ss_h)/2, vx=2, vy=2;
+  gfx_fillScreen(TFT_BLACK);
+  uint32_t last=millis();
+  while(true){
+    if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
+    uint32_t nf=millis();
+    if(nf-last>=33){ last=nf;
+      x+=vx; y+=vy; bool hit=false;
+      if(x<=0){x=0;vx=-vx;hit=true;} else if(x>=gW-g_ss_w){x=gW-g_ss_w;vx=-vx;hit=true;}
+      if(y<=0){y=0;vy=-vy;hit=true;} else if(y>=gH-g_ss_h){y=gH-g_ss_h;vy=-vy;hit=true;}
+      if(hit&&g_ss_paths.size()>1){ int ni=(idx+1)%(int)g_ss_paths.size();
+        if(ssDecode(g_ss_paths[ni]))idx=ni; else ssDecode(g_ss_paths[idx]);   // skip undecodable, keep a valid buffer
+        if(x>gW-g_ss_w)x=gW-g_ss_w; if(y>gH-g_ss_h)y=gH-g_ss_h; if(x<0)x=0; if(y<0)y=0; }
+      gfx_fillScreen(TFT_BLACK); ssBlit(x,y); gfx_flush();
+    } else delay(5);
+  }
+  ssFree();
+  g_touch_active=false; g_touch_release=0; g_last_touch_ms=millis();
+  drawFullUI(); gfx_flush();
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // RESCAN — delete index cache and rebuild with animated progress
@@ -1043,7 +1167,7 @@ static void doRescan(){
   SD_MMC.remove("/ADF/.gamecache");SD_MMC.remove("/DSK/.gamecache");
   // Rescan with animation
   g_files.clear();g_games.clear();
-  listImages(SD_MMC,g_files);buildGameList();buildActiveLetters();
+  listImages(SD_MMC,g_files);buildGameList();buildActiveLetters();scanScreensaver();
   g_sel=0;g_scroll=0;g_disk_sel=0;g_disk_page=0;g_scrollPx=0;g_az_page=0;g_inertia_on=false;
   if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
   drawFullUI();gfx_flush();
@@ -1136,36 +1260,48 @@ static void doScanDongles(){
     uint32_t w=millis();while(millis()-w<8000){if(Touch_ReadFrame()){uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<400)delay(10);break;}delay(20);}
     g_info_showing=false;drawFullUI();gfx_flush();return;
   }
-  // Results: tap a row to highlight, then USE (pair) / RENAME (keyboard) / BACK
+  // Results: tap a row to highlight, then USE (pair) / RENAME (keyboard) / BACK. Long lists scroll (drag).
   int rowH=40, listTop=26, btnBarY=VH-40;
-  int maxRows=(btnBarY-listTop-4)/rowH; if(n>maxRows)n=maxRows;
+  int maxRows=(btnBarY-listTop-4)/rowH; if(maxRows<1)maxRows=1;
+  int maxScroll=(n>maxRows)?(n-maxRows):0, scanScroll=0;
   int sel=0; for(int i=0;i<n;i++){if(espnowIsPaired()&&espnowGetXiaoMac()==espnowScanGetMac(i)){sel=i;break;}}
-  bool dirty=true;
+  if(sel>=maxRows)scanScroll=sel-maxRows+1; if(scanScroll>maxScroll)scanScroll=maxScroll; if(scanScroll<0)scanScroll=0;
+  bool dirty=true, down=false, moved=false; int downX=0,downY=0,downScroll=0;
   while(true){
     if(dirty){dirty=false;
       gfx_fillScreen(COL_BG);
       gfx_setTextSize(1);gfx_setTextColor(COL_ORANGE,COL_BG);gfx_setCursor(8,7);gfx_print("Dongles ("+String(n)+") - pick one:");
-      for(int i=0;i<n;i++){int y=listTop+i*rowH;String mac=espnowScanGetMac(i),suffix=mac.substring(12),nm=getDongleName(mac);
+      for(int r=0;r<maxRows&&(scanScroll+r)<n;r++){int i=scanScroll+r,y=listTop+r*rowH;
+        String mac=espnowScanGetMac(i),suffix=mac.substring(12),nm=getDongleName(mac);
         bool isSel=(i==sel),isActive=(espnowIsPaired()&&espnowGetXiaoMac()==mac);
         uint16_t bg=isSel?COL_SEL:COL_PANEL;
         gfx_fillRoundRect(8,y,VW-16,rowH-4,6,bg);gfx_drawRoundRect(8,y,VW-16,rowH-4,6,isSel?COL_AMBER:COL_ACCENT);
         gfx_setTextSize(1);gfx_setTextColor(isSel?inkFor(bg):COL_AMBER,bg);gfx_setCursor(18,y+7);gfx_print(nm.length()?nm:("Dongle "+String(i+1)));
         gfx_setTextColor(isSel?inkFor(bg):COL_MID,bg);gfx_setCursor(18,y+20);gfx_print("OMEGA-"+suffix);
-        if(isActive){gfx_setTextColor(COL_GREEN,bg);gfx_setCursor(VW-64,y+13);gfx_print("ACTIVE");}
+        if(isActive){gfx_setTextColor(COL_GREEN,bg);gfx_setCursor(VW-70,y+13);gfx_print("ACTIVE");}
       }
+      if(n>maxRows){int trackY=listTop,trackH=maxRows*rowH-4,thumbH=trackH*maxRows/n;if(thumbH<10)thumbH=10;
+        int thumbY=trackY+(trackH-thumbH)*scanScroll/maxScroll;
+        gfx_fillRect(VW-4,trackY,3,trackH,COL_PANEL);gfx_fillRect(VW-4,thumbY,3,thumbH,COL_AMBER);}
       int bw=(VW-4*4)/3,bx=4;const char* BL[3]={"USE","RENAME","BACK"};uint16_t BC[3]={COL_GREEN,COL_ACCENT,COL_BAR};
       for(int i=0;i<3;i++){gfx_fillRoundRect(bx,btnBarY+2,bw,34,6,BC[i]);gfx_setTextColor(inkFor(BC[i]),BC[i]);gfx_setTextSize(1);gfx_setCursor(bx+(bw-gfx_textWidth(BL[i]))/2,btnBarY+14);gfx_print(BL[i]);bx+=bw+4;}
       gfx_flush();
     }
-    if(Touch_ReadFrame()){uint16_t tx,ty;
-      if(getTouchXY(&tx,&ty)){
-        if(ty>=(uint16_t)listTop&&ty<(uint16_t)(listTop+n*rowH)){int idx=(ty-listTop)/rowH;if(idx>=0&&idx<n&&idx!=sel){sel=idx;dirty=true;}}
-        else if(ty>=(uint16_t)btnBarY){int bw=(VW-4*4)/3;int i=((int)tx-4)/(bw+4);
-          if(i==0){espnowScanSelect(sel);int y=listTop+sel*rowH;gfx_fillRoundRect(8,y,VW-16,rowH-4,6,COL_GREEN);gfx_setTextColor(TFT_BLACK,COL_GREEN);gfx_setTextSize(1);gfx_setCursor(18,y+13);gfx_print("PAIRED");gfx_flush();delay(700);break;}
-          else if(i==1){String mac=espnowScanGetMac(sel);String label="OMEGA-"+mac.substring(12),nm=getDongleName(mac),out;if(onScreenKeyboard(label,nm,out)){setDongleName(mac,out);}dirty=true;}
+    bool t=Touch_ReadFrame(); uint16_t tx=0,ty=0; if(t)t=getTouchXY(&tx,&ty);
+    if(t){
+      if(!down){down=true;downX=tx;downY=ty;downScroll=scanScroll;moved=false;}
+      else{
+        if(maxScroll>0){int ns=downScroll+((int)downY-(int)ty)/rowH; if(ns<0)ns=0; if(ns>maxScroll)ns=maxScroll; if(ns!=scanScroll){scanScroll=ns;dirty=true;}}
+        if(abs((int)ty-downY)>8||abs((int)tx-downX)>8)moved=true;
+      }
+    } else if(down){
+      down=false;
+      if(!moved){
+        if(downY>=btnBarY){int bw=(VW-4*4)/3,i=(downX-4)/(bw+4);
+          if(i==0){espnowScanSelect(sel);gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_GREEN,COL_BG);{const char*s="PAIRED";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);}gfx_print("PAIRED");gfx_flush();delay(700);break;}
+          else if(i==1){String mac=espnowScanGetMac(sel);String label="OMEGA-"+mac.substring(12),nm=getDongleName(mac),out;if(onScreenKeyboard(label,nm,out)){setDongleName(mac,out);}uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<500)delay(10);down=false;dirty=true;}
           else break; // BACK
-        }
-        uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<400)delay(10);
+        } else if(downY>=listTop&&downY<listTop+maxRows*rowH){int slot=(downY-listTop)/rowH,idx=scanScroll+slot; if(idx>=0&&idx<n&&idx!=sel){sel=idx;dirty=true;}}
       }
     }
     delay(15);
@@ -1191,11 +1327,13 @@ void setup(){
     if(!SD_MMC.exists("/ADF"))SD_MMC.mkdir("/ADF");if(!SD_MMC.exists("/DSK"))SD_MMC.mkdir("/DSK");
     generateDefaultConfig();
     loadConfig();
+    espnowSetScanCap(g_dongle_cap);
     relayout();                 // apply ROTATE/COMPACT from config before first draw
     listImages(SD_MMC,g_files);
     if(!readGameCache()){buildGameList();}
     buildActiveLetters();
     if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
+    scanScreensaver();
   } else {gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,200);gfx_print("SD MOUNT FAILED");gfx_flush();delay(2000);}
   if(g_wireless_mode){espnowBegin();g_espnow_started=true;}
   drawCracktroSplash();
@@ -1203,6 +1341,7 @@ void setup(){
   MSC.onRead(onRead);MSC.onWrite(onWrite);MSC.mediaPresent(true);
   MSC.begin(TOTAL_SECTORS,512);USB.begin();hardDetach();
   drawFullUI();gfx_flush();
+  g_last_touch_ms=millis();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1311,6 +1450,7 @@ void loop(){
   uint32_t now=millis();
 
   if(touch){
+    g_last_touch_ms=now;
     g_touch_release=0;                                  // any touch resets the release counter (ignores blips)
     if(!g_touch_active){
       // finger down
@@ -1339,6 +1479,11 @@ void loop(){
     return;
   }
 
+  // screensaver (undocumented, folder-gated): fires on idle; any touch wakes it
+  if(g_ss_enabled&&g_ss_have&&!g_info_showing&&!g_inertia_on){
+    uint32_t thr=g_loaded?g_ss_load_ms:g_ss_idle_ms;
+    if(now-g_last_touch_ms>=thr)runScreensaver();
+  }
   // idle: run inertia
   if(g_inertia_on){
     g_scrollPx+=g_inertia_vel;g_inertia_vel*=0.92f;

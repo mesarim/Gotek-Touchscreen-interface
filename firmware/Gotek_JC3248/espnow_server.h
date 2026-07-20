@@ -44,8 +44,10 @@ void   espnowScanEnd();
 int    espnowScanCount();
 String espnowScanGetMac(int i);
 bool   espnowScanSelect(int i);
+void   espnowSetScanCap(int n);   // runtime cap on discovered dongles (CONFIG.TXT CAP=)
 
 // Transfer — sends via WiFi TCP, uses ESP-NOW only for DONE/ERROR reply
 bool   espnowSendNotify(const String& name, const String& mode, uint32_t size);
 bool   espnowSendDisk(uint32_t size);
+bool   espnowSendDiskTo(const uint8_t* mac, uint32_t size);   // multicast: send to one dongle by MAC
 void   espnowSendEject();

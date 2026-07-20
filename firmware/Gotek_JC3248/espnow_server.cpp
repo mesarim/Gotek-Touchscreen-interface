@@ -30,11 +30,13 @@ static uint8_t _xiao_mac[6] = {0};
 static String  _xiao_ip     = "";
 
 // ---------- Multi-dongle scan (Path 1: collect-all, pick one into active slot) ----------
-#define MAX_SCANNED 8
+#define MAX_SCANNED 64   // hard ceiling (array size); runtime cap set from CONFIG.TXT CAP=
 struct ScannedDongle { uint8_t mac[6]; char ip[16]; };
 static ScannedDongle _scanned[MAX_SCANNED];
 static int  _scanned_count = 0;
 static volatile bool _scan_mode = false;
+static int _scanCap = 32;   // runtime cap (CONFIG.TXT CAP=), clamped to MAX_SCANNED
+void espnowSetScanCap(int n){ if(n<1)n=1; if(n>MAX_SCANNED)n=MAX_SCANNED; _scanCap=n; }
 
 // ---------- Packet structs ----------
 #pragma pack(push,1)
@@ -73,7 +75,7 @@ static void handleIncoming(const uint8_t* data, int len) {
     if (_scan_mode) {
       for (int i=0;i<_scanned_count;i++)
         if (memcmp(_scanned[i].mac, p->mac, 6)==0) { g_espnow_xiao_last_seen=millis(); return; } // already have it
-      if (_scanned_count < MAX_SCANNED) {
+      if (_scanned_count < _scanCap) {
         memcpy(_scanned[_scanned_count].mac, p->mac, 6);
         strncpy(_scanned[_scanned_count].ip, p->ip, 15);
         _scanned[_scanned_count].ip[15]=0;
@@ -246,8 +248,8 @@ bool espnowSendNotify(const String& name, const String& mode, uint32_t size) {
   return true; // proceed straight to sendDisk
 }
 
-bool espnowSendDisk(uint32_t size) {
-  String ip = (_xiao_ip.length() > 0) ? _xiao_ip : String(DONGLE_AP_IP);
+static bool sendDiskCore(const uint8_t* mac, const char* ipc, uint32_t size, uint32_t connectTimeoutMs) {
+  String ip = String(ipc);
   Serial.printf("[TCP] Connecting to XIAO at %s:%d\n", ip.c_str(), DONGLE_TCP_PORT);
 
   // Stop ESP-NOW before switching WiFi mode
@@ -257,12 +259,18 @@ bool espnowSendDisk(uint32_t size) {
   // Switch to pure STA mode to connect to XIAO's AP
   WiFi.mode(WIFI_STA);
   delay(100);
+  // Multicast hardening: drop any sticky/auto association to a previous same-SSID dongle,
+  // so WiFi.begin() targets THIS BSSID instead of silently reconnecting to the last one.
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, true);   // keep radio on, erase saved AP so it can't auto-reconnect
+  delay(200);
   // Target the specific dongle by BSSID (all dongles share SSID "GotekXIAO" on channel 6).
   // Without the BSSID, with multiple dongles powered on we'd associate to a random one.
-  WiFi.begin(DONGLE_AP_SSID, DONGLE_AP_PASS, ESPNOW_CHANNEL, _xiao_mac);
+  WiFi.begin(DONGLE_AP_SSID, DONGLE_AP_PASS, ESPNOW_CHANNEL, (uint8_t*)mac);
 
   uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) {
+  while (WiFi.status() != WL_CONNECTED && millis()-t0 < connectTimeoutMs) {
     delay(200);
     Serial.print(".");
   }
@@ -357,6 +365,16 @@ bool espnowSendDisk(uint32_t size) {
   if (ok) g_espnow_xiao_done = true;
   else    g_espnow_xiao_error = true;
   return ok;
+}
+
+// Single paired dongle — unchanged behaviour (15s connect window, learned IP).
+bool espnowSendDisk(uint32_t size) {
+  return sendDiskCore(_xiao_mac, (_xiao_ip.length() ? _xiao_ip.c_str() : DONGLE_AP_IP), size, 15000);
+}
+// Multicast fan-out — target one MuCa dongle by MAC; every dongle's AP serves 192.168.4.1.
+// Shorter connect window so a powered-off dongle in the group doesn't stall the whole load.
+bool espnowSendDiskTo(const uint8_t* mac, uint32_t size) {
+  return sendDiskCore(mac, DONGLE_AP_IP, size, 6000);
 }
 
 void espnowSendEject() {

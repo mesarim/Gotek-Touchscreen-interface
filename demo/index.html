@@ -131,7 +131,7 @@ function drawCracktro(){const copperY=VH/2-30+Math.sin(craFrame*0.05)*40|0;fillR
   craScroll+=2;craFrame++;blit();}
 
 // ---- draw ----
-function drawStatusBar(){fillRect(0,0,VW,STATUS_H,C.bar);setSize(1);text(6,6,"OMEGAWARE",C.orange,C.bar);text(6+textW("OMEGAWARE"),6," v4.0.0",C.mid,C.bar);const t=wireless?"WIRELESS":"STANDALONE";text((VW-textW(t))/2|0,6,t,wireless?0xFD20:0x07FF,C.bar);fillCircle(VW-8,STATUS_H/2,3,loaded?0xE8C4:C.green);}
+function drawStatusBar(){fillRect(0,0,VW,STATUS_H,C.bar);setSize(1);text(6,6,"OMEGAWARE",C.orange,C.bar);text(6+textW("OMEGAWARE"),6," v4.2.1",C.mid,C.bar);const t=wireless?"WIRELESS":"STANDALONE";text((VW-textW(t))/2|0,6,t,wireless?0xFD20:0x07FF,C.bar);fillCircle(VW-8,STATUS_H/2,3,loaded?0xE8C4:C.green);}
 function drawModeBar(){const mx=(COVER_ON&&orient==='L')?COVER_W:0,mw=VW-mx;fillRect(mx,STATUS_H,mw,MODE_BAR_H,C.bar);setSize(1);const isA=mode==="ADF";
   fillRound(mx+4,STATUS_H+2,36,14,7,isA?C.accent:C.bg);text(mx+10,STATUS_H+6,"ADF",isA?C.amber:C.dim,isA?C.accent:C.bg);
   fillRound(mx+44,STATUS_H+2,36,14,7,!isA?C.accent:C.bg);text(mx+50,STATUS_H+6,"DSK",!isA?C.amber:C.dim,!isA?C.accent:C.bg);

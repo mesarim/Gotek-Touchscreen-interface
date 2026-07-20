@@ -1,6 +1,6 @@
 {
   "name": "Gotek Touchscreen Interface — JC3248",
-  "version": "4.0.0",
+  "version": "4.2.1",
   "new_install_prompt_erase": true,
   "builds": [
     {
