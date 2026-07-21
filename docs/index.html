@@ -689,25 +689,59 @@ function applyFont(f){fontMode=f;nameSz=(f===0?1:f===2?3:2);const target=(f===0?
 function fontName(f){return f===0?"SMALL":f===2?"LARGE":"NORMAL";}
 function maxScrollPx(){return Math.max(0,games.length*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP));}
 
-// ---- cracktro ----
-let stars=[],craFrame=0,craScroll=0,craStart=0;
-const SCROLLTEXT="       GOTEK TOUCHSCREEN INTERFACE  *  CODED BY MEZ AND DIMMY OF OMEGAWARE  *  THE ULTIMATE RETRO DISK LOADER FOR AMIGA AND CPC  ...  KEEP THE SCENE ALIVE  ...  OMEGAWARE 2026  *         ";
-const COPPER=[0xF800,0xF920,0xFAA0,0xFC00,0xFDE0,0xEFE0,0x87E0,0x07E0,0x07F0,0x07FF,0x041F,0x001F,0x801F,0xF81F,0xF810,0xF800];
-const SINE=[0xF800,0xFBE0,0xFFE0,0x07E0,0x07FF,0x001F,0xF81F,0xF800];
-function initStars(){stars=[];for(let i=0;i<60;i++)stars.push({x:Math.random()*VW|0,y:Math.random()*VH|0,s:1+(Math.random()*3|0)});}
-function drawCracktro(){const copperY=VH/2-30+Math.sin(craFrame*0.05)*40|0;fillRect(0,0,VW,VH-24,BLACK);
-  for(const st of stars){st.x-=st.s;if(st.x<0){st.x=VW-1;st.y=Math.random()*(VH-30)|0;}const c=st.s===3?WHITE:st.s===2?0x7BEF:0x4208;px(st.x,st.y,c);}
-  for(let i=0;i<16;i++){const by=copperY+i*3;if(by>=0&&by<VH-30)fillRect(0,by,VW,2,COPPER[i]);}
-  setSize(2);let s="MEZ & DIMMY";text((VW-textW(s))/2|0,copperY-50,s,SINE[(craFrame>>2)%8],BLACK);
-  s="- OMEGAWARE -";text((VW-textW(s))/2|0,copperY+52,s,(craFrame%40<20)?CYAN:WHITE,BLACK);
-  setSize(1);s="GOTEK TOUCHSCREEN INTERFACE";text((VW-textW(s))/2|0,copperY+72,s,0x7BEF,BLACK);
-  s="TAP TO CONTINUE";text((VW-textW(s))/2|0,VH-50,s,((craFrame/15|0)%2)?BLACK:0x4A8A,BLACK);
-  fillRect(0,VH-24,VW,24,0x0010);setSize(1);const sc=craScroll/12|0,pxoff=craScroll%12;
-  for(let c=0;c<VW/12+3;c++){const ch=SCROLLTEXT[(sc+c)%SCROLLTEXT.length];text(-pxoff+c*12,VH-20,ch,YELLOW,0x0010);}
-  craScroll+=2;craFrame++;blit();}
+// ---- cracktro (v4.4.0 — 6-style boot engine, mirrors the CRACKTRO= config) ----
+let stars=[],craStyle=0,craStyleStart=0,craStart=0;
+const SCROLLTEXT="        OMEGAWARE PRESENTS ... THE GOTEK TOUCHSCREEN INTERFACE ... CODED BY MEZ & DIMMY ... A LITTLE TRIBUTE TO THE AMIGA CRACKTRO LEGENDS ... GREETINGS TO EVERYONE KEEPING THE SCENE ALIVE ... NOW GO LOAD A GAME ...        ";
+function c565(r,g,b){return((r&0xF8)<<8)|((g&0xFC)<<3)|(b>>3);}
+function hsl565(h,s,l){h=((h%360)+360)%360;s/=100;l/=100;const c=(1-Math.abs(2*l-1))*s,x=c*(1-Math.abs((h/60)%2-1)),m=l-c/2;let r,g,b;const seg=(h/60|0)%6;
+  if(seg===0){r=c;g=x;b=0;}else if(seg===1){r=x;g=c;b=0;}else if(seg===2){r=0;g=c;b=x;}else if(seg===3){r=0;g=x;b=c;}else if(seg===4){r=x;g=0;b=c;}else{r=c;g=0;b=x;}
+  return c565((r+m)*255|0,(g+m)*255|0,(b+m)*255|0);}
+function lerp565(r1,g1,b1,r2,g2,b2,k){k=k<0?0:k>1?1:k;return c565(r1+(r2-r1)*k|0,g1+(g2-g1)*k|0,b1+(b2-b1)*k|0);}
+function craLine(x0,y0,x1,y1,c){x0|=0;y0|=0;x1|=0;y1|=0;let dx=Math.abs(x1-x0),dy=-Math.abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1,err=dx+dy;for(let gd=0;gd<4000;gd++){px(x0,y0,c);if(x0===x1&&y0===y1)break;const e2=2*err;if(e2>=dy){err+=dy;x0+=sx;}if(e2<=dx){err+=dx;y0+=sy;}}}
+function initStars(){stars=[];for(let i=0;i<70;i++)stars.push({x:Math.random()*VW|0,y:Math.random()*VH|0,s:1+(Math.random()*3|0)});}
+function craStars(){for(const st of stars){st.x-=st.s*0.6;if(st.x<0){st.x=VW-1;st.y=Math.random()*(VH-30)|0;}const c=st.s===3?WHITE:st.s===2?c565(159,180,214):c565(66,80,110);const z=st.s>2?2:1;fillRect(st.x|0,st.y|0,z,z,c);}}
+function craBar(cy,h,hue){for(let i=-h/2;i<h/2;i++){const l=62-Math.abs(i)/(h/2)*56;fillRect(0,cy+i|0,VW,1,hsl565(hue,100,l));}}
+function craTextC(cx,y,s,sz,col){setSize(sz);text((cx-textW(s)/2)|0,y,s,col,null);}
+function craShadowC(cx,y,s,sz,col){setSize(sz);const xx=(cx-textW(s)/2)|0;text(xx+2,y+2,s,c565(5,6,12),null);text(xx,y,s,col,null);}
+function craScroller(t,col,amp,rainbow){const cw=12,cs=t*0.13|0,sc=cs/cw|0,pxo=cs%cw;fillRect(0,VH-30,VW,30,c565(5,7,15));setSize(2);
+  for(let c=0;c<VW/cw+3;c++){const ch=SCROLLTEXT[((sc+c)%SCROLLTEXT.length+SCROLLTEXT.length)%SCROLLTEXT.length];const x=-pxo+c*cw;const y=(VH-26+Math.sin(x*0.035+t*0.004)*amp)|0;text(x,y,ch,rainbow?hsl565(x*1.2+t*0.2,100,55):col,null);}}
+const CRA_STYLES=[
+ {name:"COPPER CLASSIC",draw(t){fillScreen(c565(4,6,13));craStars();
+   for(let b=0;b<3;b++){const cy=(150+b*34+Math.sin(t*0.0022+b*1.4)*26)|0;craBar(cy,30,t*0.06+b*70);}
+   craTextC(VW/2,34,"OMEGAWARE",4,hsl565(t*0.12,100,55));craTextC(VW/2,82,"* MEZ & DIMMY *",2,c565(174,187,208));craScroller(t,c565(255,224,0),13,false);}},
+ {name:"STARFIELD",draw(t){fillScreen(c565(2,3,10));craStars();craStars();
+   const bx=(VW/2+Math.sin(t*0.0016)*150)|0,by=(120+Math.sin(t*0.0025)*54)|0;
+   craShadowC(bx,by,"OMEGAWARE",3,hsl565(t*0.1,100,60));craTextC(bx,by+34,"INTO THE VOID",1,c565(127,208,255));craScroller(t,0,10,true);}},
+ {name:"RAINBOW RASTER",draw(t){for(let y=0;y<VH-30;y++)fillRect(0,y,VW,1,hsl565(y*1.4+t*0.16,100,50));
+   fillRect(48,104,VW-96,92,c565(6,8,18));drawRect(48,104,VW-96,92,WHITE);
+   craTextC(VW/2,124,"OMEGAWARE",4,WHITE);craTextC(VW/2,172,"CRACKED - TRAINED - LOADED",1,c565(255,233,168));craScroller(t,WHITE,10,false);}},
+ {name:"PLASMA",draw(t){const bs=8;for(let y=0;y<VH-30;y+=bs)for(let x=0;x<VW;x+=bs){const v=Math.sin(x*0.035+t*0.003)+Math.sin(y*0.05+t*0.0042)+Math.sin((x+y)*0.028+t*0.002);fillRect(x,y,bs,bs,hsl565(v*60+t*0.12,90,56));}
+   craShadowC(VW/2,54,"OMEGAWARE",4,WHITE);craTextC(VW/2,104,"MELT YOUR EYES",2,c565(10,10,20));craScroller(t,WHITE,12,false);}},
+ {name:"BOING BALL",draw(t){fillScreen(c565(12,12,22));const grd=c565(70,36,96);
+   for(let x=0;x<=VW;x+=32)vline(x,60,VH-30-60,grd);for(let y=60;y<=VH-30;y+=28)hline(0,y,VW,grd);
+   const bx=(VW/2+Math.sin(t*0.0016)*150)|0,gy=VH-70,by=(gy-Math.abs(Math.sin(t*0.004))*120)|0,r=46;
+   for(let yy=-6;yy<=6;yy++){const w=(r*0.9*Math.sqrt(1-(yy/6)*(yy/6)))|0;fillRect(bx-w,gy+6+yy,2*w+1,1,c565(8,8,14));}
+   const cell=r/3.2,ph=(t*0.06)%(cell*2);
+   for(let yy=-r;yy<=r;yy++){const hw=Math.sqrt(r*r-yy*yy)|0;for(let xx=-hw;xx<=hw;xx++){const cc=(Math.floor((xx+ph)/cell)+Math.floor(yy/cell))&1;px(bx+xx,by+yy,cc?c565(255,38,38):c565(242,242,242));}}
+   drawCircle(bx,by,r,c565(122,0,0));craTextC(VW/2,26,"OMEGAWARE",3,c565(255,59,59));craScroller(t,c565(255,102,102),9,false);}},
+ {name:"SYNTHWAVE",draw(t){for(let y=0;y<VH;y++){const f=y/VH;fillRect(0,y,VW,1,f<0.52?lerp565(24,11,51,90,26,110,f/0.52):lerp565(11,10,26,4,4,12,(f-0.53)/0.47));}
+   for(let i=0;i<26;i++)px((i*53+7)%VW,(i*29)%150,WHITE);
+   const sunx=VW/2,suny=168,sr=58;for(let yy=-sr;yy<=0;yy++){const w=Math.sqrt(sr*sr-yy*yy)|0;fillRect(sunx-w,suny+yy,2*w,1,c565(255,91,138));}
+   for(let i=0;i<6;i++){const yy=118+i*8;fillRect(sunx-60,yy,120,3+i,c565(24,11,51));}
+   const grc=c565(0,229,255),hz=176;for(let i=0;i<8;i++){const yy=(hz+i*i*2.4)|0;if(yy<VH)hline(0,yy,VW,grc);}
+   for(let x=-6;x<=12;x++){const p2=VW/2+x*70,x0=(VW/2+(p2-VW/2)*0.18)|0;craLine(x0,hz,p2,VH,grc);}
+   craShadowC(VW/2,40,"OMEGAWARE",3,c565(49,232,255));craTextC(VW/2,74,"RETRO FUTURE",1,c565(255,122,176));craScroller(t,c565(255,79,160),8,false);}},
+];
+function bootCracktro(){screen="cracktro";craStyle=Math.random()*CRA_STYLES.length|0;craStyleStart=performance.now();initStars();infoShowing=false;}
+function drawCracktro(){const now=performance.now();
+  if(now-craStyleStart>6500){craStyle=(craStyle+1)%CRA_STYLES.length;craStyleStart=now;initStars();}
+  const t=now-craStyleStart;CRA_STYLES[craStyle].draw(t);
+  setSize(1);text(4,4,(craStyle+1)+"/"+CRA_STYLES.length+" "+CRA_STYLES[craStyle].name,c565(143,224,255),null);
+  if(((now/450|0)%2))craTextC(VW/2,VH-46,"TAP TO CONTINUE",1,c565(150,168,200));
+  blit();}
 
 // ---- draw ----
-function drawStatusBar(){fillRect(0,0,VW,STATUS_H,C.bar);setSize(1);text(6,6,"OMEGAWARE",C.orange,C.bar);text(6+textW("OMEGAWARE"),6," v4.2.1",C.mid,C.bar);const t=wireless?"WIRELESS":"STANDALONE";text((VW-textW(t))/2|0,6,t,wireless?0xFD20:0x07FF,C.bar);fillCircle(VW-8,STATUS_H/2,3,loaded?0xE8C4:C.green);}
+function drawStatusBar(){fillRect(0,0,VW,STATUS_H,C.bar);setSize(1);text(6,6,"OMEGAWARE",C.orange,C.bar);text(6+textW("OMEGAWARE"),6," v4.4.0",C.mid,C.bar);const t=wireless?"WIRELESS":"STANDALONE";text((VW-textW(t))/2|0,6,t,wireless?0xFD20:0x07FF,C.bar);fillCircle(VW-8,STATUS_H/2,3,loaded?0xE8C4:C.green);}
 function drawModeBar(){const mx=(COVER_ON&&orient==='L')?COVER_W:0,mw=VW-mx;fillRect(mx,STATUS_H,mw,MODE_BAR_H,C.bar);setSize(1);const isA=mode==="ADF";
   fillRound(mx+4,STATUS_H+2,36,14,7,isA?C.accent:C.bg);text(mx+10,STATUS_H+6,"ADF",isA?C.amber:C.dim,isA?C.accent:C.bg);
   fillRound(mx+44,STATUS_H+2,36,14,7,!isA?C.accent:C.bg);text(mx+50,STATUS_H+6,"DSK",!isA?C.amber:C.dim,!isA?C.accent:C.bg);
@@ -793,7 +827,9 @@ function drawInfo(){
   hline(x+2,y,pw-4,C.sep);y+=4;
   setSize(1);text(x+2,y,"Heap:212K  PSRAM:2048K",C.lit,C.panel);y+=lh;text(x+2,y,"Games: "+games.length,C.lit,C.panel);y+=lh+2;
   infoRescanY=y;{fillRound(x,y,pw,bh,6,C.blue);setSize(isz);text(x+(pw-textW("RESCAN SD"))/2|0,y+tyo,"RESCAN SD",WHITE,C.blue);}y+=btn;
-  infoResetY=y;{fillRound(x,y,pw,bh,6,0x8000);setSize(isz);text(x+(pw-textW("SOFT RESET"))/2|0,y+tyo,"SOFT RESET",WHITE,0x8000);}}
+  infoResetY=y;{const gap=4,hw=(pw-gap)/2|0,dx=x+hw+gap;setSize(isz);
+    fillRound(x,y,hw,bh,6,0x8000);text(x+(hw-textW("SOFT RESET"))/2|0,y+tyo,"SOFT RESET",WHITE,0x8000);
+    fillRound(dx,y,hw,bh,6,C.accent);text(dx+(hw-textW("LOAD DIAG"))/2|0,y+tyo,"LOAD DIAG",WHITE,C.accent);}}
 function drawUI(){fillScreen(C.bg);drawStatusBar();if(infoShowing){drawModeBar();drawList();if(STRIP_ON)drawActionStrip();drawNowPlaying();drawAZ();drawInfo();}else{drawModeBar();drawCover();drawList();drawActionStrip();drawNowPlaying();drawAZ();}drawBottom();blit();}
 
 // ---- interaction ----
@@ -812,7 +848,9 @@ function hit(mx,my){
       if(my>=infoRotY&&my<infoRotY+bh){orient=(orient==='P')?'L':'P';relayout();drawUI();return;}
       if(my>=infoCompY&&my<infoCompY+bh){compact=!compact;relayout();drawUI();return;}
       if(my>=infoRescanY&&my<infoRescanY+bh){drawUI();return;}
-      if(my>=infoResetY&&my<infoResetY+bh){screen="cracktro";craFrame=0;craScroll=0;craStart=performance.now();initStars();infoShowing=false;return;}
+      if(my>=infoResetY&&my<infoResetY+bh){const pw2=iw-8,hw=(pw2-4)/2|0,dx=ix+4+hw+4;
+        if(mx>=dx){loaded=true;loadedIdx=-1;loadedDisk=-1;loadedName="AMIGA TEST KIT";infoShowing=false;drawUI();return;}
+        bootCracktro();return;}
       return;
     }
   }
@@ -853,7 +891,7 @@ function pUp(){if(!drag)return;const d=drag;drag=null;if(d.moved&&d.inList){iner
 function syncScroll(){if(games.length){const ti=Math.floor(scrollPx/LIST_ITEM_H);setActiveLetter(games[Math.max(0,Math.min(games.length-1,ti))].letter);}}
 
 // ---- controls + frame loop ----
-document.getElementById('gtkDemoReset').onclick=()=>{screen="cracktro";craFrame=0;craScroll=0;craStart=performance.now();initStars();};
+document.getElementById('gtkDemoReset').onclick=()=>{bootCracktro();};
 document.getElementById('gtkDemoSkip').onclick=()=>{if(screen==="cracktro"){screen="ui";drawUI();}};
 {const _gr=document.getElementById('gtkDemoRotate');if(_gr)_gr.onclick=()=>{if(screen==="cracktro"){screen="ui";}orient=(orient==='P')?'L':'P';relayout();drawUI();};}
 cv.addEventListener('mousedown',e=>{const[x,y]=evtXY(e);pDown(x,y);});
@@ -864,7 +902,7 @@ cv.addEventListener('touchmove',e=>{e.preventDefault();const[x,y]=evtXY(e);pMove
 window.addEventListener('touchend',()=>pUp());
 let lastMq=0;
 function frame(now){
-  if(screen==="cracktro"){drawCracktro();if(now-craStart>9000){screen="ui";drawUI();}}
+  if(screen==="cracktro"){drawCracktro();}
   else{
     if(inertiaOn){scrollPx+=inertiaV;inertiaV*=0.92;if(scrollPx<0){scrollPx=0;inertiaOn=false;}const mp=maxScrollPx();if(scrollPx>mp){scrollPx=mp;inertiaOn=false;}if(Math.abs(inertiaV)<0.6)inertiaOn=false;syncScroll();drawUI();}
     else if(!drag&&!infoShowing&&selOverflows()){
@@ -877,7 +915,7 @@ function frame(now){
 }
 function selOverflows(){if(sel<0||sel>=games.length)return false;const g=games[sel];setSize(nameSz);const r=8+nameSz*3,nx=LIST_X+6+r+r+6,maxNW=LIST_W-(nx-LIST_X)-8-(g.disk_count>1?36:0);return textW(g.name)>maxNW;}
 function marqueeMax(){const g=games[sel];setSize(nameSz);const r=8+nameSz*3,nx=LIST_X+6+r+r+6,maxNW=LIST_W-(nx-LIST_X)-8-(g.disk_count>1?36:0);return Math.max(0,textW(g.name)-maxNW+8);}
-relayout();initStars();craStart=performance.now();requestAnimationFrame(frame);
+relayout();bootCracktro();requestAnimationFrame(frame);
 
 </script>
 
@@ -925,7 +963,7 @@ relayout();initStars();craStart=performance.now();requestAnimationFrame(frame);
 
   // Device versions — update these when you build new firmware
   const deviceInfo = {
-    'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware v4.2.1' },
+    'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware v4.4.0' },
     'firmware/waveshare7/manifest.json': { name: 'Waveshare 7"',  version: 'Firmware v3.4.7' },
     'firmware/waveshare28/manifest.json':{ name: 'Waveshare 2.8"', version: 'Firmware v3.4.7' },
     'firmware/supermini/manifest.json':  { name: 'Super Mini Dongle', version: 'Firmware v3.2.0' },

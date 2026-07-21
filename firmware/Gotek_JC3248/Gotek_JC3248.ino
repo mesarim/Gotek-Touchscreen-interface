@@ -14,6 +14,8 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_interface.h"
 #include "esp_lcd_axs15231b.h"
+#include "esp_random.h"
+#include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 #include <JPEGDEC.h>
 #include <Wire.h>
 #include <vector>
@@ -21,7 +23,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "v4.2.1-JC3248"
+#define FW_VERSION "v4.4.0-JC3248"
 #include "espnow_server.h"
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
@@ -453,6 +455,7 @@ static uint16_t* g_ss_buf=NULL; static int g_ss_w=0, g_ss_h=0;
 #define SS_LOAD_MS  120000UL   // 2 min idle once a game is loaded (showcase)
 static uint32_t g_ss_idle_ms=SS_IDLE_MS, g_ss_load_ms=SS_LOAD_MS;   // hidden SS_IDLE=/SS_LOAD= override (seconds)
 static int g_dongle_cap=32;   // CONFIG.TXT CAP= : max wireless dongles to discover/cast (1..64)
+static int g_cracktro=0;      // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or 0 = pick one at random each boot
 // ── Item 4: load/eject behaviour toggles (all default OFF = safest) ──
 static bool g_tapload=false;    // ON = tapping the already-selected row loads it (old double-tap behaviour)
 static bool g_hotswap=false;    // ON = tapping another disk while loaded swaps to it instantly
@@ -640,6 +643,11 @@ static void generateDefaultConfig(){
   f.println("# Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s");
   f.println("LOOP=0");
   f.println("");
+  f.println("# Boot cracktro style: 0=random each boot, or pick one:");
+  f.println("#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER");
+  f.println("#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE");
+  f.println("CRACKTRO=0");
+  f.println("");
   f.println("# Font size: SMALL, NORMAL, LARGE");
   f.println("FONT=NORMAL");
   f.println("");
@@ -661,12 +669,44 @@ static void generateDefaultConfig(){
   f.println("# FORCESWAP: ON = swap disk contents without the USB eject/re-attach cycle");
   f.println("FORCESWAP=OFF");
   f.println("");
-  f.println("# Device name shown in status bar / scroller");
-  f.println("DEVICE_NAME=OMEGAWARE");
-  f.println("");
   f.println("# Wireless dongle MAC (auto-filled when you pair via INFO screen)");
   f.println("# XIAO_MAC=");
   f.close();
+}
+
+// Self-heal: after a firmware update adds a new key, an existing CONFIG.TXT won't
+// have it (generateDefaultConfig never overwrites). Append any documented key the
+// file is missing — with its comment + default — so upgraders get an editable line
+// without their other settings being touched. Only writes when something is missing;
+// hidden keys (SCREENSAVER/SS_*) are intentionally excluded so they stay undocumented.
+static void selfHealConfig(){
+  if(!SD_MMC.exists("/CONFIG.TXT"))return;   // fresh cards already get the full template
+  struct CfgKey{const char*key;const char*block;};
+  static const CfgKey KEYS[]={
+    {"THEME",    "\n# Theme: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD\nTHEME=0\n"},
+    {"MODE",     "\n# Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW to dongle)\nMODE=STANDALONE\n"},
+    {"LOOP",     "\n# Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s\nLOOP=0\n"},
+    {"CRACKTRO", "\n# Boot cracktro style: 0=random each boot, or pick one:\n#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER\n#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE\nCRACKTRO=0\n"},
+    {"FONT",     "\n# Font size: SMALL, NORMAL, LARGE\nFONT=NORMAL\n"},
+    {"ROTATE",   "\n# Screen rotation in degrees: 0 or 180 = landscape, 90 or 270 = portrait.\nROTATE=0\n"},
+    {"COMPACT",  "\n# COMPACT: OFF = cover art + list, ON = maximise the game list (cover collapses to a strip)\nCOMPACT=OFF\n"},
+    {"CAP",      "\n# CAP: max wireless dongles the scan will list (default 32, up to 64)\nCAP=32\n"},
+    {"TAPLOAD",  "\n# TAPLOAD: ON = tapping the already-highlighted game row loads it (old double-tap)\nTAPLOAD=OFF\n"},
+    {"HOTSWAP",  "# HOTSWAP: ON = tapping another disk while loaded swaps to it instantly\nHOTSWAP=OFF\n"},
+    {"FORCESWAP","# FORCESWAP: ON = swap disk contents without the USB eject/re-attach cycle\nFORCESWAP=OFF\n"},
+  };
+  const int NK=sizeof(KEYS)/sizeof(KEYS[0]);
+  bool present[NK]; for(int i=0;i<NK;i++)present[i]=false;
+  File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ); if(!fr)return;
+  while(fr.available()){String l=fr.readStringUntil('\n');l.trim();if(l.startsWith("#"))continue;
+    int eq=l.indexOf('=');if(eq<0)continue;String k=l.substring(0,eq);k.trim();
+    for(int i=0;i<NK;i++)if(k==KEYS[i].key)present[i]=true;}
+  fr.close();
+  String add=""; int missing=0;
+  for(int i=0;i<NK;i++)if(!present[i]){add+=KEYS[i].block;missing++;}
+  if(!missing)return;
+  File fw=SD_MMC.open("/CONFIG.TXT",FILE_APPEND);
+  if(fw){fw.print(add);fw.close();}
 }
 
 static void loadConfig(){
@@ -682,7 +722,8 @@ static void loadConfig(){
     else if(k=="SCREENSAVER"){g_ss_enabled=(v!="OFF"&&v!="0");}
     else if(k=="SS_IDLE"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_idle_ms=s*1000UL;}
     else if(k=="SS_LOAD"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_load_ms=s*1000UL;}
-    else if(k=="CAP"){int c=v.toInt(); if(c>=1&&c<=64)g_dongle_cap=c;}}
+    else if(k=="CAP"){int c=v.toInt(); if(c>=1&&c<=64)g_dongle_cap=c;}
+    else if(k=="CRACKTRO"){int c=v.toInt(); if(c>=0&&c<=6)g_cracktro=c;}}
   f.close();
 }
 
@@ -752,40 +793,138 @@ static void syncIndexToScroll(){if(g_games.empty())return;int ti=(int)(g_scrollP
 static int16_t star_x[NUM_STARS],star_y[NUM_STARS],star_speed[NUM_STARS];
 static void initStars(){for(int i=0;i<NUM_STARS;i++){star_x[i]=random(0,gW);star_y[i]=random(0,gH);star_speed[i]=random(1,4);}}
 
-static void drawCracktroSplash(){
+// ── Cracktro engine: 6 Amiga-style demo effects, selected by CONFIG.TXT CRACKTRO= ──
+#define CRK_RGB(r,g,b) ((uint16_t)((((r)&0xF8)<<8)|(((g)&0xFC)<<3)|((b)>>3)))
+
+// HSL -> RGB565 (s,l are percentages, matching the design tool)
+static uint16_t crk_hsl(float h,float s,float l){
+  h=fmodf(fmodf(h,360.0f)+360.0f,360.0f); s*=0.01f; l*=0.01f;
+  float c=(1.0f-fabsf(2.0f*l-1.0f))*s;
+  float x=c*(1.0f-fabsf(fmodf(h/60.0f,2.0f)-1.0f));
+  float m=l-c*0.5f, r,g,b;
+  int seg=((int)(h/60.0f))%6;
+  switch(seg){case 0:r=c;g=x;b=0;break;case 1:r=x;g=c;b=0;break;case 2:r=0;g=c;b=x;break;
+    case 3:r=0;g=x;b=c;break;case 4:r=x;g=0;b=c;break;default:r=c;g=0;b=x;break;}
+  return CRK_RGB((uint8_t)((r+m)*255.0f),(uint8_t)((g+m)*255.0f),(uint8_t)((b+m)*255.0f));
+}
+static inline uint16_t crk_hue(float h){return crk_hsl(h,100.0f,55.0f);}
+static uint16_t crk_lerp(int r1,int g1,int b1,int r2,int g2,int b2,float k){
+  if(k<0)k=0;if(k>1)k=1;
+  return CRK_RGB((uint8_t)(r1+(r2-r1)*k),(uint8_t)(g1+(g2-g1)*k),(uint8_t)(b1+(b2-b1)*k));}
+static void crk_line(int x0,int y0,int x1,int y1,uint16_t c){
+  int dx=abs(x1-x0),dy=-abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1,err=dx+dy;
+  for(int guard=0;guard<4000;guard++){gfx_drawPixel(x0,y0,c);if(x0==x1&&y0==y1)break;
+    int e2=2*err;if(e2>=dy){err+=dy;x0+=sx;}if(e2<=dx){err+=dx;y0+=sy;}}}
+
+// transparent glyphs (foreground pixels only) using the built-in 6x8 font
+static void crk_char(char ch,int x,int y,int sz,uint16_t col){
+  if(ch<32||ch>126)return; const uint8_t*d=font6x8[ch-32];
+  for(int k=0;k<6;k++){uint8_t bits=pgm_read_byte(&d[k]);
+    for(int r=0;r<8;r++)if(bits&(1<<r))for(int dy=0;dy<sz;dy++)for(int dx=0;dx<sz;dx++)
+      gfx_drawPixel(x+k*sz+dx,y+r*sz+dy,col);}}
+static int  crk_txtW(const char*s,int sz){return (int)strlen(s)*6*sz;}
+static void crk_txt(int x,int y,const char*s,int sz,uint16_t col){for(int i=0;s[i];i++)crk_char(s[i],x+i*6*sz,y,sz,col);}
+static void crk_txtC(int cx,int y,const char*s,int sz,uint16_t col){crk_txt(cx-crk_txtW(s,sz)/2,y,s,sz,col);}
+static void crk_txtShadow(int cx,int y,const char*s,int sz,uint16_t col){
+  crk_txt(cx-crk_txtW(s,sz)/2+2,y+2,s,sz,CRK_RGB(5,6,12));crk_txtC(cx,y,s,sz,col);}
+
+static const char* CRK_SCROLL="        OMEGAWARE PRESENTS ... THE GOTEK TOUCHSCREEN INTERFACE ... CODED BY MEZ & DIMMY ... A LITTLE TRIBUTE TO THE AMIGA CRACKTRO LEGENDS ... GREETINGS TO EVERYONE KEEPING THE SCENE ALIVE ... NOW GO LOAD A GAME ...        ";
+static void crk_scroller(float t,uint16_t col,float amp,bool rainbow){
+  const int sz=2,cw=12; int slen=strlen(CRK_SCROLL);
+  long cs=(long)(t*0.13f); int sc=(int)(cs/cw), px=(int)(cs%cw);
+  gfx_fillRect(0,gH-30,gW,30,CRK_RGB(5,7,15));
+  for(int c=0;c<gW/cw+3;c++){char ch=CRK_SCROLL[(((sc+c)%slen)+slen)%slen]; int x=-px+c*cw;
+    int y=gH-26+(int)(sinf(x*0.035f+t*0.004f)*amp);
+    crk_char(ch,x,y,sz, rainbow?crk_hue(x*1.2f+t*0.2f):col);}}
+static void crk_stars(){
+  for(int i=0;i<NUM_STARS;i++){star_x[i]-=star_speed[i];if(star_x[i]<0){star_x[i]=gW-1;star_y[i]=random(0,gH-30);}
+    uint16_t c=star_speed[i]==3?TFT_WHITE:star_speed[i]==2?CRK_RGB(159,180,214):CRK_RGB(66,80,110);
+    int s=star_speed[i]>2?2:1; gfx_fillRect(star_x[i],star_y[i],s,s,c);}}
+static void crk_copperBar(int cy,int h,float hue){
+  for(int i=-h/2;i<h/2;i++){float l=62.0f-fabsf((float)i)/(h/2.0f)*56.0f; gfx_fillRect(0,cy+i,gW,1,crk_hsl(hue,100.0f,l));}}
+
+// 1: COPPER CLASSIC
+static void crkCopper(float t){
+  gfx_fillScreen(CRK_RGB(4,6,13)); crk_stars();
+  for(int b=0;b<3;b++){int cy=150+b*34+(int)(sinf(t*0.0022f+b*1.4f)*26); crk_copperBar(cy,30,t*0.06f+b*70);}
+  crk_txtC(gW/2,34,"OMEGAWARE",4,crk_hue(t*0.12f));
+  crk_txtC(gW/2,82,"* MEZ & DIMMY *",2,CRK_RGB(174,187,208));
+  crk_scroller(t,CRK_RGB(255,224,0),13,false);
+}
+// 2: STARFIELD
+static void crkStarfield(float t){
+  gfx_fillScreen(CRK_RGB(2,3,10)); crk_stars(); crk_stars();
+  int bx=gW/2+(int)(sinf(t*0.0016f)*150), by=120+(int)(sinf(t*0.0025f)*54);
+  crk_txtShadow(bx,by,"OMEGAWARE",3,crk_hsl(t*0.1f,100.0f,60.0f));
+  crk_txtC(bx,by+34,"INTO THE VOID",1,CRK_RGB(127,208,255));
+  crk_scroller(t,0,10,true);
+}
+// 3: RAINBOW RASTER
+static void crkRaster(float t){
+  for(int y=0;y<gH-30;y++) gfx_fillRect(0,y,gW,1,crk_hsl(y*1.4f+t*0.16f,100.0f,50.0f));
+  gfx_fillRect(48,104,gW-96,92,CRK_RGB(6,8,18)); gfx_drawRect(48,104,gW-96,92,TFT_WHITE);
+  crk_txtC(gW/2,124,"OMEGAWARE",4,TFT_WHITE);
+  crk_txtC(gW/2,172,"CRACKED - TRAINED - LOADED",1,CRK_RGB(255,233,168));
+  crk_scroller(t,TFT_WHITE,10,false);
+}
+// 4: PLASMA
+static void crkPlasma(float t){
+  const int bs=8;
+  for(int y=0;y<gH-30;y+=bs)for(int x=0;x<gW;x+=bs){
+    float v=sinf(x*0.035f+t*0.003f)+sinf(y*0.05f+t*0.0042f)+sinf((x+y)*0.028f+t*0.002f);
+    gfx_fillRect(x,y,bs,bs,crk_hsl(v*60.0f+t*0.12f,90.0f,56.0f));}
+  crk_txtShadow(gW/2,54,"OMEGAWARE",4,TFT_WHITE);
+  crk_txtC(gW/2,104,"MELT YOUR EYES",2,CRK_RGB(10,10,20));
+  crk_scroller(t,TFT_WHITE,12,false);
+}
+// 5: BOING BALL
+static void crkBoing(float t){
+  gfx_fillScreen(CRK_RGB(12,12,22));
+  uint16_t grd=CRK_RGB(70,36,96);
+  for(int x=0;x<=gW;x+=32) gfx_vline(x,60,gH-30-60,grd);
+  for(int y=60;y<=gH-30;y+=28) gfx_hline(0,y,gW,grd);
+  int bx=gW/2+(int)(sinf(t*0.0016f)*150), gy=gH-70, by=gy-(int)(fabsf(sinf(t*0.004f))*120), r=46;
+  for(int yy=-6;yy<=6;yy++){int w=(int)(r*0.9f*sqrtf(1.0f-(yy/6.0f)*(yy/6.0f))); gfx_fillRect(bx-w,gy+6+yy,2*w+1,1,CRK_RGB(8,8,14));}
+  float cell=r/3.2f, ph=fmodf(t*0.06f,cell*2);
+  for(int yy=-r;yy<=r;yy++){int hw=(int)sqrtf((float)(r*r-yy*yy));
+    for(int xx=-hw;xx<=hw;xx++){int cc=(((int)floorf((xx+ph)/cell))+((int)floorf(yy/cell)))&1;
+      gfx_drawPixel(bx+xx,by+yy, cc?CRK_RGB(255,38,38):CRK_RGB(242,242,242));}}
+  gfx_drawCircle(bx,by,r,CRK_RGB(122,0,0));
+  crk_txtC(gW/2,26,"OMEGAWARE",3,CRK_RGB(255,59,59));
+  crk_scroller(t,CRK_RGB(255,102,102),9,false);
+}
+// 6: SYNTHWAVE
+static void crkSynth(float t){
+  for(int y=0;y<gH;y++){float f=(float)y/gH; uint16_t col;
+    if(f<0.52f) col=crk_lerp(24,11,51, 90,26,110, f/0.52f);
+    else        col=crk_lerp(11,10,26, 4,4,12, (f-0.53f)/0.47f);
+    gfx_fillRect(0,y,gW,1,col);}
+  for(int i=0;i<26;i++){int sx=(i*53+7)%gW, sy=(i*29)%150; gfx_drawPixel(sx,sy,TFT_WHITE);}
+  int sunx=gW/2,suny=168,sr=58;
+  for(int yy=-sr;yy<=0;yy++){int w=(int)sqrtf((float)(sr*sr-yy*yy)); gfx_fillRect(sunx-w,suny+yy,2*w,1,CRK_RGB(255,91,138));}
+  for(int i=0;i<6;i++){int yy=118+i*8; gfx_fillRect(sunx-60,yy,120,3+i,CRK_RGB(24,11,51));}
+  uint16_t grc=CRK_RGB(0,229,255); int hz=176;
+  for(int i=0;i<8;i++){int yy=hz+(int)(i*i*2.4f); if(yy<gH) gfx_hline(0,yy,gW,grc);}
+  for(int x=-6;x<=12;x++){int px=gW/2+(x*70); int x0=gW/2+(int)((px-gW/2)*0.18f); crk_line(x0,hz,px,gH,grc);}
+  crk_txtShadow(gW/2,40,"OMEGAWARE",3,CRK_RGB(49,232,255));
+  crk_txtC(gW/2,74,"RETRO FUTURE",1,CRK_RGB(255,122,176));
+  crk_scroller(t,CRK_RGB(255,79,160),8,false);
+}
+
+// Boot cracktro runner. style: 1..6 forces a style, 0 = random pick each boot.
+static void drawCracktro(int style){
+  int s=(style>=1&&style<=6)?(style-1):(int)(esp_random()%6);
   initStars();
-  const char*scrollText="       GOTEK TOUCHSCREEN INTERFACE  *  CODED BY MEZ AND DIMMY OF OMEGAWARE  *  "
-    "THE ULTIMATE RETRO DISK LOADER FOR AMIGA AND CPC  ...  KEEP THE SCENE ALIVE  ...  OMEGAWARE 2026  *         ";
-  int scrollLen=strlen(scrollText),scrollPos=0;
-  uint16_t copper[]={0xF800,0xF920,0xFAA0,0xFC00,0xFDE0,0xEFE0,0x87E0,0x07E0,0x07F0,0x07FF,0x041F,0x001F,0x801F,0xF81F,0xF810,0xF800};
-  uint16_t sine[]={0xF800,0xFBE0,0xFFE0,0x07E0,0x07FF,0x001F,0xF81F,0xF800};
-  int frame=0;unsigned long startMs=millis();
+  unsigned long startMs=millis();
   gfx_fillScreen(TFT_BLACK);gfx_flush();
   while(true){
     if(Touch_ReadFrame()){unsigned long t0=millis();while(Touch_ReadFrame()&&millis()-t0<500)delay(10);break;}
     if(!g_loop_cracktro&&millis()-startMs>=6000)break;
-    int copperY=gH/2-30+(int)(40.0f*sinf(frame*0.05f));
-    // Clear previous frame areas
-    gfx_fillRect(0,0,gW,gH-24,TFT_BLACK);
-    // Stars
-    for(int i=0;i<NUM_STARS;i++){star_x[i]-=star_speed[i];if(star_x[i]<0){star_x[i]=gW-1;star_y[i]=random(0,gH-30);}
-      uint16_t c=star_speed[i]==3?TFT_WHITE:star_speed[i]==2?(uint16_t)0x7BEF:(uint16_t)0x4208;gfx_drawPixel(star_x[i],star_y[i],c);}
-    // Copper bars
-    for(int i=0;i<16;i++){int by=copperY+i*3;if(by>=0&&by<gH-30)gfx_fillRect(0,by,gW,2,copper[i]);}
-    // Text
-    gfx_setTextSize(2);gfx_setTextColor(sine[(frame/4)%8],TFT_BLACK);
-    {const char*s="MEZ & DIMMY";int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,copperY-50);gfx_print(s);}
-    gfx_setTextColor((frame%40<20)?TFT_CYAN:TFT_WHITE,TFT_BLACK);
-    {const char*s="- OMEGAWARE -";int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,copperY+52);gfx_print(s);}
-    gfx_setTextSize(1);gfx_setTextColor(0x7BEF,TFT_BLACK);
-    {const char*s="GOTEK TOUCHSCREEN INTERFACE";int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,copperY+72);gfx_print(s);}
-    gfx_setTextColor((frame/15)%2?TFT_BLACK:0x4A8A,TFT_BLACK);
-    {const char*s="TAP TO CONTINUE";int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH-50);gfx_print(s);}
-    // Scroll bar
-    gfx_fillRect(0,gH-24,gW,24,0x0010);gfx_setTextSize(1);gfx_setTextColor(TFT_YELLOW,0x0010);
-    {int sc=scrollPos/12,px2=scrollPos%12;gfx_setCursor(-px2,gH-20);
-      for(int c=0;c<gW/12+3;c++){char buf[2]={scrollText[(sc+c)%scrollLen],0};gfx_print(buf);}}
-    gfx_flush();scrollPos+=2;frame++;delay(33);
+    float t=(float)(millis()-startMs);
+    switch(s){case 0:crkCopper(t);break;case 1:crkStarfield(t);break;case 2:crkRaster(t);break;
+      case 3:crkPlasma(t);break;case 4:crkBoing(t);break;default:crkSynth(t);break;}
+    if(((int)(t/450.0f))%2) crk_txtC(gW/2,gH-46,"TAP TO CONTINUE",1,CRK_RGB(150,168,200));
+    gfx_flush();delay(6);
   }
   gfx_fillScreen(TFT_BLACK);gfx_flush();
 }
@@ -915,7 +1054,13 @@ static void drawInfoPanel(){
     {gfx_fillRoundRect(x,y,pw,bh,6,espnowIsPaired()?COL_GREEN:COL_AMBER);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,espnowIsPaired()?COL_GREEN:COL_AMBER);const char*pl=espnowIsPaired()?"SWITCH DONGLE":"SCAN DONGLES";int tw=gfx_textWidth(pl);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(pl);}g_info_pair_now_btn_y=y;y+=btn;
   } else g_info_pair_now_btn_y=0;
   {gfx_fillRoundRect(x,y,pw,bh,6,COL_BLUE);gfx_setTextSize(isz);gfx_setTextColor(TFT_WHITE,COL_BLUE);int tw=gfx_textWidth("RESCAN SD");gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print("RESCAN SD");}g_info_rescan_btn_y=y;y+=btn;
-  {gfx_fillRoundRect(x,y,pw,bh,6,0x8000);gfx_setTextSize(isz);gfx_setTextColor(TFT_WHITE,0x8000);int tw=gfx_textWidth("SOFT RESET");gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print("SOFT RESET");}g_info_reset_btn_y=y;
+  // Last row split in two: SOFT RESET (rarely used) shares the row with LOAD DIAG.
+  {int gap=4,hw=(pw-gap)/2,dx=x+hw+gap;gfx_setTextSize(isz);
+    gfx_fillRoundRect(x,y,hw,bh,6,0x8000);gfx_setTextColor(TFT_WHITE,0x8000);
+    {int tw=gfx_textWidth("SOFT RESET");gfx_setCursor(x+(hw-tw)/2,y+ty);gfx_print("SOFT RESET");}
+    gfx_fillRoundRect(dx,y,hw,bh,6,COL_ACCENT);gfx_setTextColor(TFT_WHITE,COL_ACCENT);
+    {int tw=gfx_textWidth("LOAD DIAG");gfx_setCursor(dx+(hw-tw)/2,y+ty);gfx_print("LOAD DIAG");}
+  }g_info_reset_btn_y=y;
 }
 
 static void drawModeBar(){
@@ -1076,6 +1221,27 @@ static bool doLoadSelected(const String&adfPath){
 
 static void doUnload(){hardDetach();g_loaded=false;g_loaded_name="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
   if(g_wireless_mode&&g_espnow_started&&espnowIsPaired())espnowSendEject();drawStatusBar();drawListAndCover();gfx_flush();}
+
+// Expand the zero-RLE embedded ADF straight into the RAM-disk data area. No SD needed.
+static void diagInflate(const uint8_t*src,uint32_t slen,uint8_t*dst){
+  uint32_t di=0;
+  for(uint32_t si=0;si<slen;){uint8_t b=pgm_read_byte(&src[si++]);
+    if(b==0){uint8_t cnt=pgm_read_byte(&src[si++]);memset(dst+di,0,cnt);di+=cnt;}
+    else dst[di++]=b;}
+}
+// Mount the built-in Amiga Test Kit as the emulated disk — works with no SD card inserted.
+static void doLoadDiag(){
+  g_info_showing=false;
+  gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
+  gfx_setTextSize(1);gfx_setTextColor(TFT_CYAN,COL_PANEL);gfx_setCursor(6,STATUS_H+16);gfx_print("AMIGA TEST KIT");
+  gfx_setTextColor(COL_LIT,COL_PANEL);gfx_setCursor(6,STATUS_H+28);gfx_print("Loading diag...");gfx_flush();
+  if(g_loaded && !g_forceswap) hardDetach();
+  build_volume("DISK.ADF",DIAG_ADF_SIZE);                 // force an .ADF image regardless of MODE
+  diagInflate(DIAG_RLE,DIAG_RLE_LEN,g_disk+DATA_LBA*512);
+  hardAttach();
+  g_loaded=true;g_loaded_name="AMIGA TEST KIT";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
+  drawFullUI();gfx_flush();
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // SCREENSAVER (undocumented) — bouncing gallery from /screensaver/*.jpg
@@ -1326,6 +1492,7 @@ void setup(){
   if(sdok){
     if(!SD_MMC.exists("/ADF"))SD_MMC.mkdir("/ADF");if(!SD_MMC.exists("/DSK"))SD_MMC.mkdir("/DSK");
     generateDefaultConfig();
+    selfHealConfig();           // append any documented keys an older CONFIG.TXT is missing
     loadConfig();
     espnowSetScanCap(g_dongle_cap);
     relayout();                 // apply ROTATE/COMPACT from config before first draw
@@ -1334,9 +1501,9 @@ void setup(){
     buildActiveLetters();
     if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
     scanScreensaver();
-  } else {gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,200);gfx_print("SD MOUNT FAILED");gfx_flush();delay(2000);}
+  } else {gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,200);gfx_print("SD MOUNT FAILED");gfx_flush();delay(2000);relayout();}   // no card: still init layout so INFO/LOAD DIAG work
   if(g_wireless_mode){espnowBegin();g_espnow_started=true;}
-  drawCracktroSplash();
+  drawCracktro(g_cracktro);
   USB.onEvent(usbEventCB);MSC.vendorID("ESP32");MSC.productID("RAMDISK");MSC.productRevision("1.0");
   MSC.onRead(onRead);MSC.onWrite(onWrite);MSC.mediaPresent(true);
   MSC.begin(TOTAL_SECTORS,512);USB.begin();hardDetach();
@@ -1375,7 +1542,9 @@ static void handleTap(uint16_t px,uint16_t py){
     if(g_wireless_mode&&g_info_pair_now_btn_y&&py>=(uint16_t)g_info_pair_now_btn_y&&py<(uint16_t)(g_info_pair_now_btn_y+g_info_bh)){doPairNow();return;}
     if(g_info_rescan_btn_y&&py>=(uint16_t)g_info_rescan_btn_y&&py<(uint16_t)(g_info_rescan_btn_y+g_info_bh)){doRescan();return;}
     if(g_info_reset_btn_y&&py>=(uint16_t)g_info_reset_btn_y&&py<(uint16_t)(g_info_reset_btn_y+g_info_bh)){
-      int pw=g_info_w-8;gfx_fillRoundRect(g_info_x+4,g_info_reset_btn_y,pw,g_info_bh,6,0xE8C4);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0xE8C4);gfx_setCursor(g_info_x+12,g_info_reset_btn_y+(g_info_bh-8)/2);gfx_print("RESTARTING...");gfx_flush();delay(800);ESP.restart();}
+      int pw=g_info_w-8,gap=4,hw=(pw-gap)/2,dx=g_info_x+4+hw+gap;
+      if(px>=(uint16_t)dx){doLoadDiag();return;}                 // right half = LOAD DIAG
+      gfx_fillRoundRect(g_info_x+4,g_info_reset_btn_y,hw,g_info_bh,6,0xE8C4);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0xE8C4);gfx_setCursor(g_info_x+10,g_info_reset_btn_y+(g_info_bh-8)/2);gfx_print("RESET...");gfx_flush();delay(700);ESP.restart();}
     return;
   }
 
