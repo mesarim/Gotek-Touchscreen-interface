@@ -8,7 +8,12 @@
 // CPU          : 240MHz
 //
 // Derived from: ESP32_S3_ADF_DSK_Browser_v0_5_2 (2.8" SPI/CST328)
-// Converted for: 800x480 RGB parallel panel, GT911 touch via LovyanGFX
+// v4.5.0 "K": LovyanGFX REMOVED. Display now runs on esp_lcd directly:
+//   * num_fbs=2 driver framebuffers + bounce buffer (anti-glitch under SD/USB load)
+//   * all UI draws go to a PSRAM compose buffer (JC3248-style gfx architecture)
+//   * flush = copy compose -> hidden framebuffer, VSYNC page-flip, wait for latch
+//   * GT911 touch raw I2C @ 0x14 (bench-proven in K_DISPLAYTEST v3 — tear-free)
+// Landscape only (ROTATE=0/180). No LovyanGFX version pin needed anymore.
 //
 // Pin notes:
 //   RGB bus: 0,1,2,3,5,7,10,14,17,18,21,38,39,40,41,42,45,46,47,48
@@ -22,17 +27,21 @@
 #include <FS.h>
 #include <SD_MMC.h>
 
-#define LGFX_USE_V1
-#include <LovyanGFX.hpp>
-#include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
-#include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>
+// K display stack: esp_lcd RGB panel (double framebuffer) — no LovyanGFX
+#include "esp_heap_caps.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_lcd_panel_rgb.h"
 #include <Wire.h>
+#include <JPEGDEC.h>
+#include <sys/stat.h>
 #include <vector>
 #include <algorithm>
 #include <ctype.h>
+#include "esp_random.h"
+#include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 
 // ---------- Version ----------
-#define FW_VERSION  "v3.4.7"
+#define FW_VERSION  "v4.6.2-7IN"
 
 // ---------- ESP-NOW server (peer-to-peer, no WiFi AP needed) ----------
 #include "espnow_server.h"
@@ -49,15 +58,45 @@ extern "C" {
 #define EXPANDER_I2C_SCL   9
 #define EXPANDER_I2C_ADDR  0x20
 
+#define GT911_INT_PIN 4
+
+// Expander bit map (Waveshare 7"): bit1=TP_RST, bit2=DISP/backlight, bit3=LCD_RST,
+// bit4=SD_CS, bit5=USB_SEL. *** USB_SEL MUST STAY LOW *** — high routes the USB
+// data lines to the CAN transceiver and the MSC virtual disk vanishes (v4.5.0 bug:
+// writing 0xFF killed the USB key while the screen kept working).
+#define EXP_ALL_ON   0xDF   // everything high EXCEPT USB_SEL (bit5)
+#define EXP_TPRST_LO 0xDD   // same, with TP_RST (bit1) pulled low for the GT911 reset
+
+// Write the expander output register on BOTH possible chips (CH422G 0x38 /
+// TCA9554 0x20:reg1) — only the one actually fitted will care.
+static void expanderOut(uint8_t val){
+  Wire.beginTransmission(0x38); Wire.write(val); Wire.endTransmission();
+  Wire.beginTransmission(EXPANDER_I2C_ADDR); Wire.write(0x01); Wire.write(val); Wire.endTransmission();
+}
+
 static void initExpander() {
-  Wire.begin(EXPANDER_I2C_SDA, EXPANDER_I2C_SCL);
+  Wire.begin(EXPANDER_I2C_SDA, EXPANDER_I2C_SCL, 400000);
+  // CH422G (this board rev): 0x24 = system/config, 0x38 = output register.
+  Wire.beginTransmission(0x24); Wire.write(0x01); Wire.endTransmission();  // outputs enabled
+  // TCA9554 fallback (older revs): all pins -> outputs
   Wire.beginTransmission(EXPANDER_I2C_ADDR);
   Wire.write(0x03); Wire.write(0x00);
   Wire.endTransmission();
-  Wire.beginTransmission(EXPANDER_I2C_ADDR);
-  Wire.write(0x01); Wire.write(0xFF);
-  Wire.endTransmission();
-  delay(100);
+
+  // ── GT911 deterministic reset ─────────────────────────────────────────────
+  // The GT911 latches its I2C address AT RESET from the INT pin: LOW -> 0x5D,
+  // HIGH -> 0x14. LovyanGFX used to do this dance (that's why the old firmware
+  // lived at 0x5D); without it the address is a per-boot coin toss. Hold INT
+  // LOW, pulse TP_RST (expander bit1) low->high, release INT: address = 0x5D.
+  pinMode(GT911_INT_PIN, OUTPUT);
+  digitalWrite(GT911_INT_PIN, LOW);
+  expanderOut(EXP_TPRST_LO);   // TP_RST low; backlight/LCD high; USB_SEL kept LOW
+  delay(15);
+  expanderOut(EXP_ALL_ON);     // TP_RST high — GT911 samples INT (LOW) => addr 0x5D
+  delay(10);
+  pinMode(GT911_INT_PIN, INPUT);   // release INT back to the GT911
+  delay(80);           // GT911 needs >50ms after reset before I2C
+  // Wire stays OPEN: we drive the GT911 ourselves now.
 }
 
 // ---------- Display colours ----------
@@ -78,61 +117,367 @@ static void initExpander() {
 #define LCD_ROTATION  0
 static int gW = 800, gH = 480;
 
-// ---------- LovyanGFX: 7" RGB panel + GT911 touch ----------
-class LGFX_Local : public lgfx::LGFX_Device {
-public:
-  lgfx::Bus_RGB     _bus_instance;
-  lgfx::Panel_RGB   _panel_instance;
-  lgfx::Light_PWM   _light_instance;
-  lgfx::Touch_GT911 _touch_instance;
+// ============================================================================
+// K DISPLAY ENGINE — esp_lcd RGB panel, double framebuffer, VSYNC page-flip.
+// Bench-proven in K_DISPLAYTEST v3 (tear-free). All UI code below draws through
+// the KGfx shim, which keeps the LovyanGFX-style API (setCursor/print/fillRect/
+// textWidth/...) so the existing 300+ draw call sites compile unchanged, but
+// renders into a PSRAM compose buffer — JC3248 architecture, unified codebase.
+// ============================================================================
+#define KLCD_W 800
+#define KLCD_H 480
+// GT911 address is probed at boot (0x5D after our deterministic reset; 0x14 fallback)
 
-  LGFX_Local() {
-    {
-      auto cfg = _panel_instance.config();
-      cfg.memory_width  = 800; cfg.memory_height = 480;
-      cfg.panel_width   = 800; cfg.panel_height  = 480;
-      cfg.offset_x = 0; cfg.offset_y = 0;
-      _panel_instance.config(cfg);
+// 6x8 bitmap font, ASCII 32..126 (also used by the cracktro as crk_font).
+static const uint8_t crk_font[95][6] PROGMEM = {
+  {0x00,0x00,0x00,0x00,0x00,0x00},
+  {0x00,0x00,0x4F,0x00,0x00,0x00},
+  {0x00,0x07,0x00,0x07,0x00,0x00},
+  {0x14,0x7F,0x14,0x7F,0x14,0x00},
+  {0x24,0x2A,0x7F,0x2A,0x12,0x00},
+  {0x62,0x64,0x08,0x13,0x23,0x00},
+  {0x36,0x49,0x49,0x36,0x50,0x00},
+  {0x00,0x04,0x03,0x00,0x00,0x00},
+  {0x00,0x1C,0x22,0x41,0x00,0x00},
+  {0x00,0x41,0x22,0x1C,0x00,0x00},
+  {0x14,0x08,0x3E,0x08,0x14,0x00},
+  {0x08,0x08,0x3E,0x08,0x08,0x00},
+  {0x00,0x50,0x30,0x00,0x00,0x00},
+  {0x08,0x08,0x08,0x08,0x08,0x00},
+  {0x00,0x60,0x60,0x00,0x00,0x00},
+  {0x20,0x10,0x08,0x04,0x02,0x00},
+  {0x3E,0x51,0x49,0x45,0x3E,0x00},
+  {0x00,0x42,0x7F,0x40,0x00,0x00},
+  {0x42,0x61,0x51,0x49,0x46,0x00},
+  {0x21,0x41,0x45,0x4B,0x31,0x00},
+  {0x18,0x14,0x12,0x7F,0x10,0x00},
+  {0x27,0x45,0x45,0x45,0x39,0x00},
+  {0x3C,0x4A,0x49,0x49,0x30,0x00},
+  {0x01,0x71,0x09,0x05,0x03,0x00},
+  {0x36,0x49,0x49,0x49,0x36,0x00},
+  {0x06,0x49,0x49,0x29,0x1E,0x00},
+  {0x00,0x36,0x36,0x00,0x00,0x00},
+  {0x00,0x56,0x36,0x00,0x00,0x00},
+  {0x08,0x14,0x22,0x41,0x00,0x00},
+  {0x14,0x14,0x14,0x14,0x14,0x00},
+  {0x00,0x41,0x22,0x14,0x08,0x00},
+  {0x02,0x01,0x51,0x09,0x06,0x00},
+  {0x32,0x49,0x79,0x41,0x3E,0x00},
+  {0x7E,0x11,0x11,0x11,0x7E,0x00},
+  {0x7F,0x49,0x49,0x49,0x36,0x00},
+  {0x3E,0x41,0x41,0x41,0x22,0x00},
+  {0x7F,0x41,0x41,0x41,0x3E,0x00},
+  {0x7F,0x49,0x49,0x49,0x41,0x00},
+  {0x7F,0x09,0x09,0x09,0x01,0x00},
+  {0x3E,0x41,0x49,0x49,0x3A,0x00},
+  {0x7F,0x08,0x08,0x08,0x7F,0x00},
+  {0x00,0x41,0x7F,0x41,0x00,0x00},
+  {0x20,0x40,0x41,0x3F,0x01,0x00},
+  {0x7F,0x08,0x14,0x22,0x41,0x00},
+  {0x7F,0x40,0x40,0x40,0x40,0x00},
+  {0x7F,0x02,0x0C,0x02,0x7F,0x00},
+  {0x7F,0x04,0x08,0x10,0x7F,0x00},
+  {0x3E,0x41,0x41,0x41,0x3E,0x00},
+  {0x7F,0x09,0x09,0x09,0x06,0x00},
+  {0x3E,0x41,0x41,0x21,0x5E,0x00},
+  {0x7F,0x09,0x19,0x29,0x46,0x00},
+  {0x46,0x49,0x49,0x49,0x31,0x00},
+  {0x01,0x01,0x7F,0x01,0x01,0x00},
+  {0x3F,0x40,0x40,0x40,0x3F,0x00},
+  {0x1F,0x20,0x40,0x20,0x1F,0x00},
+  {0x3F,0x40,0x38,0x40,0x3F,0x00},
+  {0x63,0x14,0x08,0x14,0x63,0x00},
+  {0x07,0x08,0x70,0x08,0x07,0x00},
+  {0x61,0x51,0x49,0x45,0x43,0x00},
+  {0x00,0x7F,0x41,0x00,0x00,0x00},
+  {0x02,0x04,0x08,0x10,0x20,0x00},
+  {0x00,0x41,0x7F,0x00,0x00,0x00},
+  {0x04,0x02,0x01,0x02,0x04,0x00},
+  {0x40,0x40,0x40,0x40,0x40,0x00},
+  {0x00,0x01,0x02,0x04,0x00,0x00},
+  {0x20,0x54,0x54,0x54,0x78,0x00},
+  {0x7F,0x48,0x44,0x44,0x38,0x00},
+  {0x38,0x44,0x44,0x44,0x20,0x00},
+  {0x38,0x44,0x44,0x48,0x7F,0x00},
+  {0x38,0x54,0x54,0x54,0x18,0x00},
+  {0x08,0x7E,0x09,0x01,0x02,0x00},
+  {0x18,0xA4,0xA4,0x9C,0x78,0x00},
+  {0x7F,0x08,0x04,0x04,0x78,0x00},
+  {0x00,0x44,0x7D,0x40,0x00,0x00},
+  {0x20,0x40,0x44,0x3D,0x00,0x00},
+  {0x7F,0x10,0x28,0x44,0x00,0x00},
+  {0x00,0x41,0x7F,0x40,0x00,0x00},
+  {0x7C,0x04,0x78,0x04,0x78,0x00},
+  {0x7C,0x08,0x04,0x04,0x78,0x00},
+  {0x38,0x44,0x44,0x44,0x38,0x00},
+  {0x7C,0x14,0x14,0x14,0x08,0x00},
+  {0x08,0x14,0x14,0x18,0x7C,0x00},
+  {0x7C,0x08,0x04,0x04,0x08,0x00},
+  {0x48,0x54,0x54,0x54,0x20,0x00},
+  {0x04,0x3F,0x44,0x40,0x20,0x00},
+  {0x3C,0x40,0x40,0x20,0x7C,0x00},
+  {0x1C,0x20,0x40,0x20,0x1C,0x00},
+  {0x3C,0x40,0x30,0x40,0x3C,0x00},
+  {0x44,0x28,0x10,0x28,0x44,0x00},
+  {0x1C,0xA0,0xA0,0x9C,0x0C,0x00},
+  {0x44,0x64,0x54,0x4C,0x44,0x00},
+  {0x00,0x08,0x36,0x41,0x00,0x00},
+  {0x00,0x00,0x7F,0x00,0x00,0x00},
+  {0x00,0x41,0x36,0x08,0x00,0x00},
+  {0x08,0x04,0x08,0x10,0x08,0x00}
+};
+
+// Font "handles" — keeps the existing UG->setFont(&lgfx::fonts::DejaVu12) call
+// sites compiling. Each maps to a scale of the 6x8 font (fractional = nearest
+// neighbour): Font0/DejaVu9 -> 1.0 (6x8), DejaVu12 -> 1.5 (9x12), DejaVu18 -> 2.0 (12x16).
+namespace lgfx { namespace fonts {
+  static const uint8_t Font0=0, DejaVu9=1, DejaVu12=2, DejaVu18=3;
+}}
+
+// VSYNC handshake (free functions — the callback runs in ISR context)
+static volatile uint32_t k_vsync_count = 0;
+static bool IRAM_ATTR kOnVsync(esp_lcd_panel_handle_t p,
+                               const esp_lcd_rgb_panel_event_data_t* e, void* u){
+  k_vsync_count++; return false;
+}
+static void kWaitVsync(){
+  uint32_t s=k_vsync_count; uint32_t t0=millis();
+  while(k_vsync_count==s && (millis()-t0)<50){ delayMicroseconds(200); }  // gentle wait — don't hammer the bus
+}
+
+class KGfx {
+public:
+  esp_lcd_panel_handle_t panel=NULL;
+  uint16_t *fb0=NULL,*fb1=NULL;   // driver-owned framebuffers (num_fbs=2)
+  uint16_t *cb=NULL;              // compose buffer (PSRAM) — ALL drawing lands here
+  uint8_t  backIdx=0;
+  bool     ok=false, flip180=false;
+  // text state
+  int   tx=0, ty=0, tsize=1;
+  float fscale=1.0f;
+  uint16_t tfg=0xFFFF, tbg=0x0000;
+  // touch
+  uint8_t gtAddr=0x5D;   // set by touchProbe()
+  // clip window (used by the scrolling list so partial rows don't bleed out)
+  int clx0=0, cly0=0, clx1=KLCD_W, cly1=KLCD_H;
+
+  bool init(){
+    esp_lcd_rgb_panel_config_t cfg = {};
+    cfg.clk_src = LCD_CLK_SRC_DEFAULT;
+    cfg.timings.pclk_hz            = 16000000;   // proven on this panel
+    cfg.timings.h_res              = KLCD_W;
+    cfg.timings.v_res              = KLCD_H;
+    cfg.timings.hsync_pulse_width  = 48;
+    cfg.timings.hsync_back_porch   = 88;
+    cfg.timings.hsync_front_porch  = 40;
+    cfg.timings.vsync_pulse_width  = 3;
+    cfg.timings.vsync_back_porch   = 32;
+    cfg.timings.vsync_front_porch  = 13;
+    cfg.timings.flags.pclk_active_neg = 1;
+    cfg.data_width            = 16;
+    cfg.bits_per_pixel        = 16;
+    cfg.num_fbs               = 2;                // double buffer -> VSYNC page-flip
+    cfg.bounce_buffer_size_px = KLCD_W * 20;      // 20 lines (~1.2ms stall tolerance):
+                                                  // SD/JPEG/WiFi PSRAM bursts starved the
+                                                  // LCD DMA at 10 -> image drift/wrap
+    cfg.psram_trans_align     = 64;
+    cfg.hsync_gpio_num = 46;
+    cfg.vsync_gpio_num = 3;
+    cfg.de_gpio_num    = 5;
+    cfg.pclk_gpio_num  = 7;
+    cfg.disp_gpio_num  = -1;
+    int dpins[16] = {14,38,18,17,10, 39,0,45,48,47,21, 1,2,42,41,40};
+    for(int i=0;i<16;i++) cfg.data_gpio_nums[i] = dpins[i];
+    cfg.flags.fb_in_psram = 1;
+    if(esp_lcd_new_rgb_panel(&cfg,&panel)!=ESP_OK) return false;
+    esp_lcd_rgb_panel_event_callbacks_t cbs = {};
+    cbs.on_vsync = kOnVsync;
+    cbs.on_bounce_frame_finish = kOnVsync;   // bounce-buffer builds signal here instead
+    esp_lcd_rgb_panel_register_event_callbacks(panel,&cbs,NULL);
+    if(esp_lcd_panel_reset(panel)!=ESP_OK) return false;
+    if(esp_lcd_panel_init(panel)!=ESP_OK) return false;
+    if(esp_lcd_rgb_panel_get_frame_buffer(panel,2,(void**)&fb0,(void**)&fb1)!=ESP_OK
+       || !fb0 || !fb1) return false;
+    cb=(uint16_t*)heap_caps_malloc((size_t)KLCD_W*KLCD_H*2,MALLOC_CAP_SPIRAM);
+    if(!cb) return false;
+    ok=true;
+    touchProbe();          // lock onto the GT911's actual address (0x5D expected)
+    fillScreen(0x0000); display();
+    return true;
+  }
+  // -- LovyanGFX-compatible surface ------------------------------------------
+  void setRotation(int r){ flip180=(r==2||r==3); }
+  int  width()  const { return KLCD_W; }
+  int  height() const { return KLCD_H; }
+  void setBrightness(uint8_t){ /* backlight is expander-driven, always on */ }
+
+  void setClip(int x0,int y0,int x1,int y1){
+    clx0=max(0,x0); cly0=max(0,y0); clx1=min(KLCD_W,x1); cly1=min(KLCD_H,y1);
+  }
+  void resetClip(){ clx0=0; cly0=0; clx1=KLCD_W; cly1=KLCD_H; }
+  inline void px(int x,int y,uint16_t c){
+    if(x<clx0||x>=clx1||y<cly0||y>=cly1||!cb) return;
+    cb[y*KLCD_W+x]=c;
+  }
+  void fillScreen(uint16_t c){ if(!cb)return; for(int i=0;i<KLCD_W*KLCD_H;i++) cb[i]=c; }
+  void fillRect(int x,int y,int w,int h,uint16_t c){
+    if(!cb)return;
+    int x0=max(clx0,x),y0=max(cly0,y),x1=min(clx1,x+w),y1=min(cly1,y+h);
+    for(int yy=y0;yy<y1;yy++){ uint16_t* r=cb+yy*KLCD_W; for(int xx=x0;xx<x1;xx++) r[xx]=c; }
+  }
+  void drawRect(int x,int y,int w,int h,uint16_t c){
+    fillRect(x,y,w,1,c); fillRect(x,y+h-1,w,1,c); fillRect(x,y,1,h,c); fillRect(x+w-1,y,1,h,c);
+  }
+  void drawPixel(int x,int y,uint16_t c){ px(x,y,c); }
+  void drawFastHLine(int x,int y,int w,uint16_t c){ fillRect(x,y,w,1,c); }
+  void drawFastVLine(int x,int y,int h,uint16_t c){ fillRect(x,y,1,h,c); }
+  void fillCircle(int cx,int cy,int r,uint16_t c){
+    for(int dy=-r;dy<=r;dy++){ int hw=(int)sqrtf((float)(r*r-dy*dy)); fillRect(cx-hw,cy+dy,2*hw+1,1,c); }
+  }
+  void drawCircle(int cx,int cy,int r,uint16_t c){
+    int x=0,y=r,d=3-2*r;
+    while(x<=y){
+      px(cx+x,cy+y,c);px(cx-x,cy+y,c);px(cx+x,cy-y,c);px(cx-x,cy-y,c);
+      px(cx+y,cy+x,c);px(cx-y,cy+x,c);px(cx+y,cy-x,c);px(cx-y,cy-x,c);
+      if(d<0)d+=4*x+6; else {d+=4*(x-y)+10;y--;} x++;
     }
-    {
-      auto cfg = _panel_instance.config_detail();
-      cfg.use_psram = 2;  // double buffer — eliminates all tearing
-      _panel_instance.config_detail(cfg);
+  }
+  void fillRoundRect(int x,int y,int w,int h,int r,uint16_t c){
+    if(r<=0){ fillRect(x,y,w,h,c); return; }
+    fillRect(x+r,y,w-2*r,h,c);
+    fillRect(x,y+r,r,h-2*r,c);
+    fillRect(x+w-r,y+r,r,h-2*r,c);
+    for(int dy=-r;dy<=0;dy++){
+      int dx=(int)sqrtf((float)(r*r-dy*dy));
+      fillRect(x+r-dx,y+r+dy,dx,1,c);       fillRect(x+w-r,y+r+dy,dx,1,c);
+      fillRect(x+r-dx,y+h-r-1-dy,dx,1,c);   fillRect(x+w-r,y+h-r-1-dy,dx,1,c);
     }
-    {
-      auto cfg = _bus_instance.config();
-      cfg.panel = &_panel_instance;
-      cfg.pin_d0  = 14; cfg.pin_d1  = 38; cfg.pin_d2  = 18; cfg.pin_d3  = 17; cfg.pin_d4  = 10;
-      cfg.pin_d5  = 39; cfg.pin_d6  = 0;  cfg.pin_d7  = 45; cfg.pin_d8  = 48; cfg.pin_d9  = 47; cfg.pin_d10 = 21;
-      cfg.pin_d11 = 1;  cfg.pin_d12 = 2;  cfg.pin_d13 = 42; cfg.pin_d14 = 41; cfg.pin_d15 = 40;
-      cfg.pin_henable = 5; cfg.pin_vsync = 3; cfg.pin_hsync = 46; cfg.pin_pclk = 7;
-      cfg.freq_write        = 16000000;
-      cfg.hsync_polarity    = 0; cfg.hsync_front_porch = 40; cfg.hsync_pulse_width = 48; cfg.hsync_back_porch  = 88;
-      cfg.vsync_polarity    = 0; cfg.vsync_front_porch = 13; cfg.vsync_pulse_width =  3; cfg.vsync_back_porch  = 32;
-      cfg.pclk_active_neg   = 1; cfg.de_idle_high = 0; cfg.pclk_idle_high = 0;
-      _bus_instance.config(cfg);
+  }
+  void drawRoundRect(int x,int y,int w,int h,int r,uint16_t c){
+    drawFastHLine(x+r,y,w-2*r,c); drawFastHLine(x+r,y+h-1,w-2*r,c);
+    drawFastVLine(x,y+r,h-2*r,c); drawFastVLine(x+w-1,y+r,h-2*r,c);
+    // corner arcs — without these the outline renders as 4 floating lines
+    int cx0=x+r, cy0=y+r, cx1=x+w-1-r, cy1=y+h-1-r;
+    int xx=0, yy=r, d=3-2*r;
+    while(xx<=yy){
+      px(cx1+xx,cy1+yy,c); px(cx0-xx,cy1+yy,c); px(cx1+xx,cy0-yy,c); px(cx0-xx,cy0-yy,c);
+      px(cx1+yy,cy1+xx,c); px(cx0-yy,cy1+xx,c); px(cx1+yy,cy0-xx,c); px(cx0-yy,cy0-xx,c);
+      if(d<0)d+=4*xx+6; else {d+=4*(xx-yy)+10; yy--;}
+      xx++;
     }
-    _panel_instance.setBus(&_bus_instance);
-    {
-      auto cfg = _light_instance.config();
-      cfg.pin_bl = -1; cfg.invert = false; cfg.freq = 44100; cfg.pwm_channel = 7;
-      _light_instance.config(cfg);
+  }
+  // -- text -------------------------------------------------------------------
+  void setFont(const uint8_t* f){
+    switch(f?*f:1){
+      case 2:  fscale=1.5f; break;   // DejaVu12 -> 9x12
+      case 3:  fscale=2.0f; break;   // DejaVu18 -> 12x16
+      default: fscale=1.0f; break;   // Font0 / DejaVu9 -> 6x8
     }
-    _panel_instance.setLight(&_light_instance);
-    {
-      auto cfg = _touch_instance.config();
-      cfg.x_min = 0; cfg.x_max = 799; cfg.y_min = 0; cfg.y_max = 479;
-      cfg.pin_int = 4; cfg.pin_rst = -1;
-      cfg.i2c_port = I2C_NUM_0; cfg.i2c_addr = 0x5D;
-      cfg.pin_sda = 8; cfg.pin_scl = 9; cfg.freq = 400000;
-      cfg.offset_rotation = 0;
-      _touch_instance.config(cfg);
+  }
+  void setTextSize(int s){ tsize=(s<1)?1:s; }
+  void setTextColor(uint16_t f,uint16_t b){ tfg=f; tbg=b; }
+  void setTextColor(uint16_t f){ tfg=f; }
+  void setCursor(int x,int y){ tx=x; ty=y; }
+  int  charW() const { return (int)(6.0f*fscale*tsize+0.5f); }
+  int  charH() const { return (int)(8.0f*fscale*tsize+0.5f); }
+  int  textWidth(const String& s){ return (int)s.length()*charW(); }
+  int  textWidth(const char* s){ return (int)strlen(s)*charW(); }
+  void drawGlyph(char ch){
+    if(ch<32||ch>126) ch='?';
+    const uint8_t* d=crk_font[ch-32];
+    float s=fscale*tsize;
+    int cw=charW(), chh=charH();
+    for(int dy=0;dy<chh;dy++){
+      int row=(int)(dy/s); if(row>7)row=7;
+      for(int dx=0;dx<cw;dx++){
+        int col=(int)(dx/s); if(col>5)col=5;
+        uint8_t bits=pgm_read_byte(&d[col]);
+        px(tx+dx,ty+dy,(bits&(1<<row))?tfg:tbg);
+      }
     }
-    _panel_instance.setTouch(&_touch_instance);
-    setPanel(&_panel_instance);
+    tx+=cw;
+  }
+  void print(const String& s){ for(unsigned int i=0;i<s.length();i++) drawGlyph(s[i]); }
+  void print(const char* s){ for(int i=0;s[i];i++) drawGlyph(s[i]); }
+  // -- image blit -------------------------------------------------------------
+  void pushImage(int x,int y,int w,int h,const uint16_t* img){
+    if(!cb||!img) return;
+    for(int yy=0;yy<h;yy++){
+      int dy=y+yy; if(dy<cly0||dy>=cly1) continue;
+      int sx=0, dx=x, cw=w;
+      if(dx<clx0){ sx=clx0-dx; cw-=sx; dx=clx0; }
+      if(dx+cw>clx1) cw=clx1-dx;
+      if(cw>0) memcpy(cb+dy*KLCD_W+dx, img+yy*w+sx, (size_t)cw*2);
+    }
+  }
+  // -- touch: raw GT911 -------------------------------------------------------
+  void touchProbe(){
+    // After the reset dance the GT911 should sit at 0x5D; probe both to be safe.
+    const uint8_t cands[2]={0x5D,0x14};
+    for(int i=0;i<2;i++){
+      Wire.beginTransmission(cands[i]);
+      if(Wire.endTransmission()==0){ gtAddr=cands[i]; return; }
+    }
+    gtAddr=0x5D;   // nothing ACKed (shouldn't happen) — keep the expected default
+  }
+  bool gtRead(uint16_t reg,uint8_t* buf,uint8_t len){
+    Wire.beginTransmission(gtAddr);
+    Wire.write((uint8_t)(reg>>8)); Wire.write((uint8_t)(reg&0xFF));
+    if(Wire.endTransmission(false)!=0) return false;
+    Wire.requestFrom((int)gtAddr,(int)len);
+    uint8_t i=0; while(Wire.available()&&i<len) buf[i++]=Wire.read();
+    return i==len;
+  }
+  void gtWrite8(uint16_t reg,uint8_t v){
+    Wire.beginTransmission(gtAddr);
+    Wire.write((uint8_t)(reg>>8)); Wire.write((uint8_t)(reg&0xFF)); Wire.write(v);
+    Wire.endTransmission();
+  }
+  bool getTouch(int32_t* x,int32_t* y){
+    uint8_t status=0;
+    if(!gtRead(0x814E,&status,1)) return false;
+    if(!(status&0x80)) return false;
+    uint8_t n=status&0x0F; bool got=false;
+    if(n>0){
+      uint8_t p[8];
+      // Register map from 0x8150: [0]=Xlo [1]=Xhi [2]=Ylo [3]=Yhi [4..5]=size.
+      // (v4.5.0 bug: offsets were shifted one byte -> every tap clamped to the
+      //  bottom-right corner = phantom INFO presses, "touch doesn't work".)
+      if(gtRead(0x8150,p,8)){
+        int32_t rx=(int32_t)(p[0]|(p[1]<<8));
+        int32_t ry=(int32_t)(p[2]|(p[3]<<8));
+        if(flip180){ rx=KLCD_W-1-rx; ry=KLCD_H-1-ry; }
+        if(rx<0)rx=0; if(rx>=KLCD_W)rx=KLCD_W-1;
+        if(ry<0)ry=0; if(ry>=KLCD_H)ry=KLCD_H-1;
+        *x=rx; *y=ry; got=true;
+      }
+    }
+    gtWrite8(0x814E,0);
+    return got;
+  }
+  // -- flush: compose -> hidden framebuffer -> VSYNC page-flip ---------------
+  void display(){
+    if(!ok) return;
+    uint16_t* dst = backIdx ? fb1 : fb0;
+    if(!flip180){
+      memcpy(dst, cb, (size_t)KLCD_W*KLCD_H*2);
+    } else {
+      // 180° flip during the copy (ROTATE=180: screen mounted upside-down)
+      for(int y=0;y<KLCD_H;y++){
+        const uint16_t* s=cb+y*KLCD_W;
+        uint16_t* d=dst+(KLCD_H-1-y)*KLCD_W+(KLCD_W-1);
+        for(int x=0;x<KLCD_W;x++) *d-- = *s++;
+      }
+    }
+    esp_lcd_panel_draw_bitmap(panel,0,0,KLCD_W,KLCD_H,dst);  // driver FB ptr -> true page-flip
+    kWaitVsync();                                            // wait for the flip to LATCH
+    backIdx^=1;
+  }
+  void init_ok_or_halt(){
+    if(!init()){ while(true){ delay(1000); } }   // panel bring-up failed — nothing we can show
   }
 };
-static LGFX_Local tft;
+static KGfx tft;
 
 // ---------- Forward declarations ----------
 
@@ -167,6 +512,7 @@ static void uiERR(const String& s){
   tft.setTextColor(TFT_RED, TFT_BLACK);
   tft.setCursor(8, 200);
   tft.print("ERR: " + s);
+  tft.display();   // K: compose buffer must be flushed to be visible
 }
 
 // ---------- MSC RAM disk (0.5.2 geometry — proven working) ----------
@@ -376,41 +722,16 @@ static String basenameNoExt(const String& p){
   if(d>s) b=b.substring(0,d-(s>=0?s+1:0));
   return b;
 }
-static bool existsCaseInsensitiveInDir(const String& dir, const String& targetName, String& outPath){
-  String tgtLower = targetName; tgtLower.toLowerCase();
-  File d = SD_MMC.open(dir.c_str());
-  if(!d || !d.isDirectory()) return false;
-  File f = d.openNextFile();
-  while(f){
-    if(!f.isDirectory()){
-      String nm = f.name();
-      int slash = nm.lastIndexOf('/');
-      if(slash >= 0) nm = nm.substring(slash+1);
-      String nmLower = nm; nmLower.toLowerCase();
-      if(nmLower == tgtLower){ outPath = dir + "/" + nm; f.close(); d.close(); return true; }
-    }
-    f.close(); f = d.openNextFile();
-  }
-  d.close(); return false;
-}
-static bool existsCaseInsensitiveInRoot(const String& targetName, String& outPath){
-  return existsCaseInsensitiveInDir("/", targetName, outPath);
-}
 static bool findNFOFor(const String& adfPath, String& outNFO){
   String base = basenameNoExt(filenameOnly(adfPath));
   String dir  = parentDir(adfPath);
-  // Try exact basename first (e.g. Cannon-Fodder-1.nfo)
-  if(existsCaseInsensitiveInDir(dir, base+".nfo", outNFO)) return true;
-  // Try game base name without disk number (e.g. Cannon-Fodder.nfo)
   String gameBase = getGameBaseName(adfPath);
-  if(gameBase != base){
-    if(existsCaseInsensitiveInDir(dir, gameBase+".nfo", outNFO)) return true;
-  }
-  // Fallback: root with exact name
-  if(existsCaseInsensitiveInRoot(base+".nfo", outNFO)) return true;
-  // Fallback: root with game base name
-  if(gameBase != base)
-    return existsCaseInsensitiveInRoot(gameBase+".nfo", outNFO);
+  const char* exts[] = {".nfo",".NFO",".Nfo"};
+  // Direct exists() checks (fast — no directory enumeration). Same approach as findJPGFor.
+  for(auto e : exts){ String c=dir+"/"+base+e;     if(SD_MMC.exists(c.c_str())){ outNFO=c; return true; } }
+  if(gameBase != base) for(auto e : exts){ String c=dir+"/"+gameBase+e; if(SD_MMC.exists(c.c_str())){ outNFO=c; return true; } }
+  for(auto e : exts){ String c="/"+base+e;          if(SD_MMC.exists(c.c_str())){ outNFO=c; return true; } }
+  if(gameBase != base) for(auto e : exts){ String c="/"+gameBase+e;     if(SD_MMC.exists(c.c_str())){ outNFO=c; return true; } }
   return false;
 }
 static bool findJPGFor(const String& adfPath, String& outJPG){
@@ -432,7 +753,7 @@ static bool findJPGFor(const String& adfPath, String& outJPG){
 
 // ---------- Word-wrap helpers ----------
 
-// ---------- Touch: GT911 via LovyanGFX ----------
+// ---------- Touch: GT911 raw I2C @ 0x14 (KGfx::getTouch) ----------
 struct TouchData { uint8_t points; uint16_t rawX,rawY,strength; } gTouch={0,0,0,0};
 
 static bool Touch_ReadFrame(){
@@ -452,10 +773,11 @@ static bool  g_info_showing    = false;
 static int   g_info_pair_btn_y = 0;
 static void  doPairNow();  // defined after layout constants
 
-#define NUM_STARS 80
+#define NUM_STARS 120
 static int16_t star_x[NUM_STARS], star_y[NUM_STARS], star_speed[NUM_STARS];
 static bool g_loop_cracktro  = false;  // set by LOOP=1 in CONFIG.TXT
 static bool g_wireless_mode  = false;  // set by MODE=WIRELESS in CONFIG.TXT
+static int  g_rot            = 0;      // CONFIG.TXT ROTATE= : LovyanGFX rotation. 0=landscape, 2=180 flip. (90/270 portrait = stage 2)
 
 static void initStars() {
   for(int i=0;i<NUM_STARS;i++){
@@ -464,131 +786,197 @@ static void initStars() {
 }
 
 
-static void drawCracktroSplash() {
+// (crk_font 6x8 table moved up into the K display engine — shared with KGfx text)
+#define CRK_RGB(r,g,b) ((uint16_t)((((r)&0xF8)<<8)|(((g)&0xFC)<<3)|((b)>>3)))
+#define CRK_SB 45
+static const char* CRK_SCROLL="        OMEGAWARE PRESENTS ... THE GOTEK TOUCHSCREEN INTERFACE ... CODED BY MEZ & DIMMY ... A LITTLE TRIBUTE TO THE AMIGA CRACKTRO LEGENDS ... GREETINGS TO EVERYONE KEEPING THE SCENE ALIVE ... NOW GO LOAD A GAME ...        ";
+static int g_cracktro = 0;   // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or 0 = random each boot
+// ── K rendering targets ─────────────────────────────────────────────────────
+// Everything (UI and cracktro) draws into the ONE KGfx compose buffer; a flush
+// copies it to the hidden driver framebuffer and page-flips at VSYNC. The old
+// LovyanGFX sprite machinery is gone — the flip IS the double buffer now.
+static KGfx* crkG = &tft;                  // cracktro draw target
+static KGfx* UG   = &tft;                  // UI draw target
+static int   ui_depth = 0;                 // nesting depth so only the outermost redraw pushes
+
+static inline void uiFlush(){ tft.display(); }
+// RAII guard: wrap each top-level redraw. Nested draws share the frame; the
+// outermost one flushes on scope exit -> one atomic tear-free flip per redraw.
+struct UiFrame { UiFrame(){ ui_depth++; } ~UiFrame(){ if(--ui_depth==0) uiFlush(); } };
+
+static uint16_t crk_hsl(float h,float s,float l){
+  h=fmodf(fmodf(h,360.0f)+360.0f,360.0f); s*=0.01f; l*=0.01f;
+  float c=(1.0f-fabsf(2.0f*l-1.0f))*s;
+  float x=c*(1.0f-fabsf(fmodf(h/60.0f,2.0f)-1.0f));
+  float m=l-c*0.5f,r,g,b; int seg=((int)(h/60.0f))%6;
+  switch(seg){case 0:r=c;g=x;b=0;break;case 1:r=x;g=c;b=0;break;case 2:r=0;g=c;b=x;break;
+    case 3:r=0;g=x;b=c;break;case 4:r=x;g=0;b=c;break;default:r=c;g=0;b=x;break;}
+  return CRK_RGB((uint8_t)((r+m)*255.0f),(uint8_t)((g+m)*255.0f),(uint8_t)((b+m)*255.0f));
+}
+static inline uint16_t crk_hue(float h){return crk_hsl(h,100.0f,55.0f);}
+static uint16_t crk_lerp(int r1,int g1,int b1,int r2,int g2,int b2,float k){
+  if(k<0)k=0; if(k>1)k=1;
+  return CRK_RGB((uint8_t)(r1+(r2-r1)*k),(uint8_t)(g1+(g2-g1)*k),(uint8_t)(b1+(b2-b1)*k));
+}
+static void crk_line(int x0,int y0,int x1,int y1,uint16_t c){
+  int dx=abs(x1-x0),dy=-abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1,err=dx+dy;
+  for(int gd=0;gd<6000;gd++){crkG->drawPixel(x0,y0,c);if(x0==x1&&y0==y1)break;
+    int e2=2*err;if(e2>=dy){err+=dy;x0+=sx;}if(e2<=dx){err+=dx;y0+=sy;}}
+}
+// transparent pixel glyphs (foreground only), scaled 6x8 font
+static void crk_char(char ch,int x,int y,int sz,uint16_t col){
+  if(ch<32||ch>126)return; const uint8_t*d=crk_font[ch-32];
+  for(int k=0;k<6;k++){uint8_t bits=pgm_read_byte(&d[k]);
+    for(int r=0;r<8;r++) if(bits&(1<<r)) crkG->fillRect(x+k*sz,y+r*sz,sz,sz,col);}
+}
+static int  crk_txtW(const char*s,int sz){return (int)strlen(s)*6*sz;}
+static void crk_txt(int x,int y,const char*s,int sz,uint16_t col){for(int i=0;s[i];i++)crk_char(s[i],x+i*6*sz,y,sz,col);}
+static void crk_txtC(int cx,int y,const char*s,int sz,uint16_t col){crk_txt(cx-crk_txtW(s,sz)/2,y,s,sz,col);}
+static void crk_txtSh(int cx,int y,const char*s,int sz,uint16_t col){int x=cx-crk_txtW(s,sz)/2;crk_txt(x+2,y+2,s,sz,CRK_RGB(5,6,12));crk_txt(x,y,s,sz,col);}
+static void crk_stars(){
+  for(int i=0;i<NUM_STARS;i++){star_x[i]-=star_speed[i]; if(star_x[i]<0){star_x[i]=gW-1; star_y[i]=random(0,gH-CRK_SB);}
+    uint16_t c=star_speed[i]==3?TFT_WHITE:star_speed[i]==2?CRK_RGB(159,180,214):CRK_RGB(66,80,110);
+    int z=star_speed[i]>2?3:2; crkG->fillRect(star_x[i],star_y[i],z,z,c);}
+}
+static void crk_bar(int cy,int h,float hue){
+  for(int i=-h/2;i<h/2;i++){float l=62.0f-fabsf((float)i)/(h/2.0f)*56.0f; crkG->fillRect(0,cy+i,gW,1,crk_hsl(hue,100.0f,l));}
+}
+static void crk_scroller(float t,uint16_t col,float amp,bool rainbow){
+  const int sz=3,cw=18; int slen=strlen(CRK_SCROLL);
+  long cs=(long)(t*0.16f); int sc=(int)(cs/cw),pxo=(int)(cs%cw);
+  crkG->fillRect(0,gH-CRK_SB,gW,CRK_SB,CRK_RGB(5,7,15));
+  for(int c=0;c<gW/cw+3;c++){char ch=CRK_SCROLL[(((sc+c)%slen)+slen)%slen]; int x=-pxo+c*cw;
+    int y=gH-CRK_SB+8+(int)(sinf(x*0.02f+t*0.004f)*amp);
+    crk_char(ch,x,y,sz, rainbow?crk_hue(x*0.9f+t*0.2f):col);}
+}
+
+// 1: COPPER CLASSIC
+static void crkCopper(float t){
+  crkG->fillScreen(CRK_RGB(4,6,13)); crk_stars();
+  for(int b=0;b<3;b++){int cy=(int)(225+b*52+sinf(t*0.0022f+b*1.4f)*40); crk_bar(cy,45,t*0.06f+b*70);}
+  crk_txtC(gW/2,50,"OMEGAWARE",7,crk_hue(t*0.12f));
+  crk_txtC(gW/2,130,"* MEZ & DIMMY *",3,CRK_RGB(174,187,208));
+  crk_scroller(t,CRK_RGB(255,224,0),18,false);
+}
+// 2: STARFIELD
+static void crkStar(float t){
+  crkG->fillScreen(CRK_RGB(2,3,10)); crk_stars(); crk_stars();
+  int bx=(int)(gW/2+sinf(t*0.0016f)*250), by=(int)(180+sinf(t*0.0025f)*80);
+  crk_txtSh(bx,by,"OMEGAWARE",5,crk_hsl(t*0.1f,100.0f,60.0f));
+  crk_txtC(bx,by+52,"INTO THE VOID",2,CRK_RGB(127,208,255));
+  crk_scroller(t,0,15,true);
+}
+// 3: RAINBOW RASTER
+static void crkRaster(float t){
+  { int st=(gH>600)?2:1; for(int y=0;y<gH-CRK_SB;y+=st) crkG->fillRect(0,y,gW,st,crk_hsl(y*0.9f+t*0.16f,100.0f,50.0f)); }
+  crkG->fillRect(80,160,gW-160,140,CRK_RGB(6,8,18)); crkG->drawRect(80,160,gW-160,140,TFT_WHITE);
+  crk_txtC(gW/2,190,"OMEGAWARE",7,TFT_WHITE);
+  crk_txtC(gW/2,262,"CRACKED - TRAINED - LOADED",2,CRK_RGB(255,233,168));
+  crk_scroller(t,TFT_WHITE,15,false);
+}
+// 4: PLASMA
+static void crkPlasma(float t){
+  const int bs=(gH>600)?16:10;
+  for(int y=0;y<gH-CRK_SB;y+=bs)for(int x=0;x<gW;x+=bs){
+    float v=sinf(x*0.02f+t*0.003f)+sinf(y*0.03f+t*0.0042f)+sinf((x+y)*0.017f+t*0.002f);
+    crkG->fillRect(x,y,bs,bs,crk_hsl(v*60.0f+t*0.12f,90.0f,56.0f));}
+  crk_txtSh(gW/2,85,"OMEGAWARE",7,TFT_WHITE);
+  crk_txtC(gW/2,165,"MELT YOUR EYES",3,CRK_RGB(10,10,20));
+  crk_scroller(t,TFT_WHITE,18,false);
+}
+// 5: BOING BALL
+static void crkBoing(float t){
+  crkG->fillScreen(CRK_RGB(12,12,22));
+  uint16_t grd=CRK_RGB(70,36,96);
+  for(int x=0;x<=gW;x+=52) crkG->fillRect(x,90,1,gH-CRK_SB-90,grd);
+  for(int y=90;y<=gH-CRK_SB;y+=42) crkG->fillRect(0,y,gW,1,grd);
+  int bx=(int)(gW/2+sinf(t*0.0016f)*250), gy=gH-CRK_SB-30, by=(int)(gy-fabsf(sinf(t*0.004f))*180), r=70;
+  for(int yy=-8;yy<=8;yy++){int w=(int)(r*0.9f*sqrtf(1.0f-(yy/8.0f)*(yy/8.0f))); crkG->fillRect(bx-w,gy+8+yy,2*w+1,1,CRK_RGB(8,8,14));}
+  float cell=r/3.2f, ph=fmodf(t*0.06f,cell*2);
+  for(int yy=-r;yy<=r;yy++){int hw=(int)sqrtf((float)(r*r-yy*yy));
+    for(int xx=-hw;xx<=hw;xx++){int cc=(((int)floorf((xx+ph)/cell))+((int)floorf((float)yy/cell)))&1;
+      crkG->drawPixel(bx+xx,by+yy, cc?CRK_RGB(255,38,38):CRK_RGB(242,242,242));}}
+  crkG->drawCircle(bx,by,r,CRK_RGB(122,0,0));
+  crk_txtC(gW/2,40,"OMEGAWARE",5,CRK_RGB(255,59,59));
+  crk_scroller(t,CRK_RGB(255,102,102),13,false);
+}
+// 6: SYNTHWAVE
+static void crkSynth(float t){
+  { int st=(gH>600)?2:1; for(int y=0;y<gH;y+=st){float f=(float)y/gH; uint16_t col;
+    if(f<0.52f) col=crk_lerp(24,11,51,90,26,110,f/0.52f);
+    else        col=crk_lerp(11,10,26,4,4,12,(f-0.53f)/0.47f);
+    crkG->fillRect(0,y,gW,st,col);} }
+  for(int i=0;i<40;i++) crkG->drawPixel((i*53+7)%gW,(i*29)%230,TFT_WHITE);
+  int sunx=gW/2,suny=250,sr=88;
+  for(int yy=-sr;yy<=0;yy++){int w=(int)sqrtf((float)(sr*sr-yy*yy)); crkG->fillRect(sunx-w,suny+yy,2*w,1,CRK_RGB(255,91,138));}
+  for(int i=0;i<7;i++){int yy=178+i*12; crkG->fillRect(sunx-90,yy,180,4+i,CRK_RGB(24,11,51));}
+  uint16_t grc=CRK_RGB(0,229,255); int hz=264;
+  for(int i=0;i<9;i++){int yy=hz+(int)(i*i*3.6f); if(yy<gH) crkG->fillRect(0,yy,gW,1,grc);}
+  for(int x=-8;x<=16;x++){int p2=gW/2+x*90; int x0=gW/2+(int)((p2-gW/2)*0.18f); crk_line(x0,hz,p2,gH,grc);}
+  crk_txtSh(gW/2,60,"OMEGAWARE",5,CRK_RGB(49,232,255));
+  crk_txtC(gW/2,112,"RETRO FUTURE",2,CRK_RGB(255,122,176));
+  crk_scroller(t,CRK_RGB(255,79,160),13,false);
+}
+
+// Boot cracktro runner. style 1..6 forces a style, 0 = random each boot.
+// Renders each frame into an off-screen PSRAM sprite, then blits it whole — the
+// per-pixel work happens off-panel so the RGB display never shows a half-drawn frame (no flicker).
+static void drawCracktro(int style){
+  int s=(style>=1&&style<=6)?(style-1):(int)(esp_random()%6);
   initStars();
-
-  const char* scrollText =
-    "       GOTEK TOUCHSCREEN INTERFACE  *  CODED BY MEZ AND DIMMY OF OMEGAWARE  *  "
-    "THE ULTIMATE RETRO DISK LOADER FOR AMIGA AND CPC  ...  "
-    "WIFI WEB INTERFACE - THEME ENGINE - FAT12 RAM DISK  ...  "
-    "GREETINGS TO THE GREENFORD COMPUTER CLUB  ...  "
-    "KEEP THE SCENE ALIVE  ...  OMEGAWARE 2026  *  "
-    "       ";
-  const int scrollLen = strlen(scrollText);
-  int scrollPos = 0;
-  const int charW = 12;
-
-  uint16_t copperColors[] = {
-    0xF800,0xF920,0xFAA0,0xFC00,0xFDE0,0xEFE0,0x87E0,0x07E0,
-    0x07F0,0x07FF,0x041F,0x001F,0x801F,0xF81F,0xF810,0xF800
-  };
-  uint16_t sineColors[] = {
-    0xF800,0xFBE0,0xFFE0,0x07E0,0x07FF,0x001F,0xF81F,0xF800
-  };
-  const int numCopper=16, numSineColors=8;
-  int frame=0;
-
-  const unsigned long CRACKTRO_MS = 6000;
-  unsigned long startMs = millis();
-
-  // use_psram=2 gives double buffering — draw to back buffer, display() flips atomically
-  tft.fillScreen(TFT_BLACK);
-  tft.display();
-
+  unsigned long startMs=millis();
+  UG->fillScreen(TFT_BLACK); tft.display();
+  // K: no sprite needed — every frame renders into the compose buffer, then
+  // display() page-flips it at VSYNC. Atomic by construction.
   while(true){
-    if(Touch_ReadFrame()){
-      unsigned long t0=millis();
-      while(Touch_ReadFrame()&&millis()-t0<500) delay(10);
-      break;
-    }
-    if(!g_loop_cracktro && millis()-startMs>=CRACKTRO_MS) break;
-
-    int copperY=gH/2-40+(int)(55.0f*sinf((float)frame*0.05f));
-    int prevCopperY=gH/2-40+(int)(55.0f*sinf((float)(frame-1)*0.05f));
-
-    // Stars — erase old pixel, move, draw new
-    for(int i=0;i<NUM_STARS;i++){
-      tft.drawPixel(star_x[i],star_y[i],TFT_BLACK);
-      star_x[i]-=star_speed[i];
-      if(star_x[i]<0){ star_x[i]=gW-1; star_y[i]=random(0,gH-40); }
-      uint16_t col=(star_speed[i]==3)?TFT_WHITE:
-                   (star_speed[i]==2)?(uint16_t)0x7BEF:(uint16_t)0x4208;
-      tft.drawPixel(star_x[i],star_y[i],col);
-    }
-
-    // Copper bars — erase previous band fringe, draw new
-    tft.fillRect(0,max(0,prevCopperY-3),gW,3,TFT_BLACK);
-    tft.fillRect(0,min(gH-43,prevCopperY+numCopper*4),gW,3,TFT_BLACK);
-    for(int i=0;i<numCopper;i++){
-      int by=copperY+i*4;
-      if(by>=0&&by<gH-40) tft.fillRect(0,by,gW,3,copperColors[i]);
-    }
-
-    // Text — erase at PREVIOUS copperY, draw at CURRENT copperY
-    tft.setTextSize(4); tft.setTextWrap(false);
-    { const char* s="MEZ & DIMMY"; int tw=strlen(s)*24;
-      int pty=prevCopperY-68; if(pty<0)pty=4;
-      int ty=copperY-68; if(ty<0)ty=4;
-      tft.setTextColor(TFT_BLACK); tft.setCursor((gW-tw)/2,pty); tft.print(s);
-      tft.setTextColor(sineColors[(frame/4)%numSineColors]);
-      tft.setCursor((gW-tw)/2,ty); tft.print(s); }
-
-    tft.setTextSize(3);
-    { const char* s="- OMEGAWARE -"; int tw=strlen(s)*18;
-      tft.setTextColor(TFT_BLACK); tft.setCursor((gW-tw)/2,prevCopperY+68); tft.print(s);
-      tft.setTextColor((frame%40<20)?TFT_CYAN:TFT_WHITE);
-      tft.setCursor((gW-tw)/2,copperY+68); tft.print(s); }
-
-    tft.setTextSize(2);
-    { const char* s="GOTEK TOUCHSCREEN INTERFACE"; int tw=strlen(s)*12;
-      tft.setTextColor(TFT_BLACK); tft.setCursor((gW-tw)/2,prevCopperY+94); tft.print(s);
-      tft.setTextColor(0x7BEF); tft.setCursor((gW-tw)/2,copperY+94); tft.print(s); }
-
-    { const char* s="TAP TO CONTINUE"; int tw=strlen(s)*12;
-      tft.setTextSize(2);
-      tft.setTextColor((frame/15)%2==0 ? (uint16_t)0x4A8A : TFT_BLACK);
-      tft.setCursor((gW-tw)/2,gH-72); tft.print(s); }
-
-    // Scroll bar
-    tft.fillRect(0,gH-36,gW,36,0x0010);
-    tft.setTextSize(2); tft.setTextColor(TFT_YELLOW); tft.setTextWrap(false);
-    { int sc=scrollPos/charW, px=scrollPos%charW;
-      tft.setCursor(-px,gH-36+4);
-      for(int c=0;c<(gW/charW)+3;c++){
-        char buf[2]={scrollText[(sc+c)%scrollLen],0}; tft.print(buf); } }
-
-    // Atomic buffer flip
-    // Atomic buffer flip — panel reads from front while we drew to back
+    if(Touch_ReadFrame()){unsigned long t0=millis();while(Touch_ReadFrame()&&millis()-t0<500)delay(10);break;}
+    if(!g_loop_cracktro && millis()-startMs>=6000) break;
+    float t=(float)(millis()-startMs);
+    switch(s){case 0:crkCopper(t);break;case 1:crkStar(t);break;case 2:crkRaster(t);break;
+      case 3:crkPlasma(t);break;case 4:crkBoing(t);break;default:crkSynth(t);break;}
+    if(((int)(t/450.0f))%2) crk_txtC(gW/2,gH-CRK_SB-26,"TAP TO CONTINUE",2,CRK_RGB(150,168,200));
     tft.display();
-
-    scrollPos+=2; frame++;
-    delay(33);
+    delay(2);
   }
-
-  tft.fillScreen(TFT_BLACK);
-  tft.display();
+  UG->fillScreen(TFT_BLACK); tft.display();
 }
 
 // ============================================================================
-#define LCD_WIDTH    800
-#define LCD_HEIGHT   480
-#define STATUS_H     24
-#define COVER_W      200
-#define COVER_ART_X  8
-#define COVER_ART_Y  (STATUS_H + 6)
-#define COVER_ART_W  184
-#define COVER_ART_H  150
-#define AZ_W         20
-#define AZ_X         (LCD_WIDTH - AZ_W)
-#define LIST_X       COVER_W
-#define LIST_W       (LCD_WIDTH - COVER_W - AZ_W)
-#define MODE_BAR_H   24
-#define LIST_TOP     (STATUS_H + MODE_BAR_H)
-#define NOW_PLAY_H   32
-#define BOTTOM_H     52
-#define LIST_BOTTOM  (LCD_HEIGHT - BOTTOM_H - NOW_PLAY_H)
-#define LIST_ITEM_H  ((LIST_BOTTOM - LIST_TOP) / 8)
-#define ITEMS_VIS    8
+// ── Layout geometry — now runtime variables (not #defines) so relayout() can
+//    reflow the whole UI per rotation. Same names, so existing draw code is unchanged. ──
+static int LCD_WIDTH=800, LCD_HEIGHT=480;
+static int STATUS_H=24, MODE_BAR_H=24, NOW_PLAY_H=32, BOTTOM_H=52;
+static int COVER_W=200, COVER_H=404, COVER_ART_X=8, COVER_ART_Y=30, COVER_ART_W=184, COVER_ART_H=150;
+static int AZ_W=20, AZ_X=780;
+static int LIST_X=200, LIST_W=580, LIST_TOP=48, LIST_BOTTOM=396, LIST_ITEM_H=43, ITEMS_VIS=8;
+static bool g_portrait_mode=false;   // true when g_rot is 1 or 3 (90/270)
+
+static void relayout(){
+  LCD_WIDTH=gW; LCD_HEIGHT=gH;
+  g_portrait_mode = (g_rot==1||g_rot==3);
+  STATUS_H=24; MODE_BAR_H=24; NOW_PLAY_H=32; BOTTOM_H=52; AZ_W=20;
+  AZ_X=LCD_WIDTH-AZ_W;
+  if(!g_portrait_mode){
+    // ── Landscape (0/2): original layout, byte-identical to the old #defines ──
+    COVER_W=200; COVER_H=LCD_HEIGHT-STATUS_H-BOTTOM_H;
+    COVER_ART_X=8; COVER_ART_Y=STATUS_H+6; COVER_ART_W=184; COVER_ART_H=150;
+    LIST_X=COVER_W; LIST_W=LCD_WIDTH-COVER_W-AZ_W;
+    LIST_TOP=STATUS_H+MODE_BAR_H;
+    LIST_BOTTOM=LCD_HEIGHT-BOTTOM_H-NOW_PLAY_H;
+    ITEMS_VIS=8; LIST_ITEM_H=(LIST_BOTTOM-LIST_TOP)/ITEMS_VIS;
+  } else {
+    // ── Portrait (1/3): cover full-width on top, list full-width below ──
+    COVER_W=LCD_WIDTH; COVER_H=196;
+    COVER_ART_X=8; COVER_ART_Y=STATUS_H+MODE_BAR_H+8; COVER_ART_W=150; COVER_ART_H=150;
+    LIST_X=0; LIST_W=LCD_WIDTH-AZ_W;
+    LIST_TOP=STATUS_H+MODE_BAR_H+COVER_H;
+    LIST_BOTTOM=LCD_HEIGHT-BOTTOM_H-NOW_PLAY_H;
+    int rowH=58; ITEMS_VIS=(LIST_BOTTOM-LIST_TOP)/rowH; if(ITEMS_VIS<1)ITEMS_VIS=1;
+    LIST_ITEM_H=(LIST_BOTTOM-LIST_TOP)/ITEMS_VIS;
+  }
+}
+
+// (uiSpriteSetup removed in K — the esp_lcd double framebuffer IS the double buffer.)
 
 // ============================================================================
 // THEME SYSTEM — runtime cycling colours
@@ -699,6 +1087,19 @@ static void setWirelessMode(bool wireless) {
   drawFullUI();
 }
 
+// Write ROTATE=<deg> to CONFIG.TXT (0/90/180/270), then caller reboots to apply.
+static void saveRotate(int deg){
+  String lines=""; bool written=false;
+  File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
+  if(fr){ while(fr.available()){ String line=fr.readStringUntil('\n'); line.trim();
+      if(line.startsWith("ROTATE=")){ lines+="ROTATE="+String(deg)+"\n"; written=true; }
+      else lines+=line+"\n"; }
+    fr.close(); }
+  if(!written) lines+="ROTATE="+String(deg)+"\n";
+  File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);
+  if(fw){ fw.print(lines); fw.close(); }
+}
+
 static void ensureConfig(){
   // If CONFIG.TXT is missing or empty, write defaults so the user
   // always has a starting point and WiFi works out of the box.
@@ -717,6 +1118,11 @@ static void ensureConfig(){
         "#\n"
         "THEME=0\n"
         "LOOP=0\n"
+        "# Boot cracktro style: 0=random each boot, 1=COPPER 2=STARFIELD\n"
+        "# 3=RAINBOW 4=PLASMA 5=BOING 6=SYNTHWAVE\n"
+        "CRACKTRO=0\n"
+        "# Screen rotation (reboot to apply): 0=landscape, 180=flipped (mount upside-down). 90/270 portrait coming soon.\n"
+        "ROTATE=0\n"
         "MODE=STANDALONE\n"
         "LASTMODE=ADF\n"
         "#\n"
@@ -796,6 +1202,25 @@ static void ensureConfig(){
   }
 }
 
+// After a firmware update adds a new key, an existing CONFIG.TXT won't have it.
+// Append CRACKTRO= (with legend) if missing, so upgraders get an editable line
+// without their other settings being touched. Only writes when it's actually absent.
+static void selfHealConfig(){
+  File fr = SD_MMC.open("/CONFIG.TXT", FILE_READ);
+  if(!fr) return;
+  bool hasCracktro=false; String all="";
+  while(fr.available()){ String line=fr.readStringUntil('\n'); all+=line+"\n";
+    String t=line; t.trim(); if(t.startsWith("CRACKTRO=")) hasCracktro=true; }
+  fr.close();
+  if(hasCracktro) return;
+  File fw = SD_MMC.open("/CONFIG.TXT", FILE_WRITE);
+  if(fw){ fw.print(all);
+    fw.print("# Boot cracktro style: 0=random each boot, 1=COPPER 2=STARFIELD\n"
+             "# 3=RAINBOW 4=PLASMA 5=BOING 6=SYNTHWAVE\n"
+             "CRACKTRO=0\n");
+    fw.close(); }
+}
+
 static void loadTheme(){
   File f = SD_MMC.open("/CONFIG.TXT", FILE_READ);
   if(!f){ applyTheme(0); return; }
@@ -808,6 +1233,10 @@ static void loadTheme(){
     if(key == "THEME") applyTheme(val.toInt());
     else if(key == "LOOP") g_loop_cracktro = (val == "1" || val == "true");
     else if(key == "MODE") g_wireless_mode = (val == "WIRELESS");
+    else if(key == "CRACKTRO"){ int c=val.toInt(); if(c>=0&&c<=6) g_cracktro=c; }
+    else if(key == "ROTATE"){ int d=((val.toInt()/90)%4+4)%4; if(d==1||d==3) d=(d==1)?0:2; g_rot=d; }
+    // LANDSCAPE-LOCKED: this RGB panel has no HW portrait; 90/270 is a slow SW transpose (~1-2fps),
+    // so portrait is snapped to the nearest landscape (90->0, 270->180). Only 0/180 are allowed.
   }
   f.close();
 }
@@ -820,8 +1249,10 @@ struct GameEntry {
   String name;            // display name (from NFO or basename)
   int    first_file_idx;  // index into g_files[] for disk 1
   int    disk_count;      // 1 = single, 2+ = multi-disk
-  String jpg_path;        // cover art path (may be empty)
+  String jpg_path;        // cover art path (may be empty; "?" = checked, none found)
   std::vector<int> disk_indices; // all disk indices in order
+  bool nfo_checked=false; // lazy: have we looked for an NFO title yet?
+  String blurb;           // runtime cache of NFO blurb (not persisted to .gamecache)
 };
 
 // ============================================================================
@@ -836,6 +1267,16 @@ static String g_loaded_name = "";
 static bool   g_loaded    = false;
 static int    g_loaded_game_idx = -1;     // which game is loaded
 static int    g_loaded_disk_idx = -1;     // which disk of that game
+
+// ── Smooth list scroll + drag/inertia state (ported from the JC3248 engine) ──
+static float g_scrollPx=0;                 // pixel scroll offset (source of truth)
+static bool  g_touch_active=false,g_touch_moved=false,g_touch_inlist=false,g_inertia_on=false;
+static int   g_touch_x0=0,g_touch_y0=0,g_touch_lastY=0,g_touch_release=0;
+static float g_touch_px0=0,g_touch_vel=0,g_inertia_vel=0;
+static uint32_t g_touch_lastMs=0;
+#define DRAG_THRESH 14          // px of finger travel before a press becomes a scroll
+#define RELEASE_FRAMES 5        // consecutive no-touch frames = real lift (~80ms; 7" GT911 blips more than the JC's)
+static int maxScrollPx(){ int m=(int)g_games.size()*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP); return m>0?m:0; }
 
 // ============================================================================
 // FILE HELPERS
@@ -907,77 +1348,79 @@ static void parseNFO(const String& txt,String& outTitle,String& outBlurb){
 // ============================================================================
 // GAME LIST BUILDER — groups multi-disk games, finds cover art
 // ============================================================================
+// ── Game cache — caches buildGameList output so NFO/JPG lookups only happen once ──
+static String gameCachePath(){return g_mode==MODE_ADF?"/ADF/.gamecache":"/DSK/.gamecache";}
+
+static void writeGameCache(){
+  File f=SD_MMC.open(gameCachePath().c_str(),FILE_WRITE);if(!f)return;
+  f.println("#FILES="+String(g_files.size()));
+  for(auto&g:g_games){
+    f.print(g.name);f.print("|");f.print(g.first_file_idx);f.print("|");
+    f.print(g.disk_count);f.print("|");f.print(g.jpg_path);f.print("|");
+    for(int i=0;i<(int)g.disk_indices.size();i++){if(i>0)f.print(",");f.print(g.disk_indices[i]);}
+    f.println();
+  }
+  f.close();
+}
+
+static bool readGameCache(){
+  g_games.clear();
+  File f=SD_MMC.open(gameCachePath().c_str(),FILE_READ);
+  if(!f){return false;}
+  long declaredFiles=-1;
+  while(f.available()){
+    String line=f.readStringUntil('\n');line.trim();if(!line.length())continue;
+    if(line.startsWith("#FILES=")){declaredFiles=line.substring(7).toInt();continue;}
+    int p1=line.indexOf('|');if(p1<0)continue;
+    int p2=line.indexOf('|',p1+1);if(p2<0)continue;
+    int p3=line.indexOf('|',p2+1);if(p3<0)continue;
+    int p4=line.indexOf('|',p3+1);if(p4<0)continue;
+    GameEntry e;
+    e.name=line.substring(0,p1);
+    e.first_file_idx=line.substring(p1+1,p2).toInt();
+    e.disk_count=line.substring(p2+1,p3).toInt();
+    e.jpg_path=line.substring(p3+1,p4);
+    if(e.jpg_path=="?")e.jpg_path="";
+    String indices=line.substring(p4+1);
+    if(indices.length()){int pos=0;while(pos<(int)indices.length()){int comma=indices.indexOf(',',pos);if(comma<0)comma=indices.length();e.disk_indices.push_back(indices.substring(pos,comma).toInt());pos=comma+1;}}
+    if(e.first_file_idx>=0&&e.first_file_idx<(int)g_files.size()) g_games.push_back(e);
+  }
+  f.close();
+  if(declaredFiles>=0&&declaredFiles!=(long)g_files.size()){g_games.clear();return false;}
+  return!g_games.empty();
+}
+
 static void buildGameList(){
   g_games.clear();
   std::vector<bool> used(g_files.size(), false);
-
   for(int i=0;i<(int)g_files.size();i++){
     if(used[i]) continue;
     String baseName=getGameBaseName(g_files[i]);
     int diskNum=getDiskNumber(g_files[i]);
     String dir=parentDir(g_files[i]);
-
     GameEntry entry;
     entry.first_file_idx=i;
     entry.disk_count=1;
     entry.disk_indices.push_back(i);
-
     if(diskNum>0){
-      // Multi-disk: find all related disks
       entry.name=baseName;
       for(int j=i+1;j<(int)g_files.size();j++){
         if(used[j]) continue;
-        if(parentDir(g_files[j])==dir &&
-           getGameBaseName(g_files[j])==baseName &&
-           getDiskNumber(g_files[j])>0){
-          used[j]=true;
-          entry.disk_count++;
-          entry.disk_indices.push_back(j);
-          // Keep first_file_idx pointing to disk 1
-          if(getDiskNumber(g_files[j])<getDiskNumber(g_files[entry.first_file_idx]))
-            entry.first_file_idx=j;
+        if(parentDir(g_files[j])==dir && getGameBaseName(g_files[j])==baseName && getDiskNumber(g_files[j])>0){
+          used[j]=true; entry.disk_count++; entry.disk_indices.push_back(j);
         }
       }
-      // Sort disk_indices by disk number
-      for(int a=0;a<(int)entry.disk_indices.size();a++)
-        for(int b=a+1;b<(int)entry.disk_indices.size();b++)
-          if(getDiskNumber(g_files[entry.disk_indices[b]])<getDiskNumber(g_files[entry.disk_indices[a]]))
-            std::swap(entry.disk_indices[a],entry.disk_indices[b]);
+      std::sort(entry.disk_indices.begin(),entry.disk_indices.end(),[](int a,int b){return getDiskNumber(g_files[a])<getDiskNumber(g_files[b]);});
+      entry.first_file_idx=entry.disk_indices[0];
     } else {
       entry.name=basenameNoExt(filenameOnly(g_files[i]));
     }
     used[i]=true;
-
-    // Try NFO for title
-    String nfoPath,nfoTitle,nfoBlurb;
-    if(findNFOFor(g_files[entry.first_file_idx],nfoPath)){
-      String txt=readSmallTextFile(nfoPath,512);
-      parseNFO(txt,nfoTitle,nfoBlurb);
-      if(nfoTitle.length()) entry.name=nfoTitle;
-    }
-
-    // Cover art
-    String jpg;
-    if(findJPGFor(g_files[entry.first_file_idx],jpg)) entry.jpg_path=jpg;
-    else {
-      // Try base name in folder
-      String tryBase=dir+"/"+baseName;
-      for(const char* ext:{".jpg",".jpeg",".png"}){
-        String tryPath=tryBase+ext;
-        if(SD_MMC.exists(tryPath.c_str())){ entry.jpg_path=tryPath; break; }
-      }
-    }
-
+    // NO NFO/JPG lookups here — done lazily in drawCoverPanel (huge boot speedup)
     g_games.push_back(entry);
   }
-
-  // Sort alphabetically
-  for(int i=0;i<(int)g_games.size();i++)
-    for(int j=i+1;j<(int)g_games.size();j++){
-      String a=g_games[i].name; String b=g_games[j].name;
-      a.toLowerCase(); b.toLowerCase();
-      if(a.compareTo(b)>0) std::swap(g_games[i],g_games[j]);
-    }
+  std::sort(g_games.begin(),g_games.end(),[](const GameEntry&a,const GameEntry&b){String al=a.name,bl=b.name;al.toLowerCase();bl.toLowerCase();return al<bl;});
+  writeGameCache();
 }
 
 // ============================================================================
@@ -1001,34 +1444,34 @@ static int findFirstWithLetter(char letter,int count,String(*fn)(int)){
   for(int i=0;i<count;i++) if(toupper(fn(i).charAt(0))>=letter) return i;
   return count-1;
 }
-static void drawAZBar(){
+static void drawAZBar(){ UiFrame _uf;
   if(active_letter_count==0) return;
   int barH=LIST_BOTTOM-LIST_TOP;
-  tft.fillRect(AZ_X,LIST_TOP,AZ_W,barH+NOW_PLAY_H,COL_PANEL);
+  UG->fillRect(AZ_X,LIST_TOP,AZ_W,barH+NOW_PLAY_H,COL_PANEL);
   char curLetter='A';
   if(g_scroll>=0&&g_scroll<(int)g_games.size())
     curLetter=toupper(g_games[g_scroll].name.charAt(0));
   int letterH=barH/active_letter_count; if(letterH<8) letterH=8;
-  tft.setFont(&lgfx::fonts::Font0);
-  tft.setTextSize(1);
+  UG->setFont(&lgfx::fonts::Font0);
+  UG->setTextSize(1);
   for(int i=0;i<active_letter_count;i++){
     char letter=active_letters[i];
     int ly=LIST_TOP+i*letterH;
     if(ly+letterH>LIST_BOTTOM) break;
     if(letter==curLetter){
-      tft.fillRect(AZ_X,ly,AZ_W,letterH,COL_AMBER);
-      tft.setTextColor(TFT_BLACK,COL_AMBER);
+      UG->fillRect(AZ_X,ly,AZ_W,letterH,COL_AMBER);
+      UG->setTextColor(TFT_BLACK,COL_AMBER);
     } else {
-      tft.setTextColor(COL_DIM,COL_PANEL);
+      UG->setTextColor(COL_DIM,COL_PANEL);
     }
-    tft.setCursor(AZ_X+(AZ_W-6)/2,ly+(letterH-8)/2);
-    tft.print(String(letter));
+    UG->setCursor(AZ_X+(AZ_W-6)/2,ly+(letterH-8)/2);
+    UG->print(String(letter));
   }
   int maxOff=(int)g_games.size()-ITEMS_VIS;
   if(maxOff>0){
     int thumbH=max(6,barH*ITEMS_VIS/(int)g_games.size());
     int thumbY=LIST_TOP+(barH-thumbH)*g_scroll/maxOff;
-    tft.fillRect(AZ_X-3,thumbY,2,thumbH,COL_BLUE);
+    UG->fillRect(AZ_X-3,thumbY,2,thumbH,COL_BLUE);
   }
 }
 static bool handleAlphabetTouch(uint16_t px,uint16_t py){
@@ -1041,6 +1484,7 @@ static bool handleAlphabetTouch(uint16_t px,uint16_t py){
   g_sel=target; g_scroll=target;
   int maxOff=(int)g_games.size()-ITEMS_VIS; if(maxOff<0) maxOff=0;
   if(g_scroll>maxOff) g_scroll=maxOff;
+  g_scrollPx=(float)(g_scroll*LIST_ITEM_H); g_inertia_on=false;   // keep pixel scroll in sync
   return true;
 }
 
@@ -1051,12 +1495,26 @@ static bool handleAlphabetTouch(uint16_t px,uint16_t py){
 // ESP-NOW manual pair — broadcasts hellos for 15s from main thread
 // Must be defined after COVER_W, COL_* are available
 // ============================================================================
+// RESCAN — delete cache files and rebuild the game list from a fresh SD scan.
+// Use after adding/removing games on the card so the cached list updates.
+static void doRescan(){
+  g_info_showing=false;
+  SD_MMC.remove("/ADF/.index");   SD_MMC.remove("/DSK/.index");
+  SD_MMC.remove("/ADF/.gamecache");SD_MMC.remove("/DSK/.gamecache");
+  g_files.clear(); g_games.clear();
+  listImages(SD_MMC,g_files);
+  buildGameList();           // no cache now → full rebuild, writes fresh cache
+  buildActiveLetters();
+  g_sel=0; g_scroll=0; g_disk_sel=0; g_scrollPx=0; g_inertia_on=false;
+  drawFullUI();
+}
+
 static void doPairNow() {
-  tft.fillRoundRect(8, g_info_pair_btn_y, COVER_W-16, 28, 6, COL_AMBER);
-  tft.setFont(&lgfx::fonts::DejaVu12);
-  tft.setTextColor(TFT_BLACK, COL_AMBER);
-  tft.setCursor(18, g_info_pair_btn_y+8);
-  tft.print("PAIRING...");
+  UG->fillRoundRect(8, g_info_pair_btn_y, COVER_W-16, 28, 6, COL_AMBER);
+  UG->setFont(&lgfx::fonts::DejaVu12);
+  UG->setTextColor(TFT_BLACK, COL_AMBER);
+  UG->setCursor(18, g_info_pair_btn_y+8);
+  UG->print("PAIRING...");
 
   uint32_t t0 = millis();
   int count = 0;
@@ -1064,52 +1522,52 @@ static void doPairNow() {
     espnowBroadcastHello();
     delay(300);
     count++;
-    tft.setFont(&lgfx::fonts::DejaVu9);
-    tft.setTextColor(COL_LIT, COL_PANEL);
-    tft.setCursor(8, g_info_pair_btn_y - 14);
-    tft.print("tx: " + String(count) + "   ");
+    UG->setFont(&lgfx::fonts::DejaVu9);
+    UG->setTextColor(COL_LIT, COL_PANEL);
+    UG->setCursor(8, g_info_pair_btn_y - 14);
+    UG->print("tx: " + String(count) + "   ");
   }
 
   uint16_t btnCol = g_espnow_paired ? COL_GREEN : 0xE8C4;
-  tft.fillRoundRect(8, g_info_pair_btn_y, COVER_W-16, 28, 6, btnCol);
-  tft.setFont(&lgfx::fonts::DejaVu12);
-  tft.setTextColor(TFT_BLACK, btnCol);
-  tft.setCursor(18, g_info_pair_btn_y+8);
-  tft.print(g_espnow_paired ? "PAIRED OK!" : "PAIR FAILED");
+  UG->fillRoundRect(8, g_info_pair_btn_y, COVER_W-16, 28, 6, btnCol);
+  UG->setFont(&lgfx::fonts::DejaVu12);
+  UG->setTextColor(TFT_BLACK, btnCol);
+  UG->setCursor(18, g_info_pair_btn_y+8);
+  UG->print(g_espnow_paired ? "PAIRED OK!" : "PAIR FAILED");
   delay(1500);
   drawFullUI();
   g_info_showing = false;
 }
 
-static void drawStatusBar(){
-  tft.fillRect(0,0,LCD_WIDTH,STATUS_H,COL_BAR);
-  tft.setFont(&lgfx::fonts::DejaVu9);
-  tft.setTextColor(COL_ORANGE,COL_BAR);
-  tft.setCursor(10,8); tft.print("OMEGAWARE");
-  tft.setTextColor(COL_MID,COL_BAR);
-  tft.print("  " FW_VERSION);
+static void drawStatusBar(){ UiFrame _uf;
+  UG->fillRect(0,0,LCD_WIDTH,STATUS_H,COL_BAR);
+  UG->setFont(&lgfx::fonts::DejaVu9);
+  UG->setTextColor(COL_ORANGE,COL_BAR);
+  UG->setCursor(10,8); UG->print("OMEGAWARE");
+  UG->setTextColor(COL_MID,COL_BAR);
+  UG->print("  " FW_VERSION);
 
   // Mode indicator (centre)
   if (g_wireless_mode) {
     if(espnowIsPaired()){
-      tft.setTextColor(0x07E0, COL_BAR);
+      UG->setTextColor(0x07E0, COL_BAR);
       String label = "WIRELESS:PAIRED";
-      int tw = tft.textWidth(label);
-      tft.setCursor((LCD_WIDTH/2)-(tw/2), 8);
-      tft.print(label);
+      int tw = UG->textWidth(label);
+      UG->setCursor((LCD_WIDTH/2)-(tw/2), 8);
+      UG->print(label);
     } else {
-      tft.setTextColor(0xFD20, COL_BAR);
+      UG->setTextColor(0xFD20, COL_BAR);
       String label = "WIRELESS:PAIRING";
-      int tw = tft.textWidth(label);
-      tft.setCursor((LCD_WIDTH/2)-(tw/2), 8);
-      tft.print(label);
+      int tw = UG->textWidth(label);
+      UG->setCursor((LCD_WIDTH/2)-(tw/2), 8);
+      UG->print(label);
     }
   } else {
-    tft.setTextColor(0x07FF, COL_BAR);
+    UG->setTextColor(0x07FF, COL_BAR);
     String label = "STANDALONE";
-    int tw = tft.textWidth(label);
-    tft.setCursor((LCD_WIDTH/2)-(tw/2), 8);
-    tft.print(label);
+    int tw = UG->textWidth(label);
+    UG->setCursor((LCD_WIDTH/2)-(tw/2), 8);
+    UG->print(label);
   }
 
   // Right side: battery widget + LOADED/READY text
@@ -1118,7 +1576,7 @@ static void drawStatusBar(){
 
   // LOADED / READY indicator dot
   uint16_t indCol = g_loaded ? 0xE8C4 : COL_GREEN;
-  tft.fillCircle(LCD_WIDTH-8, STATUS_H/2, 4, indCol);
+  UG->fillCircle(LCD_WIDTH-8, STATUS_H/2, 4, indCol);
 }
 
 // ============================================================================
@@ -1166,13 +1624,13 @@ static void drawFloppyIcon(int x, int y, int s, uint16_t bodyCol, uint16_t label
   // s parameter sets size. Draw proportionally using direct primitives.
   int bx = x, by = y, bw = s, bh = s;
   // Body
-  tft.fillRect(bx, by, bw, bh, bodyCol);
+  UG->fillRect(bx, by, bw, bh, bodyCol);
   // Top-right write-protect notch (corner cutout ~1/5 width, 1/6 height)
   int nw = bw*4/18, nh = bh*3/18;
-  tft.fillRect(bx+bw-nw, by, nw, nh, shutterCol);
+  UG->fillRect(bx+bw-nw, by, nw, nh, shutterCol);
   // Label area: top 40% of body, inset 1px each side except right edge
   int lx = bx+2, ly = by+2, lw = bw-nw-3, lh = bh*9/22;
-  tft.fillRect(lx, ly, lw, lh, labelCol);
+  UG->fillRect(lx, ly, lw, lh, labelCol);
   // Three clean label lines
   uint16_t llineCol = (labelCol > 0x4000)
     ? (uint16_t)((labelCol & 0xF7DE) >> 1)   // darken
@@ -1180,18 +1638,18 @@ static void drawFloppyIcon(int x, int y, int s, uint16_t bodyCol, uint16_t label
   int lineW = lw - 6;
   for (int i = 0; i < 3; i++) {
     int lineY = ly + 3 + i * (lh/4);
-    tft.fillRect(lx+3, lineY, lineW, 2, llineCol);
+    UG->fillRect(lx+3, lineY, lineW, 2, llineCol);
   }
   // Metal shutter: centred, lower 50% of body
   int mx = bx + bw/4, my = by + bh*11/20;
   int mw = bw/2,      mh = bh*8/20;
-  tft.fillRect(mx, my, mw, mh, shutterCol);
+  UG->fillRect(mx, my, mw, mh, shutterCol);
   // Shutter border
-  tft.drawRect(mx, my, mw, mh, (uint16_t)(shutterCol >> 1 | 0x0821));
+  UG->drawRect(mx, my, mw, mh, (uint16_t)(shutterCol >> 1 | 0x0821));
   // Hub hole: small centred rectangle inside shutter
   int hx = mx + mw/2 - mw/6, hy = my + mh/2 - mh/4;
   int hw = mw/3,              hh = mh/2;
-  tft.fillRect(hx, hy, hw, hh, bodyCol);
+  UG->fillRect(hx, hy, hw, hh, bodyCol);
 }
 
 // ── Battery — reserved for future I2C fuel gauge (e.g. MAX17048 @ 0x36) ──
@@ -1215,160 +1673,256 @@ static void drawGradientBg(int x, int y, int w, int h, uint16_t colTop, uint16_t
     uint16_t col = ((r&0x1F)<<11)|((g&0x3F)<<5)|(b&0x1F);
     int iy = y + i*bandH;
     int ih = (i==steps-1) ? (y+h-iy) : bandH;
-    tft.fillRect(x, iy, w, ih, col);
+    UG->fillRect(x, iy, w, ih, col);
   }
 }
 
 
 // Read JPEG dimensions from file header (SOF0 marker FFC0)
-static bool getJpegSize(const String& path, int& w, int& h){
-  w=0; h=0;
-  File f=SD_MMC.open(path.c_str(),FILE_READ);
-  if(!f) return false;
-  uint8_t buf[4];
-  // Check SOI marker
-  if(f.read(buf,2)!=2||buf[0]!=0xFF||buf[1]!=0xD8){ f.close(); return false; }
-  while(f.available()>4){
-    if(f.read(buf,1)!=1||buf[0]!=0xFF){ f.close(); return false; }
-    while(buf[0]==0xFF&&f.read(buf,1)==1); // skip padding
-    uint8_t marker=buf[0];
-    if(f.read(buf,2)!=2){ f.close(); return false; }
-    int segLen=(buf[0]<<8)|buf[1];
-    // SOF markers: FFC0-FFCF except FFC4 FFC8 FFCC
-    if(marker>=0xC0&&marker<=0xCF&&marker!=0xC4&&marker!=0xC8&&marker!=0xCC){
-      if(f.read(buf,1)!=1){ f.close(); return false; } // precision
-      uint8_t dim[4]; if(f.read(dim,4)!=4){ f.close(); return false; }
-      h=(dim[0]<<8)|dim[1];
-      w=(dim[2]<<8)|dim[3];
-      f.close(); return true;
+static JPEGDEC jpegdec;
+static uint16_t *jpeg_tmp_buf=NULL;
+static int jpeg_tmp_w=0,jpeg_tmp_h=0;
+static int jpeg_buf_cb(JPEGDRAW*pDraw){
+  if(!jpeg_tmp_buf)return 0;
+  for(int yy=0;yy<pDraw->iHeight;yy++){
+    int row=pDraw->y+yy; if(row<0||row>=jpeg_tmp_h)continue;
+    int cw=pDraw->iWidth; if(pDraw->x+cw>jpeg_tmp_w)cw=jpeg_tmp_w-pDraw->x;
+    if(cw>0) memcpy(&jpeg_tmp_buf[row*jpeg_tmp_w+pDraw->x],&pDraw->pPixels[yy*pDraw->iWidth],cw*2);
+  } return 1;
+}
+// Decode JPEG from SD via JPEGDEC, scale to fit maxW x maxH, blit with LovyanGFX pushImage.
+// Replaces UG->drawJpgFile(SD_MMC,...) which fails to compile on newer LovyanGFX+core (SDMMCFS abstract).
+static void drawJpegFit(const String&path,int boxX,int boxY,int maxW,int maxH){
+  File f=SD_MMC.open(path.c_str(),FILE_READ); if(!f) return;
+  size_t sz=f.size();
+  // SD_MMC f.size() can be 0 for subdir files — fall back to VFS stat
+  if(sz==0){ f.close(); struct stat st; String vp="/sdcard"+path; if(stat(vp.c_str(),&st)==0) sz=st.st_size; f=SD_MMC.open(path.c_str(),FILE_READ); if(!f) return; }
+  if(sz==0||sz>500000){ f.close(); return; }
+  uint8_t*buf=(uint8_t*)ps_malloc(sz); if(!buf){ buf=(uint8_t*)malloc(sz); } if(!buf){ f.close(); return; }
+  f.read(buf,sz); f.close();
+  if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){ free(buf); return; }
+  jpegdec.setPixelType(RGB565_LITTLE_ENDIAN);  // K: esp_lcd framebuffer is native little-endian RGB565 (big-endian was a LovyanGFX pushImage quirk)
+  int jw=jpegdec.getWidth(),jh=jpegdec.getHeight();
+  if(jw<=0||jh<=0||jw>2000||jh>2000){ jpegdec.close(); free(buf); return; }
+  jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)jw*jh*2);
+  if(!jpeg_tmp_buf){ jpegdec.close(); free(buf); return; }
+  memset(jpeg_tmp_buf,0,(size_t)jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
+  jpegdec.decode(0,0,0); jpegdec.close(); free(buf);
+  float scX=(float)maxW/jw,scY=(float)maxH/jh,sc=min(scX,scY);
+  if(sc>1.0f)sc=1.0f;
+  int dw=(int)(jw*sc),dh=(int)(jh*sc);
+  if(dw<=0||dh<=0){ free(jpeg_tmp_buf); jpeg_tmp_buf=NULL; return; }
+  int ox=boxX+(maxW-dw)/2,oy=boxY+(maxH-dh)/2;
+  if(sc>=0.999f){
+    // 1:1 — push the decoded buffer directly
+    UG->pushImage(ox,oy,jw,jh,jpeg_tmp_buf);
+  } else {
+    // nearest-neighbour downscale into a row buffer, push row by row
+    uint16_t*rowbuf=(uint16_t*)malloc(dw*2);
+    if(rowbuf){
+      for(int r=0;r<dh;r++){ int srcY=(int)(r/sc); if(srcY>=jh)srcY=jh-1;
+        for(int c=0;c<dw;c++){ int srcX=(int)(c/sc); if(srcX>=jw)srcX=jw-1;
+          rowbuf[c]=jpeg_tmp_buf[srcY*jw+srcX]; }
+        UG->pushImage(ox,oy+r,dw,1,rowbuf);
+        if(r%20==0)yield();
+      }
+      free(rowbuf);
     }
-    // Skip segment
-    f.seek(f.position()+segLen-2);
   }
-  f.close(); return false;
+  free(jpeg_tmp_buf); jpeg_tmp_buf=NULL;
 }
 
-static void drawCoverPanel(){
-  // Gradient background for cover panel
-  uint16_t bgTop = (uint16_t)(COL_PANEL);
-  uint16_t bgBot = (uint16_t)(COL_BG);
-  drawGradientBg(0, STATUS_H, COVER_W, LCD_HEIGHT-STATUS_H-BOTTOM_H, bgTop, bgBot);
+
+static void drawCoverPanel(){ UiFrame _uf;
+  // Flat fill cover panel background (portrait = full-width top block; landscape = left column)
+  if(g_portrait_mode) UG->fillRect(0, STATUS_H+MODE_BAR_H, LCD_WIDTH, COVER_H, COL_PANEL);
+  else                UG->fillRect(0, STATUS_H, COVER_W, LCD_HEIGHT-STATUS_H-BOTTOM_H, COL_PANEL);
 
   if(g_games.empty()) return;
-  const GameEntry& game=g_games[g_sel];
+  GameEntry& game=g_games[g_sel];
   const int maxW=COVER_W-12;
+
+  // Lazy resolve cover art on first view of this game (moved out of buildGameList for fast boot)
+  if(!game.jpg_path.length()){
+    String jpg;
+    if(findJPGFor(g_files[game.first_file_idx],jpg)) game.jpg_path=jpg;
+    else {
+      String tryBase=parentDir(g_files[game.first_file_idx])+"/"+getGameBaseName(g_files[game.first_file_idx]);
+      bool found=false;
+      for(const char* ext:{".jpg",".jpeg",".png"}){
+        String tryPath=tryBase+ext;
+        if(SD_MMC.exists(tryPath.c_str())){ game.jpg_path=tryPath; found=true; break; }
+      }
+      if(!found) game.jpg_path="?";   // mark checked so we don't search SD again
+    }
+  }
+  // Lazy resolve NFO title+blurb on first view (read the NFO file ONCE, cache both)
+  if(!game.nfo_checked){
+    game.nfo_checked=true;
+    String nfoPath,nfoTitle,nfoBlurb;
+    if(findNFOFor(g_files[game.first_file_idx],nfoPath)){
+      String txt=readSmallTextFile(nfoPath,512);
+      parseNFO(txt,nfoTitle,nfoBlurb);
+      if(nfoTitle.length()) game.name=nfoTitle;
+      game.blurb=nfoBlurb;
+    }
+  }
+  bool hasJpg = (game.jpg_path.length()>0 && game.jpg_path!="?");
 
   // Cover art box — rounded with subtle glow border
   int artX=COVER_ART_X, artY=COVER_ART_Y, artW=COVER_ART_W, artH=COVER_ART_H;
   // Outer glow
-  tft.drawRoundRect(artX-1, artY-1, artW+2, artH+2, 8, COL_ACCENT);
-  tft.fillRoundRect(artX, artY, artW, artH, 7, COL_BAR);
+  UG->drawRoundRect(artX-1, artY-1, artW+2, artH+2, 8, COL_ACCENT);
+  UG->fillRoundRect(artX, artY, artW, artH, 7, COL_BAR);
 
-  if(game.jpg_path.length()>0){
-    int jw=0,jh=0;
-    getJpegSize(game.jpg_path,jw,jh);
+  if(hasJpg){
     int boxW=artW-4, boxH=artH-4;
-    if(jw>0&&jh>0){
-      float scaleW=(float)boxW/jw, scaleH=(float)boxH/jh;
-      float scale=min(scaleW,scaleH);
-      if(scale>1.0f) scale=1.0f;
-      int dw=(int)(jw*scale), dh=(int)(jh*scale);
-      int ox=artX+2+(boxW-dw)/2, oy=artY+2+(boxH-dh)/2;
-      tft.drawJpgFile(SD_MMC,game.jpg_path.c_str(),ox,oy,0,0,0,0,scale,scale);
-    } else {
-      tft.drawJpgFile(SD_MMC,game.jpg_path.c_str(),artX+2,artY+2,boxW,boxH);
-    }
+    drawJpegFit(game.jpg_path, artX+2, artY+2, boxW, boxH);
   } else {
     // No art — draw floppy icon as placeholder
     int is = min(artW, artH) * 3 / 4;
     int ix = artX + (artW-is)/2, iy = artY + (artH-is)/2;
     drawFloppyIcon(ix, iy, is, COL_ACCENT, COL_MID, COL_BAR);
-    tft.setFont(&lgfx::fonts::DejaVu9);
-    tft.setTextColor(COL_DIM, COL_BAR);
+    UG->setFont(&lgfx::fonts::DejaVu9);
+    UG->setTextColor(COL_DIM, COL_BAR);
     char initial=toupper(game.name.charAt(0));
     // Draw initial over label area of floppy
-    tft.setFont(&lgfx::fonts::DejaVu18);
-    tft.setTextColor(COL_LIT, COL_MID);
+    UG->setFont(&lgfx::fonts::DejaVu18);
+    UG->setTextColor(COL_LIT, COL_MID);
     char ibuf[2]={initial,0};
-    int tw=tft.textWidth(ibuf);
-    tft.setCursor(artX+(artW-tw)/2, artY+artH/4);
-    tft.print(ibuf);
+    int tw=UG->textWidth(ibuf);
+    UG->setCursor(artX+(artW-tw)/2, artY+artH/4);
+    UG->print(ibuf);
+  }
+
+  // ── PORTRAIT: title/blurb to the RIGHT of the art, INSERT full-width at block bottom ──
+  if(g_portrait_mode){
+    int rx=artX+artW+12, rw=LCD_WIDTH-rx-12, ry=artY+4;
+    // Title (up to 2 lines, big)
+    UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(COL_LIT,COL_PANEL);
+    { String t=game.name, line="", word=""; int nl=0;
+      for(int i=0;i<=(int)t.length()&&nl<2;i++){ char c=(i<(int)t.length())?t[i]:' ';
+        if(c==' '||i==(int)t.length()){ String cand=line.length()?line+" "+word:word;
+          if(UG->textWidth(cand)>rw&&line.length()){ UG->setCursor(rx,ry); UG->print(line); ry+=22; nl++; line=word; }
+          else line=cand; word=""; } else word+=c; }
+      if(line.length()&&nl<2){ UG->setCursor(rx,ry); UG->print(line); ry+=22; } }
+    ry+=4;
+    // Blurb (up to 5 lines)
+    if(game.blurb.length()){
+      UG->setFont(&lgfx::fonts::DejaVu9); UG->setTextColor(COL_MID,COL_PANEL);
+      String b=game.blurb, line="", word=""; int nl=0;
+      for(int i=0;i<=(int)b.length()&&nl<5;i++){ char c=(i<(int)b.length())?b[i]:' ';
+        if(c==' '||c=='\n'||i==(int)b.length()){ String cand=line.length()?line+" "+word:word;
+          if(UG->textWidth(cand)>rw&&line.length()){ UG->setCursor(rx,ry); UG->print(line); ry+=12; nl++; line=word; }
+          else line=cand; word=""; } else word+=c; }
+      if(line.length()&&nl<5){ UG->setCursor(rx,ry); UG->print(line); } }
+    // INSERT / EJECT — full-width at the bottom of the cover block
+    int coverBottom=STATUS_H+MODE_BAR_H+COVER_H, pbtnY=coverBottom-42, pbh=34, pbx=8, pbw=LCD_WIDTH-16;
+    bool isLd=(g_loaded&&g_loaded_game_idx==g_sel);
+    uint16_t bf=isLd?(uint16_t)0x4000:(uint16_t)0x0340, bb=isLd?(uint16_t)0xE8C4:COL_GREEN;
+    UG->fillRoundRect(pbx,pbtnY,pbw,pbh,10,bf); UG->drawRoundRect(pbx,pbtnY,pbw,pbh,10,bb);
+    UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(TFT_WHITE,bf);
+    const char* pl=isLd?"EJECT":"INSERT"; int ptw=UG->textWidth(pl);
+    UG->setCursor(pbx+(pbw-ptw)/2, pbtnY+(pbh-13)/2); UG->print(pl);
+    // Multi-disk selector — one centred row just above INSERT
+    if(game.disk_count>1){
+      int nd=game.disk_count, bw2=28, bh2=18, gap=4;
+      int per=max(1,(pbw)/(bw2+gap)); int show=min(nd,per);
+      int rowW=show*(bw2+gap)-gap, sx=(LCD_WIDTH-rowW)/2, dy=pbtnY-bh2-6;
+      UG->setFont(&lgfx::fonts::DejaVu9);
+      for(int d=0; d<show; d++){
+        int bx=sx+d*(bw2+gap);
+        bool sel=(d==g_disk_sel), ld=(g_loaded_game_idx==g_sel&&g_loaded_disk_idx==d);
+        uint16_t bc=ld?COL_GREEN:(sel?COL_AMBER:COL_BAR);
+        UG->fillRoundRect(bx,dy,bw2,bh2,4,bc); UG->drawRoundRect(bx,dy,bw2,bh2,4,sel?COL_AMBER:COL_DIM);
+        UG->setTextColor(ld||sel?TFT_BLACK:COL_LIT,bc);
+        String dl=String(d+1); UG->setCursor(bx+(bw2-UG->textWidth(dl))/2,dy+(bh2-9)/2); UG->print(dl);
+      }
+    }
+    return;
   }
 
   // Flow content downward
   int ty=artY+artH+6;
 
   // Title
-  tft.setFont(&lgfx::fonts::DejaVu12);
-  tft.setTextColor(COL_LIT, COL_PANEL);
-  tft.setTextSize(1);
+  UG->setFont(&lgfx::fonts::DejaVu12);
+  UG->setTextColor(COL_LIT, COL_PANEL);
+  UG->setTextSize(1);
   String title=game.name;
-  if(tft.textWidth(title)<=maxW){
-    tft.setCursor(6,ty); tft.print(title); ty+=16;
+  if(UG->textWidth(title)<=maxW){
+    UG->setCursor(6,ty); UG->print(title); ty+=16;
   } else {
     int breakAt=0;
     for(int i=1;i<=(int)title.length();i++){
       if(i==(int)title.length()||title[i]==' '){
-        if(tft.textWidth(title.substring(0,i))<=maxW) breakAt=i;
+        if(UG->textWidth(title.substring(0,i))<=maxW) breakAt=i;
         else break;
       }
     }
     if(breakAt>0){
-      tft.setCursor(6,ty); tft.print(title.substring(0,breakAt)); ty+=16;
+      UG->setCursor(6,ty); UG->print(title.substring(0,breakAt)); ty+=16;
       String rest=title.substring(breakAt+1);
-      while(tft.textWidth(rest)>maxW&&rest.length()>3) rest=rest.substring(0,rest.length()-1);
-      tft.setCursor(6,ty); tft.print(rest); ty+=16;
+      while(UG->textWidth(rest)>maxW&&rest.length()>3) rest=rest.substring(0,rest.length()-1);
+      UG->setCursor(6,ty); UG->print(rest); ty+=16;
     } else {
-      while(tft.textWidth(title)>maxW&&title.length()>3) title=title.substring(0,title.length()-1);
-      tft.setCursor(6,ty); tft.print(title); ty+=16;
+      while(UG->textWidth(title)>maxW&&title.length()>3) title=title.substring(0,title.length()-1);
+      UG->setCursor(6,ty); UG->print(title); ty+=16;
     }
   }
   ty+=2;
 
-  // NFO blurb
-  String nfoPath,nfoTitle,nfoBlurb;
-  if(findNFOFor(g_files[game.first_file_idx],nfoPath)){
-    String txt=readSmallTextFile(nfoPath,512);
-    parseNFO(txt,nfoTitle,nfoBlurb);
-  }
+  // NFO blurb (use cached value from the single NFO read above — no re-read per draw)
+  String nfoBlurb=game.blurb;
   if(nfoBlurb.length()>0){
-    tft.setFont(&lgfx::fonts::DejaVu9);
-    tft.setTextColor(COL_LIT, COL_PANEL);
+    UG->setFont(&lgfx::fonts::DejaVu9);
+    UG->setTextColor(COL_LIT, COL_PANEL);
     String line="",word=""; int lines=0;
     for(int i=0;i<=(int)nfoBlurb.length()&&lines<4;i++){
       char c=(i<(int)nfoBlurb.length())?nfoBlurb[i]:' ';
       if(c==' '||c=='\n'||i==(int)nfoBlurb.length()){
         String cand=line.length()?line+" "+word:word;
-        if(tft.textWidth(cand)>maxW&&line.length()){
-          tft.setCursor(6,ty); tft.print(line); ty+=11; lines++; line=word;
+        if(UG->textWidth(cand)>maxW&&line.length()){
+          UG->setCursor(6,ty); UG->print(line); ty+=11; lines++; line=word;
         } else line=cand;
         word="";
       } else word+=c;
     }
-    if(line.length()&&lines<4){ tft.setCursor(6,ty); tft.print(line); ty+=11; }
+    if(line.length()&&lines<4){ UG->setCursor(6,ty); UG->print(line); ty+=11; }
     ty+=3;
   }
 
-  // Disk selector
+  // Disk selector — wraps to as many rows as needed (7 per row). Tested layout
+  // fits 3 rows (21 disks) above INSERT without colliding with the blurb — covers
+  // every floppy-playable Amiga game (Beneath a Steel Sky=15, Biiing!=19, etc).
   int btnY=LCD_HEIGHT-BOTTOM_H-44;
   if(game.disk_count>1){
-    int diskY=btnY-38;
-    tft.setFont(&lgfx::fonts::DejaVu9);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tft.setCursor(6,diskY); tft.print("DISK:"); diskY+=12;
-    int btnW=26,btnH=20,gap=3;
-    int totalW=game.disk_count*(btnW+gap)-gap;
-    int startX=max(6,(COVER_W-totalW)/2);
-    for(int d=0;d<game.disk_count&&d<8;d++){
-      int bx=startX+d*(btnW+gap);
+    const int PER_ROW=7;
+    int btnW=23,btnH=18,gap=3;
+    int nd=game.disk_count;
+    int rows=(nd+PER_ROW-1)/PER_ROW;
+    int rowH=btnH+gap;
+    // Reserve vertical space above INSERT for label + all rows
+    int diskY=btnY - 12 - rows*rowH - 4;
+    UG->setFont(&lgfx::fonts::DejaVu9);
+    UG->setTextColor(COL_DIM, COL_PANEL);
+    UG->setCursor(6,diskY); UG->print("DISK:"); diskY+=12;
+    for(int d=0;d<nd;d++){
+      int col=d%PER_ROW, row=d/PER_ROW;
+      int inRow=min(PER_ROW, nd-row*PER_ROW);          // buttons in THIS row (last row may be short)
+      int rowW=inRow*(btnW+gap)-gap;
+      int startX=max(4,(COVER_W-rowW)/2);
+      int bx=startX+col*(btnW+gap);
+      int by=diskY+row*rowH;
       bool isSel=(d==g_disk_sel);
       bool isLoaded=(g_loaded_game_idx==g_sel&&g_loaded_disk_idx==d);
       uint16_t bc=isLoaded?COL_GREEN:(isSel?COL_AMBER:COL_BAR);
-      tft.fillRoundRect(bx,diskY,btnW,btnH,4,bc);
-      tft.drawRoundRect(bx,diskY,btnW,btnH,4,isSel?COL_AMBER:COL_DIM);
-      tft.setTextColor(isLoaded||isSel?TFT_BLACK:COL_LIT,bc);
-      tft.setCursor(bx+(btnW-6)/2,diskY+(btnH-9)/2);
-      tft.print(String(d+1));
+      UG->fillRoundRect(bx,by,btnW,btnH,4,bc);
+      UG->drawRoundRect(bx,by,btnW,btnH,4,isSel?COL_AMBER:COL_DIM);
+      UG->setTextColor(isLoaded||isSel?TFT_BLACK:COL_LIT,bc);
+      String dl=String(d+1);
+      UG->setCursor(bx+(btnW-UG->textWidth(dl))/2,by+(btnH-9)/2);
+      UG->print(dl);
     }
   }
 
@@ -1377,8 +1931,8 @@ static void drawCoverPanel(){
   uint16_t btnFill = isLoaded ? (uint16_t)0x4000 : (uint16_t)0x0340;
   uint16_t btnBord = isLoaded ? (uint16_t)0xE8C4 : COL_GREEN;
   int bh = 36;
-  tft.fillRoundRect(6, btnY, COVER_W-12, bh, 10, btnFill);
-  tft.drawRoundRect(6, btnY, COVER_W-12, bh, 10, btnBord);
+  UG->fillRoundRect(6, btnY, COVER_W-12, bh, 10, btnFill);
+  UG->drawRoundRect(6, btnY, COVER_W-12, bh, 10, btnBord);
 
   // Floppy icon — small, left side of button
   int iconSize = 22;
@@ -1389,119 +1943,127 @@ static void drawCoverPanel(){
     isLoaded ? (uint16_t)0x4000 : COL_BAR);
 
   // Label
-  tft.setFont(&lgfx::fonts::DejaVu12);
-  tft.setTextColor(TFT_WHITE, btnFill);
+  UG->setFont(&lgfx::fonts::DejaVu12);
+  UG->setTextColor(TFT_WHITE, btnFill);
   const char* btnLabel = isLoaded ? "EJECT" : "INSERT";
-  int tw2 = tft.textWidth(btnLabel);
+  int tw2 = UG->textWidth(btnLabel);
   // Centre label in remaining space after icon
   int labelX = iconX + iconSize + 4 + ((COVER_W-12 - (iconX-6+iconSize+4) - tw2)/2);
-  tft.setCursor(labelX, btnY + (bh-13)/2);
-  tft.print(btnLabel);
+  UG->setCursor(labelX, btnY + (bh-13)/2);
+  UG->print(btnLabel);
 }
 
 // ============================================================================
-static void drawModeBar(){
-  tft.fillRect(LIST_X,STATUS_H,LIST_W+AZ_W,MODE_BAR_H,COL_BAR);
-  tft.setFont(&lgfx::fonts::DejaVu9);
+static void drawModeBar(){ UiFrame _uf;
+  UG->fillRect(LIST_X,STATUS_H,LIST_W+AZ_W,MODE_BAR_H,COL_BAR);
+  UG->setFont(&lgfx::fonts::DejaVu9);
   bool isADF=(g_mode==MODE_ADF);
   int by=STATUS_H+3, bh=18;
   // ADF pill
   if(isADF){
-    tft.fillRoundRect(LIST_X+4,by,44,bh,9,COL_ACCENT);
-    tft.drawRoundRect(LIST_X+4,by,44,bh,9,COL_AMBER);
-    tft.setTextColor(COL_AMBER,COL_ACCENT);
+    UG->fillRoundRect(LIST_X+4,by,44,bh,9,COL_ACCENT);
+    UG->drawRoundRect(LIST_X+4,by,44,bh,9,COL_AMBER);
+    UG->setTextColor(COL_AMBER,COL_ACCENT);
   } else {
-    tft.fillRoundRect(LIST_X+4,by,44,bh,9,COL_BG);
-    tft.setTextColor(COL_DIM,COL_BG);
+    UG->fillRoundRect(LIST_X+4,by,44,bh,9,COL_BG);
+    UG->setTextColor(COL_DIM,COL_BG);
   }
-  tft.setCursor(LIST_X+12,by+5); tft.print("ADF");
+  UG->setCursor(LIST_X+12,by+5); UG->print("ADF");
   // DSK pill
   if(!isADF){
-    tft.fillRoundRect(LIST_X+52,by,44,bh,9,COL_ACCENT);
-    tft.drawRoundRect(LIST_X+52,by,44,bh,9,COL_AMBER);
-    tft.setTextColor(COL_AMBER,COL_ACCENT);
+    UG->fillRoundRect(LIST_X+52,by,44,bh,9,COL_ACCENT);
+    UG->drawRoundRect(LIST_X+52,by,44,bh,9,COL_AMBER);
+    UG->setTextColor(COL_AMBER,COL_ACCENT);
   } else {
-    tft.fillRoundRect(LIST_X+52,by,44,bh,9,COL_BG);
-    tft.setTextColor(COL_DIM,COL_BG);
+    UG->fillRoundRect(LIST_X+52,by,44,bh,9,COL_BG);
+    UG->setTextColor(COL_DIM,COL_BG);
   }
-  tft.setCursor(LIST_X+60,by+5); tft.print("DSK");
+  UG->setCursor(LIST_X+60,by+5); UG->print("DSK");
   // Count
-  tft.setTextColor(COL_MID,COL_BAR);
-  tft.setCursor(LIST_X+102,by+5);
-  tft.print(String(g_games.size())+" games");
+  UG->setTextColor(COL_MID,COL_BAR);
+  UG->setCursor(LIST_X+102,by+5);
+  UG->print(String(g_games.size())+" games");
 }
 
 // ============================================================================
 // FILE LIST
 // ============================================================================
-static void drawFileList(){
-  // Gradient background for list area
-  drawGradientBg(LIST_X, LIST_TOP, LIST_W, LIST_BOTTOM-LIST_TOP, COL_BG, (uint16_t)(COL_BG >> 1));
+static void drawFileList(){ UiFrame _uf;
+  // Flat fill list background — was a 32-band gradient redrawn on every scroll/select (slow on RGB+single-buffer)
+  UG->fillRect(LIST_X, LIST_TOP, LIST_W, LIST_BOTTOM-LIST_TOP, COL_BG);
 
   if(g_games.empty()){
-    tft.setFont(&lgfx::fonts::DejaVu12);
-    tft.setTextColor(0xE8C4, COL_BG);
-    tft.setCursor(LIST_X+10, LIST_TOP+20);
-    tft.print(g_mode==MODE_ADF?"No .ADF files":"No .DSK files"); return;
+    UG->setFont(&lgfx::fonts::DejaVu12);
+    UG->setTextColor(0xE8C4, COL_BG);
+    UG->setCursor(LIST_X+10, LIST_TOP+20);
+    UG->print(g_mode==MODE_ADF?"No .ADF files":"No .DSK files"); return;
   }
-  int maxOff=(int)g_games.size()-ITEMS_VIS; if(maxOff<0) maxOff=0;
-  if(g_scroll>maxOff) g_scroll=maxOff; if(g_scroll<0) g_scroll=0;
+  // Pixel-smooth scroll: g_scrollPx is the source of truth; rows draw at a
+  // fractional offset inside a clip window so partial rows slide cleanly.
+  { int mp=maxScrollPx();
+    if(g_scrollPx<0) g_scrollPx=0;
+    if(g_scrollPx>(float)mp) g_scrollPx=(float)mp; }
+  int first=(int)(g_scrollPx/LIST_ITEM_H);
+  int off=(int)(g_scrollPx-(float)first*LIST_ITEM_H);
+  g_scroll=first;   // keep the integer scroll in sync (A-Z thumb, PREV/NEXT)
+  UG->setClip(LIST_X, LIST_TOP, LIST_X+LIST_W, LIST_BOTTOM);
 
-  for(int vi=0;vi<ITEMS_VIS;vi++){
-    int gi=g_scroll+vi; if(gi>=(int)g_games.size()) break;
+  for(int vi=0;vi<=ITEMS_VIS+1;vi++){
+    int gi=first+vi; if(gi>=(int)g_games.size()) break;
     const GameEntry& game=g_games[gi];
     bool isSel=(gi==g_sel);
     bool isLoaded=(g_loaded&&g_loaded_game_idx==gi);
-    int y=LIST_TOP+vi*LIST_ITEM_H;
+    int y=LIST_TOP-off+vi*LIST_ITEM_H;
+    if(y>=LIST_BOTTOM) break;
     int cardH = LIST_ITEM_H - 2;
     int cardY = y + 1;
 
     // Card background
     if(isSel){
-      tft.fillRoundRect(LIST_X+2, cardY, LIST_W-4, cardH, 6, COL_SEL);
-      tft.drawRoundRect(LIST_X+2, cardY, LIST_W-4, cardH, 6, COL_AMBER);
+      UG->fillRoundRect(LIST_X+2, cardY, LIST_W-4, cardH, 6, COL_SEL);
+      UG->drawRoundRect(LIST_X+2, cardY, LIST_W-4, cardH, 6, COL_AMBER);
     } else {
-      tft.fillRect(LIST_X, y, LIST_W, LIST_ITEM_H, COL_BG); // clear first
-      tft.fillRoundRect(LIST_X+2, cardY, LIST_W-4, cardH, 4, (uint16_t)(COL_PANEL));
+      UG->fillRect(LIST_X, y, LIST_W, LIST_ITEM_H, COL_BG); // clear first
+      UG->fillRoundRect(LIST_X+2, cardY, LIST_W-4, cardH, 4, (uint16_t)(COL_PANEL));
     }
 
     // Left accent bar
     uint16_t accentCol = isLoaded ? COL_GREEN : (isSel ? COL_AMBER : COL_ACCENT);
-    tft.fillRoundRect(LIST_X+4, cardY+3, 4, cardH-6, 2, accentCol);
+    UG->fillRoundRect(LIST_X+4, cardY+3, 4, cardH-6, 2, accentCol);
 
     // Initial circle
     int cx=LIST_X+24, cy=y+LIST_ITEM_H/2;
     uint16_t circCol=isSel?COL_AMBER:(isLoaded?COL_GREEN:COL_CIRC);
-    tft.fillCircle(cx, cy, 13, circCol);
-    tft.setFont(&lgfx::fonts::DejaVu12);
-    tft.setTextColor(isSel||isLoaded?TFT_BLACK:COL_CIRC_TEXT, circCol);
+    UG->fillCircle(cx, cy, 13, circCol);
+    UG->setFont(&lgfx::fonts::DejaVu12);
+    UG->setTextColor(isSel||isLoaded?TFT_BLACK:COL_CIRC_TEXT, circCol);
     char initial=toupper(game.name.charAt(0));
     char ibuf[2]={initial,0};
-    int iw=tft.textWidth(ibuf);
-    tft.setCursor(cx-iw/2, cy-7); tft.print(ibuf);
+    int iw=UG->textWidth(ibuf);
+    UG->setCursor(cx-iw/2, cy-7); UG->print(ibuf);
 
     // Game name
     int textX=LIST_X+46;
-    tft.setFont(&lgfx::fonts::DejaVu12);
+    UG->setFont(&lgfx::fonts::DejaVu12);
     uint16_t textBg = isSel ? COL_SEL : (uint16_t)COL_PANEL;
-    tft.setTextColor(isSel?TFT_WHITE:COL_LIT, textBg);
+    UG->setTextColor(isSel?TFT_WHITE:COL_LIT, textBg);
     String name=game.name;
     int maxNameW=LIST_W-60-(game.disk_count>1?44:0);
-    while(tft.textWidth(name)>maxNameW&&name.length()>3)
+    while(UG->textWidth(name)>maxNameW&&name.length()>3)
       name=name.substring(0,name.length()-1);
-    tft.setCursor(textX, cy-7); tft.print(name);
+    UG->setCursor(textX, cy-7); UG->print(name);
 
     // Disk count badge
     if(game.disk_count>1){
-      tft.setFont(&lgfx::fonts::DejaVu9);
+      UG->setFont(&lgfx::fonts::DejaVu9);
       uint16_t badgeCol=isLoaded?COL_GREEN:COL_ACCENT;
       int bx=LIST_X+LIST_W-46;
       int bh2=16, bby=cy-8;
-      tft.fillRoundRect(bx,bby,42,bh2,5,badgeCol);
-      tft.setTextColor(TFT_WHITE,badgeCol);
+      UG->fillRoundRect(bx,bby,42,bh2,5,badgeCol);
+      UG->setTextColor(TFT_WHITE,badgeCol);
       String dc=String(game.disk_count)+"DSK";
-      tft.setCursor(bx+(42-tft.textWidth(dc))/2,bby+4);
-      tft.print(dc);
+      UG->setCursor(bx+(42-UG->textWidth(dc))/2,bby+4);
+      UG->print(dc);
     }
 
     // Loaded indicator — small floppy icon
@@ -1509,43 +2071,48 @@ static void drawFileList(){
       drawFloppyIcon(LIST_X+LIST_W-20, cy-8, 16, COL_GREEN, COL_ACCENT, COL_BAR);
     }
   }
+  UG->resetClip();
 }
 
 // ============================================================================
 // NOW PLAYING BAR
 // ============================================================================
-static void drawNowPlayingBar(){
+static void drawNowPlayingBar(){ UiFrame _uf;
   int y=LIST_BOTTOM;
   if(g_loaded&&g_loaded_name.length()>0){
-    tft.fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_NOW);
-    tft.drawRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_GREEN);
-    tft.fillCircle(LIST_X+10,y+NOW_PLAY_H/2,4,COL_GREEN);
-    tft.setFont(&lgfx::fonts::DejaVu9);
-    tft.setTextColor(COL_GREEN,COL_NOW);
-    tft.setCursor(LIST_X+20,y+5); tft.print("NOW PLAYING");
-    tft.setFont(&lgfx::fonts::DejaVu12);
-    tft.setTextColor(TFT_WHITE,COL_NOW);
-    tft.setCursor(LIST_X+20,y+17);
+    UG->fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_NOW);
+    UG->drawRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_GREEN);
+    UG->fillCircle(LIST_X+10,y+NOW_PLAY_H/2,4,COL_GREEN);
+    UG->setFont(&lgfx::fonts::DejaVu9);
+    UG->setTextColor(COL_GREEN,COL_NOW);
+    UG->setCursor(LIST_X+20,y+5); UG->print("NOW PLAYING");
+    UG->setFont(&lgfx::fonts::DejaVu12);
+    UG->setTextColor(TFT_WHITE,COL_NOW);
+    UG->setCursor(LIST_X+20,y+17);
     String name=g_loaded_name;
-    while(tft.textWidth(name)>LIST_W-30&&name.length()>3)
+    while(UG->textWidth(name)>LIST_W-30&&name.length()>3)
       name=name.substring(0,name.length()-1);
-    tft.print(name);
+    UG->print(name);
   } else {
-    tft.fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_BG);
-    tft.setFont(&lgfx::fonts::DejaVu9);
-    tft.setTextColor(COL_MID,COL_BG);
-    tft.setCursor(LIST_X+10,y+NOW_PLAY_H/2-4);
-    tft.print(String((int)g_games.size())+" games  —  tap INSERT to load");
+    UG->fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_BG);
+    UG->setFont(&lgfx::fonts::DejaVu9);
+    UG->setTextColor(COL_MID,COL_BG);
+    UG->setCursor(LIST_X+10,y+NOW_PLAY_H/2-4);
+    UG->print(String((int)g_games.size())+" games  -  tap INSERT to load");
   }
 }
+
+// Redraw only the list strip + now-playing + A-Z index during scroll/inertia —
+// the cover panel is untouched (no SD/JPEG churn mid-drag). One flip per frame.
+static void redrawListArea(){ UiFrame _uf; drawFileList(); drawNowPlayingBar(); drawAZBar(); }
 
 // ============================================================================
 // BOTTOM BAR
 // ============================================================================
-static void drawBottomBar(){
+static void drawBottomBar(){ UiFrame _uf;
   int y=LCD_HEIGHT-BOTTOM_H;
   drawGradientBg(0, y, LCD_WIDTH, BOTTOM_H, COL_BAR, COL_PANEL);
-  tft.drawFastHLine(0, y, LCD_WIDTH, COL_SEP);
+  UG->drawFastHLine(0, y, LCD_WIDTH, COL_SEP);
   int bw=LCD_WIDTH/4;
 
   struct BtnDef { const char* icon; const char* label; uint16_t col; };
@@ -1558,38 +2125,38 @@ static void drawBottomBar(){
 
   for(int i=0;i<4;i++){
     int bx = i*bw;
-    if(i>0) tft.drawFastVLine(bx, y+4, BOTTOM_H-8, COL_SEP);
+    if(i>0) UG->drawFastVLine(bx, y+4, BOTTOM_H-8, COL_SEP);
 
     // Icon circle — positioned higher to leave room for labels
     int cx = bx + bw/2, cy = y + 13;
-    tft.fillCircle(cx, cy, 10, (uint16_t)(btns[i].col >> 2));
-    tft.drawCircle(cx, cy, 10, btns[i].col);
-    tft.setFont(&lgfx::fonts::DejaVu12);
-    tft.setTextColor(btns[i].col, (uint16_t)(btns[i].col >> 2));
-    int tw = tft.textWidth(btns[i].icon);
-    tft.setCursor(cx-tw/2, cy-7); tft.print(btns[i].icon);
+    UG->fillCircle(cx, cy, 10, (uint16_t)(btns[i].col >> 2));
+    UG->drawCircle(cx, cy, 10, btns[i].col);
+    UG->setFont(&lgfx::fonts::DejaVu12);
+    UG->setTextColor(btns[i].col, (uint16_t)(btns[i].col >> 2));
+    int tw = UG->textWidth(btns[i].icon);
+    UG->setCursor(cx-tw/2, cy-7); UG->print(btns[i].icon);
 
     // Label
-    tft.setFont(&lgfx::fonts::DejaVu9);
-    tft.setTextColor(COL_DIM, COL_PANEL);
-    tw = tft.textWidth(btns[i].label);
-    tft.setCursor(bx+(bw-tw)/2, y+26); tft.print(btns[i].label);
+    UG->setFont(&lgfx::fonts::DejaVu9);
+    UG->setTextColor(COL_DIM, COL_PANEL);
+    tw = UG->textWidth(btns[i].label);
+    UG->setCursor(bx+(bw-tw)/2, y+26); UG->print(btns[i].label);
   }
 
   // Theme name
-  tft.setFont(&lgfx::fonts::DejaVu9);
-  tft.setTextColor((uint16_t)(COL_AMBER>>1), COL_PANEL);
+  UG->setFont(&lgfx::fonts::DejaVu9);
+  UG->setTextColor((uint16_t)(COL_AMBER>>1), COL_PANEL);
   String tn=THEMES[g_theme_idx].name;
-  int tw=tft.textWidth(tn);
-  tft.setCursor(2*bw+(bw-tw)/2, y+38); tft.print(tn);
+  int tw=UG->textWidth(tn);
+  UG->setCursor(2*bw+(bw-tw)/2, y+38); UG->print(tn);
 }
 
 // ============================================================================
 // FULL REDRAW + PARTIAL REFRESH
 // ============================================================================
-static void drawFullUI(){
-  tft.setTextSize(1);
-  tft.setFont(&lgfx::fonts::DejaVu12);
+static void drawFullUI(){ UiFrame _uf;
+  UG->setTextSize(1);
+  UG->setFont(&lgfx::fonts::DejaVu12);
   // Full screen gradient background
   drawGradientBg(0, 0, LCD_WIDTH, LCD_HEIGHT, (uint16_t)(COL_BAR), (uint16_t)(COL_BG>>1));
   drawStatusBar();
@@ -1600,20 +2167,19 @@ static void drawFullUI(){
   drawAZBar();
   drawBottomBar();
 }
-static void drawListAndCover(){
-  tft.setTextSize(1);
-  tft.setFont(&lgfx::fonts::DejaVu12);
-  // Use flat fills here (not gradients) to avoid stutter on partial refresh
-  tft.fillRect(0, STATUS_H, COVER_W, LCD_HEIGHT-STATUS_H-BOTTOM_H, COL_PANEL);
-  tft.fillRect(LIST_X, LIST_TOP, LIST_W, LIST_BOTTOM-LIST_TOP, COL_BG);
+static void drawListAndCover(){ UiFrame _uf;
+  UG->setTextSize(1);
+  UG->setFont(&lgfx::fonts::DejaVu12);
+  // drawCoverPanel() and drawFileList() now flat-fill their own backgrounds,
+  // so no pre-fill needed here (was double-painting both areas every redraw).
   drawCoverPanel();
   drawFileList();
   drawNowPlayingBar();
   drawAZBar();
-  tft.fillCircle(LCD_WIDTH-14,STATUS_H/2,5,g_loaded?0xE8C4:COL_GREEN);
-  tft.setFont(&lgfx::fonts::DejaVu9);
-  tft.setTextColor(g_loaded?0xE8C4:COL_GREEN,COL_BAR);
-  tft.setCursor(LCD_WIDTH-78,8); tft.print(g_loaded?"LOADED ":"READY  ");
+  UG->fillCircle(LCD_WIDTH-14,STATUS_H/2,5,g_loaded?0xE8C4:COL_GREEN);
+  UG->setFont(&lgfx::fonts::DejaVu9);
+  UG->setTextColor(g_loaded?0xE8C4:COL_GREEN,COL_BAR);
+  UG->setCursor(LCD_WIDTH-78,8); UG->print(g_loaded?"LOADED ":"READY  ");
 }
 
 // ============================================================================
@@ -1621,20 +2187,21 @@ static void drawListAndCover(){
 // ============================================================================
 static bool doLoadSelected(const String& adfPath){
   // Loading overlay in cover panel
-  tft.fillRect(0,STATUS_H,COVER_W,LCD_HEIGHT-STATUS_H-BOTTOM_H,COL_PANEL);
-  tft.setFont(&lgfx::fonts::DejaVu12);
-  tft.setTextColor(TFT_CYAN,COL_PANEL);
+  UG->fillRect(0,STATUS_H,COVER_W,LCD_HEIGHT-STATUS_H-BOTTOM_H,COL_PANEL);
+  UG->setFont(&lgfx::fonts::DejaVu12);
+  UG->setTextColor(TFT_CYAN,COL_PANEL);
   String title=basenameNoExt(filenameOnly(adfPath));
   if(title.length()>13) title=title.substring(0,13);
-  tft.setCursor(8,STATUS_H+20); tft.print(title);
-  tft.setFont(&lgfx::fonts::DejaVu9);
-  tft.setTextColor(COL_LIT,COL_PANEL);
-  tft.setCursor(8,STATUS_H+38); tft.print("Loading...");
+  UG->setCursor(8,STATUS_H+20); UG->print(title);
+  UG->setFont(&lgfx::fonts::DejaVu9);
+  UG->setTextColor(COL_LIT,COL_PANEL);
+  UG->setCursor(8,STATUS_H+38); UG->print("Loading...");
+  uiFlush();   // portrait: show the loading overlay (progress bar below repaints at the end)
 
   File f=openNamedImage(adfPath);
   if(!f){
-    tft.setTextColor(0xE8C4,COL_PANEL); tft.setCursor(8,STATUS_H+56);
-    tft.print("Open failed"); delay(1000); drawListAndCover(); return false;
+    UG->setTextColor(0xE8C4,COL_PANEL); UG->setCursor(8,STATUS_H+56);
+    UG->print("Open failed"); delay(1000); drawListAndCover(); return false;
   }
   uint32_t fsz=f.size();
   if(fsz==0){ f.close(); drawListAndCover(); return false; }
@@ -1642,7 +2209,7 @@ static bool doLoadSelected(const String& adfPath){
   build_volume_with_file(getOutputFilename(),fsz);
 
   int barX=8,barY=STATUS_H+58,barW=COVER_W-16,barH=14;
-  tft.drawRoundRect(barX,barY,barW,barH,4,COL_DIM);
+  UG->drawRoundRect(barX,barY,barW,barH,4,COL_DIM);
 
   uint32_t copied=0;
   uint8_t* dst=g_disk+DATA_LBA*SECTOR_SIZE;
@@ -1650,20 +2217,23 @@ static bool doLoadSelected(const String& adfPath){
   uint8_t* buf=(uint8_t*)malloc(BUFSZ);
   if(!buf){ f.close(); return false; }
   uint32_t remain=fsz;
+  int _pcTick=0;
   while(remain){
     size_t n=remain>BUFSZ?BUFSZ:remain;
     int rd=f.read(buf,n); if(rd<=0) break;
     memcpy(dst+copied,buf,rd); remain-=rd; copied+=rd;
     int fill=(int)((barW-4)*((float)copied/fsz));
-    tft.fillRoundRect(barX+2,barY+2,fill,barH-4,3,COL_GREEN);
+    UG->fillRoundRect(barX+2,barY+2,fill,barH-4,3,COL_GREEN);
+    if((++_pcTick & 7)==0) uiFlush();   // throttled flip so the progress bar animates
   }
   free(buf);
   if(fsz>copied) memset(dst+copied,0,fsz-copied);
   f.close();
 
-  tft.setFont(&lgfx::fonts::DejaVu9);
-  tft.setTextColor(COL_GREEN,COL_PANEL);
-  tft.setCursor(8,barY+18); tft.print("OK  "+String(copied/1024)+"KB");
+  UG->setFont(&lgfx::fonts::DejaVu9);
+  UG->setTextColor(COL_GREEN,COL_PANEL);
+  UG->setCursor(8,barY+18); UG->print("OK  "+String(copied/1024)+"KB");
+  uiFlush();
   delay(400);
 
   hardAttach();
@@ -1685,6 +2255,25 @@ static bool doLoadSelected(const String& adfPath){
   return true;
 }
 
+// Expand the zero-RLE embedded ADF straight into the RAM-disk data area. No SD needed.
+static void diagInflate(const uint8_t* src, uint32_t slen, uint8_t* dst){
+  uint32_t di=0;
+  for(uint32_t si=0; si<slen; ){ uint8_t b=pgm_read_byte(&src[si++]);
+    if(b==0){ uint8_t cnt=pgm_read_byte(&src[si++]); memset(dst+di,0,cnt); di+=cnt; }
+    else dst[di++]=b; }
+}
+// Mount the built-in Amiga Test Kit as the emulated disk — works with no SD card.
+static void doLoadDiag(){
+  g_info_showing=false;
+  if(g_loaded) hardDetach();
+  build_volume_with_file("DISK.ADF", DIAG_ADF_SIZE);          // force an .ADF image regardless of MODE
+  diagInflate(DIAG_RLE, DIAG_RLE_LEN, g_disk+DATA_LBA*SECTOR_SIZE);
+  hardAttach();
+  g_loaded=true; g_loaded_name="AMIGA TEST KIT";
+  g_loaded_game_idx=-1; g_loaded_disk_idx=-1;
+  drawFullUI();
+}
+
 static void doUnload(){
   hardDetach();
   g_loaded=false; g_loaded_name="";
@@ -1698,10 +2287,8 @@ static void doUnload(){
 // DEBOUNCED TOUCH STATE
 // ============================================================================
 static const uint32_t BTN_COOLDOWN_MS=200;
-static const int      BTN_MOVE_TOL_PX=20;
-static bool     bbTouchDown=false;
 static uint32_t bbLastActionMs=0;
-static int      bbStartX=0,bbStartY=0;
+static void handleTap(uint16_t px,uint16_t py);   // tap dispatcher (below loop)
 
 void setup(){
   applyTheme(0);  // default colours before SD is available
@@ -1723,8 +2310,9 @@ void setup(){
   if(!sdok){ delay(200); sdok=SD_MMC.begin("/sdcard",true); }
   if(sdok){
     ensureConfig();      // create CONFIG.TXT with defaults if missing or empty
+    selfHealConfig();    // append CRACKTRO= to an older CONFIG.TXT that predates it
     listImages(SD_MMC,g_files);
-    buildGameList();
+    if(!readGameCache()) buildGameList();
     buildActiveLetters();
     g_sel=0; g_scroll=0; g_disk_sel=0;
   } else {
@@ -1738,8 +2326,11 @@ void setup(){
   // Battery ADC init AFTER SD_MMC — SD_MMC may have touched IO20
   batInit();
 
-  loadTheme();         // must be before cracktro so LOOP= and THEME= are loaded
-  drawCracktroSplash();
+  loadTheme();         // must be before cracktro so LOOP=, THEME=, CRACKTRO=, ROTATE= are loaded
+  tft.setRotation(g_rot);                   // apply ROTATE= (K: 180 = flip during flush + touch remap)
+  gW = tft.width(); gH = tft.height();
+  relayout();
+  drawCracktro(g_cracktro);   // 6-style boot cracktro (CRACKTRO= config). K engine — no LovyanGFX version pin needed.
 
   USB.onEvent(usbEventCallback);
   MSC.vendorID("ESP32"); MSC.productID("RAMDISK"); MSC.productRevision("1.0");
@@ -1754,11 +2345,12 @@ void loop(void){
   if(g_espnow_link_just_established){
     g_espnow_link_just_established=false;
     // Brief green flash across status bar
-    tft.fillRect(0,0,LCD_WIDTH,STATUS_H,0x07E0);
-    tft.setFont(&lgfx::fonts::DejaVu9);
-    tft.setTextColor(TFT_BLACK,0x07E0);
-    tft.setCursor(LCD_WIDTH/2 - 72, 8);
-    tft.print("** XIAO LINK ESTABLISHED **");
+    UG->fillRect(0,0,LCD_WIDTH,STATUS_H,0x07E0);
+    UG->setFont(&lgfx::fonts::DejaVu9);
+    UG->setTextColor(TFT_BLACK,0x07E0);
+    UG->setCursor(LCD_WIDTH/2 - 72, 8);
+    UG->print("** XIAO LINK ESTABLISHED **");
+    uiFlush();
     delay(2000);
     drawStatusBar();
   }
@@ -1772,15 +2364,68 @@ void loop(void){
   bool haveTouch=frame&&getTouchXY(&px,&py);
   uint32_t nowMs=millis();
 
-  if(!haveTouch){ bbTouchDown=false; delay(1); return; }
-  if(nowMs-bbLastActionMs<BTN_COOLDOWN_MS){ delay(1); return; }
-  if(bbTouchDown){
-    int dx=abs((int)px-bbStartX),dy=abs((int)py-bbStartY);
-    if(dx>BTN_MOVE_TOL_PX||dy>BTN_MOVE_TOL_PX) bbTouchDown=false;
-    delay(1); return;
+  // ── Touch state machine: tap vs drag-scroll with flick inertia (JC engine) ──
+  if(haveTouch){
+    g_touch_release=0;                                  // any touch resets the lift counter
+    if(!g_touch_active){
+      // finger down
+      g_touch_active=true; g_touch_x0=px; g_touch_y0=py; g_touch_px0=g_scrollPx;
+      g_touch_lastY=py; g_touch_lastMs=nowMs; g_touch_moved=false; g_touch_vel=0; g_inertia_on=false;
+      // NOTE: unlike the JC (whose info panel overlays the list), the 7" info
+      // panel lives in the cover column — the list stays scrollable beside it.
+      g_touch_inlist=(px>=LIST_X&&px<AZ_X&&py>=LIST_TOP&&py<LIST_BOTTOM&&!g_games.empty());
+    } else {
+      // finger held / moving
+      if(abs((int)px-g_touch_x0)>DRAG_THRESH||abs((int)py-g_touch_y0)>DRAG_THRESH) g_touch_moved=true;
+      if(g_touch_inlist&&g_touch_moved){
+        g_scrollPx=g_touch_px0-(float)((int)py-g_touch_y0);
+        if(g_scrollPx<0) g_scrollPx=0;
+        { int mp=maxScrollPx(); if(g_scrollPx>(float)mp) g_scrollPx=(float)mp; }
+        uint32_t dt=nowMs-g_touch_lastMs;
+        if(dt>0){ g_touch_vel=(float)((int)py-g_touch_lastY)/(float)dt; g_touch_lastY=py; g_touch_lastMs=nowMs; }
+        redrawListArea();
+      }
+    }
+    return;
   }
-  bbTouchDown=true; bbStartX=px; bbStartY=py; bbLastActionMs=nowMs;
 
+  // no touch this frame — only a real lift after several consecutive empty frames
+  if(g_touch_active){
+    if(++g_touch_release<RELEASE_FRAMES){ delay(1); return; }
+    g_touch_active=false; g_touch_release=0;
+    if(g_touch_moved){
+      // ANY moved gesture arms the tap cooldown: if the GT911 blips mid-drag,
+      // the split-off "second touch" can't fire a phantom tap (the LOAD DIAG bug)
+      bbLastActionMs=nowMs;
+      if(g_touch_inlist){
+        // list drag released -> coast with flick inertia
+        g_inertia_vel=-g_touch_vel*16.0f;
+        g_inertia_on=fabsf(g_inertia_vel)>0.5f;
+      }
+    } else if(!g_touch_moved){
+      // clean tap (no drag) -> dispatch at the DOWN position
+      if(nowMs-bbLastActionMs>=BTN_COOLDOWN_MS){
+        bbLastActionMs=nowMs;
+        handleTap((uint16_t)g_touch_x0,(uint16_t)g_touch_y0);
+      }
+    }
+    return;
+  }
+
+  // idle: run inertia
+  if(g_inertia_on){
+    g_scrollPx+=g_inertia_vel; g_inertia_vel*=0.92f;
+    if(g_scrollPx<0){ g_scrollPx=0; g_inertia_on=false; }
+    { int mp=maxScrollPx(); if(g_scrollPx>(float)mp){ g_scrollPx=(float)mp; g_inertia_on=false; } }
+    if(fabsf(g_inertia_vel)<0.3f) g_inertia_on=false;
+    redrawListArea();
+    return;
+  }
+  delay(1);
+}
+
+// ── Tap dispatcher — a completed tap (down + up, no drag) lands here ─────────
+static void handleTap(uint16_t px,uint16_t py){
   // ── A-Z bar ────────────────────────────────────────────────────────────────
   if(px>=AZ_X&&py>=LIST_TOP&&py<LIST_BOTTOM){
     if(handleAlphabetTouch(px,py)) drawListAndCover();
@@ -1792,7 +2437,7 @@ void loop(void){
     int pw = COVER_W - 12;
     int saY = g_info_pair_btn_y;          // STANDALONE button Y
     int wiY = saY + 52;                    // WIRELESS button Y (48px + 4px gap)
-    int pairBtnY = LCD_HEIGHT-BOTTOM_H-116;
+    int pairBtnY = LCD_HEIGHT-BOTTOM_H-156;
 
     // STANDALONE button (48px tall)
     if(py >= (uint16_t)saY && py < (uint16_t)(saY+48) && px >= 6 && px < COVER_W-6) {
@@ -1804,18 +2449,49 @@ void loop(void){
       if(!g_wireless_mode) setWirelessMode(true);
       return;
     }
-    // SOFT RESET button
+    // RESCAN SD (left half) + ROTATE (right half)
+    int rescanBtnY = LCD_HEIGHT - BOTTOM_H - 114;
+    if(py >= (uint16_t)rescanBtnY && py < (uint16_t)(rescanBtnY+30) &&
+       px >= 6 && px < COVER_W-6) {
+      int hw=(pw-6)/2, dx=6+hw+6;
+      if(px >= (uint16_t)dx){
+        // right half = FLIP: toggle landscape 0 <-> 180 (portrait disabled on this RGB panel)
+        int nextDeg = (g_rot==0) ? 180 : 0;
+        UG->fillRoundRect(dx, rescanBtnY, hw, 30, 8, COL_BLUE);
+        UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(TFT_WHITE, COL_BLUE);
+        { int tw=UG->textWidth("SAVING..."); UG->setCursor(dx+(hw-tw)/2, rescanBtnY+9); }
+        UG->print("SAVING...");
+        uiFlush();
+        saveRotate(nextDeg);
+        delay(600);
+        ESP.restart();
+        return;
+      }
+      // left half = RESCAN SD
+      UG->fillRoundRect(6, rescanBtnY, hw, 30, 8, COL_GREEN);
+      UG->setFont(&lgfx::fonts::DejaVu12);
+      UG->setTextColor(TFT_BLACK, COL_GREEN);
+      { int tw=UG->textWidth("SCANNING"); UG->setCursor(6+(hw-tw)/2, rescanBtnY+9); }
+      UG->print("SCANNING");
+      uiFlush();
+      doRescan();
+      return;
+    }
+    // SOFT RESET (left half) + LOAD DIAG (right half) share one row
     int resetBtnY = LCD_HEIGHT - BOTTOM_H - 78;
     if(py >= (uint16_t)resetBtnY && py < (uint16_t)(resetBtnY+30) &&
        px >= 6 && px < COVER_W-6) {
-      // Flash the button red briefly then restart
-      tft.fillRoundRect(6, resetBtnY, pw, 30, 8, (uint16_t)0xE8C4);
-      tft.setFont(&lgfx::fonts::DejaVu12);
-      tft.setTextColor(TFT_BLACK, (uint16_t)0xE8C4);
-      { int tw=tft.textWidth("RESTARTING...");
-        tft.setCursor(6+(pw-tw)/2, resetBtnY+9); }
-      tft.print("RESTARTING...");
-      delay(800);
+      int hw=(pw-6)/2, dx=6+hw+6;
+      if(px >= (uint16_t)dx){ doLoadDiag(); return; }   // right half = LOAD DIAG
+      // left half = SOFT RESET
+      UG->fillRoundRect(6, resetBtnY, hw, 30, 8, (uint16_t)0xE8C4);
+      UG->setFont(&lgfx::fonts::DejaVu12);
+      UG->setTextColor(TFT_BLACK, (uint16_t)0xE8C4);
+      { int tw=UG->textWidth("RESET");
+        UG->setCursor(6+(hw-tw)/2, resetBtnY+9); }
+      UG->print("RESET");
+      uiFlush();
+      delay(700);
       ESP.restart();
       return;
     }
@@ -1828,13 +2504,16 @@ void loop(void){
     }
   }
   {
-    int btnY=LCD_HEIGHT-BOTTOM_H-40;
-    if(px<COVER_W&&py>=btnY&&py<LCD_HEIGHT-BOTTOM_H&&!g_games.empty()){
+    bool insHit;
+    if(g_portrait_mode){ int cb=STATUS_H+MODE_BAR_H+COVER_H, pb=cb-42;
+      insHit = (px>=8&&px<LCD_WIDTH-8&&py>=(uint16_t)pb&&py<(uint16_t)(pb+34)); }
+    else { int btnY=LCD_HEIGHT-BOTTOM_H-40;
+      insHit = (px<COVER_W&&py>=(uint16_t)btnY&&py<(uint16_t)(LCD_HEIGHT-BOTTOM_H)); }
+    if(insHit && !g_games.empty()){
       bool isLoaded=(g_loaded&&g_loaded_game_idx==g_sel);
       if(isLoaded){
         doUnload();
       } else {
-        // Load the selected disk of the selected game
         const GameEntry& game=g_games[g_sel];
         int diskFileIdx=game.disk_indices.empty()?
                         game.first_file_idx:
@@ -1845,28 +2524,37 @@ void loop(void){
     }
   }
 
-  // ── Cover panel: disk selector buttons ─────────────────────────────────────
-  if(px<COVER_W&&!g_games.empty()){
+  // ── Cover panel: disk selector buttons (must mirror draw) ──
+  if(!g_games.empty()){
     const GameEntry& game=g_games[g_sel];
     if(game.disk_count>1){
-      int btnY=LCD_HEIGHT-BOTTOM_H-40;
-      int diskH=34;
-      int diskY=btnY-diskH-4+13;  // matches draw position
-      int btnW=26,btnH=20,gap=3;
-      int totalW=game.disk_count*(btnW+gap)-gap;
-      int startX=max(6,(COVER_W-totalW)/2);
-      if(py>=(uint16_t)diskY&&py<(uint16_t)(diskY+btnH)){
-        int hitBtn=(px-startX)/(btnW+gap);
-        if(hitBtn>=0&&hitBtn<game.disk_count){
-          g_disk_sel=hitBtn;
-          if(g_loaded&&g_loaded_game_idx==g_sel){
-            int diskFileIdx=game.disk_indices[g_disk_sel];
-            doLoadSelected(g_files[diskFileIdx]);
-          } else {
-            drawCoverPanel();
+      if(g_portrait_mode){
+        int cb=STATUS_H+MODE_BAR_H+COVER_H, pbtnY=cb-42, pbw=LCD_WIDTH-16;
+        int nd=game.disk_count, bw2=28,bh2=18,gap=4;
+        int per=max(1,pbw/(bw2+gap)), show=min(nd,per);
+        int rowW=show*(bw2+gap)-gap, sx=(LCD_WIDTH-rowW)/2, dy=pbtnY-bh2-6;
+        for(int d=0; d<show; d++){ int bx=sx+d*(bw2+gap);
+          if(px>=(uint16_t)bx&&px<(uint16_t)(bx+bw2)&&py>=(uint16_t)dy&&py<(uint16_t)(dy+bh2)){
+            g_disk_sel=d;
+            if(g_loaded&&g_loaded_game_idx==g_sel) doLoadSelected(g_files[game.disk_indices[g_disk_sel]]);
+            else drawCoverPanel();
+            return;
+          } }
+      } else if(px<COVER_W){
+        const int PER_ROW=7; int btnW=23,btnH=18,gap=3; int nd=game.disk_count;
+        int rows=(nd+PER_ROW-1)/PER_ROW; int rowH=btnH+gap;
+        int btnY=LCD_HEIGHT-BOTTOM_H-44; int diskY=btnY - 12 - rows*rowH - 4 + 12;
+        for(int d=0;d<nd;d++){
+          int col=d%PER_ROW, row=d/PER_ROW; int inRow=min(PER_ROW, nd-row*PER_ROW);
+          int rowW=inRow*(btnW+gap)-gap; int startX=max(4,(COVER_W-rowW)/2);
+          int bx=startX+col*(btnW+gap); int by=diskY+row*rowH;
+          if(px>=(uint16_t)bx&&px<(uint16_t)(bx+btnW)&&py>=(uint16_t)by&&py<(uint16_t)(by+btnH)){
+            g_disk_sel=d;
+            if(g_loaded&&g_loaded_game_idx==g_sel){ doLoadSelected(g_files[game.disk_indices[g_disk_sel]]); }
+            else { drawCoverPanel(); }
+            return;
           }
         }
-        return;
       }
     }
   }
@@ -1876,13 +2564,15 @@ void loop(void){
     if(px>=LIST_X+6&&px<LIST_X+44&&g_mode!=MODE_ADF){
       g_mode=MODE_ADF;
       if(!listImages(SD_MMC,g_files)) g_files.clear();
-      buildGameList(); buildActiveLetters(); g_sel=0; g_scroll=0; g_disk_sel=0;
+      if(!readGameCache())buildGameList(); buildActiveLetters(); g_sel=0; g_scroll=0; g_disk_sel=0;
+      g_scrollPx=0; g_inertia_on=false;
       drawFullUI(); return;
     }
     if(px>=LIST_X+50&&px<LIST_X+88&&g_mode!=MODE_DSK){
       g_mode=MODE_DSK;
       if(!listImages(SD_MMC,g_files)) g_files.clear();
-      buildGameList(); buildActiveLetters(); g_sel=0; g_scroll=0; g_disk_sel=0;
+      if(!readGameCache())buildGameList(); buildActiveLetters(); g_sel=0; g_scroll=0; g_disk_sel=0;
+      g_scrollPx=0; g_inertia_on=false;
       drawFullUI(); return;
     }
   }
@@ -1890,22 +2580,11 @@ void loop(void){
   // ── File list tap ──────────────────────────────────────────────────────────
   if(px>=LIST_X&&px<AZ_X&&py>=LIST_TOP&&py<LIST_BOTTOM){
     g_info_showing=false;
-    int vi=(py-LIST_TOP)/LIST_ITEM_H;
-    int gi=g_scroll+vi;
+    int gi=(int)((g_scrollPx+(float)(py-LIST_TOP))/LIST_ITEM_H);   // pixel-accurate row hit
     if(gi>=0&&gi<(int)g_games.size()){
-      if(gi==g_sel){
-        // Second tap = load disk 1 (or eject if loaded)
-        bool isLoaded=(g_loaded&&g_loaded_game_idx==g_sel);
-        if(isLoaded){ doUnload(); }
-        else {
-          const GameEntry& game=g_games[g_sel];
-          int diskFileIdx=game.disk_indices.empty()?
-                          game.first_file_idx:
-                          game.disk_indices[0];
-          g_disk_sel=0;
-          doLoadSelected(g_files[diskFileIdx]);
-        }
-      } else {
+      // Tap = SELECT only (v4.5.3: double-tap-to-insert removed — loading is
+      // done exclusively via the INSERT button, so browsing can't mount a disk)
+      if(gi!=g_sel){
         g_sel=gi; g_disk_sel=0;
         drawListAndCover();
       }
@@ -1921,6 +2600,7 @@ void loop(void){
       if(g_sel>0){
         g_sel--; g_disk_sel=0;
         if(g_sel<g_scroll) g_scroll=g_sel;
+        g_scrollPx=(float)(g_scroll*LIST_ITEM_H); g_inertia_on=false;
         drawListAndCover();
       }
     } else if(btn==1){
@@ -1929,120 +2609,154 @@ void loop(void){
         if(g_sel>=g_scroll+ITEMS_VIS) g_scroll=g_sel-ITEMS_VIS+1;
         int maxOff=(int)g_games.size()-ITEMS_VIS; if(maxOff<0) maxOff=0;
         if(g_scroll>maxOff) g_scroll=maxOff;
+        g_scrollPx=(float)(g_scroll*LIST_ITEM_H); g_inertia_on=false;
         drawListAndCover();
       }
     } else if(btn==2){
       // THEME — cycle to next
       cycleTheme();
     } else {
-      // INFO panel in cover area
-      tft.fillRect(0,STATUS_H,COVER_W,LCD_HEIGHT-STATUS_H-BOTTOM_H,COL_PANEL);
+      // INFO — second tap toggles back to the regular cover panel
+      if(g_info_showing){
+        g_info_showing=false;
+        drawCoverPanel();
+        return;
+      }
+      UiFrame _uf;   // compose the whole INFO panel off-screen, push once
+      UG->fillRect(0,STATUS_H,COVER_W,LCD_HEIGHT-STATUS_H-BOTTOM_H,COL_PANEL);
       int y = STATUS_H + 8;
       int pw = COVER_W - 12;  // panel usable width
 
       // --- TRANSFER MODE label ---
-      tft.setFont(&lgfx::fonts::DejaVu9);
-      tft.setTextColor(COL_DIM, COL_PANEL);
-      tft.setCursor(8, y); tft.print("TRANSFER MODE"); y += 13;
+      UG->setFont(&lgfx::fonts::DejaVu9);
+      UG->setTextColor(COL_DIM, COL_PANEL);
+      UG->setCursor(8, y); UG->print("TRANSFER MODE"); y += 13;
 
       // STANDALONE button — double height (48px)
       uint16_t saCol = !g_wireless_mode ? COL_GREEN : COL_BAR;
       uint16_t saBrd = !g_wireless_mode ? COL_GREEN : COL_DIM;
-      tft.fillRoundRect(6, y, pw, 48, 8, saCol);
-      tft.drawRoundRect(6, y, pw, 48, 8, saBrd);
-      tft.setFont(&lgfx::fonts::DejaVu18);
-      tft.setTextColor(!g_wireless_mode ? TFT_BLACK : COL_DIM, saCol);
-      { int tw=tft.textWidth("STANDALONE");
-        tft.setCursor(6+(pw-tw)/2, y+14); }
-      tft.print("STANDALONE");
-      tft.setFont(&lgfx::fonts::DejaVu9);
-      tft.setTextColor(!g_wireless_mode ? TFT_BLACK : COL_DIM, saCol);
-      { int tw=tft.textWidth("direct USB to Gotek");
-        tft.setCursor(6+(pw-tw)/2, y+34); }
-      tft.print("direct USB to Gotek");
+      UG->fillRoundRect(6, y, pw, 48, 8, saCol);
+      UG->drawRoundRect(6, y, pw, 48, 8, saBrd);
+      UG->setFont(&lgfx::fonts::DejaVu18);
+      UG->setTextColor(!g_wireless_mode ? TFT_BLACK : COL_DIM, saCol);
+      { int tw=UG->textWidth("STANDALONE");
+        UG->setCursor(6+(pw-tw)/2, y+14); }
+      UG->print("STANDALONE");
+      UG->setFont(&lgfx::fonts::DejaVu9);
+      UG->setTextColor(!g_wireless_mode ? TFT_BLACK : COL_DIM, saCol);
+      { int tw=UG->textWidth("direct USB to Gotek");
+        UG->setCursor(6+(pw-tw)/2, y+34); }
+      UG->print("direct USB to Gotek");
       int saY = y;
       y += 52;
 
       // WIRELESS button — double height (48px)
       uint16_t wiCol = g_wireless_mode ? COL_BLUE : COL_BAR;
       uint16_t wiBrd = g_wireless_mode ? COL_BLUE : COL_DIM;
-      tft.fillRoundRect(6, y, pw, 48, 8, wiCol);
-      tft.drawRoundRect(6, y, pw, 48, 8, wiBrd);
-      tft.setFont(&lgfx::fonts::DejaVu18);
-      tft.setTextColor(g_wireless_mode ? TFT_WHITE : COL_DIM, wiCol);
-      { int tw=tft.textWidth("WIRELESS");
-        tft.setCursor(6+(pw-tw)/2, y+14); }
-      tft.print("WIRELESS");
-      tft.setFont(&lgfx::fonts::DejaVu9);
-      tft.setTextColor(g_wireless_mode ? TFT_WHITE : COL_DIM, wiCol);
-      { int tw=tft.textWidth("send via WiFi to XIAO");
-        tft.setCursor(6+(pw-tw)/2, y+34); }
-      tft.print("send via WiFi to XIAO");
+      UG->fillRoundRect(6, y, pw, 48, 8, wiCol);
+      UG->drawRoundRect(6, y, pw, 48, 8, wiBrd);
+      UG->setFont(&lgfx::fonts::DejaVu18);
+      UG->setTextColor(g_wireless_mode ? TFT_WHITE : COL_DIM, wiCol);
+      { int tw=UG->textWidth("WIRELESS");
+        UG->setCursor(6+(pw-tw)/2, y+14); }
+      UG->print("WIRELESS");
+      UG->setFont(&lgfx::fonts::DejaVu9);
+      UG->setTextColor(g_wireless_mode ? TFT_WHITE : COL_DIM, wiCol);
+      { int tw=UG->textWidth("send via WiFi to XIAO");
+        UG->setCursor(6+(pw-tw)/2, y+34); }
+      UG->print("send via WiFi to XIAO");
       y += 56;
 
       // Store saY for touch handler
       g_info_pair_btn_y = saY;
 
       // Divider
-      tft.drawFastHLine(8, y, pw, COL_SEP); y += 6;
+      UG->drawFastHLine(8, y, pw, COL_SEP); y += 6;
 
       // --- SYSTEM INFO ---
-      tft.setFont(&lgfx::fonts::DejaVu9);
-      tft.setTextColor(COL_LIT, COL_PANEL);
-      tft.setCursor(8,y); tft.print("Heap: "+String(ESP.getFreeHeap()/1024)+"KB  PSRAM: "+String(ESP.getFreePsram()/1024)+"KB"); y+=12;
-      tft.setCursor(8,y); tft.print("Games: "+String(g_games.size())+"  FW: " FW_VERSION); y+=14;
+      UG->setFont(&lgfx::fonts::DejaVu9);
+      UG->setTextColor(COL_LIT, COL_PANEL);
+      UG->setCursor(8,y); UG->print("Heap: "+String(ESP.getFreeHeap()/1024)+"KB  PSRAM: "+String(ESP.getFreePsram()/1024)+"KB"); y+=12;
+      UG->setCursor(8,y); UG->print("Games: "+String(g_games.size())+"  FW: " FW_VERSION); y+=14;
 
       // --- WIRELESS STATUS (only in wireless mode) ---
       if (g_wireless_mode) {
-        tft.drawFastHLine(8, y, pw, COL_SEP); y+=6;
-        tft.setFont(&lgfx::fonts::DejaVu9);
+        UG->drawFastHLine(8, y, pw, COL_SEP); y+=6;
+        UG->setFont(&lgfx::fonts::DejaVu9);
         if(espnowIsPaired()){
           bool online = espnowXiaoOnline();
-          tft.setTextColor(online ? COL_GREEN : COL_ORANGE, COL_PANEL);
-          tft.setCursor(8,y); tft.print(online ? "XIAO: ONLINE" : "XIAO: OFFLINE"); y+=11;
-          tft.setTextColor(COL_LIT, COL_PANEL);
+          UG->setTextColor(online ? COL_GREEN : COL_ORANGE, COL_PANEL);
+          UG->setCursor(8,y); UG->print(online ? "XIAO: ONLINE" : "XIAO: OFFLINE"); y+=11;
+          UG->setTextColor(COL_LIT, COL_PANEL);
           String mac = espnowGetXiaoMac();
-          tft.setCursor(8,y); tft.print(mac); y+=11;
-          tft.setTextColor(COL_DIM, COL_PANEL);
-          tft.setCursor(8,y); tft.print("AP: GotekXIAO"); y+=11;
+          UG->setCursor(8,y); UG->print(mac); y+=11;
+          UG->setTextColor(COL_DIM, COL_PANEL);
+          UG->setCursor(8,y); UG->print("AP: GotekXIAO"); y+=11;
           if(g_espnow_xiao_done){
-            tft.setTextColor(COL_GREEN,COL_PANEL);
-            tft.setCursor(8,y); tft.print("Status: loaded OK"); y+=11;
+            UG->setTextColor(COL_GREEN,COL_PANEL);
+            UG->setCursor(8,y); UG->print("Status: loaded OK"); y+=11;
           } else if(g_espnow_xiao_error){
-            tft.setTextColor(0xE8C4,COL_PANEL);
-            tft.setCursor(8,y); tft.print("Status: error"); y+=11;
+            UG->setTextColor(0xE8C4,COL_PANEL);
+            UG->setCursor(8,y); UG->print("Status: error"); y+=11;
           } else {
-            tft.setTextColor(COL_LIT,COL_PANEL);
-            tft.setCursor(8,y); tft.print("Status: idle"); y+=11;
+            UG->setTextColor(COL_LIT,COL_PANEL);
+            UG->setCursor(8,y); UG->print("Status: idle"); y+=11;
           }
         } else {
-          tft.setTextColor(COL_ORANGE, COL_PANEL);
-          tft.setCursor(8,y); tft.print("Not paired — tap PAIR NOW"); y+=11;
+          UG->setTextColor(COL_ORANGE, COL_PANEL);
+          UG->setCursor(8,y); UG->print("Not paired - tap PAIR NOW"); y+=11;
         }
         y += 4;
 
         // PAIR NOW button — anchored at bottom of panel
-        int pairBtnY = LCD_HEIGHT - BOTTOM_H - 116;
+        int pairBtnY = LCD_HEIGHT - BOTTOM_H - 156;
         uint16_t pairCol = espnowIsPaired() ? COL_GREEN : COL_AMBER;
-        tft.fillRoundRect(6, pairBtnY, pw, 36, 8, pairCol);
-        tft.drawRoundRect(6, pairBtnY, pw, 36, 8, pairCol);
-        tft.setFont(&lgfx::fonts::DejaVu18);
-        tft.setTextColor(TFT_BLACK, pairCol);
+        UG->fillRoundRect(6, pairBtnY, pw, 36, 8, pairCol);
+        UG->drawRoundRect(6, pairBtnY, pw, 36, 8, pairCol);
+        UG->setFont(&lgfx::fonts::DejaVu18);
+        UG->setTextColor(TFT_BLACK, pairCol);
         const char* pairLabel = espnowIsPaired() ? "RE-PAIR" : "PAIR NOW";
-        { int tw=tft.textWidth(pairLabel);
-          tft.setCursor(6+(pw-tw)/2, pairBtnY+10); }
-        tft.print(pairLabel);
+        { int tw=UG->textWidth(pairLabel);
+          UG->setCursor(6+(pw-tw)/2, pairBtnY+10); }
+        UG->print(pairLabel);
       }
 
-      // SOFT RESET button — positioned safely above INSERT/EJECT area
+      // RESCAN SD (left half) + ROTATE (right half) — above SOFT RESET
+      int rescanBtnY = LCD_HEIGHT - BOTTOM_H - 114;
+      { int hw=(pw-6)/2, dx=6+hw+6;
+        UG->setFont(&lgfx::fonts::DejaVu12);
+        // left: RESCAN SD
+        UG->fillRoundRect(6, rescanBtnY, hw, 30, 8, COL_ACCENT);
+        UG->drawRoundRect(6, rescanBtnY, hw, 30, 8, COL_ACCENT);
+        UG->setTextColor(TFT_WHITE, COL_ACCENT);
+        { int tw=UG->textWidth("RESCAN"); UG->setCursor(6+(hw-tw)/2, rescanBtnY+9); }
+        UG->print("RESCAN");
+        // right: FLIP (landscape 0<->180; shows current orientation; tap saves + reboots)
+        UG->fillRoundRect(dx, rescanBtnY, hw, 30, 8, COL_BLUE);
+        UG->drawRoundRect(dx, rescanBtnY, hw, 30, 8, COL_BLUE);
+        UG->setTextColor(TFT_WHITE, COL_BLUE);
+        String rl = "ROT " + String(g_rot*90);
+        { int tw=UG->textWidth(rl); UG->setCursor(dx+(hw-tw)/2, rescanBtnY+9); }
+        UG->print(rl);
+      }
+
+      // SOFT RESET (left half) + LOAD DIAG (right half) — share one row
       int resetBtnY = LCD_HEIGHT - BOTTOM_H - 78;
-      tft.fillRoundRect(6, resetBtnY, pw, 30, 8, (uint16_t)0x8000);
-      tft.drawRoundRect(6, resetBtnY, pw, 30, 8, (uint16_t)0xE8C4);
-      tft.setFont(&lgfx::fonts::DejaVu12);
-      tft.setTextColor(TFT_WHITE, (uint16_t)0x8000);
-      { int tw=tft.textWidth("SOFT RESET");
-        tft.setCursor(6+(pw-tw)/2, resetBtnY+9); }
-      tft.print("SOFT RESET");
+      { int hw=(pw-6)/2, dx=6+hw+6;
+        UG->setFont(&lgfx::fonts::DejaVu12);
+        // left: SOFT RESET
+        UG->fillRoundRect(6, resetBtnY, hw, 30, 8, (uint16_t)0x8000);
+        UG->drawRoundRect(6, resetBtnY, hw, 30, 8, (uint16_t)0xE8C4);
+        UG->setTextColor(TFT_WHITE, (uint16_t)0x8000);
+        { int tw=UG->textWidth("SOFT RESET"); UG->setCursor(6+(hw-tw)/2, resetBtnY+9); }
+        UG->print("SOFT RESET");
+        // right: LOAD DIAG
+        UG->fillRoundRect(dx, resetBtnY, hw, 30, 8, COL_ACCENT);
+        UG->drawRoundRect(dx, resetBtnY, hw, 30, 8, COL_ACCENT);
+        UG->setTextColor(TFT_WHITE, COL_ACCENT);
+        { int tw=UG->textWidth("LOAD DIAG"); UG->setCursor(dx+(hw-tw)/2, resetBtnY+9); }
+        UG->print("LOAD DIAG");
+      }
 
       g_info_showing = true;
     }
