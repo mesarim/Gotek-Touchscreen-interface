@@ -1,6 +1,6 @@
 {
   "name": "Gotek Touchscreen Interface — Waveshare 7\"",
-  "version": "3.4.7",
+  "version": "4.6.2",
   "new_install_prompt_erase": true,
   "builds": [
     {
