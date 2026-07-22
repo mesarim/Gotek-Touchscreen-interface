@@ -14,6 +14,7 @@ Built by **Mez** and **Dimmy** (Dimitri Hilverda) — **OMEGAWARE**.
 | Your hardware | Use | Status |
 |---|---|---|
 | **Guition JC3248W535C** (3.5", 480x320) | [`Gotek_JC3248/`](firmware/Gotek_JC3248) | **Recommended — current build** |
+| Waveshare **ESP32-S3-Touch-LCD-7** (7", 800x480) | [`Waveshare_7inch/`](firmware/Waveshare_7inch) | **BETA — public testing (v4.6.2)** |
 | ESP32-S3 **Super Mini** (wireless dongle) | [`Gotek_SuperMini/`](firmware/SuperMini-S3) | Companion to the interface (optional) |
 | Waveshare **ESP32-S3-Touch-LCD-2.8** | [`Gotek_Waveshare28/`](firmware/Waveshare_28) | **Legacy / out of date** |
 | `Version 0.5.2/` | archive | **Legacy / out of date** |
@@ -55,6 +56,48 @@ Flash `Gotek_JC3248/Gotek_JC3248.ino`; keep the other four files in the folder b
 **Library:** `JPEGDEC` by Larry Bank (Library Manager) for cover-art decoding.
 **Do not** add the ESP-IDF `esp_lcd_touch.c/.h` files — they crash the Arduino build; touch is
 handled in the `.ino`.
+
+---
+
+## Waveshare 7" — big-screen interface (BETA)
+
+The JC3248 experience on a 7" 800x480 panel. Runs the **"K" rendering engine** — raw `esp_lcd`
+with a double framebuffer and VSYNC page-flip, **no display library required** (LovyanGFX was
+removed entirely in v4.5.0). Tear-free UI, drag-to-scroll with flick inertia, cover art, the
+6-style cracktro, six themes, the built-in Amiga Test Kit diagnostic, and wireless mode.
+Landscape only (0 / 180 degrees via the FLIP button — this RGB panel has no hardware portrait).
+
+**Status: beta.** Rendering, touch, scrolling and the USB virtual disk are verified on real
+hardware (USB tested against a PC; Gotek/FlashFloppy end-to-end verification in progress).
+Testers welcome — see the full build guide, usage notes and **testing checklist** in
+[`firmware/Waveshare_7inch/README.md`](firmware/Waveshare_7inch/README.md).
+
+### Files
+Flash `Waveshare_7inch/Gotek_7inch.ino`; keep `espnow_server.cpp` / `.h` and `diag_adf.h`
+in the folder beside it.
+
+### Hardware
+- **Board:** Waveshare ESP32-S3-Touch-LCD-7 (ESP32-S3, 800x480 ST7262 RGB panel)
+- **Touch:** GT911 capacitive (I2C; firmware auto-detects its address)
+- **SD:** SD_MMC, 1-bit — FAT32
+- Presents the chosen image to the host over **USB Mass Storage** (TinyUSB)
+
+### Build settings (Arduino IDE — select "ESP32S3 Dev Module")
+| Setting | Value |
+|---|---|
+| USB Mode | USB-OTG (TinyUSB) |
+| **USB CDC On Boot** | **Disabled** (required, or the Gotek won't see the drive) |
+| PSRAM | **OPI PSRAM** |
+| Flash Size | 16MB (128Mb) |
+| Partition Scheme | Huge APP (3MB No OTA / 1MB SPIFFS) |
+| CPU Frequency | 240MHz |
+
+**Library:** just `JPEGDEC` (Library Manager) — nothing else. Do **not** install LovyanGFX or the
+Adafruit TinyUSB library for this build.
+
+> Note: the firmware boots with USB **detached** — the USB disk only appears once you INSERT a
+> game (or LOAD DIAG). A silent USB port at idle is normal. Reflashing always needs the manual
+> BOOT-hold + RESET into download mode, because the running firmware has no COM port.
 
 ---
 
@@ -145,6 +188,10 @@ Being straight so nobody gets surprised:
 
 - **JC3248 interface** (works) — fast cached boot, 1000+ games, image loading, themes, cover art,
   multi-disk pagination: exercised on real hardware.
+- **Waveshare 7"** (beta) — rendering, touch, drag-scroll and the USB virtual disk verified on
+  real hardware against a PC; **Gotek/FlashFloppy end-to-end test still in progress**. That's why
+  it's a beta — testers wanted (checklist in
+  [`firmware/Waveshare_7inch/README.md`](firmware/Waveshare_7inch/README.md)).
 - **Single-dongle wireless** (works) — interface to one Super Mini, pair and load.
 - **Multi-dongle switching** (beta) — code to drive several dongles from one screen (BSSID-targeted
   WiFi) is implemented but **not yet hardware-verified with two or more dongles**.
@@ -167,8 +214,10 @@ talk to hardware and contains none of the firmware's SD/USB/wireless logic.
   ([fork](https://github.com/dimitrihilverda/Gotek-Touchscreen-interface))
 - OMEGAWARE
 
-Libraries: [JPEGDEC](https://github.com/bitbank2/JPEGDEC) (Larry Bank), LovyanGFX (Waveshare build),
-ESP32 Arduino core.
+Amiga Test Kit © Keir Fraser, public domain (Unlicense) — bundled as the built-in diagnostic.
+
+Libraries: [JPEGDEC](https://github.com/bitbank2/JPEGDEC) (Larry Bank), LovyanGFX (Waveshare 2.8"
+build), ESP32 Arduino core.
 
 ## Licence
 
