@@ -1,11 +1,38 @@
 # Gotek Touchscreen Interface
 
+**The GTi** — *"The Floppy Flinger Thinger."*
+
 A touchscreen front-end for [Gotek](https://en.wikipedia.org/wiki/Gotek_Floppy_Emulator)-style
 floppy emulators. It browses `.ADF` (Amiga) and `.DSK` (ZX / CPC) disk images from an SD card,
 shows cover art and game info, and presents the selected image to the host machine as a USB
 floppy — wrapped in a demoscene-flavoured UI (cracktro splash, copper bars, scroller, six themes).
 
 Built by **Mez** and **Dimmy** (Dimitri Hilverda) — **OMEGAWARE**.
+
+---
+
+## What it is (and what it isn't)
+
+The GTi doesn't replace FlashFloppy — it makes it nicer to live with. FlashFloppy and HxC
+already do floppy emulation brilliantly; what they leave you with is a 0.9" OLED, a rotary
+encoder, and a thousand files named things like `Turrican2[cr FLT].adf`. The GTi is the
+missing front-end: browse by cover art, read the blurb, tap INSERT.
+
+- **Keep your existing setup.** Nothing on the Gotek is removed or reflashed — the GTi simply
+  presents itself as the USB stick. Your OLED, encoder and current workflow all still work
+  the moment you unplug it.
+- **Wireless = invisible installs.** With a dongle tucked inside the machine there's no USB
+  stick protruding from your Amiga at all; the screen feeds it disks over WiFi from across
+  the room.
+- **Easier on the eyes.** Big type on a real screen (three font sizes on the JC build) and
+  six themes including a high-contrast paper-white mode — kinder than a tiny OLED to eyes
+  that, like the hardware, have been going since 1987.
+- **One dumb endpoint, many faces.** The dongle does exactly one thing: receive an image,
+  become a floppy. The 3.5" screen, the 7" beta and future clients all feed that same simple
+  endpoint — the system grows without ever touching the Gotek again.
+
+Built for FlashFloppy; anything that boots images from a USB stick should be equally happy,
+though FlashFloppy is what gets bench-tested here.
 
 ---
 
@@ -161,9 +188,18 @@ If you have a Waveshare 2.8", the files are in [`Gotek_Waveshare28/`](Gotek_Wave
 - **Multi-disk grouping** — `Game-1.adf ... Game-N.adf` collapse into one entry with a paginated
   disk selector (6 per page; handles 10+ disk sets such as Monkey Island 2).
 - **Six themes** (NAVY, EMBER, MATRIX, PAPER, SYNTH, GOLD), cycled on-device, saved to `CONFIG.TXT`.
-- **A-Z jump bar**, now-playing bar, cracktro splash.
+- **A-Z jump bar**, now-playing bar.
+- **Six boot cracktros** — COPPER, STARFIELD, RAINBOW, PLASMA, BOING BALL, SYNTHWAVE. Pick one
+  with `CRACKTRO=1..6` in `CONFIG.TXT`, or `CRACKTRO=0` for a random one each boot.
+- **Built-in Amiga Test Kit** — a green **LOAD DIAG** button (INFO panel) mounts Keir Fraser's
+  public-domain diagnostic disk straight from firmware. Works with **no SD card at all** — a
+  bare GTi can still health-check your Amiga out of the box.
+- **Favourites** — tap a game's letter circle to star it. Stars and play counts live in a small
+  file on the SD card, so they survive reboots, rescans and even reflashes.
 - **STANDALONE** (direct USB) or **WIRELESS** (Super Mini dongle) transfer.
-- Auto-generates a commented `CONFIG.TXT` on a blank card.
+- Auto-generates a commented `CONFIG.TXT` on a blank card, plus a **SAMPLE folder** in `/ADF`
+  showing exactly how to lay out a game (disk + cover + `.nfo`) — the browser ignores it; it
+  exists purely to be copied.
 
 ### SD card layout
 ```
@@ -172,6 +208,26 @@ If you have a Waveshare 2.8", the files are in [`Gotek_Waveshare28/`](Gotek_Wave
 /CONFIG.TXT                            (auto-created if missing)
 ```
 Multi-disk: name files `<Game>-1.adf`, `<Game>-2.adf`, ... (digits after the final dash).
+
+### The `.nfo` file (optional game title + info)
+
+Plain text, same folder and basename as the game (`GameName.nfo`). Two formats, both supported:
+
+**Simple** — no labels needed:
+```
+Turrican II
+1991 - Rainbow Arts - Run and gun
+Sprawling run-and-gun with huge weapons and legendary music.
+```
+First non-empty line = the display title (shown **instead of the file name**); everything after it = the info blurb shown on the cover panel.
+
+**Labelled** — labels are case-insensitive (`Title:`, `TITLE:`, `title:` all work):
+```
+Title: Turrican II
+Blurb: 1991 - Rainbow Arts - Run and gun
+Sprawling run-and-gun with huge weapons and legendary music.
+```
+`Title:` overrides the display name regardless of the file/folder name. `Blurb:` (or `Description:`) starts the info text; lines that follow are appended until a line containing a `:` appears. Keep blurbs short — a line or two reads best on the cover panel.
 
 ### First-time setup
 Insert a blank **FAT32** SD card, flash the board, and reboot. The firmware creates the folder

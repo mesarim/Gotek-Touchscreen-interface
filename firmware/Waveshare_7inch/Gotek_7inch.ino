@@ -41,7 +41,7 @@
 #include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 
 // ---------- Version ----------
-#define FW_VERSION  "v4.6.2-7IN"
+#define FW_VERSION  "v4.6.4-7IN"
 
 // ---------- ESP-NOW server (peer-to-peer, no WiFi AP needed) ----------
 #include "espnow_server.h"
@@ -789,7 +789,7 @@ static void initStars() {
 // (crk_font 6x8 table moved up into the K display engine — shared with KGfx text)
 #define CRK_RGB(r,g,b) ((uint16_t)((((r)&0xF8)<<8)|(((g)&0xFC)<<3)|((b)>>3)))
 #define CRK_SB 45
-static const char* CRK_SCROLL="        OMEGAWARE PRESENTS ... THE GOTEK TOUCHSCREEN INTERFACE ... CODED BY MEZ & DIMMY ... A LITTLE TRIBUTE TO THE AMIGA CRACKTRO LEGENDS ... GREETINGS TO EVERYONE KEEPING THE SCENE ALIVE ... NOW GO LOAD A GAME ...        ";
+static const char* CRK_SCROLL="        OMEGAWARE PRESENTS ... THE GTi ... THE FLOPPY FLINGER THINGER ... CODED BY MEZ & DIMMY ... A LITTLE TRIBUTE TO THE AMIGA CRACKTRO LEGENDS ... GREETINGS TO EVERYONE KEEPING THE SCENE ALIVE ... NOW GO LOAD A GAME ...        ";
 static int g_cracktro = 0;   // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or 0 = random each boot
 // ── K rendering targets ─────────────────────────────────────────────────────
 // Everything (UI and cracktro) draws into the ONE KGfx compose buffer; a flush
@@ -1159,6 +1159,13 @@ static void ensureConfig(){
         "  GameName.jpg  — cover art (JPEG, any size)\r\n"
         "  GameName.nfo  — info/description (plain text)\r\n"
         "\r\n"
+        "NFO FORMAT (GameName.nfo, plain text):\r\n"
+        "  Line 1:  game title (shown INSTEAD of the file name)\r\n"
+        "  Line 2+: short info - year, publisher, description\r\n"
+        "  Or use labels (any case):\r\n"
+        "    Title: Turrican II\r\n"
+        "    Blurb: 1991 - Rainbow Arts - legendary run and gun\r\n"
+        "\r\n"
         "NOTES:\r\n"
         "  - Folder name becomes the game title in the browser\r\n"
         "  - Multi-disk games are grouped automatically\r\n"
@@ -1190,6 +1197,13 @@ static void ensureConfig(){
         "OPTIONAL EXTRAS (same folder as the .dsk files):\r\n"
         "  GameName.jpg  — cover art (JPEG, any size)\r\n"
         "  GameName.nfo  — info/description (plain text)\r\n"
+        "\r\n"
+        "NFO FORMAT (GameName.nfo, plain text):\r\n"
+        "  Line 1:  game title (shown INSTEAD of the file name)\r\n"
+        "  Line 2+: short info - year, publisher, description\r\n"
+        "  Or use labels (any case):\r\n"
+        "    Title: Head Over Heels\r\n"
+        "    Blurb: 1987 - Ocean - isometric puzzle classic\r\n"
         "\r\n"
         "NOTES:\r\n"
         "  - Same folder structure as ADF\r\n"
@@ -1328,8 +1342,9 @@ static void parseNFO(const String& txt,String& outTitle,String& outBlurb){
   bool gotT=false,gotB=false;
   for(size_t i=0;i<lines.size();++i){
     const String& L=lines[i];
-    if(!gotT&&L.startsWith("Title:")){ outTitle=L.substring(6); outTitle.trim(); gotT=true; continue; }
-    if(!gotB&&(L.startsWith("Blurb:")||L.startsWith("Description:"))){
+    String Ll=L; Ll.toLowerCase();   // labels are case-insensitive (Title:/TITLE:/title:)
+    if(!gotT&&Ll.startsWith("title:")){ outTitle=L.substring(6); outTitle.trim(); gotT=true; continue; }
+    if(!gotB&&(Ll.startsWith("blurb:")||Ll.startsWith("description:"))){
       outBlurb=L.substring(L.indexOf(':')+1); outBlurb.trim();
       for(size_t j=i+1;j<lines.size();++j){
         const String& Lj=lines[j]; if(Lj.indexOf(':')>0) break;

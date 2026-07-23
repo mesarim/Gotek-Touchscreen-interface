@@ -23,7 +23,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "v4.4.0-JC3248"
+#define FW_VERSION "v4.7.2-JC3248"
 #include "espnow_server.h"
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
@@ -193,6 +193,15 @@ static void gfx_drawRect(int x,int y,int w,int h,uint16_t c){gfx_fillRect(x,y,w,
 static void gfx_hline(int x,int y,int w,uint16_t c){gfx_fillRect(x,y,w,1,c);}
 static void gfx_vline(int x,int y,int h,uint16_t c){gfx_fillRect(x,y,1,h,c);}
 static void gfx_fillCircle(int cx,int cy,int r,uint16_t c){for(int y=-r;y<=r;y++){int w=(int)sqrtf(r*r-y*y);gfx_fillRect(cx-w,cy+y,2*w+1,1,c);}}
+#define COL_STAR 0xFEE0
+static void gfx_fillStar(int cx,int cy,float rO,uint16_t col){
+  float rI=rO*0.42f;float pts[10][2];
+  for(int i=0;i<10;i++){float a=-1.57080f+i*0.628319f;float rr=(i&1)?rI:rO;pts[i][0]=cx+cosf(a)*rr;pts[i][1]=cy+sinf(a)*rr;}
+  int y0=(int)(cy-rO-1),y1=(int)(cy+rO+1),x0=(int)(cx-rO-1),x1=(int)(cx+rO+1);
+  for(int y=y0;y<=y1;y++)for(int x=x0;x<=x1;x++){bool in=false;
+    for(int i=0,j=9;i<10;j=i++){if(((pts[i][1]>y)!=(pts[j][1]>y))&&((float)x<(pts[j][0]-pts[i][0])*(y-pts[i][1])/(pts[j][1]-pts[i][1])+pts[i][0]))in=!in;}
+    if(in)gfx_drawPixel(x,y,col);}
+}
 static void gfx_drawCircle(int cx,int cy,int r,uint16_t c){int x=0,y=r,d=3-2*r;while(x<=y){gfx_drawPixel(cx+x,cy+y,c);gfx_drawPixel(cx-x,cy+y,c);gfx_drawPixel(cx+x,cy-y,c);gfx_drawPixel(cx-x,cy-y,c);gfx_drawPixel(cx+y,cy+x,c);gfx_drawPixel(cx-y,cy+x,c);gfx_drawPixel(cx+y,cy-x,c);gfx_drawPixel(cx-y,cy-x,c);if(d<0)d+=4*x+6;else{d+=4*(x-y)+10;y--;}x++;}}
 static void gfx_fillRoundRect(int x,int y,int w,int h,int r,uint16_t c){gfx_fillRect(x+r,y,w-2*r,h,c);gfx_fillRect(x,y+r,r,h-2*r,c);gfx_fillRect(x+w-r,y+r,r,h-2*r,c);for(int dy=-r;dy<=0;dy++){int dx=(int)sqrtf(r*r-dy*dy);gfx_fillRect(x+r-dx,y+r+dy,dx,1,c);gfx_fillRect(x+w-r,y+r+dy,dx,1,c);gfx_fillRect(x+r-dx,y+h-r-1-dy,dx,1,c);gfx_fillRect(x+w-r,y+h-r-1-dy,dx,1,c);}}
 static void gfx_drawRoundRect(int x,int y,int w,int h,int r,uint16_t c){gfx_hline(x+r,y,w-2*r,c);gfx_hline(x+r,y+h-1,w-2*r,c);gfx_vline(x,y+r,h-2*r,c);gfx_vline(x+w-1,y+r,h-2*r,c);}
@@ -391,7 +400,12 @@ static std::vector<String> scanImagesAnimated(){
   File root=SD_MMC.open(dir.c_str());
   if(root&&root.isDirectory()){File gd;while((gd=root.openNextFile())){
     String en=gd.name();if(!en.startsWith("/"))en=dir+"/"+en;
-    if(gd.isDirectory()){File e;while((e=gd.openNextFile())){String fn=e.name();int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
+    if(gd.isDirectory()){
+      {String leaf=en;int sl2=leaf.lastIndexOf('/');if(sl2>=0)leaf=leaf.substring(sl2+1);leaf.toUpperCase();
+       // skip the SAMPLE example folder AND all dot-folders (.thumbs cache,
+       // plus macOS SD litter like .Trashes / .Spotlight-V100 — free immunity)
+       if(leaf=="SAMPLE"||leaf.startsWith(".")){gd.close();continue;}}
+      File e;while((e=gd.openNextFile())){String fn=e.name();int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
       if(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ")){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;out.push_back(fp);count++;
         if(millis()-lastDraw>80){drawScanFrame(count);lastDraw=millis();}}e.close();}}
     else{String fn=en;int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
@@ -406,6 +420,160 @@ static std::vector<String> scanImagesAnimated(){
 static bool listImages(fs::FS&fs,std::vector<String>&out){
   if(readIndexCache(out))return!out.empty();
   out=scanImagesAnimated();writeIndexCache(out);return!out.empty();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// /ADF/SAMPLE — a worked example of the folder layout, written ONCE when a
+// blank card is provisioned. The browser IGNORES any folder named SAMPLE
+// (case-insensitive), so it exists purely to be copied on a PC. If the user
+// deletes it, it stays deleted (only recreated when /ADF itself is missing).
+// ════════════════════════════════════════════════════════════════════════════
+static const uint8_t SAMPLE_JPG[] PROGMEM = {
+  255,216,255,224,0,16,74,70,73,70,0,1,1,0,0,1,0,1,0,0,
+  255,219,0,67,0,12,8,9,11,9,8,12,11,10,11,14,13,12,14,18,
+  30,20,18,17,17,18,37,27,28,22,30,44,39,46,46,43,39,43,42,49,
+  55,70,59,49,52,66,52,42,43,61,83,62,66,72,74,78,79,78,47,59,
+  86,92,85,76,91,70,77,78,75,255,219,0,67,1,13,14,14,18,16,18,
+  36,20,20,36,75,50,43,50,75,75,75,75,75,75,75,75,75,75,75,75,
+  75,75,75,75,75,75,75,75,75,75,75,75,75,75,75,75,75,75,75,75,
+  75,75,75,75,75,75,75,75,75,75,75,75,75,75,75,75,75,75,255,192,
+  0,17,8,0,150,0,150,3,1,34,0,2,17,1,3,17,1,255,196,0,
+  27,0,1,0,3,1,1,1,1,0,0,0,0,0,0,0,0,0,0,4,
+  5,6,7,3,1,2,255,196,0,76,16,0,1,2,3,2,2,17,18,6,
+  1,5,0,0,0,0,0,0,1,2,3,4,5,17,18,33,84,6,19,20,
+  21,22,23,54,81,83,85,131,145,163,178,193,209,225,7,34,49,51,53,65,
+  68,100,101,116,117,146,148,162,164,179,210,226,50,52,97,115,130,177,129,35,
+  36,82,113,161,255,196,0,23,1,1,1,1,1,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,3,2,1,255,196,0,38,17,1,1,0,1,2,6,
+  2,2,3,1,0,0,0,0,0,0,0,1,2,17,50,3,18,49,81,129,
+  177,19,33,65,145,113,161,193,209,255,218,0,12,3,1,0,2,17,3,17,
+  0,63,0,231,0,2,236,128,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,30,144,96,172,85,214,106,118,84,56,247,166,
+  202,66,155,143,118,98,101,37,160,162,42,172,69,98,191,14,178,34,22,153,
+  201,73,219,223,131,127,57,9,173,70,162,34,37,136,135,211,178,201,248,99,
+  44,109,191,87,79,215,252,77,74,21,49,234,141,135,91,188,247,96,107,115,
+  35,146,213,239,39,100,244,208,159,142,112,93,36,89,31,206,203,254,227,127,
+  179,92,45,215,240,99,44,235,117,102,244,39,227,156,23,72,208,159,142,112,
+  93,38,144,28,107,86,111,66,126,57,193,116,141,9,248,231,5,210,105,10,
+  186,220,220,121,92,167,40,125,219,215,173,192,139,111,99,92,10,253,9,248,
+  231,5,210,52,39,227,156,23,73,231,158,243,187,55,184,222,98,125,26,122,
+  98,102,105,204,141,18,243,81,138,182,93,68,195,106,107,1,5,249,28,148,
+  129,102,107,170,229,55,191,15,251,117,117,186,253,133,255,0,162,186,169,75,
+  89,38,178,52,8,201,53,39,17,110,182,59,90,173,235,187,237,114,47,97,
+  127,180,194,94,228,147,193,255,0,151,33,26,95,83,85,173,195,142,106,105,
+  126,147,202,220,111,54,189,190,191,166,108,0,101,96,0,0,0,0,210,214,
+  24,216,112,105,104,198,163,81,100,33,45,136,150,97,91,85,87,125,109,51,
+  70,154,183,218,169,94,143,131,202,106,109,169,103,191,31,42,192,1,150,222,
+  242,63,157,151,253,198,255,0,102,184,200,200,254,118,95,247,27,253,154,224,
+  0,0,5,38,73,60,31,249,114,23,101,69,126,12,88,217,70,85,13,239,
+  178,245,183,90,171,103,96,10,18,211,35,223,157,127,237,175,246,132,44,199,
+  51,139,198,245,20,177,161,75,198,133,54,247,68,133,17,137,149,170,90,230,
+  170,119,208,15,214,73,60,31,249,114,17,165,245,53,90,220,56,228,156,146,
+  120,63,242,228,35,75,234,106,181,184,113,205,97,215,247,233,62,38,217,252,
+  207,113,155,0,25,88,0,0,0,0,52,213,190,213,74,244,124,30,83,50,
+  105,171,125,170,149,232,248,60,166,166,218,150,123,241,242,172,0,25,109,233,
+  45,17,33,76,66,136,235,85,24,244,114,217,250,41,123,159,178,219,28,109,
+  228,231,51,192,13,14,126,203,108,113,183,147,156,103,236,182,199,27,121,57,
+  204,240,3,67,159,178,219,28,109,228,231,25,251,45,177,198,222,78,115,60,
+  0,208,231,236,182,199,27,121,57,198,126,203,108,113,183,147,156,207,0,44,
+  42,211,240,167,114,172,169,175,75,150,219,121,19,191,103,49,246,95,83,85,
+  173,195,142,87,22,50,250,154,173,110,28,115,88,117,253,250,79,137,182,127,
+  51,220,102,192,6,86,0,0,0,0,13,53,111,181,82,189,31,7,148,204,
+  154,106,223,106,165,122,62,15,41,169,182,165,158,252,124,189,50,51,68,207,
+  249,248,146,185,163,40,185,9,98,94,185,122,219,21,18,203,45,77,115,77,
+  165,183,149,126,27,238,43,250,153,247,122,63,154,187,142,195,166,18,182,234,
+  172,140,30,150,222,85,248,111,184,105,109,229,95,134,251,141,100,253,198,198,
+  87,57,90,231,35,18,200,110,192,171,133,127,2,235,244,30,19,42,235,147,
+  49,149,19,43,143,14,35,17,111,97,91,26,182,96,179,244,93,242,87,139,
+  98,248,240,117,209,154,210,219,202,191,13,247,13,45,188,171,240,223,113,168,
+  135,106,205,202,177,124,29,235,15,221,119,34,53,127,201,231,10,22,87,35,
+  47,25,205,135,9,136,216,86,221,95,197,215,49,109,92,9,173,255,0,170,
+  115,229,167,195,59,179,122,91,121,87,225,190,225,165,183,149,126,27,238,53,
+  147,113,96,196,153,128,235,101,226,178,227,211,253,71,165,219,109,111,126,197,
+  194,79,101,151,82,237,150,89,130,206,193,185,158,182,196,242,195,150,75,221,
+  132,210,219,202,191,13,247,13,45,188,171,240,223,113,188,6,181,172,233,28,
+  86,187,77,206,138,172,121,28,183,46,202,174,245,247,110,219,107,81,123,22,
+  174,185,250,151,212,213,107,112,227,147,114,117,170,169,237,207,229,180,133,47,
+  169,170,214,225,199,45,135,95,23,210,28,94,158,103,184,205,128,12,172,0,
+  0,0,0,26,106,223,106,165,122,62,15,41,153,52,213,190,213,74,244,124,
+  30,83,83,109,75,61,248,249,93,117,51,238,244,127,53,119,29,135,70,153,
+  139,26,29,220,166,95,46,182,219,122,244,109,155,231,57,234,103,221,232,254,
+  106,238,59,14,152,71,46,170,196,60,211,59,136,112,205,25,166,119,16,225,
+  154,76,7,29,67,205,51,184,135,12,209,154,103,113,14,25,164,192,4,60,
+  211,59,136,112,205,25,166,119,16,225,154,76,0,67,205,51,184,135,12,210,
+  68,187,226,196,98,172,104,57,83,173,178,237,228,118,13,124,7,160,3,146,
+  100,235,85,83,219,159,203,105,10,95,83,85,173,195,142,77,201,214,170,167,
+  183,63,150,210,20,190,166,171,91,135,28,190,31,229,244,143,23,167,153,238,
+  51,96,3,42,128,0,0,0,6,154,183,218,169,94,143,131,202,102,77,53,
+  111,181,82,189,31,7,148,212,219,82,207,126,62,87,93,76,251,189,31,205,
+  93,199,97,209,166,101,32,205,93,203,153,122,237,182,97,84,179,120,231,61,
+  76,251,189,31,205,93,199,97,209,166,98,198,135,119,41,151,203,173,182,222,
+  189,27,102,249,43,213,88,241,206,153,45,135,223,119,56,206,153,45,135,223,
+  119,56,205,51,184,135,12,209,154,103,113,14,25,167,62,221,51,166,75,97,
+  247,221,206,51,166,75,97,247,221,206,51,76,238,33,195,52,102,153,220,67,
+  134,104,251,12,233,146,216,125,247,115,140,233,146,216,125,247,115,140,211,59,
+  136,112,205,25,166,119,16,225,154,62,195,58,100,182,31,125,220,228,137,121,
+  120,82,204,86,65,109,214,170,219,101,170,184,127,201,31,52,206,226,28,51,
+  73,18,239,139,17,138,177,160,229,78,182,203,183,145,216,53,240,28,28,163,
+  39,90,170,158,220,254,91,72,82,250,154,173,110,28,114,110,78,181,85,61,
+  185,252,182,144,165,245,53,90,220,56,229,240,255,0,47,164,120,189,60,207,
+  113,155,0,25,84,0,0,0,0,52,213,190,213,74,244,124,30,83,50,105,
+  171,11,126,90,149,17,189,115,22,70,27,17,201,133,47,37,168,169,110,186,
+  119,205,77,181,44,247,227,229,117,212,207,187,209,252,213,220,118,29,48,226,
+  244,42,204,197,14,109,243,50,172,132,247,190,26,195,84,136,138,169,98,170,
+  47,121,83,88,188,211,18,173,139,201,122,143,250,137,89,170,178,186,96,57,
+  158,152,149,108,94,75,212,127,212,52,196,171,98,242,94,163,254,163,156,180,
+  213,211,1,204,244,196,171,98,242,94,163,254,161,166,37,91,23,146,245,31,
+  245,14,90,106,233,128,230,122,98,85,177,121,47,81,255,0,80,211,18,173,
+  139,201,122,143,250,135,45,53,116,192,115,61,49,42,216,188,151,168,255,0,
+  168,105,137,86,197,228,189,71,253,67,150,154,160,100,235,85,83,219,159,203,
+  105,10,95,83,85,173,195,142,120,213,170,49,106,213,8,179,179,13,99,98,
+  197,178,212,98,42,55,2,34,119,213,117,143,104,75,115,35,53,101,127,90,
+  145,29,5,140,85,193,121,200,235,85,19,93,108,194,91,14,190,47,164,120,
+  189,60,207,113,155,0,25,88,0,0,0,0,39,211,42,241,233,204,124,54,
+  195,131,49,5,235,121,97,71,101,246,35,191,228,137,222,91,48,16,0,150,
+  206,140,220,102,83,74,189,209,59,246,170,149,236,221,35,68,239,218,170,87,
+  179,116,148,64,215,62,76,124,88,118,94,232,157,251,85,74,246,110,145,162,
+  119,237,85,43,217,186,74,32,57,242,62,44,59,47,116,78,253,170,165,123,
+  55,72,209,59,246,170,149,236,221,37,16,28,249,31,22,29,151,186,39,126,
+  213,82,189,155,164,104,157,251,85,74,246,110,146,136,14,124,143,139,14,203,
+  221,19,191,106,169,94,205,210,52,78,253,170,165,123,55,73,68,7,62,71,
+  197,135,101,238,137,223,181,84,175,102,233,43,170,85,56,245,40,140,116,84,
+  135,14,28,52,178,28,40,77,186,198,107,216,159,170,225,82,24,23,43,93,
+  156,60,113,186,200,0,12,168,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,255,217
+};
+
+static void ensureSampleFolder(){
+  if(SD_MMC.exists("/ADF/SAMPLE"))return;
+  SD_MMC.mkdir("/ADF/SAMPLE");
+  File f=SD_MMC.open("/ADF/SAMPLE/Sample.adf",FILE_WRITE);
+  if(f){f.print(
+    "This placeholder shows WHERE your disk image goes.\r\n"
+    "A real game is an .adf disk image (usually 880KB for Amiga).\r\n"
+    "The browser ignores any folder named SAMPLE - copy the layout,\r\n"
+    "don't play in here.\r\n");f.close();}
+  f=SD_MMC.open("/ADF/SAMPLE/Sample.nfo",FILE_WRITE);
+  if(f){f.print(
+    "Title: Sample Game Name\r\n"
+    "Blurb: 1991 - Publisher Name - one line about the game\r\n"
+    "\r\n"
+    "This folder is an EXAMPLE ONLY - the browser ignores any folder\r\n"
+    "named SAMPLE. Copy this layout for real games:\r\n"
+    "\r\n"
+    "  /ADF/YourGame/YourGame.adf   the disk image\r\n"
+    "  /ADF/YourGame/YourGame.jpg   cover art (JPEG, any size)\r\n"
+    "  /ADF/YourGame/YourGame.nfo   this info file (plain text)\r\n"
+    "\r\n"
+    "NFO rules:\r\n"
+    "  'Title:' overrides the display name (any case: TITLE:/title:).\r\n"
+    "  'Blurb:' or 'Description:' = info text shown on the cover panel.\r\n"
+    "  Or skip the labels: first line = title, following lines = blurb.\r\n"
+    "\r\n"
+    "Multi-disk games: YourGame-1.adf, YourGame-2.adf, ...\r\n"
+    "Same pattern applies in /DSK for .dsk images.\r\n");f.close();}
+  f=SD_MMC.open("/ADF/SAMPLE/Sample.jpg",FILE_WRITE);
+  if(f){f.write(SAMPLE_JPG,sizeof(SAMPLE_JPG));f.close();}
 }
 
 // ── Game cache — defined after STATE section below ──
@@ -448,6 +616,7 @@ static bool g_wireless_mode=false,g_loop_cracktro=false,g_info_showing=false;
 // ── Screensaver (undocumented, folder-gated /screensaver/*.jpg) ──
 static std::vector<String> g_ss_paths;
 static bool g_ss_have=false, g_ss_enabled=true;
+static bool g_ss_claude=false;   // /screensaver/ exists but holds no JPGs -> bounce the Claude starburst
 static uint32_t g_last_touch_ms=0;
 static uint16_t* g_ss_buf=NULL; static int g_ss_w=0, g_ss_h=0;
 #define SS_MAX      150        // longest side of the bouncing image (virtual-canvas px)
@@ -456,13 +625,14 @@ static uint16_t* g_ss_buf=NULL; static int g_ss_w=0, g_ss_h=0;
 static uint32_t g_ss_idle_ms=SS_IDLE_MS, g_ss_load_ms=SS_LOAD_MS;   // hidden SS_IDLE=/SS_LOAD= override (seconds)
 static int g_dongle_cap=32;   // CONFIG.TXT CAP= : max wireless dongles to discover/cast (1..64)
 static int g_cracktro=0;      // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or 0 = pick one at random each boot
+static bool g_carousel_enabled=false;  // CONFIG.TXT CAROUSEL= : undocumented flag; enables the REEL button + coverflow UI
 // ── Item 4: load/eject behaviour toggles (all default OFF = safest) ──
 static bool g_tapload=false;    // ON = tapping the already-selected row loads it (old double-tap behaviour)
 static bool g_hotswap=false;    // ON = tapping another disk while loaded swaps to it instantly
 static bool g_forceswap=false;  // ON = swap disk bytes in place without the USB eject/re-attach cycle
 static int g_info_rescan_btn_y=0,g_info_reset_btn_y=0,g_info_pair_now_btn_y=0,g_info_font_btn_y=0;
 static int g_info_x=0,g_info_w=150,g_info_rot_btn_y=0,g_info_comp_btn_y=0,g_info_mode_btn_y=0,g_info_bottom=0,g_info_bh=22;
-struct GameEntry{String name;int first_file_idx;int disk_count;String jpg_path;std::vector<int>disk_indices;};
+struct GameEntry{String name;int first_file_idx;int disk_count;String jpg_path;std::vector<int>disk_indices;bool fav=false;uint16_t plays=0;};
 static std::vector<String>g_files;static std::vector<GameEntry>g_games;
 static int g_sel=0,g_scroll=0,g_disk_sel=0,g_loaded_game_idx=-1,g_loaded_disk_idx=-1;
 static int g_disk_page=0;  // current page of disk selector (6 disks/page)
@@ -524,14 +694,25 @@ static bool readGameCache(){
   return!g_games.empty();
 }
 
+// .nfo format (documented in the repo README):
+//   Labelled (labels are CASE-INSENSITIVE): "Title: ..." overrides the display
+//   name; "Blurb: ..." (or "Description: ...") starts the info text, following
+//   label-less lines are appended (up to 3).
+//   Simple (no labels): first non-empty line = title, everything after = blurb.
 static void parseNFO(const String&txt,String&t,String&b){
   t="";b="";if(!txt.length())return;
   std::vector<String>lines;int pos=0;while(pos<(int)txt.length()){int nl=txt.indexOf('\n',pos);if(nl<0)nl=txt.length();String L=txt.substring(pos,nl);L.trim();lines.push_back(L);pos=nl+1;}
   for(size_t i=0;i<lines.size();i++){
-    if(!t.length()&&lines[i].startsWith("Title:")){t=lines[i].substring(6);t.trim();}
-    if(!b.length()&&(lines[i].startsWith("Blurb:")||lines[i].startsWith("Description:"))){b=lines[i].substring(lines[i].indexOf(':')+1);b.trim();
+    String Ll=lines[i];Ll.toLowerCase();
+    if(!t.length()&&Ll.startsWith("title:")){t=lines[i].substring(6);t.trim();}
+    if(!b.length()&&(Ll.startsWith("blurb:")||Ll.startsWith("description:"))){b=lines[i].substring(lines[i].indexOf(':')+1);b.trim();
       for(size_t j=i+1;j<lines.size()&&j<i+4;j++){if(lines[j].indexOf(':')>0)break;if(lines[j].length()){b+="\n"+lines[j];}}}}
-  if(!t.length()&&lines.size())t=lines[0];
+  // Unlabelled fallback: first non-empty line = title, the rest = blurb
+  // (this is the format of the bulk-enriched .nfo library — v4.6.0 fix: the JC
+  //  previously showed only the title from these; blurbs were silently dropped)
+  if(!t.length()){for(size_t i=0;i<lines.size();i++)if(lines[i].length()){t=lines[i];break;}}
+  if(!b.length()){bool af=false;for(size_t i=0;i<lines.size();i++){if(!lines[i].length())continue;if(!af){af=true;continue;}if(b.length())b+="\n";b+=lines[i];}}
+  t.trim();b.trim();
 }
 
 static void buildGameList(){
@@ -552,6 +733,28 @@ static void buildGameList(){
   }
   std::sort(g_games.begin(),g_games.end(),[](const GameEntry&a,const GameEntry&b){String al=a.name,bl=b.name;al.toLowerCase();bl.toLowerCase();return al<bl;});
   writeGameCache();
+}
+// ── Per-game stats: favourites + play counts, keyed by name, survives RESCAN ──
+static String statsPath(){return "/.gtistats";}
+static void applyStats(){
+  File f=SD_MMC.open(statsPath().c_str(),FILE_READ);if(!f)return;
+  while(f.available()){String line=f.readStringUntil('\n');line.trim();if(!line.length())continue;
+    int p1=line.indexOf('|');if(p1<0)continue;int p2=line.indexOf('|',p1+1);if(p2<0)continue;
+    int fv=line.substring(0,p1).toInt();int pl=line.substring(p1+1,p2).toInt();String nm=line.substring(p2+1);
+    for(auto&g:g_games){if(g.name==nm){g.fav=(fv!=0);g.plays=(uint16_t)pl;break;}}}
+  f.close();
+}
+static void saveStats(){
+  std::vector<String>names;std::vector<int>favs,plays;
+  File f=SD_MMC.open(statsPath().c_str(),FILE_READ);
+  if(f){while(f.available()){String line=f.readStringUntil('\n');line.trim();if(!line.length())continue;
+    int p1=line.indexOf('|');if(p1<0)continue;int p2=line.indexOf('|',p1+1);if(p2<0)continue;
+    names.push_back(line.substring(p2+1));favs.push_back(line.substring(0,p1).toInt());plays.push_back(line.substring(p1+1,p2).toInt());}f.close();}
+  for(auto&g:g_games){if(!g.fav&&g.plays==0)continue;int idx=-1;for(size_t i=0;i<names.size();i++)if(names[i]==g.name){idx=(int)i;break;}
+    if(idx<0){names.push_back(g.name);favs.push_back(g.fav?1:0);plays.push_back(g.plays);}else{favs[idx]=g.fav?1:0;plays[idx]=g.plays;}}
+  File w=SD_MMC.open(statsPath().c_str(),FILE_WRITE);if(!w)return;
+  for(size_t i=0;i<names.size();i++){if(favs[i]==0&&plays[i]==0)continue;w.print(favs[i]);w.print("|");w.print(plays[i]);w.print("|");w.println(names[i]);}
+  w.close();
 }
 static char active_letters[27];static int active_letter_count=0;
 static void buildActiveLetters(){bool s[26]={};bool hasHash=false;
@@ -714,7 +917,7 @@ static void loadConfig(){
   File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);if(!f)return;
   while(f.available()){String l=f.readStringUntil('\n');l.trim();if(l.startsWith("#"))continue;
     int eq=l.indexOf('=');if(eq<0)continue;String k=l.substring(0,eq),v=l.substring(eq+1);k.trim();v.trim();
-    if(k=="THEME")applyTheme(v.toInt());else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");
+    if(k=="THEME")applyTheme(v.toInt());else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");else if(k=="CAROUSEL")g_carousel_enabled=(v=="1"||v=="ON"||v=="true");
     else if(k=="TAPLOAD")g_tapload=(v=="ON"||v=="1");else if(k=="HOTSWAP")g_hotswap=(v=="ON"||v=="1");else if(k=="FORCESWAP")g_forceswap=(v=="ON"||v=="1");
     else if(k=="FONT"){int f=1;if(v=="SMALL")f=0;else if(v=="LARGE")f=2;applyFont(f);}
     else if(k=="ROTATE"){g_rot=((v.toInt()/90)%4+4)%4;}
@@ -828,7 +1031,7 @@ static void crk_txtC(int cx,int y,const char*s,int sz,uint16_t col){crk_txt(cx-c
 static void crk_txtShadow(int cx,int y,const char*s,int sz,uint16_t col){
   crk_txt(cx-crk_txtW(s,sz)/2+2,y+2,s,sz,CRK_RGB(5,6,12));crk_txtC(cx,y,s,sz,col);}
 
-static const char* CRK_SCROLL="        OMEGAWARE PRESENTS ... THE GOTEK TOUCHSCREEN INTERFACE ... CODED BY MEZ & DIMMY ... A LITTLE TRIBUTE TO THE AMIGA CRACKTRO LEGENDS ... GREETINGS TO EVERYONE KEEPING THE SCENE ALIVE ... NOW GO LOAD A GAME ...        ";
+static const char* CRK_SCROLL="        OMEGAWARE PRESENTS ... THE GTi ... THE FLOPPY FLINGER THINGER ... CODED BY MEZ & DIMMY ... A LITTLE TRIBUTE TO THE AMIGA CRACKTRO LEGENDS ... GREETINGS TO EVERYONE KEEPING THE SCENE ALIVE ... NOW GO LOAD A GAME ...        ";
 static void crk_scroller(float t,uint16_t col,float amp,bool rainbow){
   const int sz=2,cw=12; int slen=strlen(CRK_SCROLL);
   long cs=(long)(t*0.13f); int sc=(int)(cs/cw), px=(int)(cs%cw);
@@ -1085,9 +1288,12 @@ static void drawFileList(){
     else gfx_fillRoundRect(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,3,COL_PANEL);
     uint16_t acCol=ld?COL_GREEN:(sel?COL_AMBER:COL_ACCENT);gfx_fillRect(LIST_X+3,y+3,3,LIST_ITEM_H-4,acCol);
     int r=8+g_name_sz*3,cx=LIST_X+6+r,cy=y+LIST_ITEM_H/2;
+    if(game.fav){gfx_fillStar(cx,cy,(float)r,COL_STAR);}
+    else{
     gfx_fillCircle(cx,cy,r,sel?COL_AMBER:(ld?COL_GREEN:COL_CIRC));
     gfx_setTextSize(g_name_sz);gfx_setTextColor(sel||ld?TFT_BLACK:COL_CIRC_TEXT,sel?COL_AMBER:COL_CIRC);
     char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setCursor(cx-gfx_textWidth(ib)/2,cy-4*g_name_sz);gfx_print(ib);
+    }
     int nx=cx+r+6;gfx_setTextSize(g_name_sz);gfx_setTextColor(sel?TFT_WHITE:COL_LIT,sel?COL_SEL:COL_PANEL);
     int maxNW=LIST_W-(nx-LIST_X)-8-(game.disk_count>1?36:0);
     if(sel&&gfx_textWidth(game.name)>maxNW){
@@ -1160,13 +1366,464 @@ static bool handleAlphabetTouch(uint16_t px,uint16_t py){
 
 static void drawBottomBar(){
   int y=VH-BOTTOM_H;gfx_fillRect(0,y,VW,BOTTOM_H,COL_BAR);gfx_hline(0,y,VW,COL_SEP);
-  int bw=VW/4;
-  struct{const char*icon;const char*label;uint16_t col;}btns[4]={{"<","PREV",COL_ORANGE},{">","NEXT",COL_BLUE},{"#","THEME",COL_AMBER},{"i","INFO",COL_MID}};
-  for(int i=0;i<4;i++){int bx=i*bw;if(i>0)gfx_vline(bx,y+3,BOTTOM_H-6,COL_SEP);
-    int cx=bx+bw/2,cy2=y+10;gfx_fillCircle(cx,cy2,8,(uint16_t)(btns[i].col>>2));gfx_drawCircle(cx,cy2,8,btns[i].col);
-    gfx_setTextSize(1);gfx_setTextColor(btns[i].col,(uint16_t)(btns[i].col>>2));int tw=gfx_textWidth(btns[i].icon);gfx_setCursor(cx-tw/2,cy2-4);gfx_print(btns[i].icon);
-    gfx_setTextColor(COL_DIM,COL_BAR);tw=gfx_textWidth(btns[i].label);gfx_setCursor(bx+(bw-tw)/2,y+22);gfx_print(btns[i].label);}
+  // 5 buttons when the (undocumented) carousel is enabled, classic 4 otherwise
+  int nb=g_carousel_enabled?5:4;int bw=VW/nb;
+  struct{const char*icon;const char*label;uint16_t col;}btns[5]={{"<","PREV",COL_ORANGE},{">","NEXT",COL_BLUE},{"#","THEME",COL_AMBER},{"o","REEL",COL_GREEN},{"i","INFO",COL_MID}};
+  for(int i=0;i<nb;i++){
+    int bi=(i<3)?i:(g_carousel_enabled?i:i+1);   // slot -> button (skip REEL when disabled)
+    int bx=i*bw;if(i>0)gfx_vline(bx,y+3,BOTTOM_H-6,COL_SEP);
+    int cx=bx+bw/2,cy2=y+10;gfx_fillCircle(cx,cy2,8,(uint16_t)(btns[bi].col>>2));gfx_drawCircle(cx,cy2,8,btns[bi].col);
+    gfx_setTextSize(1);gfx_setTextColor(btns[bi].col,(uint16_t)(btns[bi].col>>2));int tw=gfx_textWidth(btns[bi].icon);gfx_setCursor(cx-tw/2,cy2-4);gfx_print(btns[bi].icon);
+    gfx_setTextColor(COL_DIM,COL_BAR);tw=gfx_textWidth(btns[bi].label);gfx_setCursor(bx+(bw-tw)/2,y+22);gfx_print(btns[bi].label);}
   gfx_setTextColor((uint16_t)(COL_AMBER>>1),COL_BAR);String tn=THEMES[g_theme_idx].name;int tw=gfx_textWidth(tn);gfx_setCursor(2*bw+(bw-tw)/2,y+33);gfx_print(tn);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CAROUSEL — "fake coverflow" reel (undocumented; enabled by CAROUSEL=1)
+// Center cover full-size, neighbours scaled+squashed+dimmed, looping reel.
+// Sources cycle ALL -> FAV -> MOST -> RND (RND = shuffle-jump to one random
+// cover). Tap center = INSERT/EJECT (deliberate; no automount). [LIST] exits.
+// ════════════════════════════════════════════════════════════════════════════
+static bool g_car_active=false;
+static int  g_car_src=0;                        // 0=ALL 1=FAV 2=MOST 3=RND
+static std::vector<int> g_car_list;             // reel order -> g_games indices
+static float g_car_pos=0;                       // fractional reel position
+// touch/inertia — same feel constants as the list scroll
+static bool g_car_touch=false,g_car_moved=false,g_car_coast=false;
+static int  g_car_x0=0,g_car_y0=0,g_car_lastX=0,g_car_rel=0;
+static float g_car_pos0=0,g_car_vel=0,g_car_ivel=0;
+static uint32_t g_car_lastMs=0;
+#define CAR_PX_PER_STEP 120.0f
+// RND dice-roll spin: slot-machine ease-out to the chosen cover + a d6 overlay.
+// (Born of Copilot's "you rolled a d6 and it came out 23" — hence the 1-in-23
+//  chance the die lands showing 23. The impossible roll, canonized.)
+static bool  g_car_spin=false, g_car_dieShow=false, g_car_die23=false;
+static float g_car_spinTarget=0;
+static uint8_t g_car_die=1, g_car_dieTick=0;
+static void runScreensaver();   // defined below; the reel's idle tick can summon it
+#define CAR_TILE  150                            // decoded cover tile size (px)
+#define CAR_SLOTS 16                             // LRU tile cache entries (PSRAM, ~720 KB)
+static uint16_t* car_buf[CAR_SLOTS]={0};
+static int      car_game[CAR_SLOTS]={-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
+static uint32_t car_stamp[CAR_SLOTS]={0};
+static uint32_t car_tick_ctr=0;
+
+static int carN(){return (int)g_car_list.size();}
+static int carWrap(int i){int n=carN();if(n<=0)return 0;i%=n;if(i<0)i+=n;return i;}
+static const char* carSrcName(){return g_car_src==1?"FAV":g_car_src==2?"MOST":"ALL";}
+
+static void carBuildList(){
+  g_car_list.clear();
+  int n=(int)g_games.size();
+  if(g_car_src==1){for(int i=0;i<n;i++)if(g_games[i].fav)g_car_list.push_back(i);}
+  else if(g_car_src==2){for(int i=0;i<n;i++)g_car_list.push_back(i);
+    std::sort(g_car_list.begin(),g_car_list.end(),[](int a,int b){
+      if(g_games[a].plays!=g_games[b].plays)return g_games[a].plays>g_games[b].plays;
+      String al=g_games[a].name,bl=g_games[b].name;al.toLowerCase();bl.toLowerCase();return al<bl;});}
+  else{for(int i=0;i<n;i++)g_car_list.push_back(i);}   // ALL and RND share A-Z order
+}
+
+// Decode a game's cover into a CAR_TILE x CAR_TILE tile (aspect-fit, COL_BAR letterbox).
+static bool carDecodeTile(int gi,uint16_t*dst){
+  for(int i=0;i<CAR_TILE*CAR_TILE;i++)dst[i]=COL_BAR;
+  auto&game=g_games[gi];
+  if(!game.jpg_path.length()){String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg))game.jpg_path=jpg;else game.jpg_path="?";}
+  if(!(game.jpg_path.length()>0&&game.jpg_path!="?"))return false;
+  String vfsPath="/sdcard"+game.jpg_path;struct stat st;
+  if(stat(vfsPath.c_str(),&st)!=0||st.st_size==0||st.st_size>500000)return false;
+  size_t sz=(size_t)st.st_size;
+  File f=SD_MMC.open(game.jpg_path.c_str(),"r");if(!f)return false;
+  uint8_t*buf=(uint8_t*)ps_malloc(sz);if(!buf){f.close();return false;}
+  f.read(buf,sz);f.close();
+  if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return false;}
+  int jw=jpegdec.getWidth(),jh=jpegdec.getHeight();
+  if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return false;}
+  // Use JPEGDEC's built-in downscale: decoding a big cover at 1/2, 1/4 or 1/8
+  // is up to 16x less work than full-decode-then-shrink (the "slow covers" fix).
+  int opt=0,div=1;
+  if(jw>=CAR_TILE*8&&jh>=CAR_TILE*8){opt=JPEG_SCALE_EIGHTH;div=8;}
+  else if(jw>=CAR_TILE*4&&jh>=CAR_TILE*4){opt=JPEG_SCALE_QUARTER;div=4;}
+  else if(jw>=CAR_TILE*2&&jh>=CAR_TILE*2){opt=JPEG_SCALE_HALF;div=2;}
+  int djw=jw/div,djh=jh/div;
+  jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)djw*djh*2);
+  if(!jpeg_tmp_buf){jpegdec.close();free(buf);return false;}
+  memset(jpeg_tmp_buf,0,(size_t)djw*djh*2);jpeg_tmp_w=djw;jpeg_tmp_h=djh;
+  jpegdec.decode(0,0,opt);jpegdec.close();free(buf);
+  float sc=min((float)CAR_TILE/djw,(float)CAR_TILE/djh);if(sc>1.0f)sc=1.0f;
+  int dw=(int)(djw*sc),dh=(int)(djh*sc);
+  int ox=(CAR_TILE-dw)/2,oy=(CAR_TILE-dh)/2;
+  for(int r=0;r<dh;r++){int sy=(int)(r/sc);if(sy>=djh)sy=djh-1;
+    for(int c=0;c<dw;c++){int sx=(int)(c/sc);if(sx>=djw)sx=djw-1;
+      dst[(oy+r)*CAR_TILE+(ox+c)]=jpeg_tmp_buf[sy*djw+sx];}
+    if(r%20==0)yield();}
+  free(jpeg_tmp_buf);jpeg_tmp_buf=NULL;return true;
+}
+// Persistent SD thumbnail cache: the first view decodes the big JPEG once, then
+// the finished 45 KB tile is written beside the game as ".<name>.tnl". Every
+// later view (incl. after reboot) reads 45 KB raw instead of a ~500 KB JPEG —
+// ~10x less SD traffic and zero decode. Stale-checked against the JPG's mtime.
+// Thumbs live in ONE central folder per side (/ADF/.thumbs, /DSK/.thumbs) —
+// game folders stay pristine, and deleting the .thumbs folder resets the cache.
+// A short path-hash suffix prevents same-name collisions across folders.
+static String carThumbRoot(int gi){
+  return (g_files[g_games[gi].first_file_idx].startsWith("/DSK"))?String("/DSK/.thumbs"):String("/ADF/.thumbs");
+}
+static String carThumbPath(int gi){
+  auto&g=g_games[gi];
+  const String&p=g_files[g.first_file_idx];
+  uint32_t h=5381; for(unsigned i=0;i<p.length();i++)h=((h<<5)+h)^(uint8_t)p[i];   // djb2-xor
+  char hx[6]; snprintf(hx,sizeof(hx),"%04X",(unsigned)(h&0xFFFF));
+  return carThumbRoot(gi)+"/"+getGameBaseName(p)+"_"+hx+".tnl";
+}
+static bool carLoadThumb(int gi,uint16_t*dst){
+  auto&g=g_games[gi];
+  if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return false;
+  String tp=carThumbPath(gi);
+  struct stat stT,stJ;
+  String vT="/sdcard"+tp,vJ="/sdcard"+g.jpg_path;
+  if(stat(vT.c_str(),&stT)!=0)return false;
+  if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))return false;
+  if(stat(vJ.c_str(),&stJ)==0&&stJ.st_mtime>stT.st_mtime)return false;   // cover replaced -> stale
+  File f=SD_MMC.open(tp.c_str(),"r");if(!f)return false;
+  size_t want=(size_t)CAR_TILE*CAR_TILE*2;
+  size_t got=f.read((uint8_t*)dst,want);f.close();
+  return got==want;
+}
+static void carSaveThumb(int gi,uint16_t*src){
+  auto&g=g_games[gi];
+  if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return;
+  String root=carThumbRoot(gi);
+  if(!SD_MMC.exists(root.c_str()))SD_MMC.mkdir(root.c_str());
+  File f=SD_MMC.open(carThumbPath(gi).c_str(),FILE_WRITE);if(!f)return;
+  f.write((uint8_t*)src,(size_t)CAR_TILE*CAR_TILE*2);f.close();
+}
+// Fetch a game's tile (NULL if uncached and decoding isn't allowed right now).
+static uint16_t* carTile(int gi,bool mayDecode){
+  for(int s=0;s<CAR_SLOTS;s++)if(car_buf[s]&&car_game[s]==gi){car_stamp[s]=++car_tick_ctr;return car_buf[s];}
+  if(!mayDecode)return NULL;
+  int slot=-1;uint32_t old=0xFFFFFFFF;
+  for(int s=0;s<CAR_SLOTS;s++){
+    if(!car_buf[s]){car_buf[s]=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2);if(!car_buf[s])continue;car_game[s]=-1;car_stamp[s]=0;}
+    if(car_game[s]<0){slot=s;break;}
+    if(car_stamp[s]<old){old=car_stamp[s];slot=s;}
+  }
+  if(slot<0)return NULL;
+  car_game[slot]=gi;car_stamp[slot]=++car_tick_ctr;
+  if(!carLoadThumb(gi,car_buf[slot])){                       // fast path: 45 KB raw thumb
+    if(carDecodeTile(gi,car_buf[slot]))carSaveThumb(gi,car_buf[slot]);   // self-heal fallback (rare)
+  }
+  return car_buf[slot];
+}
+// Build ALL cover thumbnails up-front — first launch of a card and RESCAN only
+// (Michael's call: one predictable pass with a progress bar, never live jank).
+// Fresh thumbs are stat-checked and skipped, so a re-run over a built card is
+// seconds, not minutes. Only runs when the carousel is enabled at all.
+static void buildThumbs(){
+  if(!g_carousel_enabled)return;
+  int n=(int)g_games.size(); if(!n)return;
+  uint16_t*tmp=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2);
+  if(!tmp)return;
+  uint32_t lastDraw=0;
+  for(int i=0;i<n;i++){
+    auto&g=g_games[i];
+    if(!g.jpg_path.length()){String jpg;if(findJPGFor(g_files[g.first_file_idx],jpg))g.jpg_path=jpg;else g.jpg_path="?";}
+    bool need=false;
+    if(g.jpg_path.length()>0&&g.jpg_path!="?"){
+      String vT="/sdcard"+carThumbPath(i),vJ="/sdcard"+g.jpg_path;
+      struct stat stT,stJ;
+      if(stat(vT.c_str(),&stT)!=0)need=true;
+      else if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))need=true;
+      else if(stat(vJ.c_str(),&stJ)==0&&stJ.st_mtime>stT.st_mtime)need=true;
+    }
+    if(need&&carDecodeTile(i,tmp))carSaveThumb(i,tmp);
+    uint32_t nowMs=millis();
+    if(nowMs-lastDraw>100||i==n-1){
+      lastDraw=nowMs;
+      gfx_fillScreen(0x1082);
+      gfx_setTextSize(2);gfx_setTextColor(0xFC60,0x1082);
+      {const char*s="BUILDING COVER CACHE";int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH/2-50);gfx_print(s);}
+      gfx_setTextSize(1);gfx_setTextColor(0x9BD6,0x1082);
+      {String m=String(i+1)+" / "+String(n);int tw=gfx_textWidth(m);gfx_setCursor((gW-tw)/2,gH/2-22);gfx_print(m);}
+      int bw2=gW-120,bx=60,by=gH/2;
+      gfx_drawRect(bx,by,bw2,12,0x4A8A);
+      gfx_fillRect(bx+2,by+2,(int)((long)(bw2-4)*(i+1)/n),8,0x07E0);
+      gfx_setTextColor(0x4A8A,0x1082);
+      {const char*s="one-off: reel thumbnails (first launch / rescan)";int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH/2+26);gfx_print(s);}
+      gfx_flush();
+    }
+    if((i&7)==0)yield();
+  }
+  free(tmp);
+  writeGameCache();   // persist jpg paths resolved during the build (faster covers later too)
+}
+
+static inline uint16_t carDim(uint16_t c,int lvl){
+  if(lvl<=0)return c;
+  if(lvl==1)return (uint16_t)((c>>1)&0x7BEF);    // ~50%
+  return (uint16_t)((c>>2)&0x39E7);              // ~25%
+}
+// Blit a tile scaled to w x h centred at (cx,cy), dim level 0..2, nearest-neighbour.
+static void carBlit(uint16_t*tile,int cx,int cy,int w,int h,int dim){
+  int x0=cx-w/2,y0=cy-h/2;
+  for(int dy=0;dy<h;dy++){int sy=dy*CAR_TILE/h;
+    for(int dx=0;dx<w;dx++){int sx=dx*CAR_TILE/w;
+      gfx_drawPixel(x0+dx,y0+dy,carDim(tile?tile[sy*CAR_TILE+sx]:COL_BAR,dim));}}
+}
+
+// The d6 overlay: pips while rolling, final face at rest — or "23" on the lucky roll.
+static void carDrawDie(){
+  int s=26,x=VW/2-s/2,y=STATUS_H+4;
+  gfx_fillRoundRect(x,y,s,s,5,0xFFFF);
+  gfx_drawRoundRect(x,y,s,s,5,COL_ACCENT);
+  int c=x+s/2,m=y+s/2,o=7;
+  if(g_car_die23&&!g_car_spin){
+    gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0xFFFF);
+    gfx_setCursor(c-6,m-4);gfx_print("23");return;   // a d6, and it came out 23
+  }
+  uint8_t f=g_car_die;
+  if(f&1)gfx_fillCircle(c,m,2,TFT_BLACK);
+  if(f>=2){gfx_fillCircle(c-o,m-o,2,TFT_BLACK);gfx_fillCircle(c+o,m+o,2,TFT_BLACK);}
+  if(f>=4){gfx_fillCircle(c+o,m-o,2,TFT_BLACK);gfx_fillCircle(c-o,m+o,2,TFT_BLACK);}
+  if(f==6){gfx_fillCircle(c-o,m,2,TFT_BLACK);gfx_fillCircle(c+o,m,2,TFT_BLACK);}
+}
+
+static void drawCarousel(){
+  drawStatusBar();
+  gfx_fillRect(0,STATUS_H,VW,VH-STATUS_H-BOTTOM_H,COL_BG);
+  int n=carN();
+  int ccx=VW/2, ccy=STATUS_H+12+CAR_TILE/2;              // center cover: y 32..182
+  if(n==0){
+    gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);
+    String m=(g_car_src==1)?"NO FAVOURITES YET":"NO GAMES";
+    gfx_setCursor((VW-gfx_textWidth(m))/2,110);gfx_print(m);
+    if(g_car_src==1){gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
+      String h="star games: tap the letter circle in the list";
+      gfx_setCursor((VW-gfx_textWidth(h))/2,140);gfx_print(h);}
+  }else{
+    int ci=(int)lroundf(g_car_pos);
+    float frac=g_car_pos-(float)ci;                      // -0.5..0.5
+    bool moving=(g_car_touch&&g_car_moved)||g_car_coast||g_car_spin;
+    int maxOff=(n>=5)?2:((n>=2)?1:0);
+    // Warm the cache CENTER-FIRST when settled (painter's order would decode
+    // the side covers before the star of the show — backwards for the eye).
+    if(!moving){
+      carTile(g_car_list[carWrap(ci)],true);
+      if(maxOff>=1){carTile(g_car_list[carWrap(ci-1)],true);carTile(g_car_list[carWrap(ci+1)],true);}
+    }
+    // far to near, center last (painter's order)
+    static const int order[5]={-2,2,-1,1,0};
+    for(int oi=0;oi<5;oi++){
+      int off=order[oi];if(abs(off)>maxOff)continue;
+      int gi=g_car_list[carWrap(ci+off)];
+      float rel=(float)off-frac;
+      float ar=fabsf(rel);if(ar>2.6f)continue;
+      int x=ccx+(int)(rel*110.0f*(1.0f-min(ar,1.0f)*0.22f));
+      float scale=1.0f-ar*0.28f;if(scale<0.42f)scale=0.42f;
+      float squash=1.0f-ar*0.20f;if(squash<0.55f)squash=0.55f;
+      int h=(int)(CAR_TILE*scale),w=(int)(CAR_TILE*scale*squash);
+      int dim=(ar<0.5f)?0:((ar<1.6f)?1:2);
+      uint16_t*tile=carTile(gi,!moving&&ar<1.6f);
+      carBlit(tile,x,ccy,w,h,dim);
+      auto&gm=g_games[gi];
+      bool isLd=(g_loaded&&g_loaded_game_idx==gi);
+      uint16_t bord=(ar<0.5f)?(isLd?COL_GREEN:COL_AMBER):COL_ACCENT;
+      gfx_drawRect(x-w/2-1,ccy-h/2-1,w+2,h+2,bord);
+      if(isLd)gfx_drawRect(x-w/2-2,ccy-h/2-2,w+4,h+4,COL_GREEN);
+      // no-art placeholder letter
+      if(gm.jpg_path=="?"){int ls=(w>=110)?4:2;char ib[2]={(char)toupper(gm.name.charAt(0)),0};
+        gfx_setTextSize(ls);gfx_setTextColor(carDim(COL_LIT,dim),carDim(COL_BAR,dim));
+        gfx_setCursor(x-3*ls,ccy-4*ls);gfx_print(ib);}
+      // favourite star on the center cover
+      if(ar<0.5f&&gm.fav)gfx_fillStar(x+w/2-13,ccy-h/2+13,9.0f,COL_STAR);
+    }
+    // center title + info
+    int gi=g_car_list[carWrap(ci)];
+    auto&game=g_games[gi];
+    gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);
+    String t=game.name;while(gfx_textWidth(t)>VW-24&&t.length()>3)t=t.substring(0,t.length()-1);
+    gfx_setCursor((VW-gfx_textWidth(t))/2,190);gfx_print(t);
+    // lazy NFO blurb (same pattern as the cover panel, keyed to the center game)
+    static int carNfoSel=-1;static String carBlurb="";
+    if(carNfoSel!=gi){carNfoSel=gi;carBlurb="";String nfoP,nT,nB;
+      if(findNFOFor(g_files[game.first_file_idx],nfoP)){File nf=SD_MMC.open(nfoP,FILE_READ);
+        if(nf){String txt;while(nf.available()&&txt.length()<512)txt+=(char)nf.read();nf.close();parseNFO(txt,nT,nB);
+          if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=nT;carBlurb=nB;}}}
+    if(carBlurb.length()){gfx_setTextSize(1);
+      drawWrapped(70,210,carBlurb,VW-140,10,2,232,COL_MID,COL_BG);}
+    // reel position "i/n" top-right of the stage
+    gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
+    String pn=String(carWrap(ci)+1)+"/"+String(n);
+    gfx_setCursor(VW-8-gfx_textWidth(pn),STATUS_H+4);gfx_print(pn);
+    // swipe hint under blurb area (only when reel is idle at a favourite-less fresh boot? keep always, subtle)
+    gfx_setTextColor(COL_DIM,COL_BG);
+    String hint=String("< swipe >   tap cover = ")+((g_loaded&&g_loaded_game_idx==gi)?"EJECT":"INSERT");
+    gfx_setCursor((VW-gfx_textWidth(hint))/2,VH-BOTTOM_H-12);gfx_print(hint);
+  }
+  // carousel bottom bar: [LIST] | [source ALL/FAV/MOST] | [ROLL]
+  int y=VH-BOTTOM_H;gfx_fillRect(0,y,VW,BOTTOM_H,COL_BAR);gfx_hline(0,y,VW,COL_SEP);
+  int bw=VW/3;
+  gfx_vline(bw,y+3,BOTTOM_H-6,COL_SEP);gfx_vline(2*bw,y+3,BOTTOM_H-6,COL_SEP);
+  // LIST
+  gfx_fillCircle(bw/2,y+10,8,(uint16_t)(COL_ORANGE>>2));gfx_drawCircle(bw/2,y+10,8,COL_ORANGE);
+  gfx_setTextSize(1);gfx_setTextColor(COL_ORANGE,(uint16_t)(COL_ORANGE>>2));gfx_setCursor(bw/2-3,y+6);gfx_print("=");
+  gfx_setTextColor(COL_DIM,COL_BAR);gfx_setCursor((bw-gfx_textWidth("LIST"))/2,y+22);gfx_print("LIST");
+  // SOURCE (cycles ALL/FAV/MOST)
+  gfx_fillCircle(bw+bw/2,y+10,8,(uint16_t)(COL_AMBER>>2));gfx_drawCircle(bw+bw/2,y+10,8,COL_AMBER);
+  gfx_setTextColor(COL_AMBER,(uint16_t)(COL_AMBER>>2));gfx_setCursor(bw+bw/2-3,y+6);gfx_print("*");
+  gfx_setTextColor(COL_AMBER,COL_BAR);
+  String sl=carSrcName();gfx_setCursor(bw+(bw-gfx_textWidth(sl))/2,y+22);gfx_print(sl);
+  // ROLL — icon is a tiny die (of course it is)
+  {int dx=2*bw+bw/2,dy2=y+10,ds=16;
+   gfx_fillRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,0xFFFF);
+   gfx_drawRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,COL_GREEN);
+   int o=4;
+   gfx_fillCircle(dx,dy2,1,TFT_BLACK);
+   gfx_fillCircle(dx-o,dy2-o,1,TFT_BLACK);gfx_fillCircle(dx+o,dy2+o,1,TFT_BLACK);
+   gfx_fillCircle(dx+o,dy2-o,1,TFT_BLACK);gfx_fillCircle(dx-o,dy2+o,1,TFT_BLACK);
+   gfx_setTextColor(COL_DIM,COL_BAR);gfx_setCursor(2*bw+(bw-gfx_textWidth("ROLL"))/2,y+22);gfx_print("ROLL");}
+  if(g_car_dieShow&&carN()>0)carDrawDie();   // dice overlay rides on top of everything
+}
+
+static void carEnter(){
+  carBuildList();                                        // stats/favs may have changed
+  g_car_active=true;g_car_touch=false;g_car_coast=false;
+  int start=0;for(int i=0;i<carN();i++)if(g_car_list[i]==g_sel){start=i;break;}
+  g_car_pos=(float)start;
+  drawCarousel();gfx_flush();
+}
+static void carExit(){g_car_active=false;drawFullUI();gfx_flush();}
+static void carCycleSrc(){
+  g_car_src=(g_car_src+1)%3;carBuildList();          // ALL -> FAV -> MOST (RND is its own button now)
+  g_car_spin=false;g_car_dieShow=false;
+  if(carN()>0){int start=0;for(int i=0;i<carN();i++)if(g_car_list[i]==g_sel){start=i;break;}g_car_pos=(float)start;}
+  else g_car_pos=0;
+  g_car_coast=false;drawCarousel();gfx_flush();
+}
+// ROLL — the dice button. Spins to a random cover WITHIN the current source
+// (roll a random favourite, a random most-played, or a random anything).
+// Every tap re-rolls. That's the fun; it deserved its own button.
+static void carRollDice(){
+  int n=carN(); if(n<=0)return;
+  int tgt=(int)(esp_random()%n);
+  int cur=carWrap((int)lroundf(g_car_pos));
+  int off=((tgt-cur)%n+n)%n; if(off<15)off+=n;       // at least 15 covers of travel
+  g_car_pos=(float)cur;
+  g_car_spinTarget=(float)cur+(float)off;
+  g_car_spin=true; g_car_dieShow=true; g_car_coast=false;
+  g_car_die=1+(uint8_t)(esp_random()%6);
+  g_car_die23=((esp_random()%23)==0);                // the impossible roll
+  drawCarousel();gfx_flush();
+}
+
+static void carHandleTap(uint16_t px,uint16_t py){
+  if(py>=(uint16_t)(VH-BOTTOM_H)){
+    if(px<(uint16_t)(VW/3))carExit();
+    else if(px<(uint16_t)(2*VW/3))carCycleSrc();
+    else carRollDice();                                // every tap re-rolls
+    return;}
+  int n=carN();if(!n)return;
+  int ci=carWrap((int)lroundf(g_car_pos));
+  int ccx=VW/2,ccy=STATUS_H+12+CAR_TILE/2;
+  if(px>=(uint16_t)(ccx-CAR_TILE/2)&&px<(uint16_t)(ccx+CAR_TILE/2)&&
+     py>=(uint16_t)(ccy-CAR_TILE/2)&&py<(uint16_t)(ccy+CAR_TILE/2)){
+    // center cover tap = deliberate INSERT / EJECT (no automount anywhere else)
+    int gi=g_car_list[ci];
+    g_sel=gi;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[gi].name));
+    if(g_loaded&&g_loaded_game_idx==gi)doUnload();
+    else{auto&gm=g_games[gi];doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[0]]);}
+    if(g_car_active){drawCarousel();gfx_flush();}        // repaint over the list redraw the loader did
+    return;
+  }
+  // side tap = step one cover toward that side
+  if(px<(uint16_t)(ccx-CAR_TILE/2))g_car_pos-=1.0f;
+  else if(px>=(uint16_t)(ccx+CAR_TILE/2))g_car_pos+=1.0f;
+  else return;
+  g_car_pos=(float)carWrap((int)lroundf(g_car_pos));
+  g_car_coast=false;drawCarousel();gfx_flush();
+}
+
+// Carousel touch state machine — mirrors the list's tap/drag/coast logic.
+static void carTick(bool touch,uint16_t px,uint16_t py,uint32_t now){
+  int n=carN();
+  if(touch){
+    g_car_rel=0;
+    if(!g_car_touch){
+      // a touch mid-roll skips the spin straight to the result; any touch clears the die
+      if(g_car_spin){g_car_spin=false;g_car_pos=(float)carWrap((int)lroundf(g_car_spinTarget));}
+      g_car_dieShow=false;
+      g_car_touch=true;g_car_moved=false;g_car_x0=px;g_car_y0=py;g_car_lastX=px;
+      g_car_pos0=g_car_pos;g_car_vel=0;g_car_coast=false;g_car_lastMs=now;
+    }else{
+      if(abs((int)px-g_car_x0)>DRAG_THRESH)g_car_moved=true;
+      if(g_car_moved&&n>0&&py<(uint16_t)(VH-BOTTOM_H)){
+        g_car_pos=g_car_pos0-((float)((int)px-g_car_x0))/CAR_PX_PER_STEP;
+        uint32_t dt=now-g_car_lastMs;
+        if(dt>0){g_car_vel=((float)((int)px-g_car_lastX))/(float)dt;g_car_lastX=px;g_car_lastMs=now;}
+        drawCarousel();gfx_flush();
+      }
+    }
+    return;
+  }
+  if(g_car_touch){
+    if(++g_car_rel<RELEASE_FRAMES)return;
+    g_car_touch=false;g_car_rel=0;
+    if(g_car_moved){g_car_ivel=-g_car_vel*16.0f/CAR_PX_PER_STEP;g_car_coast=(fabsf(g_car_ivel)>0.004f);if(!g_car_coast){g_car_coast=true;g_car_ivel=0;}}
+    else carHandleTap((uint16_t)g_car_x0,(uint16_t)g_car_y0);
+    return;
+  }
+  if(g_car_spin&&n>0){
+    // dice-roll spin: ease-out toward the pre-chosen target, tumbling the die
+    float d=g_car_spinTarget-g_car_pos;
+    g_car_pos+=d*0.14f;
+    if((++g_car_dieTick&3)==0)g_car_die=1+(uint8_t)(esp_random()%6);   // tumble pips
+    if(fabsf(d)<0.05f){
+      g_car_pos=(float)carWrap((int)lroundf(g_car_spinTarget));
+      g_car_spin=false;                                  // die rests on its final face
+      g_car_die=1+(uint8_t)(esp_random()%6);
+    }
+    drawCarousel();gfx_flush();
+    return;
+  }
+  if(g_car_coast&&n>0){
+    g_car_pos+=g_car_ivel;g_car_ivel*=0.92f;
+    if(fabsf(g_car_ivel)<0.02f){
+      float target=(float)lroundf(g_car_pos);
+      float dd=target-g_car_pos;
+      if(fabsf(dd)<0.01f){
+        g_car_pos=(float)carWrap((int)target);           // settle + wrap into range
+        g_car_coast=false;
+      }else g_car_pos+=dd*0.35f;
+    }
+    drawCarousel();gfx_flush();                          // final settled draw decodes covers
+    return;
+  }
+  // Screensaver fires from the reel too (v4.7.0 fix: it was gated off in
+  // carousel mode, so an idle reel never slept — found via a shopping trip).
+  // Waking returns to the carousel, not the list.
+  if(g_ss_enabled&&g_ss_have&&!g_car_touch&&!g_car_coast&&!g_car_spin){
+    uint32_t thr=g_loaded?g_ss_load_ms:g_ss_idle_ms;
+    if(now-g_last_touch_ms>=thr){runScreensaver();return;}
+  }
+  // Idle prefetch: while the reel rests, quietly warm the neighbours you're
+  // about to swipe to (one tile per ~150 ms, spiralling out to +/-5).
+  if(n>0){
+    static uint32_t lastPre=0;
+    if(now-lastPre>=150){
+      lastPre=now;
+      int ci=carWrap((int)lroundf(g_car_pos));
+      int maxPre=min(5,n/2);
+      for(int d2=1;d2<=maxPre;d2++)for(int sgn=-1;sgn<=1;sgn+=2){
+        int gi=g_car_list[carWrap(ci+d2*sgn)];
+        bool cached=false;
+        for(int sl=0;sl<CAR_SLOTS;sl++)if(car_buf[sl]&&car_game[sl]==gi){cached=true;break;}
+        if(!cached){
+          carTile(gi,true);
+          if(d2<=2){drawCarousel();gfx_flush();}         // it's on screen — show it
+          return;                                        // one tile per tick, stay responsive
+        }
+      }
+    }
+  }
 }
 
 static void drawFullUI(){gfx_fillScreen(COL_BG);drawStatusBar();drawCoverPanel();drawActionStrip();drawModeBar();drawFileList();drawNowPlayingBar();drawAZBar();drawBottomBar();}
@@ -1204,6 +1861,7 @@ static bool doLoadSelected(const String&adfPath){
   while(remain&&buf){size_t n=remain>16384?16384:remain;int rd=f.read(buf,n);if(rd<=0)break;memcpy(dst+copied,buf,rd);remain-=rd;copied+=rd;}
   if(buf)free(buf);f.close();
   hardAttach();g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
+  if(g_sel>=0&&g_sel<(int)g_games.size()){if(g_games[g_sel].plays<65535)g_games[g_sel].plays++;saveStats();}
   if(g_wireless_mode&&g_espnow_started){
     uint8_t mcMacs[64][6]; int mcN=enumMuCaDongles(mcMacs,g_dongle_cap);
     if(mcN>0){                                              // multicast: fan the disk out to every MuCa- dongle in turn
@@ -1280,8 +1938,8 @@ static void ssBlit(int x,int y){ if(!g_ss_buf)return;
   for(int r=0;r<g_ss_h;r++){int vy=y+r; if(vy<0||vy>=gH)continue;
     for(int c=0;c<g_ss_w;c++){int vx=x+c; if(vx<0||vx>=gW)continue;
       fb_setPixel(vx,vy,g_ss_buf[r*g_ss_w+c]);}}}
-static void scanScreensaver(){                               // arm iff /screensaver/ has >=1 JPG
-  g_ss_paths.clear(); g_ss_have=false;
+static void scanScreensaver(){                               // arm iff /screensaver/ exists
+  g_ss_paths.clear(); g_ss_have=false; g_ss_claude=false;
   File dir=SD_MMC.open("/screensaver"); if(!dir)return;
   if(!dir.isDirectory()){dir.close();return;}
   File e;
@@ -1295,13 +1953,57 @@ static void scanScreensaver(){                               // arm iff /screens
     if(g_ss_paths.size()>=64)break;
   }
   dir.close();
-  g_ss_have=!g_ss_paths.empty();
+  // Folder with JPGs = user's gallery. Folder EMPTY = the Claude starburst
+  // bounces instead (the third member of the crew, haunting the idle screen).
+  g_ss_claude=g_ss_paths.empty();
+  g_ss_have=!g_ss_paths.empty()||g_ss_claude;
+}
+// Procedurally draw the Claude starburst into the bounce buffer (no JPEG needed):
+// 12 tapered coral rays around a solid hub. It's math, not a bitmap — so it
+// ANIMATES: `phase` slowly rotates the rays and breathes their lengths.
+static bool ssMakeClaude(float phase){
+  const int S=96;
+  if(g_ss_buf&&(g_ss_w!=S||g_ss_h!=S)) ssFree();
+  if(!g_ss_buf){ g_ss_buf=(uint16_t*)ps_malloc((size_t)S*S*2); if(!g_ss_buf)return false; }
+  const float cx=S/2.0f-0.5f, cy=S/2.0f-0.5f;
+  const uint16_t CORAL=0xE3AB;                 // ~RGB(224,118,90)
+  const int NR=12;
+  float rayLen[NR];
+  for(int i=0;i<NR;i++){
+    float base=(i%3==0)?44.0f:((i%3==1)?34.0f:39.0f);      // organic, uneven rays
+    rayLen[i]=base*(1.0f+0.07f*sinf(phase*2.3f+(float)i));  // gentle breathing shimmer
+  }
+  for(int y=0;y<S;y++)for(int x=0;x<S;x++){
+    float dx=x-cx, dy=y-cy;
+    float d=sqrtf(dx*dx+dy*dy);
+    uint16_t c=TFT_BLACK;
+    if(d<=2.5f) c=CORAL;                       // solid hub
+    else{
+      float a=atan2f(dy,dx)-phase;             // rotate the whole burst by phase
+      a=fmodf(a,6.2831853f); if(a<0)a+=6.2831853f;
+      int ri=(int)((a+0.2617994f)/0.5235988f)%NR;   // nearest 30-degree ray
+      float ra=ri*0.5235988f;
+      float da=fabsf(a-ra); if(da>3.1415926f)da=6.2831853f-da;
+      float perp=d*sinf(da);                   // distance from the ray's axis
+      float hw=3.4f*(1.0f-d/rayLen[ri])+0.8f;  // tapered width toward the tip
+      if(d<=rayLen[ri]&&perp<=hw) c=CORAL;
+    }
+    g_ss_buf[y*S+x]=c;
+  }
+  g_ss_w=S; g_ss_h=S; return true;
 }
 static void runScreensaver(){                                // blocking bounce loop; any touch exits
-  if(g_ss_paths.empty()){g_ss_have=false;return;}
-  int idx=0; bool ok=false;
-  for(int t=0;t<(int)g_ss_paths.size();t++){ if(ssDecode(g_ss_paths[t])){idx=t;ok=true;break;} }
-  if(!ok){ssFree();g_ss_have=false;return;}   // no decodable image -> disarm, back to UI
+  int idx=0;
+  bool claudeMode=g_ss_paths.empty();
+  float ph=0;
+  if(claudeMode){
+    // Empty /screensaver/ folder: bounce the (slowly spinning) Claude starburst
+    if(!g_ss_claude||!ssMakeClaude(0)){g_ss_have=false;return;}
+  } else {
+    bool ok=false;
+    for(int t=0;t<(int)g_ss_paths.size();t++){ if(ssDecode(g_ss_paths[t])){idx=t;ok=true;break;} }
+    if(!ok){ssFree();g_ss_have=false;return;}   // no decodable image -> disarm, back to UI
+  }
   int x=(gW-g_ss_w)/2, y=(gH-g_ss_h)/2, vx=2, vy=2;
   gfx_fillScreen(TFT_BLACK);
   uint32_t last=millis();
@@ -1315,12 +2017,14 @@ static void runScreensaver(){                                // blocking bounce 
       if(hit&&g_ss_paths.size()>1){ int ni=(idx+1)%(int)g_ss_paths.size();
         if(ssDecode(g_ss_paths[ni]))idx=ni; else ssDecode(g_ss_paths[idx]);   // skip undecodable, keep a valid buffer
         if(x>gW-g_ss_w)x=gW-g_ss_w; if(y>gH-g_ss_h)y=gH-g_ss_h; if(x<0)x=0; if(y<0)y=0; }
+      if(claudeMode){ ph+=0.02f; ssMakeClaude(ph); }   // re-render each frame: rotation + breathing
       gfx_fillScreen(TFT_BLACK); ssBlit(x,y); gfx_flush();
     } else delay(5);
   }
   ssFree();
   g_touch_active=false; g_touch_release=0; g_last_touch_ms=millis();
-  drawFullUI(); gfx_flush();
+  if(g_car_active){drawCarousel();gfx_flush();}   // woke from the reel -> back to the reel
+  else{drawFullUI(); gfx_flush();}
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1333,7 +2037,7 @@ static void doRescan(){
   SD_MMC.remove("/ADF/.gamecache");SD_MMC.remove("/DSK/.gamecache");
   // Rescan with animation
   g_files.clear();g_games.clear();
-  listImages(SD_MMC,g_files);buildGameList();buildActiveLetters();scanScreensaver();
+  listImages(SD_MMC,g_files);buildGameList();buildThumbs();applyStats();buildActiveLetters();scanScreensaver();
   g_sel=0;g_scroll=0;g_disk_sel=0;g_disk_page=0;g_scrollPx=0;g_az_page=0;g_inertia_on=false;
   if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
   drawFullUI();gfx_flush();
@@ -1490,14 +2194,16 @@ void setup(){
   SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);delay(100);
   bool sdok=SD_MMC.begin("/sdcard",true);if(!sdok){delay(200);sdok=SD_MMC.begin("/sdcard",true);}
   if(sdok){
-    if(!SD_MMC.exists("/ADF"))SD_MMC.mkdir("/ADF");if(!SD_MMC.exists("/DSK"))SD_MMC.mkdir("/DSK");
+    if(!SD_MMC.exists("/ADF")){SD_MMC.mkdir("/ADF");ensureSampleFolder();}   // blank card: include the SAMPLE example
+    if(!SD_MMC.exists("/DSK"))SD_MMC.mkdir("/DSK");
     generateDefaultConfig();
     selfHealConfig();           // append any documented keys an older CONFIG.TXT is missing
     loadConfig();
     espnowSetScanCap(g_dongle_cap);
     relayout();                 // apply ROTATE/COMPACT from config before first draw
     listImages(SD_MMC,g_files);
-    if(!readGameCache()){buildGameList();}
+    if(!readGameCache()){buildGameList();buildThumbs();}   // fresh card: build reel thumbs up-front
+    applyStats();
     buildActiveLetters();
     if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
     scanScreensaver();
@@ -1579,13 +2285,14 @@ static void handleTap(uint16_t px,uint16_t py){
 
   // ── Mode bar ──
   if(py>=STATUS_H&&py<STATUS_H+MODE_BAR_H&&px>=LIST_X){
-    if(px<LIST_X+40&&g_mode!=MODE_ADF){g_mode=MODE_ADF;g_files.clear();listImages(SD_MMC,g_files);if(!readGameCache())buildGameList();buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));drawFullUI();gfx_flush();return;}
-    if(px>=LIST_X+44&&px<LIST_X+80&&g_mode!=MODE_DSK){g_mode=MODE_DSK;g_files.clear();listImages(SD_MMC,g_files);if(!readGameCache())buildGameList();buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));drawFullUI();gfx_flush();return;}}
+    if(px<LIST_X+40&&g_mode!=MODE_ADF){g_mode=MODE_ADF;g_files.clear();listImages(SD_MMC,g_files);if(!readGameCache()){buildGameList();buildThumbs();}buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));drawFullUI();gfx_flush();return;}
+    if(px>=LIST_X+44&&px<LIST_X+80&&g_mode!=MODE_DSK){g_mode=MODE_DSK;g_files.clear();listImages(SD_MMC,g_files);if(!readGameCache()){buildGameList();buildThumbs();}buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));drawFullUI();gfx_flush();return;}}
 
   // ── File list ──
   if(px>=LIST_X&&px<AZ_X&&py>=LIST_TOP&&py<LIST_BOTTOM){
     bool wasInfo=g_info_showing; g_info_showing=false;
     int gi=(int)((g_scrollPx+(py-LIST_TOP))/LIST_ITEM_H);if(gi>=0&&gi<(int)g_games.size()){
+      {int r=8+g_name_sz*3;if(px<=(uint16_t)(LIST_X+6+2*r+3)){g_games[gi].fav=!g_games[gi].fav;saveStats();if(wasInfo)drawFullUI();else drawFileList();gfx_flush();return;}}
       if(gi==g_sel){
         // Default: tapping the already-selected row does nothing (load only via INSERT).
         // TAPLOAD=ON restores the old tap-again-to-load/eject behaviour.
@@ -1596,12 +2303,15 @@ static void handleTap(uint16_t px,uint16_t py){
     else if(wasInfo){drawFullUI();gfx_flush();}
     return;}
 
-  // ── Bottom bar ──
-  if(py>=VH-BOTTOM_H){int bw=VW/4,btn=px/bw;
+  // ── Bottom bar ── (slot count follows drawBottomBar: 5 with carousel, else 4)
+  if(py>=VH-BOTTOM_H){
+    int nb=g_carousel_enabled?5:4;int bw=VW/nb,btn=px/bw;if(btn>=nb)btn=nb-1;
+    if(btn>=3&&!g_carousel_enabled)btn++;   // slot -> logical button (skip REEL when disabled)
     if(btn==0&&g_sel>0){g_sel--;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[g_sel].name));if((float)(g_sel*LIST_ITEM_H)<g_scrollPx)g_scrollPx=g_sel*LIST_ITEM_H;drawListAndCover();gfx_flush();}
     else if(btn==1&&g_sel<(int)g_games.size()-1){g_sel++;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[g_sel].name));if((float)((g_sel+1)*LIST_ITEM_H)>g_scrollPx+(LIST_BOTTOM-LIST_TOP))g_scrollPx=(g_sel+1)*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP);drawListAndCover();gfx_flush();}
     else if(btn==2){cycleTheme();}
-    else if(btn==3){ g_info_showing=!g_info_showing; if(g_info_showing)drawInfoPanel(); else drawFullUI(); gfx_flush(); }
+    else if(btn==3){ g_info_showing=false; carEnter(); }   // REEL — enter the carousel
+    else if(btn==4){ g_info_showing=!g_info_showing; if(g_info_showing)drawInfoPanel(); else drawFullUI(); gfx_flush(); }
     return;
   }
 }
@@ -1617,6 +2327,13 @@ void loop(){
   static uint32_t last=0;if(millis()-last<16){delay(1);return;}last=millis();
   bool frame=Touch_ReadFrame();uint16_t px=0,py=0;bool touch=frame&&getTouchXY(&px,&py);
   uint32_t now=millis();
+
+  // ── Carousel mode: dedicated tap/drag/coast machine, then bail ──
+  if(g_car_active){
+    if(touch)g_last_touch_ms=now;
+    carTick(touch,px,py,now);
+    return;
+  }
 
   if(touch){
     g_last_touch_ms=now;
@@ -1649,7 +2366,7 @@ void loop(){
   }
 
   // screensaver (undocumented, folder-gated): fires on idle; any touch wakes it
-  if(g_ss_enabled&&g_ss_have&&!g_info_showing&&!g_inertia_on){
+  if(g_ss_enabled&&g_ss_have&&!g_info_showing&&!g_inertia_on&&!g_car_active){
     uint32_t thr=g_loaded?g_ss_load_ms:g_ss_idle_ms;
     if(now-g_last_touch_ms>=thr)runScreensaver();
   }

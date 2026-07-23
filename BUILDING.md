@@ -1,6 +1,6 @@
 # Building the GTi firmware (Arduino IDE)
 
-_Firmware: **Gotek_JC3248 v4.4.0** — OMEGAWARE. Target board: **Guition JC3248W535C** (ESP32-S3-N16R8, 16 MB flash / 8 MB PSRAM, AXS15231B QSPI display + touch)._
+_Firmware: **Gotek_JC3248 v4.7.2** — OMEGAWARE. Target board: **Guition JC3248W535C** (ESP32-S3-N16R8, 16 MB flash / 8 MB PSRAM, AXS15231B QSPI display + touch)._
 
 Everything below is what a fresh machine needs to compile the sketch from source. Most of it is bundled with the ESP32 Arduino core — only **two** things are separate installs.
 
