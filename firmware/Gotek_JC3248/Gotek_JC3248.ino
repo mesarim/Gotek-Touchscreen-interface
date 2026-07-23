@@ -23,7 +23,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "v4.7.2-JC3248"
+#define FW_VERSION "v4.7.3-JC3248"
 #include "espnow_server.h"
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
@@ -1400,6 +1400,7 @@ static uint32_t g_car_lastMs=0;
 static bool  g_car_spin=false, g_car_dieShow=false, g_car_die23=false;
 static float g_car_spinTarget=0;
 static uint8_t g_car_die=1, g_car_dieTick=0;
+static int g_car_ins_x=0,g_car_ins_y=0,g_car_ins_w=0,g_car_ins_h=0;   // INSERT button rect (set by drawCarousel)
 static void runScreensaver();   // defined below; the reel's idle tick can summon it
 #define CAR_TILE  150                            // decoded cover tile size (px)
 #define CAR_SLOTS 16                             // LRU tile cache entries (PSRAM, ~720 KB)
@@ -1654,10 +1655,18 @@ static void drawCarousel(){
     gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
     String pn=String(carWrap(ci)+1)+"/"+String(n);
     gfx_setCursor(VW-8-gfx_textWidth(pn),STATUS_H+4);gfx_print(pn);
-    // swipe hint under blurb area (only when reel is idle at a favourite-less fresh boot? keep always, subtle)
-    gfx_setTextColor(COL_DIM,COL_BG);
-    String hint=String("< swipe >   tap cover = ")+((g_loaded&&g_loaded_game_idx==gi)?"EJECT":"INSERT");
-    gfx_setCursor((VW-gfx_textWidth(hint))/2,VH-BOTTOM_H-12);gfx_print(hint);
+    // INSERT/EJECT — an explicit button under the nfo (v4.7.3: tap-the-cover-to-
+    // load removed; in portrait the cover fills the width, so swipes grazed
+    // into accidental loads. Mounting is always a deliberate button on the GTi.)
+    {bool isLd=(g_loaded&&g_loaded_game_idx==gi);
+     g_car_ins_w=170;g_car_ins_h=34;
+     g_car_ins_x=(VW-g_car_ins_w)/2;g_car_ins_y=VH-BOTTOM_H-42;
+     uint16_t bf=isLd?(uint16_t)0x4000:(uint16_t)0x0340, bb=isLd?(uint16_t)0xE8C4:COL_GREEN;
+     gfx_fillRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,8,bf);
+     gfx_drawRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,8,bb);
+     gfx_setTextSize(2);gfx_setTextColor(TFT_WHITE,bf);
+     const char*lbl=isLd?"EJECT":"INSERT";int tw=gfx_textWidth(lbl);
+     gfx_setCursor(g_car_ins_x+(g_car_ins_w-tw)/2,g_car_ins_y+(g_car_ins_h-16)/2);gfx_print(lbl);}
   }
   // carousel bottom bar: [LIST] | [source ALL/FAV/MOST] | [ROLL]
   int y=VH-BOTTOM_H;gfx_fillRect(0,y,VW,BOTTOM_H,COL_BAR);gfx_hline(0,y,VW,COL_SEP);
@@ -1724,9 +1733,9 @@ static void carHandleTap(uint16_t px,uint16_t py){
   int n=carN();if(!n)return;
   int ci=carWrap((int)lroundf(g_car_pos));
   int ccx=VW/2,ccy=STATUS_H+12+CAR_TILE/2;
-  if(px>=(uint16_t)(ccx-CAR_TILE/2)&&px<(uint16_t)(ccx+CAR_TILE/2)&&
-     py>=(uint16_t)(ccy-CAR_TILE/2)&&py<(uint16_t)(ccy+CAR_TILE/2)){
-    // center cover tap = deliberate INSERT / EJECT (no automount anywhere else)
+  // INSERT/EJECT button (checked FIRST — its corners overlap the side zones)
+  if(px>=(uint16_t)g_car_ins_x&&px<(uint16_t)(g_car_ins_x+g_car_ins_w)&&
+     py>=(uint16_t)g_car_ins_y&&py<(uint16_t)(g_car_ins_y+g_car_ins_h)){
     int gi=g_car_list[ci];
     g_sel=gi;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[gi].name));
     if(g_loaded&&g_loaded_game_idx==gi)doUnload();
@@ -1734,6 +1743,10 @@ static void carHandleTap(uint16_t px,uint16_t py){
     if(g_car_active){drawCarousel();gfx_flush();}        // repaint over the list redraw the loader did
     return;
   }
+  // center cover = DEAD ZONE (v4.7.3: no tap-to-load — portrait thumbs kept
+  // grazing it into accidental mounts; the button above is the only trigger)
+  if(px>=(uint16_t)(ccx-CAR_TILE/2)&&px<(uint16_t)(ccx+CAR_TILE/2)&&
+     py>=(uint16_t)(ccy-CAR_TILE/2)&&py<(uint16_t)(ccy+CAR_TILE/2))return;
   // side tap = step one cover toward that side
   if(px<(uint16_t)(ccx-CAR_TILE/2))g_car_pos-=1.0f;
   else if(px>=(uint16_t)(ccx+CAR_TILE/2))g_car_pos+=1.0f;
