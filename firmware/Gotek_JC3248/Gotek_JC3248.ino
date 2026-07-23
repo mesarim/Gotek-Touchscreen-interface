@@ -23,7 +23,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "v4.7.3-JC3248"
+#define FW_VERSION "v4.7.4-JC3248"
 #include "espnow_server.h"
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
@@ -958,6 +958,12 @@ static void applyFont(int f){if(f<0||f>2)f=1;g_font=f;g_name_sz=(f==0?1:f==2?3:2
 static const char* fontName(int f){return f==0?"SMALL":f==2?"LARGE":"NORMAL";}
 static void relayout(){
   if(g_portrait){gW=320;gH=480;}else{gW=480;gH=320;}
+  // Reset the clip window to the new canvas. The clip statics init to the
+  // landscape 320 height; with an EMPTY game list drawFileList() early-returns
+  // before its usual set/reset, so in portrait everything below y=320 —
+  // including the whole bottom bar — was silently clipped (buttons invisible
+  // but still tappable). Rotation must always re-sync the clip.
+  g_clip_x0=0;g_clip_x1=gW;g_clip_y0=0;g_clip_y1=gH;
   AZ_X=VW-AZ_W; int mb=STATUS_H+MODE_BAR_H;
   if(!g_compact){
     if(!g_portrait){
@@ -1226,7 +1232,7 @@ static void drawActionStrip(){
   gfx_fillRect(0,STRIP_Y,VW,STRIP_H,COL_PANEL);gfx_hline(0,STRIP_Y,VW,COL_SEP);
   int th=STRIP_H-12;gfx_fillRoundRect(6,STRIP_Y+6,th,th,4,COL_BG);gfx_drawRoundRect(6,STRIP_Y+6,th,th,4,COL_ACCENT);
   char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setTextSize(3);gfx_setTextColor(COL_ACCENT,COL_BG);gfx_setCursor(6+(th-18)/2,STRIP_Y+6+(th-24)/2);gfx_print(ib);
-  gfx_setTextSize(2);gfx_setTextColor(TFT_WHITE,COL_PANEL);String nm=game.name;int maxw=INS_X-(th+16)-6;while(gfx_textWidth(nm)>maxw&&nm.length()>3)nm=nm.substring(0,nm.length()-1);gfx_setCursor(th+16,STRIP_Y+8);gfx_print(nm);
+  gfx_setTextSize(2);gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL);String nm=game.name;int maxw=INS_X-(th+16)-6;while(gfx_textWidth(nm)>maxw&&nm.length()>3)nm=nm.substring(0,nm.length()-1);gfx_setCursor(th+16,STRIP_Y+8);gfx_print(nm);
   gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_PANEL);gfx_setCursor(th+16,STRIP_Y+26);gfx_print(game.disk_count>1?("disk "+String(g_disk_sel+1)+"/"+String(game.disk_count)+"  < tap >"):"1 disk  ADF 880KB");
   gfx_fillRoundRect(INS_X,INS_Y,INS_W,INS_H,6,isL?(uint16_t)0x4000:COL_GREEN);gfx_drawRoundRect(INS_X,INS_Y,INS_W,INS_H,6,isL?(uint16_t)0xE8C4:COL_GREEN);
   gfx_setTextSize(2);gfx_setTextColor(isL?TFT_WHITE:TFT_BLACK,isL?(uint16_t)0x4000:COL_GREEN);const char*lbl=isL?"EJECT":"INSERT";int tw=gfx_textWidth(lbl);gfx_setCursor(INS_X+(INS_W-tw)/2,INS_Y+(INS_H-16)/2);gfx_print(lbl);
@@ -2069,10 +2075,13 @@ static bool onScreenKeyboard(const String&macLabel,const String&initial,String&o
   while(true){
     if(dirty){dirty=false;
       gfx_fillScreen(COL_BG);
-      gfx_fillRect(0,0,VW,22,COL_BAR);gfx_setTextSize(1);gfx_setTextColor(COL_AMBER,COL_BAR);gfx_setCursor(6,7);gfx_print("NAME DONGLE");
-      gfx_setTextColor(COL_DIM,COL_BAR);gfx_setCursor(VW-gfx_textWidth(macLabel)-6,7);gfx_print(macLabel);
+      // Theme-aware inks: on light bars/panels (PAPER) amber/white/dim gray are
+      // unreadable — fall back to dark ink via inkFor().
+      bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
+      gfx_fillRect(0,0,VW,22,COL_BAR);gfx_setTextSize(1);gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);gfx_setCursor(6,7);gfx_print("NAME DONGLE");
+      gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR);gfx_setCursor(VW-gfx_textWidth(macLabel)-6,7);gfx_print(macLabel);
       gfx_fillRoundRect(8,28,VW-16,34,6,COL_PANEL);gfx_drawRoundRect(8,28,VW-16,34,6,COL_AMBER);
-      gfx_setTextSize(2);gfx_setTextColor(TFT_WHITE,COL_PANEL);
+      gfx_setTextSize(2);gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL);
       String shown=out;while(gfx_textWidth(shown)>VW-52&&shown.length()>0)shown=shown.substring(1);
       gfx_setCursor(18,38);gfx_print(shown);gfx_print("_");
       int ky=70;
@@ -2159,7 +2168,7 @@ static void doScanDongles(){
         bool isSel=(i==sel),isActive=(espnowIsPaired()&&espnowGetXiaoMac()==mac);
         uint16_t bg=isSel?COL_SEL:COL_PANEL;
         gfx_fillRoundRect(8,y,VW-16,rowH-4,6,bg);gfx_drawRoundRect(8,y,VW-16,rowH-4,6,isSel?COL_AMBER:COL_ACCENT);
-        gfx_setTextSize(1);gfx_setTextColor(isSel?inkFor(bg):COL_AMBER,bg);gfx_setCursor(18,y+7);gfx_print(nm.length()?nm:("Dongle "+String(i+1)));
+        gfx_setTextSize(1);gfx_setTextColor(isSel?inkFor(bg):((inkFor(bg)==TFT_BLACK)?TFT_BLACK:COL_AMBER),bg);gfx_setCursor(18,y+7);gfx_print(nm.length()?nm:("Dongle "+String(i+1)));
         gfx_setTextColor(isSel?inkFor(bg):COL_MID,bg);gfx_setCursor(18,y+20);gfx_print("OMEGA-"+suffix);
         if(isActive){gfx_setTextColor(COL_GREEN,bg);gfx_setCursor(VW-70,y+13);gfx_print("ACTIVE");}
       }
