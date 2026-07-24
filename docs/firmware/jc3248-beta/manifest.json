@@ -1,0 +1,13 @@
+{
+  "name": "Gotek Touchscreen Interface — JC3248 BETA (save era)",
+  "version": "4.8.1-beta",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        { "path": "Gotek_JC3248.ino.merged.bin", "offset": 0 }
+      ]
+    }
+  ]
+}

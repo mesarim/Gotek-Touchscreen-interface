@@ -266,6 +266,13 @@
     .badge-dongle     { background: #1a1a2a; color: var(--blue);  border: 1px solid #2a2a4a; }
     .badge-wireless   { background: #2a1a0a; color: var(--copper2); border: 1px solid #4a2a0a; }
     .badge-current    { background: #2a2410; color: #ffd75e; border: 1px solid #6a5a1a; }
+    .badge-beta       { background: #2a1015; color: #ff6e8a; border: 1px solid #5a1a2a; }
+    .beta-note {
+      background: #1a1015; border: 1px solid #4a2a35; border-radius: 8px;
+      padding: 0.8rem 1rem; margin-bottom: 1rem; font-size: 0.85rem;
+      color: #d0a0b0; line-height: 1.5;
+    }
+    .beta-note b { color: #ff6e8a; }
 
     .selected-indicator {
       position: absolute;
@@ -514,6 +521,40 @@
       <div class="device-chip">ESP32 · 320×240 ILI9341</div>
       <div class="device-desc">Cheap Yellow Display (~£10). Wireless remote — pairs with XIAO dongle over ESP-NOW.</div>
       <div><span class="device-badge badge-wireless">Wireless Remote</span></div>
+    </div>
+
+  </div>
+
+  <div class="section-label">Fresh off the press — beta builds</div>
+
+  <div class="beta-note">
+    <b>&#9888; Experimental — for testers.</b> These builds carry the new <b>save-game era</b>:
+    writes the Amiga makes to the floppy are persisted onto the GTi's SD card as
+    <b>GameName.sav.adf</b> beside the untouched master — standalone <i>and</i> wireless
+    ("FLING in reverse"). INSERT automatically boots the save when one exists (green floppy
+    badge on the cover); delete the .sav file to factory-reset a game. Configure with
+    <b>SAVES=OFF/COPY/OVERWRITE</b> in CONFIG.TXT (default COPY). To test wireless saves,
+    flash <i>both</i> the JC BETA and the Super Mini BETA below. Bench-verified, not yet
+    field-proven — please report results (good or broken) via GitHub issues.
+    The stable builds above are completely unaffected.
+  </div>
+
+  <div class="device-grid">
+
+    <div class="device-card" data-manifest="firmware/jc3248-beta/manifest.json" onclick="selectDevice(this)">
+      <div class="selected-indicator"></div>
+      <div class="device-name">Guition JC3248 &mdash; BETA</div>
+      <div class="device-chip">ESP32-S3 &middot; v4.8.1-beta &middot; save-game era</div>
+      <div class="device-desc">Everything in stable v4.7.4 plus save-game persistence: .sav.adf save copies, save-boot on INSERT, floppy badge, wireless save fetch from the dongle, and a shapeshifting screensaver surprise.</div>
+      <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
+    </div>
+
+    <div class="device-card" data-manifest="firmware/supermini-beta/manifest.json" onclick="selectDevice(this)">
+      <div class="selected-indicator"></div>
+      <div class="device-name">Super Mini Dongle &mdash; BETA</div>
+      <div class="device-chip">ESP32-S3 Super Mini &middot; v3.2.0-beta &middot; save protocol</div>
+      <div class="device-desc">Dongle side of wireless saves: tracks what the Gotek writes and hands the changed sectors back to the JC BETA on request. Red+blue LEDs together = unsaved data waiting. Fully compatible with stable screens (save features simply stay dormant).</div>
+      <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-dongle">USB Dongle</span></div>
     </div>
 
   </div>
@@ -969,6 +1010,8 @@ relayout();bootCracktro();requestAnimationFrame(frame);
     'firmware/supermini/manifest.json':  { name: 'Super Mini Dongle', version: 'Firmware v3.2.0' },
     'firmware/xiao/manifest.json':       { name: 'XIAO Dongle',   version: 'Firmware v3.2.0' },
     'firmware/cyd/manifest.json':        { name: 'CYD',           version: 'Firmware v3.9.0' },
+    'firmware/jc3248-beta/manifest.json':    { name: 'Guition JC3248 BETA',    version: 'Firmware v4.8.1-beta (save era)' },
+    'firmware/supermini-beta/manifest.json': { name: 'Super Mini Dongle BETA', version: 'Firmware v3.2.0-beta (save protocol)' },
   };
 
   function selectDevice(card) {

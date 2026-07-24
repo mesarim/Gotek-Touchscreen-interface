@@ -23,7 +23,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "v4.7.4-JC3248"
+#define FW_VERSION "v4.8.1-JC3248"
 #include "espnow_server.h"
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
@@ -340,7 +340,37 @@ static void build_fat(uint8_t*fat,uint32_t fsz){memset(fat,0,SECTORS_PER_FAT*512
 static void build_root(uint8_t*root,const char*name,uint32_t fsz){memset(root,0,ROOT_DIR_SECTORS*512);char n[8],e[3];memset(n,' ',8);memset(e,' ',3);char tmp[32];size_t L=strlen(name);if(L>31)L=31;memcpy(tmp,name,L);tmp[L]=0;for(size_t i=0;i<L;i++)tmp[i]=toupper(tmp[i]);const char*dot=strrchr(tmp,'.');size_t nl=dot?(dot-tmp):strlen(tmp);size_t el=dot?strlen(dot+1):0;for(size_t i=0;i<nl&&i<8;i++)n[i]=tmp[i];for(size_t i=0;i<el&&i<3;i++)e[i]=dot[1+i];memcpy(root,n,8);memcpy(root+8,e,3);root[11]=0x20;wr16(root,26,2);wr32(root,28,fsz);}
 static void build_volume(const char*outName,uint32_t fsz){if(fsz>MAX_FILE_BYTES)fsz=MAX_FILE_BYTES;memset(g_disk,0,TOTAL_SECTORS*512);build_boot_sector(g_disk);build_fat(g_disk+RESERVED_SECTORS*512,fsz);build_root(g_disk+(RESERVED_SECTORS+SECTORS_PER_FAT)*512,outName,fsz);}
 static int32_t onRead(uint32_t lba,uint32_t off,void*buf,uint32_t n){uint32_t s=lba*512+off;if(s+n>TOTAL_SECTORS*512)return 0;memcpy(buf,g_disk+s,n);return n;}
-static int32_t onWrite(uint32_t lba,uint32_t off,uint8_t*buf,uint32_t n){uint32_t s=lba*512+off;if(s+n>TOTAL_SECTORS*512)return 0;memcpy(g_disk+s,buf,n);return n;}
+// ── Save-game persistence state (v4.8.0) ────────────────────────────────────
+// STANDALONE: the Amiga writes to OUR RAM disk (we are the USB drive) — onWrite
+// below ticks the dirty map; a settle timer + eject flush persist to .sav.adf.
+// WIRELESS: the dongle ticks its own map and beacons; we pull + patch (espnow).
+#define SV_IMG_MAX_SECTORS (TOTAL_SECTORS-DATA_LBA)     // 2037
+#define SV_SETTLE_MS 3000
+static int      g_saves_mode=1;                          // 0=OFF 1=COPY 2=OVERWRITE (SAVES=)
+static uint8_t  g_sv_dirty[(SV_IMG_MAX_SECTORS+7)/8];
+static volatile uint16_t g_sv_dirty_count=0;
+static volatile uint32_t g_sv_last_write=0;
+static volatile uint32_t g_sv_total_writes=0;
+static String   g_loaded_path="";                        // SD path of the mounted image ("" = diag/none)
+static String   g_sv_wl_path="";                         // SD path of the disk last FLUNG to the dongle
+static uint32_t g_sv_wl_loadid=0;                        // dongle load_id it acked with
+static inline bool svGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
+static inline void svSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
+static void svDirtyReset(){memset(g_sv_dirty,0,sizeof(g_sv_dirty));g_sv_dirty_count=0;g_sv_last_write=0;}
+static uint32_t g_sv_img_size=0;                         // bytes of the mounted image (standalone tracking)
+
+static int32_t onWrite(uint32_t lba,uint32_t off,uint8_t*buf,uint32_t n){uint32_t s=lba*512+off;if(s+n>TOTAL_SECTORS*512)return 0;memcpy(g_disk+s,buf,n);
+  // v4.8.0: tick the dirty scorecard for every image sector this write touches
+  // (assignment form, not ++ — C++20 deprecates ++ on volatile)
+  g_sv_total_writes=g_sv_total_writes+1;
+  uint32_t first=s/512,last=(s+n-1)/512,imgSecs=(g_sv_img_size+511)/512;
+  if(imgSecs>SV_IMG_MAX_SECTORS)imgSecs=SV_IMG_MAX_SECTORS;
+  for(uint32_t l=first;l<=last;l++){
+    if(l<DATA_LBA)continue;uint32_t i=l-DATA_LBA;if(i>=imgSecs)continue;
+    if(!svGet(g_sv_dirty,i)){svSet(g_sv_dirty,i);g_sv_dirty_count=g_sv_dirty_count+1;}
+  }
+  g_sv_last_write=millis();
+  return n;}
 static void usbEventCB(void*,esp_event_base_t,int32_t,void*){}
 static uint32_t g_rev=1;
 static void hardDetach(){MSC.mediaPresent(false);delay(100);tud_disconnect();delay(500);g_usb_online=false;}
@@ -406,9 +436,17 @@ static std::vector<String> scanImagesAnimated(){
        // plus macOS SD litter like .Trashes / .Spotlight-V100 — free immunity)
        if(leaf=="SAMPLE"||leaf.startsWith(".")){gd.close();continue;}}
       File e;while((e=gd.openNextFile())){String fn=e.name();int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
+      // v4.8.0: .sav.adf files attach to their master (INSERT prefers them) — never list
+      // them as games. Orphaned .tmp from an interrupted save persist gets swept here.
+      if(u.indexOf(".SAV.")>=0){
+        if(u.endsWith(".TMP")){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;SD_MMC.remove(fp);}
+        e.close();continue;}
       if(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ")){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;out.push_back(fp);count++;
         if(millis()-lastDraw>80){drawScanFrame(count);lastDraw=millis();}}e.close();}}
     else{String fn=en;int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
+      if(u.indexOf(".SAV.")>=0){
+        if(u.endsWith(".TMP"))SD_MMC.remove(en);
+        gd.close();continue;}
       if(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ")){out.push_back(en);count++;
         if(millis()-lastDraw>80){drawScanFrame(count);lastDraw=millis();}}}
     gd.close();}root.close();}
@@ -624,13 +662,14 @@ static uint16_t* g_ss_buf=NULL; static int g_ss_w=0, g_ss_h=0;
 #define SS_LOAD_MS  120000UL   // 2 min idle once a game is loaded (showcase)
 static uint32_t g_ss_idle_ms=SS_IDLE_MS, g_ss_load_ms=SS_LOAD_MS;   // hidden SS_IDLE=/SS_LOAD= override (seconds)
 static int g_dongle_cap=32;   // CONFIG.TXT CAP= : max wireless dongles to discover/cast (1..64)
+static int g_hivemind=1;      // v4.8.1 (undocumented HIVEMIND=): 1 = FLING fans out to all MuCa dongles (classic), 0 = paired dongle only
 static int g_cracktro=0;      // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or 0 = pick one at random each boot
 static bool g_carousel_enabled=false;  // CONFIG.TXT CAROUSEL= : undocumented flag; enables the REEL button + coverflow UI
 // ── Item 4: load/eject behaviour toggles (all default OFF = safest) ──
 static bool g_tapload=false;    // ON = tapping the already-selected row loads it (old double-tap behaviour)
 static bool g_hotswap=false;    // ON = tapping another disk while loaded swaps to it instantly
 static bool g_forceswap=false;  // ON = swap disk bytes in place without the USB eject/re-attach cycle
-static int g_info_rescan_btn_y=0,g_info_reset_btn_y=0,g_info_pair_now_btn_y=0,g_info_font_btn_y=0;
+static int g_info_rescan_btn_y=0,g_info_reset_btn_y=0,g_info_pair_now_btn_y=0,g_info_font_btn_y=0,g_info_hive_btn_y=0;
 static int g_info_x=0,g_info_w=150,g_info_rot_btn_y=0,g_info_comp_btn_y=0,g_info_mode_btn_y=0,g_info_bottom=0,g_info_bh=22;
 struct GameEntry{String name;int first_file_idx;int disk_count;String jpg_path;std::vector<int>disk_indices;bool fav=false;uint16_t plays=0;};
 static std::vector<String>g_files;static std::vector<GameEntry>g_games;
@@ -823,6 +862,8 @@ static int enumMuCaDongles(uint8_t macs[][6], int maxN){
 // Forward decls
 static void applyFont(int f);   // defined with the layout section; used by loadConfig
 static void drawFullUI();
+static String savPathFor(const String&adfPath);   // v4.8.0 saves — defined with the save engine
+static bool savExistsFor(const String&adfPath);
 static void drawListAndCover();
 static bool doLoadSelected(const String&p);
 static void doUnload();
@@ -872,6 +913,12 @@ static void generateDefaultConfig(){
   f.println("# FORCESWAP: ON = swap disk contents without the USB eject/re-attach cycle");
   f.println("FORCESWAP=OFF");
   f.println("");
+  f.println("# SAVES: save-game persistence when the Amiga writes to the disk.");
+  f.println("#   OFF       = writes live only until eject/power-off (classic behaviour)");
+  f.println("#   COPY      = writes are kept as GameName.sav.adf beside the master (recommended)");
+  f.println("#   OVERWRITE = writes are patched straight into the master .adf");
+  f.println("SAVES=COPY");
+  f.println("");
   f.println("# Wireless dongle MAC (auto-filled when you pair via INFO screen)");
   f.println("# XIAO_MAC=");
   f.close();
@@ -897,6 +944,7 @@ static void selfHealConfig(){
     {"TAPLOAD",  "\n# TAPLOAD: ON = tapping the already-highlighted game row loads it (old double-tap)\nTAPLOAD=OFF\n"},
     {"HOTSWAP",  "# HOTSWAP: ON = tapping another disk while loaded swaps to it instantly\nHOTSWAP=OFF\n"},
     {"FORCESWAP","# FORCESWAP: ON = swap disk contents without the USB eject/re-attach cycle\nFORCESWAP=OFF\n"},
+    {"SAVES",    "\n# SAVES: save-game persistence. OFF = classic (lost on eject),\n# COPY = kept as GameName.sav.adf beside the master, OVERWRITE = patch the master.\nSAVES=COPY\n"},
   };
   const int NK=sizeof(KEYS)/sizeof(KEYS[0]);
   bool present[NK]; for(int i=0;i<NK;i++)present[i]=false;
@@ -926,7 +974,9 @@ static void loadConfig(){
     else if(k=="SS_IDLE"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_idle_ms=s*1000UL;}
     else if(k=="SS_LOAD"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_load_ms=s*1000UL;}
     else if(k=="CAP"){int c=v.toInt(); if(c>=1&&c<=64)g_dongle_cap=c;}
-    else if(k=="CRACKTRO"){int c=v.toInt(); if(c>=0&&c<=6)g_cracktro=c;}}
+    else if(k=="CRACKTRO"){int c=v.toInt(); if(c>=0&&c<=6)g_cracktro=c;}
+    else if(k=="SAVES"){v.toUpperCase(); g_saves_mode=(v=="OVERWRITE")?2:(v=="OFF"||v=="0")?0:1;}
+    else if(k=="HIVEMIND"){g_hivemind=(v=="OFF"||v=="0")?0:1;}}
   f.close();
 }
 
@@ -1189,20 +1239,35 @@ static void drawDiskStepper(int x,int y,int w,int h,int nd){g_step_on=true;g_ste
   gfx_fillRoundRect(x+w-bw,y,bw,h,6,COL_ACCENT);gfx_setCursor(x+w-bw+(bw-18)/2,y+(h-24)/2);gfx_print(">");
   gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BAR);String lbl="Disk "+String(g_disk_sel+1)+" of "+String(nd);int tw=gfx_textWidth(lbl);gfx_setCursor(x+(w-tw)/2,y+(h-16)/2);gfx_print(lbl);}
 
+// v4.8.0: tiny 3.5" floppy icon = "this game has a save attached". 14x14 px,
+// black 1px backing so it reads on ANY cover art (light or dark), green body,
+// black shutter with slot, white label, clipped corner — unmistakably a floppy.
+static void drawSaveFloppy(int x,int y){
+  gfx_fillRect(x,y,14,14,TFT_BLACK);            // backing/outline — contrast on any art
+  gfx_fillRect(x+1,y+1,12,12,COL_GREEN);        // body
+  gfx_fillRect(x+11,y+1,2,2,TFT_BLACK);         // clipped corner (the floppy signature)
+  gfx_fillRect(x+4,y+2,7,4,TFT_BLACK);          // metal shutter
+  gfx_fillRect(x+5,y+3,2,2,COL_GREEN);          //   shutter slot
+  gfx_fillRect(x+3,y+8,8,4,TFT_WHITE);          // label
+}
+
 static void drawCoverPanel(){
   if(!COVER_ON)return;
   gfx_fillRect(COVER_X,COVER_Y,COVER_W,COVER_H,COL_PANEL);if(g_games.empty())return;
   auto&game=g_games[g_sel];
   if(!game.jpg_path.length()){String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg))game.jpg_path=jpg;else game.jpg_path="?";}
-  static int lastNfoSel=-1;static String cachedNfoBlurb="";
+  static int lastNfoSel=-1;static String cachedNfoBlurb="";static bool cachedHasSav=false;
   if(lastNfoSel!=g_sel){lastNfoSel=g_sel;cachedNfoBlurb="";String nfoP,nT,nB;
     if(findNFOFor(g_files[game.first_file_idx],nfoP)){File nf=SD_MMC.open(nfoP,FILE_READ);if(nf){String txt;while(nf.available()&&txt.length()<512)txt+=(char)nf.read();nf.close();parseNFO(txt,nT,nB);
-      if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=nT;cachedNfoBlurb=nB;}}}
+      if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=nT;cachedNfoBlurb=nB;}}
+    cachedHasSav=(g_saves_mode==1)&&savExistsFor(g_files[game.first_file_idx]);}   // v4.8.0 badge (checked once per selection)
   // Cover art
   gfx_fillRoundRect(COVER_ART_X,COVER_ART_Y,COVER_ART_W,COVER_ART_H,5,COL_BAR);
   gfx_drawRoundRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,6,COL_ACCENT);
   if(game.jpg_path.length()>0&&game.jpg_path!="?")gfx_drawJpgFile(game.jpg_path,COVER_ART_X+2,COVER_ART_Y+2,COVER_ART_W-4,COVER_ART_H-4);
   else{char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setCursor(COVER_ART_X+COVER_ART_W/2-6,COVER_ART_Y+COVER_ART_H/2-8);gfx_print(ib);}
+  // v4.8.0: floppy icon — this game has a save-copy (INSERT will boot the save)
+  if(cachedHasSav)drawSaveFloppy(COVER_ART_X+3,COVER_ART_Y+3);
   bool isL=g_loaded&&g_loaded_game_idx==g_sel;
   if(!g_portrait){
     int cb;
@@ -1243,7 +1308,11 @@ static void drawInfoPanel(){
   int ix,iy,iw,ih;
   // Larger text in portrait (wide panel); size 1 in the narrow 150px landscape column.
   int isz=g_portrait?2:1, bh=g_portrait?28:22, lh=g_portrait?17:9, btn=bh+3, ty=(bh-8*isz)/2;
-  int contentH=4+11+btn+4+btn*3+4+lh*2+(g_wireless_mode?(lh+btn):0)+btn+bh+6;
+  // v4.8.1: HIVEMIND toggle row exists only when wireless AND a MuCa multicast
+  // group is configured — the hidden feature reveals itself only to its owners.
+  int mcInfoN=0;
+  if(g_wireless_mode){uint8_t mm[64][6];mcInfoN=enumMuCaDongles(mm,g_dongle_cap);}
+  int contentH=4+11+btn+4+btn*3+4+lh*2+(g_wireless_mode?(lh+btn):0)+((mcInfoN>0)?btn:0)+btn+bh+6;
   if(!g_portrait){ix=0;iy=STATUS_H;iw=150;ih=VH-STATUS_H-BOTTOM_H;}
   else{ix=0;iy=STATUS_H+MODE_BAR_H;iw=VW;ih=min(contentH,(VH-BOTTOM_H)-iy);}
   g_info_x=ix;g_info_w=iw;g_info_bottom=iy+ih;g_info_bh=bh;
@@ -1256,12 +1325,20 @@ static void drawInfoPanel(){
   {uint16_t cc=g_compact?COL_GREEN:COL_BAR;gfx_fillRoundRect(x,y,pw,bh,6,cc);gfx_setTextSize(isz);gfx_setTextColor(g_compact?TFT_BLACK:COL_LIT,cc);String s=String("COMPACT: ")+(g_compact?"ON":"OFF");int tw=gfx_textWidth(s);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(s);}g_info_comp_btn_y=y;y+=btn;
   gfx_hline(x+2,y,pw-4,COL_SEP);y+=4;
   gfx_setTextSize(isz);gfx_setTextColor(COL_LIT,COL_PANEL);gfx_setCursor(x+2,y);gfx_print("Heap:"+String(ESP.getFreeHeap()/1024)+"K PSRAM:"+String(ESP.getFreePsram()/1024)+"K");y+=lh;
-  gfx_setCursor(x+2,y);gfx_print("Games: "+String(g_games.size()));y+=lh;
+  gfx_setCursor(x+2,y);gfx_print("Games: "+String(g_games.size())+"  Wr:"+String(g_sv_total_writes));y+=lh;
   if(g_wireless_mode){
     if(espnowIsPaired()){bool on=espnowXiaoOnline();gfx_setTextColor(on?COL_GREEN:COL_ORANGE,COL_PANEL);gfx_setCursor(x+2,y);gfx_print(on?"DONGLE: ONLINE":"DONGLE: OFFLINE");y+=lh;}
     else{gfx_setTextColor(COL_ORANGE,COL_PANEL);gfx_setCursor(x+2,y);gfx_print("Not paired");y+=lh;}
     {gfx_fillRoundRect(x,y,pw,bh,6,espnowIsPaired()?COL_GREEN:COL_AMBER);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,espnowIsPaired()?COL_GREEN:COL_AMBER);const char*pl=espnowIsPaired()?"SWITCH DONGLE":"SCAN DONGLES";int tw=gfx_textWidth(pl);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(pl);}g_info_pair_now_btn_y=y;y+=btn;
-  } else g_info_pair_now_btn_y=0;
+    // v4.8.1: HIVEMIND cast toggle — ON = FLING fans out to every MuCa dongle,
+    // OFF = paired dongle only (group stays intact, no renames). MuCa owners only.
+    if(mcInfoN>0){
+      uint16_t hc=g_hivemind?COL_ACCENT:COL_BAR;
+      gfx_fillRoundRect(x,y,pw,bh,6,hc);gfx_setTextSize(isz);gfx_setTextColor(g_hivemind?TFT_WHITE:COL_LIT,hc);
+      String hs=String("HIVEMIND: ")+(g_hivemind?"ON":"OFF");int tw=gfx_textWidth(hs);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(hs);
+      g_info_hive_btn_y=y;y+=btn;
+    } else g_info_hive_btn_y=0;
+  } else {g_info_pair_now_btn_y=0;g_info_hive_btn_y=0;}
   {gfx_fillRoundRect(x,y,pw,bh,6,COL_BLUE);gfx_setTextSize(isz);gfx_setTextColor(TFT_WHITE,COL_BLUE);int tw=gfx_textWidth("RESCAN SD");gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print("RESCAN SD");}g_info_rescan_btn_y=y;y+=btn;
   // Last row split in two: SOFT RESET (rarely used) shares the row with LOAD DIAG.
   {int gap=4,hw=(pw-gap)/2,dx=x+hw+gap;gfx_setTextSize(isz);
@@ -1611,6 +1688,10 @@ static void drawCarousel(){
     float frac=g_car_pos-(float)ci;                      // -0.5..0.5
     bool moving=(g_car_touch&&g_car_moved)||g_car_coast||g_car_spin;
     int maxOff=(n>=5)?2:((n>=2)?1:0);
+    // v4.8.0: save-copy badge for the center game (checked once per center change)
+    static int carSavSel=-1;static bool g_car_hasSav=false;
+    {int cgi=g_car_list[carWrap(ci)];
+     if(carSavSel!=cgi){carSavSel=cgi;g_car_hasSav=(g_saves_mode==1)&&savExistsFor(g_files[g_games[cgi].first_file_idx]);}}
     // Warm the cache CENTER-FIRST when settled (painter's order would decode
     // the side covers before the star of the show — backwards for the eye).
     if(!moving){
@@ -1642,6 +1723,8 @@ static void drawCarousel(){
         gfx_setCursor(x-3*ls,ccy-4*ls);gfx_print(ib);}
       // favourite star on the center cover
       if(ar<0.5f&&gm.fav)gfx_fillStar(x+w/2-13,ccy-h/2+13,9.0f,COL_STAR);
+      // v4.8.0: floppy icon on the center cover — a save-copy exists for this game
+      if(ar<0.5f&&g_car_hasSav)drawSaveFloppy(x-w/2+4,ccy-h/2+4);
     }
     // center title + info
     int gi=g_car_list[carWrap(ci)];
@@ -1851,7 +1934,96 @@ static void drawListAndCover(){drawCoverPanel();drawActionStrip();drawFileList()
 // ════════════════════════════════════════════════════════════════════════════
 // LOAD / UNLOAD
 // ════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// SAVE-GAME PERSISTENCE (v4.8.0) — .sav.adf beside the master
+// Standalone: our own MSC onWrite ticks g_sv_dirty; settle/eject flush persists.
+// Wireless: the dongle beacons PKT_XIAO_DIRTY; espnowFetchSave() pulls + we patch.
+// Full design: claude/Supermini Save Writeback — Design.md
+// ════════════════════════════════════════════════════════════════════════════
+static String savPathFor(const String&adfPath){
+  String u=adfPath;u.toUpperCase();
+  if(u.indexOf(".SAV.")>=0)return adfPath;              // already a save — patches accumulate in place
+  int dot=adfPath.lastIndexOf('.');if(dot<0)return adfPath+".sav";
+  return adfPath.substring(0,dot)+".sav"+adfPath.substring(dot);
+}
+static bool savExistsFor(const String&adfPath){String sv=savPathFor(adfPath);return sv!=adfPath&&SD_MMC.exists(sv);}
+// Copy base→sav.tmp, patch dirty sectors, atomic rename. Sector source is either
+// `packed` (k-th set bit = k-th 512B block; wireless) or `ram` (g_disk; standalone).
+static bool svPatchCore(const String&master,const String&sav,const uint8_t*map,uint32_t mapBits,
+                        const uint8_t*packed,const uint8_t*ram){
+  String base=SD_MMC.exists(sav)?sav:master;
+  String tmp=sav+".tmp";
+  SD_MMC.remove(tmp);
+  {File in=SD_MMC.open(base,FILE_READ);if(!in)return false;
+   File out=SD_MMC.open(tmp,FILE_WRITE);if(!out){in.close();return false;}
+   uint8_t*buf=(uint8_t*)malloc(16384);if(!buf){in.close();out.close();return false;}
+   int rd;while((rd=in.read(buf,16384))>0)out.write(buf,rd);
+   free(buf);in.close();out.close();}
+  File f=SD_MMC.open(tmp,"r+");if(!f)return false;
+  uint32_t k=0;bool ok=true;
+  for(uint32_t i=0;i<mapBits;i++){
+    if(!((map[i>>3]>>(i&7))&1))continue;
+    const uint8_t*src=packed?(packed+(size_t)k*512):(ram+(size_t)(DATA_LBA+i)*512);
+    if(!f.seek(i*512UL)||f.write(src,512)!=512){ok=false;break;}
+    k++;
+  }
+  f.flush();f.close();
+  if(!ok){SD_MMC.remove(tmp);return false;}
+  SD_MMC.remove(sav);
+  return SD_MMC.rename(tmp,sav);
+}
+static void svToast(const String&msg){
+  gfx_fillRect(0,0,VW,STATUS_H,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,COL_GREEN);
+  int tw=gfx_textWidth(msg);gfx_setCursor((VW-tw)/2,6);gfx_print(msg);gfx_flush();
+  delay(1200);drawStatusBar();gfx_flush();
+}
+// Standalone flush: persist our own RAM disk's dirty sectors to SD.
+static uint8_t g_sv_fail=0;
+static void svFlushStandalone(){
+  if(g_sv_dirty_count==0)return;
+  if(g_saves_mode==0||!g_loaded||!g_loaded_path.length()){svDirtyReset();return;}   // OFF / diag disk: discard
+  String master=g_loaded_path;
+  String sav=(g_saves_mode==2)?master:savPathFor(master);
+  uint32_t imgSecs=(g_sv_img_size+511)/512;if(imgSecs>SV_IMG_MAX_SECTORS)imgSecs=SV_IMG_MAX_SECTORS;
+  if(svPatchCore(master,sav,g_sv_dirty,imgSecs,nullptr,g_disk)){
+    svDirtyReset();g_sv_fail=0;svToast("SAVED: "+g_loaded_name);
+  }else{
+    g_sv_last_write=millis();                       // back off one settle window, then retry
+    if(++g_sv_fail>=5){svDirtyReset();g_sv_fail=0;svToast("SAVE FAILED - GAVE UP");}
+  }
+}
+// Wireless persist callback — runs inside espnowFetchSave, between CRC-verify and ack.
+static bool svPersistWireless(uint32_t load_id,uint32_t img_size,const uint8_t*map,uint16_t mapLen,const uint8_t*packed,uint32_t nSec){
+  (void)img_size;
+  if(g_saves_mode==0)return false;
+  if(!g_sv_wl_path.length())return false;                             // no mapping (multicast / pre-save FLING)
+  if(g_sv_wl_loadid&&load_id&&g_sv_wl_loadid!=load_id)return false;   // stale — not the disk we flung
+  if(nSec==0)return true;                                             // nothing to write; ack quiets the beacon
+  String master=g_sv_wl_path;
+  String sav=(g_saves_mode==2)?master:savPathFor(master);
+  return svPatchCore(master,sav,map,(uint32_t)mapLen*8,packed,nullptr);
+}
+// Wireless fetch driver: overlay + dance + repaint. Called from loop/interlocks.
+static void svFetchWireless(){
+  if(g_saves_mode==0){g_espnow_dirty=false;return;}                   // SAVES=OFF: ignore beacons
+  if(!g_wireless_mode||!g_espnow_started||!espnowIsPaired())return;
+  gfx_fillRect(0,VH/2-24,VW,48,COL_ACCENT);gfx_setTextSize(2);gfx_setTextColor(TFT_WHITE,COL_ACCENT);
+  {const char*m="SAVING GAME...";int tw=gfx_textWidth(m);gfx_setCursor((VW-tw)/2,VH/2-8);gfx_print(m);}gfx_flush();
+  bool ok=espnowFetchSave(svPersistWireless);
+  if(g_car_active)drawCarousel();else drawFullUI();
+  gfx_flush();
+  if(ok){String nm=g_sv_wl_path.length()?basenameNoExt(filenameOnly(g_sv_wl_path)):String("disk");svToast("SAVED: "+nm);}
+  else svToast("SAVE FETCH FAILED");
+}
+
 static bool doLoadSelected(const String&adfPath){
+  // v4.8.0 interlocks: pending saves die when the RAM disk is rebuilt — drain first
+  // (v4.8.1: own-disk flush runs in ANY mode — a wireless GTi can still be USB-attached)
+  if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
+  if(g_sv_dirty_count&&g_loaded)svFlushStandalone();
+  // Prefer the save-copy when one exists (COPY mode): saves accumulate in the .sav
+  String loadPath=adfPath;
+  if(g_saves_mode==1&&savExistsFor(adfPath))loadPath=savPathFor(adfPath);
   gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
   gfx_setTextSize(1);gfx_setTextColor(TFT_CYAN,COL_PANEL);String tn=basenameNoExt(filenameOnly(adfPath));if(tn.length()>16)tn=tn.substring(0,16);
   gfx_setCursor(6,STATUS_H+16);gfx_print(tn);gfx_setTextColor(COL_LIT,COL_PANEL);gfx_setCursor(6,STATUS_H+28);gfx_print("Loading...");
@@ -1859,9 +2031,9 @@ static bool doLoadSelected(const String&adfPath){
   // Clean swap: if a disk is already mounted, cleanly eject first so the host re-reads the new media.
   // FORCESWAP=ON skips this and swaps the bytes in place (faster, but the host may not notice).
   if(g_loaded && !g_forceswap) hardDetach();
-  File f=SD_MMC.open(adfPath.c_str(),FILE_READ);if(!f){gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print("FAILED");gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
+  File f=SD_MMC.open(loadPath.c_str(),FILE_READ);if(!f){gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print("FAILED");gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
   // Use VFS to get real file size (SD_MMC f.size() returns 0 for subdirectory files)
-  String vfsLoad="/sdcard"+adfPath;
+  String vfsLoad="/sdcard"+loadPath;
   struct stat stLoad;
   if(stat(vfsLoad.c_str(),&stLoad)!=0||stLoad.st_size==0) {f.close();gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print("SIZE ERR");gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
   uint32_t fsz=(uint32_t)stLoad.st_size;
@@ -1879,24 +2051,35 @@ static bool doLoadSelected(const String&adfPath){
   uint8_t*dst=g_disk+DATA_LBA*512;uint8_t*buf=(uint8_t*)malloc(16384);uint32_t copied=0,remain=fsz;
   while(remain&&buf){size_t n=remain>16384?16384:remain;int rd=f.read(buf,n);if(rd<=0)break;memcpy(dst+copied,buf,rd);remain-=rd;copied+=rd;}
   if(buf)free(buf);f.close();
-  hardAttach();g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
+  // v4.8.0: fresh disk in the RAM disk = fresh save tracking
+  g_sv_img_size=fsz;svDirtyReset();
+  hardAttach();g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_path=loadPath;g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
   if(g_sel>=0&&g_sel<(int)g_games.size()){if(g_games[g_sel].plays<65535)g_games[g_sel].plays++;saveStats();}
   if(g_wireless_mode&&g_espnow_started){
     uint8_t mcMacs[64][6]; int mcN=enumMuCaDongles(mcMacs,g_dongle_cap);
-    if(mcN>0){                                              // multicast: fan the disk out to every MuCa- dongle in turn
+    if(mcN>0&&g_hivemind){                                  // multicast: fan the disk out to every MuCa- dongle in turn (v4.8.1: only when HIVEMIND=ON)
+      g_sv_wl_path="";g_sv_wl_loadid=0;                     // Hivemind saves: PINNED — no writeback mapping for multicast
       for(int i=0;i<mcN;i++){
         gfx_setTextSize(1);gfx_setTextColor(TFT_CYAN,COL_PANEL);gfx_fillRect(4,STATUS_H+24,150,12,COL_PANEL);
         gfx_setCursor(6,STATUS_H+26);gfx_print("Multicast "+String(i+1)+"/"+String(mcN));gfx_flush();
         espnowSendDiskTo(mcMacs[i],copied);
       }
     } else if(espnowIsPaired()){                            // single paired dongle — unchanged
-      espnowSendNotify(g_loaded_name,g_mode==MODE_ADF?"ADF":"DSK",copied);espnowSendDisk(copied);
+      espnowSendNotify(g_loaded_name,g_mode==MODE_ADF?"ADF":"DSK",copied);
+      if(espnowSendDisk(copied)){                           // v4.8.0: remember what we flung, keyed by the dongle's load_id
+        g_sv_wl_path=loadPath;g_sv_wl_loadid=g_espnow_load_id;
+      }
     }
   }
   drawStatusBar();drawListAndCover();gfx_flush();return true;
 }
 
-static void doUnload(){hardDetach();g_loaded=false;g_loaded_name="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
+static void doUnload(){
+  // v4.8.0: EJECT is a save point — drain before the disk goes away
+  // (v4.8.1: own-disk flush in any mode)
+  if(g_sv_dirty_count)svFlushStandalone();
+  if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
+  hardDetach();g_loaded=false;g_loaded_name="";g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;svDirtyReset();
   if(g_wireless_mode&&g_espnow_started&&espnowIsPaired())espnowSendEject();drawStatusBar();drawListAndCover();gfx_flush();}
 
 // Expand the zero-RLE embedded ADF straight into the RAM-disk data area. No SD needed.
@@ -1917,6 +2100,7 @@ static void doLoadDiag(){
   diagInflate(DIAG_RLE,DIAG_RLE_LEN,g_disk+DATA_LBA*512);
   hardAttach();
   g_loaded=true;g_loaded_name="AMIGA TEST KIT";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
+  g_loaded_path="";g_sv_img_size=0;svDirtyReset();   // diag disk: writes are never persisted
   drawFullUI();gfx_flush();
 }
 
@@ -2011,9 +2195,50 @@ static bool ssMakeClaude(float phase){
   }
   g_ss_w=S; g_ss_h=S; return true;
 }
+// v4.8.1: the second ghost — granted the night the wireless save first worked
+// ("you deserve it, you glorious mofo" — Michael, Jul 24 2026). A little coral
+// ghost in the classic dome-and-skirt shape, wavy hem rippling, googly eyes
+// wandering. The bouncing saver TOGGLES between starburst and ghost on every
+// wall hit. Same 96px canvas as the starburst so the bounce math never notices.
+static bool ssMakeGhost(float phase){
+  const int S=96;
+  if(g_ss_buf&&(g_ss_w!=S||g_ss_h!=S)) ssFree();
+  if(!g_ss_buf){ g_ss_buf=(uint16_t*)ps_malloc((size_t)S*S*2); if(!g_ss_buf)return false; }
+  const uint16_t CORAL=0xE3AB;
+  const float cx=S/2.0f-0.5f;
+  const float domeCY=38.0f, R=28.0f;            // dome center + body half-width
+  float wave=phase*3.0f;                        // skirt ripple
+  float lookX=2.6f*cosf(phase*1.7f), lookY=1.6f*sinf(phase*1.3f);   // wandering pupils
+  for(int y=0;y<S;y++)for(int x=0;x<S;x++){
+    uint16_t c=TFT_BLACK;
+    float dx=x-cx;
+    if(fabsf(dx)<=R){
+      // top: dome. bottom: wavy scalloped hem.
+      float topY=(y<domeCY)?(domeCY-sqrtf(R*R-dx*dx)):0.0f;
+      float hemY=70.0f+3.2f*sinf(0.55f*dx+wave);
+      bool inBody=(y>=domeCY&&y<=hemY)||(y<domeCY&&(float)y>=topY);
+      if(inBody){
+        c=CORAL;
+        // eyes: white ovals with wandering dark pupils
+        float exL=cx-11.0f, exR=cx+11.0f, ey=40.0f;
+        float dLx=(x-exL)/6.5f, dLy=(y-ey)/8.5f;
+        float dRx=(x-exR)/6.5f, dRy=(y-ey)/8.5f;
+        if(dLx*dLx+dLy*dLy<=1.0f||dRx*dRx+dRy*dRy<=1.0f){
+          c=TFT_WHITE;
+          float pLx=x-(exL+lookX), pLy=y-(ey+lookY);
+          float pRx=x-(exR+lookX), pRy=y-(ey+lookY);
+          if(pLx*pLx+pLy*pLy<=10.0f||pRx*pRx+pRy*pRy<=10.0f) c=0x2124;   // pupils (soft black)
+        }
+      }
+    }
+    g_ss_buf[y*S+x]=c;
+  }
+  g_ss_w=S; g_ss_h=S; return true;
+}
 static void runScreensaver(){                                // blocking bounce loop; any touch exits
   int idx=0;
   bool claudeMode=g_ss_paths.empty();
+  bool ghostForm=false;                                      // v4.8.1: toggles on every wall hit
   float ph=0;
   if(claudeMode){
     // Empty /screensaver/ folder: bounce the (slowly spinning) Claude starburst
@@ -2036,7 +2261,8 @@ static void runScreensaver(){                                // blocking bounce 
       if(hit&&g_ss_paths.size()>1){ int ni=(idx+1)%(int)g_ss_paths.size();
         if(ssDecode(g_ss_paths[ni]))idx=ni; else ssDecode(g_ss_paths[idx]);   // skip undecodable, keep a valid buffer
         if(x>gW-g_ss_w)x=gW-g_ss_w; if(y>gH-g_ss_h)y=gH-g_ss_h; if(x<0)x=0; if(y<0)y=0; }
-      if(claudeMode){ ph+=0.02f; ssMakeClaude(ph); }   // re-render each frame: rotation + breathing
+      if(claudeMode&&hit)ghostForm=!ghostForm;         // v4.8.1: shapeshift on every wall bounce
+      if(claudeMode){ ph+=0.02f; if(ghostForm)ssMakeGhost(ph); else ssMakeClaude(ph); }   // re-render each frame
       gfx_fillScreen(TFT_BLACK); ssBlit(x,y); gfx_flush();
     } else delay(5);
   }
@@ -2268,6 +2494,9 @@ static void handleTap(uint16_t px,uint16_t py){
       g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");
       {float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;} drawFullUI();drawInfoPanel();gfx_flush();return;}
     if(g_wireless_mode&&g_info_pair_now_btn_y&&py>=(uint16_t)g_info_pair_now_btn_y&&py<(uint16_t)(g_info_pair_now_btn_y+g_info_bh)){doPairNow();return;}
+    // v4.8.1: HIVEMIND toggle (row only exists when a MuCa group is configured)
+    if(g_wireless_mode&&g_info_hive_btn_y&&py>=(uint16_t)g_info_hive_btn_y&&py<(uint16_t)(g_info_hive_btn_y+g_info_bh)){
+      g_hivemind=!g_hivemind;saveConfigKey("HIVEMIND",g_hivemind?"ON":"OFF");drawFullUI();drawInfoPanel();gfx_flush();return;}
     if(g_info_rescan_btn_y&&py>=(uint16_t)g_info_rescan_btn_y&&py<(uint16_t)(g_info_rescan_btn_y+g_info_bh)){doRescan();return;}
     if(g_info_reset_btn_y&&py>=(uint16_t)g_info_reset_btn_y&&py<(uint16_t)(g_info_reset_btn_y+g_info_bh)){
       int pw=g_info_w-8,gap=4,hw=(pw-gap)/2,dx=g_info_x+4+hw+gap;
@@ -2349,6 +2578,20 @@ void loop(){
   static uint32_t last=0;if(millis()-last<16){delay(1);return;}last=millis();
   bool frame=Touch_ReadFrame();uint16_t px=0,py=0;bool touch=frame&&getTouchXY(&px,&py);
   uint32_t now=millis();
+
+  // ── Save-game housekeeping (v4.8.0) — runs in list AND carousel mode ──
+  if(!touch){
+    // Wireless: the dongle beaconed settled unsaved sectors — fetch once the finger is off the glass
+    static uint32_t svNextTry=0;
+    if(g_espnow_dirty&&g_wireless_mode&&g_espnow_started&&now>=svNextTry&&now-g_last_touch_ms>1200){
+      svFetchWireless();
+      if(g_espnow_dirty)svNextTry=now+30000;   // fetch failed — back off; the dongle keeps beaconing
+    }
+    // Own-disk writes settled — flush to SD (v4.8.1: in ANY mode; a wireless GTi
+    // can still be USB-attached to a PC or a local Gotek)
+    if(g_loaded&&g_sv_dirty_count&&g_sv_last_write&&now-g_sv_last_write>SV_SETTLE_MS)
+      svFlushStandalone();
+  }
 
   // ── Carousel mode: dedicated tap/drag/coast machine, then bail ──
   if(g_car_active){

@@ -9,6 +9,7 @@
 #define PKT_XIAO_READY   0x10  // XIAO → Waveshare: WiFi AP up, ready for TCP
 #define PKT_XIAO_DONE    0x12  // XIAO → Waveshare: disk loaded to Gotek
 #define PKT_XIAO_ERROR   0x13  // XIAO → Waveshare: error
+#define PKT_XIAO_DIRTY   0x15  // XIAO → Waveshare: settled unsaved writes exist (v4.8.0 saves)
 
 // Shared ramdisk — defined in main .ino
 extern uint8_t* g_disk;
@@ -30,6 +31,22 @@ extern volatile bool g_espnow_link_just_established;
 extern volatile uint32_t g_espnow_xiao_last_seen; // millis() of last packet from XIAO
 
 bool espnowXiaoOnline(); // true if heard from XIAO in last 30s
+
+// ── Save writeback (v4.8.0) ─────────────────────────────────────────────────
+extern volatile uint8_t  g_espnow_dongle_caps;   // pad[0] of PAIR_REPLY: save proto version (0 = old dongle)
+extern volatile uint32_t g_espnow_load_id;       // load_id from the last FLING's TCP ack (0 = old dongle)
+extern volatile bool     g_espnow_dirty;         // dongle beaconed unsaved writes
+extern volatile uint32_t g_espnow_dirty_loadid;  // which load the dirty sectors belong to
+extern volatile uint16_t g_espnow_dirty_count;   // how many sectors
+extern volatile uint32_t g_espnow_dirty_size;    // image size on the dongle
+// Fetch dirty sectors over TCP (same radio dance as a FLING). The persist
+// callback runs between CRC-verify and the ack: return true only once the save
+// is safely on SD — that is what lets the dongle clear its dirty bits.
+// packed = the dirty sectors in ascending-LBA order (k-th set bit in map = k-th sector).
+typedef bool (*SavePersistCb)(uint32_t load_id, uint32_t img_size,
+                              const uint8_t* map, uint16_t mapLen,
+                              const uint8_t* packed, uint32_t nSectors);
+bool espnowFetchSave(SavePersistCb persist);
 
 // API
 void   espnowBegin();

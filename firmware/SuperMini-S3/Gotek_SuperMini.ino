@@ -45,10 +45,25 @@
 #define PKT_XIAO_READY  0x10
 #define PKT_XIAO_DONE   0x12
 #define PKT_XIAO_ERROR  0x13
+#define PKT_XIAO_DIRTY  0x15   // v3.2.0: settled unsaved writes exist — GTi, come fetch
+
+// ── Save writeback (v3.2.0) ─────────────────────────────────────────────────
+// The Gotek writes save-game sectors onto our RAM disk via USB MSC. We tick a
+// dirty bitmap per written sector (we never parse or diff anything — doctrine),
+// and once writes settle we beacon PKT_XIAO_DIRTY until the GTi pulls the dirty
+// sectors over TCP (command escape below) and acks. Bits only clear on ack.
+#define SAVE_PROTO_VER  1        // advertised in HELLO/REPLY pad[0]
+#define SAVE_SETTLE_MS  3000     // quiet time after last write before beaconing
+#define SAVE_BEACON_MS  10000    // beacon repeat until serviced
+#define TCP_CMD_ESCAPE  0xFFFFFFFFUL  // size header value that means "command, not disk"
+#define CMD_GET_SAVE    0x01
+#define CMD_GET_STATUS  0x02
 
 #pragma pack(push,1)
 struct PktHello  { uint8_t type; uint8_t mac[6]; char ip[16]; uint8_t pad[227]; };
 struct PktSimple { uint8_t type; uint8_t pad[249]; };
+struct PktDirty  { uint8_t type; uint32_t load_id; uint16_t dirty_count;
+                   uint32_t image_size; uint32_t age_ms; uint8_t flags; uint8_t pad[234]; };
 #pragma pack(pop)
 
 // FAT12 geometry
@@ -64,6 +79,27 @@ struct PktSimple { uint8_t type; uint8_t pad[249]; };
 #define ADF_DEFAULT_SIZE 901120
 
 static uint8_t* g_disk = nullptr;
+
+// ── Save writeback state ────────────────────────────────────────────────────
+#define IMG_MAX_SECTORS (TOTAL_SECTORS - DATA_LBA)      // 2037
+static uint8_t  g_dirty[(IMG_MAX_SECTORS+7)/8];         // live map (filled by onWrite)
+static uint8_t  g_snap [(IMG_MAX_SECTORS+7)/8];         // snapshot streamed to the GTi
+static volatile uint16_t g_dirty_count   = 0;
+static volatile uint32_t g_last_write_ms = 0;
+static volatile uint32_t g_total_writes  = 0;           // includes FAT noise (INFO counter)
+static uint32_t g_load_id    = 0;                        // bumped per received disk
+static uint32_t g_image_size = ADF_DEFAULT_SIZE;         // size of the mounted image
+static uint32_t g_next_beacon_ms = 0;
+static inline bool dGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
+static inline void dSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
+static inline void dClr(uint8_t*m,uint32_t i){m[i>>3]&=(uint8_t)~(1u<<(i&7));}
+static void dirtyReset(){memset(g_dirty,0,sizeof(g_dirty));g_dirty_count=0;g_last_write_ms=0;g_next_beacon_ms=0;}
+// CRC32 (IEEE, bitwise — identical implementation on the GTi side)
+static uint32_t crc32sw(uint32_t crc,const uint8_t*p,size_t n){
+  crc=~crc;
+  while(n--){crc^=*p++;for(int k=0;k<8;k++)crc=(crc>>1)^(0xEDB88320UL&(uint32_t)(-(int32_t)(crc&1)));}
+  return ~crc;
+}
 
 // Two-LED diagnostic status (replaces OLED). Call sites kept as oledStatus()/oledProgress()
 // so the rest of the firmware is unchanged — they just drive LEDs now.
@@ -102,7 +138,22 @@ static int32_t onRead(uint32_t lba, uint32_t off, void* buf, uint32_t n) {
 static int32_t onWrite(uint32_t lba, uint32_t off, uint8_t* buf, uint32_t n) {
   uint32_t s = lba*SECTOR_SIZE+off;
   if (s+n > TOTAL_SECTORS*SECTOR_SIZE) return 0;
-  memcpy(g_disk+s, buf, n); return (int32_t)n;
+  memcpy(g_disk+s, buf, n);
+  // v3.2.0: tick the dirty scorecard for every image sector this write touches.
+  // Writes below DATA_LBA are FAT/dir housekeeping — counted but never mapped.
+  // (assignment form, not ++ — C++20 deprecates ++ on volatile)
+  g_total_writes=g_total_writes+1;
+  uint32_t first=s/SECTOR_SIZE, last=(s+n-1)/SECTOR_SIZE;
+  uint32_t imgSecs=(g_image_size+SECTOR_SIZE-1)/SECTOR_SIZE;
+  if(imgSecs>IMG_MAX_SECTORS)imgSecs=IMG_MAX_SECTORS;
+  for(uint32_t l=first;l<=last;l++){
+    if(l<DATA_LBA)continue;
+    uint32_t i=l-DATA_LBA;
+    if(i>=imgSecs)continue;
+    if(!dGet(g_dirty,i)){dSet(g_dirty,i);g_dirty_count=g_dirty_count+1;}
+  }
+  g_last_write_ms=millis();
+  return (int32_t)n;
 }
 static void usbEventCb(void*,esp_event_base_t,int32_t,void*) {}
 static void hardDetach() {
@@ -212,11 +263,13 @@ static void handleESPNOW(const uint8_t* data, int len) {
     _wavePeer = new XiaoPeer(_wave_mac, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
     if (!_wavePeer->add_peer()) { delete _wavePeer; _wavePeer = nullptr; }
 
-    // Reply with our MAC and AP IP
+    // Reply with our MAC and AP IP (+ save-protocol capability in the pad —
+    // old GTi firmware ignores pad bytes, new firmware reads pad[0])
     PktHello reply = {};
     reply.type = PKT_PAIR_REPLY;
     WiFi.softAPmacAddress(reply.mac);  // use AP MAC
     strncpy(reply.ip, AP_IP, 15);
+    reply.pad[0] = SAVE_PROTO_VER;
     XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
     if (dst) dst->send_pkt((uint8_t*)&reply, sizeof(reply));
 
@@ -231,6 +284,9 @@ static void handleESPNOW(const uint8_t* data, int len) {
 
   if (type == PKT_DISK_EJECT) {
     if (g_disk_loaded) { hardDetach(); g_disk_loaded=false; }
+    // A new-firmware GTi drains saves BEFORE ejecting, so any bits left here are
+    // either already fetched or from an old GTi that can't fetch — drop them.
+    dirtyReset();
     digitalWrite(LED_BLUE, LOW);
     oledStatus("Gotek OMEGA " FW_VERSION, "Ejected", "", "Ready");
     return;
@@ -277,6 +333,68 @@ static void startAP() {
   oledStatus("Gotek OMEGA " FW_VERSION, "WiFi AP ready", AP_SSID, "waiting for WS...");
 }
 
+// ── Save writeback: TCP command handlers (v3.2.0) ───────────────────────────
+static inline void wrLE32(uint8_t*p,uint32_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);p[2]=(uint8_t)(v>>16);p[3]=(uint8_t)(v>>24);}
+static inline void wrLE16(uint8_t*p,uint16_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);}
+
+// GET_STATUS: 'S','T',ver | load_id u32 | dirty_count u16 | age_ms u32 | total_writes u32 | image_size u32
+static void doGetStatus(WiFiClient& client){
+  uint8_t r[21]; r[0]='S'; r[1]='T'; r[2]=SAVE_PROTO_VER;
+  wrLE32(r+3,g_load_id); wrLE16(r+7,g_dirty_count);
+  wrLE32(r+9,g_last_write_ms?(millis()-g_last_write_ms):0xFFFFFFFFUL);
+  wrLE32(r+13,g_total_writes); wrLE32(r+17,g_image_size);
+  client.write(r,21); client.flush();
+}
+
+// GET_SAVE: stream snapshot bitmap + dirty sectors + CRC32; clear bits only on ack.
+// Response: 'S','V','1' | flags u8 | load_id u32 | image_size u32 | mapLen u16 |
+//           map[mapLen] | <dirty sectors ascending> | crc32 u32 (over map+sectors)
+static void doGetSave(WiFiClient& client){
+  uint32_t imgSecs=(g_image_size+SECTOR_SIZE-1)/SECTOR_SIZE;
+  if(imgSecs>IMG_MAX_SECTORS)imgSecs=IMG_MAX_SECTORS;
+  uint16_t mapLen=(uint16_t)((imgSecs+7)/8);
+  memcpy(g_snap,g_dirty,mapLen);           // snapshot: writes during transfer stay dirty in the live map
+  uint8_t hdr[14]; hdr[0]='S';hdr[1]='V';hdr[2]='1';hdr[3]=0;
+  wrLE32(hdr+4,g_load_id); wrLE32(hdr+8,g_image_size); wrLE16(hdr+12,mapLen);
+  client.write(hdr,14);
+  uint32_t crc=crc32sw(0,g_snap,mapLen);
+  client.write(g_snap,mapLen);
+  uint32_t sent=0;
+  for(uint32_t i=0;i<imgSecs;i++){
+    if(!dGet(g_snap,i))continue;
+    uint8_t* sec=g_disk+(DATA_LBA+i)*SECTOR_SIZE;
+    client.write(sec,SECTOR_SIZE);
+    crc=crc32sw(crc,sec,SECTOR_SIZE);
+    sent++; oledProgress(sent,g_dirty_count);
+  }
+  uint8_t cb[4]; wrLE32(cb,crc); client.write(cb,4); client.flush();
+  Serial.printf("[SAVE] Sent %lu dirty sectors (load %lu)\n",(unsigned long)sent,(unsigned long)g_load_id);
+  // Await GTi ack: 0x01 = persisted to SD → clear the snapshot's bits from the live map
+  uint32_t t0=millis(); while(!client.available()&&millis()-t0<10000)delay(5);
+  bool ok=(client.available()&&client.read()==0x01);
+  if(ok){
+    for(uint32_t i=0;i<imgSecs;i++)
+      if(dGet(g_snap,i)&&dGet(g_dirty,i)){dClr(g_dirty,i);if(g_dirty_count)g_dirty_count=g_dirty_count-1;}
+    g_next_beacon_ms=0;
+    Serial.println("[SAVE] GTi persisted — bits cleared");
+    if(g_dirty_count==0) setLeds(false,g_disk_loaded);
+  } else {
+    Serial.println("[SAVE] No ack — keeping dirty bits for retry");
+  }
+}
+
+// Beacon: settled unsaved writes exist — repeated every SAVE_BEACON_MS until fetched.
+// Doubles as a keepalive so the GTi's DONGLE:ONLINE indicator stays fresh.
+static void sendDirtyBeacon(){
+  PktDirty pkt={}; pkt.type=PKT_XIAO_DIRTY;
+  pkt.load_id=g_load_id; pkt.dirty_count=g_dirty_count;
+  pkt.image_size=g_image_size;
+  pkt.age_ms=g_last_write_ms?(millis()-g_last_write_ms):0;
+  pkt.flags=0;
+  XiaoPeer* dst=_wavePeer?_wavePeer:_bcastPeer;
+  if(dst)dst->send_pkt((uint8_t*)&pkt,sizeof(pkt));
+}
+
 // Handle incoming TCP disk transfer
 static void handleTCPClient(WiFiClient& client) {
   Serial.printf("[TCP] Client connected from %s\n", client.remoteIP().toString().c_str());
@@ -294,6 +412,21 @@ static void handleTCPClient(WiFiClient& client) {
   client.read(hdr, 4);
   uint32_t size = ((uint32_t)hdr[0]<<24)|((uint32_t)hdr[1]<<16)|
                   ((uint32_t)hdr[2]<<8)|(uint32_t)hdr[3];
+
+  // v3.2.0 command escape: a real disk size is always <= MAX_FILE_BYTES, so
+  // 0xFFFFFFFF unmistakably means "command follows", never a disk.
+  if (size == TCP_CMD_ESCAPE) {
+    t0 = millis();
+    while (client.available() < 1 && millis()-t0 < 3000) delay(1);
+    if (!client.available()) { client.write((uint8_t)0x00); return; }
+    uint8_t cmd = client.read();
+    Serial.printf("[TCP] Command 0x%02X\n", cmd);
+    if      (cmd == CMD_GET_SAVE)   doGetSave(client);
+    else if (cmd == CMD_GET_STATUS) doGetStatus(client);
+    else client.write((uint8_t)0x00);
+    return;
+  }
+
   Serial.printf("[TCP] Expecting %u bytes\n", size);
 
   if (size == 0 || size > MAX_FILE_BYTES) {
@@ -332,8 +465,15 @@ static void handleTCPClient(WiFiClient& client) {
   Serial.printf("[TCP] Received %u / %u bytes\n", received, size);
 
   if (received == size) {
-    // Send OK response
-    client.write((uint8_t)0x01);
+    // New disk = new save identity: bump load_id, wipe the old scorecard.
+    g_load_id++;
+    g_image_size = size;
+    dirtyReset();
+
+    // Send OK response + load_id (old GTi reads only the first byte — compatible;
+    // new GTi reads 4 more bytes to learn which load this ack belongs to)
+    uint8_t ack[5]; ack[0]=0x01; wrLE32(ack+1,g_load_id);
+    client.write(ack,5);
     client.flush();
     delay(100);
     client.stop();
@@ -422,6 +562,7 @@ void setup() {
     hello.type = PKT_PAIR_HELLO;
     WiFi.softAPmacAddress(hello.mac);
     strncpy(hello.ip, AP_IP, 15);
+    hello.pad[0] = SAVE_PROTO_VER;
     if (_bcastPeer) _bcastPeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     if (_wavePeer)  _wavePeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     dots++;
@@ -447,6 +588,7 @@ void setup() {
       confirm.type = PKT_PAIR_REPLY;
       WiFi.softAPmacAddress(confirm.mac);
       strncpy(confirm.ip, AP_IP, 15);
+      confirm.pad[0] = SAVE_PROTO_VER;
       _wavePeer->send_pkt((uint8_t*)&confirm, sizeof(confirm));
       break;
     }
@@ -470,6 +612,16 @@ void loop() {
   // Handle TCP disk transfers
   WiFiClient client = _tcpServer.available();
   if (client) handleTCPClient(client);
+
+  // v3.2.0: unsaved writes settled? Raise a hand until the GTi collects them.
+  if (g_dirty_count > 0 && g_last_write_ms &&
+      (millis() - g_last_write_ms) > SAVE_SETTLE_MS &&
+      millis() > g_next_beacon_ms) {
+    sendDirtyBeacon();
+    g_next_beacon_ms = millis() + SAVE_BEACON_MS;
+    // Red+blue together = unsaved data waiting (distinct from either alone)
+    setLeds(true, true);
+  }
 
   // LED blink if not paired
   if (!_paired) digitalWrite(LED_RED, (millis()/1000)&1 ? HIGH : LOW);
