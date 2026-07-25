@@ -27,7 +27,7 @@
 #include "esp_wifi.h"
 #include <LittleFS.h>
 
-#define FW_VERSION     "v3.2.0-mini"
+#define FW_VERSION     "v3.3.0-mini"   // 3.3.x = the save-protocol line (3.2.0 = last pre-save build)
 #define ESPNOW_CHANNEL 6
 #define LED_RED        1   // GP1 — status/attention
 #define LED_BLUE       2   // GP2 — activity
@@ -319,19 +319,9 @@ static void loadConfig() {
 
 // WiFi AP + TCP server
 static WiFiServer _tcpServer(TCP_PORT);
-static bool       _apRunning = false;
+// (_apRunning removed in 3.3.0 with startAP() — the AP is unconditionally started in setup())
 
-static void startAP() {
-  if (_apRunning) return;
-  // Stop ESP-NOW WiFi first, start AP
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(AP_SSID, AP_PASS, ESPNOW_CHANNEL);
-  delay(200);
-  _tcpServer.begin();
-  _apRunning = true;
-  Serial.printf("[AP] Started: %s  IP: %s  Port: %d\n", AP_SSID, AP_IP, TCP_PORT);
-  oledStatus("Gotek OMEGA " FW_VERSION, "WiFi AP ready", AP_SSID, "waiting for WS...");
-}
+// (startAP() removed in 3.3.0 — dead code since the AP became always-on in setup())
 
 // ── Save writeback: TCP command handlers (v3.2.0) ───────────────────────────
 static inline void wrLE32(uint8_t*p,uint32_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);p[2]=(uint8_t)(v>>16);p[3]=(uint8_t)(v>>24);}
@@ -427,7 +417,7 @@ static void handleTCPClient(WiFiClient& client) {
     return;
   }
 
-  Serial.printf("[TCP] Expecting %u bytes\n", size);
+  Serial.printf("[TCP] Expecting %lu bytes\n", (unsigned long)size);
 
   if (size == 0 || size > MAX_FILE_BYTES) {
     Serial.println("[TCP] Invalid size");
@@ -462,7 +452,7 @@ static void handleTCPClient(WiFiClient& client) {
   }
   free(buf);
 
-  Serial.printf("[TCP] Received %u / %u bytes\n", received, size);
+  Serial.printf("[TCP] Received %lu / %lu bytes\n", (unsigned long)received, (unsigned long)size);
 
   if (received == size) {
     // New disk = new save identity: bump load_id, wipe the old scorecard.
@@ -497,7 +487,7 @@ static void handleTCPClient(WiFiClient& client) {
     client.stop();
     String rxStr = "rx:" + String(received/1024) + "k/" + String(size/1024) + "k";
     oledStatus("TRANSFER ERROR", rxStr, "tap INSERT again", "");
-    Serial.printf("[TCP] Transfer incomplete: %u/%u\n", received, size);
+    Serial.printf("[TCP] Transfer incomplete: %lu/%lu\n", (unsigned long)received, (unsigned long)size);
     sendSimple(PKT_XIAO_ERROR);
   }
 }
@@ -535,7 +525,6 @@ void setup() {
   WiFi.softAP(AP_SSID, AP_PASS, ESPNOW_CHANNEL);
   delay(300);
   _tcpServer.begin();
-  _apRunning = true;
   Serial.printf("[AP] Started on channel %d, IP: %s\n", ESPNOW_CHANNEL, AP_IP);
 
   // Start ESP-NOW (compatible with AP_STA mode)
@@ -573,7 +562,7 @@ void setup() {
       handleESPNOW(pkt.data, pkt.len);
 
     // Check for TCP clients while pairing
-    WiFiClient client = _tcpServer.available();
+    WiFiClient client = _tcpServer.accept();
     if (client) handleTCPClient(client);
 
     if (dots % 5 == 0)
@@ -610,7 +599,7 @@ void loop() {
     handleESPNOW(pkt.data, pkt.len);
 
   // Handle TCP disk transfers
-  WiFiClient client = _tcpServer.available();
+  WiFiClient client = _tcpServer.accept();
   if (client) handleTCPClient(client);
 
   // v3.2.0: unsaved writes settled? Raise a hand until the GTi collects them.
