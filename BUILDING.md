@@ -23,9 +23,9 @@ Then *Boards Manager → search "esp32" → install*.
 | Library | Where to get it | Used for |
 |---|---|---|
 | **JPEGDEC** (Larry Bank / bitbank2) | Arduino **Library Manager** → search `JPEGDEC` | Decoding cover-art / screensaver JPGs |
-| **AXS15231B esp_lcd driver** (`esp_lcd_axs15231b.c` + `.h`) | Panel driver for the JC3248W535 display — e.g. the community driver in **NorthernMan54/JC3248W535EN** (`src/esp_lcd_axs15231b.*`). ⚠️ **Confirm the exact source you used** and install it as a library (or drop the `.c`/`.h` beside the sketch). | The display + capacitive touch controller |
+| **AXS15231B esp_lcd driver** (`esp_lcd_axs15231b.c` + `.h`) + **touch glue** (`esp_lcd_touch.c` + `.h`) | **Bundled in the sketch folder — nothing to install.** Keep all the `.c`/`.h` files beside the `.ino` and the Arduino IDE compiles them automatically. | The display + capacitive touch controller |
 
-> The AXS15231B driver is the one that trips people up: it is **not** in Library Manager. It must be present on the include path as `esp_lcd_axs15231b.h`. If you get `esp_lcd_axs15231b.h: No such file or directory`, this is the missing piece.
+> The display/touch drivers are **not** in Library Manager — they ship with the sketch. If you get `esp_lcd_axs15231b.h: No such file or directory` or `esp_lcd_touch.h: No such file or directory`, you are missing files from the sketch folder — re-download the repo and make sure all eight files listed below sit beside the `.ino`.
 
 > **TinyUSB is NOT a separate install.** It's built into the ESP32 core — you enable it with the *USB Mode: USB-OTG (TinyUSB)* board setting (see §4), and `USB.h`/`USBMSC.h` come from the core. ⚠️ Do **not** install the "Adafruit TinyUSB Library" from Library Manager — on ESP32-S3 it conflicts with the core's own TinyUSB.
 
@@ -60,10 +60,14 @@ Select **ESP32S3 Dev Module** (or a JC3248W535 entry if your setup provides one)
 
 ```
 Gotek_JC3248/
-  Gotek_JC3248.ino     ← main firmware
-  espnow_server.h      ← wireless / multicast
+  Gotek_JC3248.ino       ← main firmware
+  espnow_server.h        ← wireless / multicast
   espnow_server.cpp
-  diag_adf.h           ← embedded Amiga Test Kit diagnostic (zero-RLE, ~99 KB, public domain)
+  diag_adf.h             ← embedded Amiga Test Kit diagnostic (zero-RLE, ~99 KB, public domain)
+  esp_lcd_axs15231b.h    ← display panel driver (bundled)
+  esp_lcd_axs15231b.c
+  esp_lcd_touch.h        ← touch glue for the driver (bundled)
+  esp_lcd_touch.c
 ```
 Open `Gotek_JC3248.ino`, compile, and flash. First compile is a little slower because `diag_adf.h` embeds the ~99 KB diagnostic image.
 
