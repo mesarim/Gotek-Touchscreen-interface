@@ -17,13 +17,20 @@
 #include "esp_random.h"
 #include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 #include <JPEGDEC.h>
+// JPEGDEC and PNGdec both define INTELSHORT/INTELLONG/MOTOSHORT/MOTOLONG; undef
+// after JPEGDEC so PNGdec redefines them cleanly (silences redefinition warnings).
+#undef INTELSHORT
+#undef INTELLONG
+#undef MOTOSHORT
+#undef MOTOLONG
+#include <PNGdec.h>      // cover art may be PNG as well as JPEG (v4.8.4) — needs the "PNGdec" library (Larry Bank) installed
 #include <Wire.h>
 #include <vector>
 #include <algorithm>
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "v4.8.1-JC3248"
+#define FW_VERSION "v4.8.4-JC3248"
 #include "espnow_server.h"
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
@@ -154,6 +161,7 @@ static esp_lcd_panel_handle_t panel_handle = NULL;
 static uint16_t *framebuffer = NULL;
 static uint16_t *dma_buffer = NULL;
 static JPEGDEC jpegdec;
+static PNG     pngdec;   // v4.8.4 PNG cover support
 
 static inline uint16_t swap16(uint16_t c){return(c>>8)|(c<<8);}
 static inline void fb_setPixel(int vx,int vy,uint16_t color){
@@ -243,6 +251,16 @@ int jpeg_buf_cb(JPEGDRAW*pDraw){
     if(cw>0) memcpy(&jpeg_tmp_buf[row*jpeg_tmp_w+pDraw->x],&pDraw->pPixels[yy*pDraw->iWidth],cw*2);
   } return 1;
 }
+// ── PNG decode via PNGdec (v4.8.4). Same jpeg_tmp_buf target as the JPEG path,
+//    so the scale/blit code downstream is shared. PNGdec has no hardware
+//    downscale, so PNG covers decode full-res into PSRAM (keep them modest). ──
+static bool coverIsPng(const String&p){int d=p.lastIndexOf('.');if(d<0)return false;String e=p.substring(d+1);e.toLowerCase();return e=="png";}
+int png_buf_cb(PNGDRAW*pDraw){   // PNGdec's PNG_DRAW_CALLBACK returns int
+  if(!jpeg_tmp_buf)return 0;
+  int row=pDraw->y; if(row<0||row>=jpeg_tmp_h)return 1;
+  pngdec.getLineAsRGB565(pDraw,&jpeg_tmp_buf[row*jpeg_tmp_w],PNG_RGB565_LITTLE_ENDIAN,0x00000000);
+  return 1;
+}
 static void gfx_drawJpgFile(const String&path,int x,int y,int maxW,int maxH){
   // Use VFS to get real file size (SD_MMC f.size() returns 0 for subdirectory files)
   String vfsPath="/sdcard"+path;
@@ -252,13 +270,24 @@ static void gfx_drawJpgFile(const String&path,int x,int y,int maxW,int maxH){
   File f=SD_MMC.open(path.c_str(),"r"); if(!f){return;}
   uint8_t*buf=(uint8_t*)ps_malloc(sz); if(!buf){f.close();return;}
   f.read(buf,sz); f.close();
-  if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return;}
-  int jw=jpegdec.getWidth(),jh=jpegdec.getHeight();
-  if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return;}
-  jpeg_tmp_buf=(uint16_t*)ps_malloc(jw*jh*2);
-  if(!jpeg_tmp_buf){jpegdec.close();free(buf);return;}
-  memset(jpeg_tmp_buf,0,jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
-  jpegdec.decode(0,0,0); jpegdec.close(); free(buf);
+  int jw=0,jh=0;
+  if(coverIsPng(path)){
+    if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){free(buf);return;}
+    jw=pngdec.getWidth();jh=pngdec.getHeight();
+    if(jw<=0||jh<=0||jw>2000||jh>2000){pngdec.close();free(buf);return;}
+    jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)jw*jh*2);
+    if(!jpeg_tmp_buf){pngdec.close();free(buf);return;}
+    memset(jpeg_tmp_buf,0,(size_t)jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
+    pngdec.decode(NULL,0); pngdec.close(); free(buf);
+  } else {
+    if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return;}
+    jw=jpegdec.getWidth();jh=jpegdec.getHeight();
+    if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return;}
+    jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)jw*jh*2);
+    if(!jpeg_tmp_buf){jpegdec.close();free(buf);return;}
+    memset(jpeg_tmp_buf,0,(size_t)jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
+    jpegdec.decode(0,0,0); jpegdec.close(); free(buf);
+  }
   float scX=(float)maxW/jw,scY=(float)maxH/jh,sc=min(scX,scY);
   if(sc>1.0f)sc=1.0f;
   int dw=(int)(jw*sc),dh=(int)(jh*sc);
@@ -600,7 +629,7 @@ static void ensureSampleFolder(){
     "named SAMPLE. Copy this layout for real games:\r\n"
     "\r\n"
     "  /ADF/YourGame/YourGame.adf   the disk image\r\n"
-    "  /ADF/YourGame/YourGame.jpg   cover art (JPEG, any size)\r\n"
+    "  /ADF/YourGame/YourGame.jpg   cover art (JPEG or PNG, any size)\r\n"
     "  /ADF/YourGame/YourGame.nfo   this info file (plain text)\r\n"
     "\r\n"
     "NFO rules:\r\n"
@@ -622,8 +651,27 @@ static void ensureSampleFolder(){
 static String basenameNoExt(const String&p){int s=p.lastIndexOf('/'),d=p.lastIndexOf('.');String b=s>=0?p.substring(s+1):p;if(d>s)b=b.substring(0,d-(s>=0?s+1:0));return b;}
 static String filenameOnly(const String&p){int s=p.lastIndexOf('/');return s>=0?p.substring(s+1):p;}
 static String parentDir(const String&p){int s=p.lastIndexOf('/');return s>0?p.substring(0,s):"/";}
-static String getGameBaseName(const String&fp){String b=basenameNoExt(filenameOnly(fp));int d=b.lastIndexOf('-');if(d>0&&d<(int)b.length()-1){bool num=true;for(int i=d+1;i<(int)b.length();i++)if(!isDigit(b[i])){num=false;break;}if(num)return b.substring(0,d);}return b;}
-static int getDiskNumber(const String&fp){String b=basenameNoExt(filenameOnly(fp));int d=b.lastIndexOf('-');if(d>0){int n=b.substring(d+1).toInt();if(n>0)return n;}return 0;}
+// ── TOSEC "(Disk n of m)" awareness (v4.8.4). If a filename carries a TOSEC
+//    disk token we read n as the disk number and treat the text BEFORE the
+//    token as the game key, so multi-disk TOSEC sets group exactly like our
+//    own -1/-2 naming. Matches (Disk ...) and (Disc ...), case-insensitive.
+//    Purely additive: a TOSEC name ends in ) or ], so the old trailing "-n"
+//    path never fires on it, and single-disk / folder-per-game libraries are
+//    untouched. NOTE: grouping keys on the text before the token, so keep ONE
+//    rip per title together — two rips of the same disk 1 would merge. ──
+static int tosecDiskTokenPos(const String&b){
+  String lb=b;lb.toLowerCase();int p=-1;
+  const char*kw[]={"(disk ","(disc "};
+  for(auto k:kw){int q=lb.indexOf(k);if(q>=0&&(p<0||q<p))p=q;}
+  return p;   // index of the '(' , or -1
+}
+static int tosecDiskNumber(const String&b){int p=tosecDiskTokenPos(b);if(p<0)return 0;int n=b.substring(p+6).toInt();return n>0?n:0;}
+static String getGameBaseName(const String&fp){String b=basenameNoExt(filenameOnly(fp));
+  int tp=tosecDiskTokenPos(b);if(tp>0&&tosecDiskNumber(b)>0){String g=b.substring(0,tp);g.trim();if(g.length())return g;}
+  int d=b.lastIndexOf('-');if(d>0&&d<(int)b.length()-1){bool num=true;for(int i=d+1;i<(int)b.length();i++)if(!isDigit(b[i])){num=false;break;}if(num)return b.substring(0,d);}return b;}
+static int getDiskNumber(const String&fp){String b=basenameNoExt(filenameOnly(fp));
+  int tn=tosecDiskNumber(b);if(tn>0)return tn;
+  int d=b.lastIndexOf('-');if(d>0){int n=b.substring(d+1).toInt();if(n>0)return n;}return 0;}
 
 static bool findInDir(const String&dir,const String&target,String&out){
   String tgt=target;tgt.toLowerCase();File d=SD_MMC.open(dir.c_str());if(!d||!d.isDirectory())return false;
@@ -635,7 +683,7 @@ static bool findNFOFor(const String&p,String&out){
 }
 static bool findJPGFor(const String&p,String&out){
   String b=basenameNoExt(filenameOnly(p)),d=parentDir(p),gb=getGameBaseName(p);
-  const char*exts[]={".jpg",".jpeg",".JPG",".JPEG"};
+  const char*exts[]={".jpg",".jpeg",".png",".JPG",".JPEG",".PNG"};
   // Try exact basename in same dir
   for(auto e:exts){String c=d+"/"+b+e;if(SD_MMC.exists(c.c_str())){out=c;return true;}}
   // Try game base name (for multi-disk: GameName.jpg instead of GameName-1.jpg)
@@ -1251,6 +1299,17 @@ static void drawSaveFloppy(int x,int y){
   gfx_fillRect(x+3,y+8,8,4,TFT_WHITE);          // label
 }
 
+// v4.8.2: type-to-search. A little magnifier sits atop the A-Z rail (above # / A);
+// tapping it opens a keyboard that live-filters the library by substring and jumps
+// the list to whatever result you tap. The rail letters shrink slightly to make room.
+#define AZ_SRCH_H 18
+static void drawMagnifier(int cx,int cy,uint16_t col){
+  gfx_drawCircle(cx-1,cy-1,4,col);
+  gfx_drawCircle(cx-1,cy-1,5,col);        // 2px lens ring
+  gfx_fillRect(cx+2,cy+2,2,2,col);        // diagonal handle stub
+  gfx_fillRect(cx+4,cy+4,2,2,col);
+}
+
 static void drawCoverPanel(){
   if(!COVER_ON)return;
   gfx_fillRect(COVER_X,COVER_Y,COVER_W,COVER_H,COL_PANEL);if(g_games.empty())return;
@@ -1409,15 +1468,18 @@ static void drawAZBar(){
   if(!active_letter_count)return;
   int azBottom=AZ_TOP+AZ_H;
   int togY=azBottom-AZ_TOG_H;                       // toggle top; letters occupy the strip above it
-  int barH=togY-AZ_TOP;
+  int letTop=AZ_TOP+AZ_SRCH_H;                      // v4.8.2: reserve a cell for the search magnifier
+  int barH=togY-letTop;
   gfx_fillRect(AZ_X,AZ_TOP,AZ_W,AZ_H,COL_PANEL);
+  drawMagnifier(AZ_X+AZ_W/2,AZ_TOP+AZ_SRCH_H/2,COL_AMBER);
+  gfx_hline(AZ_X,AZ_TOP+AZ_SRCH_H-1,AZ_W,COL_SEP);
   char p0[27],p1[27];int n0=azHalf(0,p0),n1=azHalf(1,p1);
   char*half=g_az_page==0?p0:p1;int hn=g_az_page==0?n0:n1;
   int slots=max(13,max(n0,n1));                    // enough rows for the bigger half ('#' can push it to 14)
   int letterH=barH/slots;if(letterH<7)letterH=7;
   int lsz=(letterH>=15)?2:1;
   gfx_setTextSize(lsz);
-  for(int i=0;i<hn;i++){char letter=half[i];int ly=AZ_TOP+i*letterH;if(ly+letterH>togY)break;
+  for(int i=0;i<hn;i++){char letter=half[i];int ly=letTop+i*letterH;if(ly+letterH>togY)break;
     if(letter==g_active_letter){gfx_fillRect(AZ_X,ly,AZ_W,letterH,COL_AMBER);gfx_setTextColor(TFT_BLACK,COL_AMBER);}
     else gfx_setTextColor(COL_DIM,COL_PANEL);
     gfx_setCursor(AZ_X+(AZ_W-6*lsz)/2,ly+(letterH-8*lsz)/2);char lb[2]={letter,0};gfx_print(lb);}
@@ -1434,12 +1496,12 @@ static bool handleAlphabetTouch(uint16_t px,uint16_t py){
   int togY=AZ_TOP+AZ_H-AZ_TOG_H;
   // Toggle button (taller hit region at the strip bottom) — manual page peek
   if(py>=(uint16_t)togY){g_az_page=g_az_page?0:1;return true;}
-  int barH=togY-AZ_TOP;
+  int letTop=AZ_TOP+AZ_SRCH_H;int barH=togY-letTop;    // letters live below the magnifier cell
   char p0[27],p1[27];int n0=azHalf(0,p0),n1=azHalf(1,p1);
   char*half=g_az_page==0?p0:p1;int hn=g_az_page==0?n0:n1;
   if(hn==0){g_az_page=g_az_page?0:1;return true;}
   int slots=max(13,max(n0,n1));int letterH=barH/slots;if(letterH<7)letterH=7;
-  int r=constrain((int)(py-AZ_TOP)/letterH,0,hn-1);
+  int r=constrain((int)(py-letTop)/letterH,0,hn-1);
   char letter=half[r];
   int target=0;for(int i=0;i<(int)g_games.size();i++){if(bucketOf(g_games[i].name)>=letter){target=i;break;}}
   setActiveLetter(letter);
@@ -1519,20 +1581,32 @@ static bool carDecodeTile(int gi,uint16_t*dst){
   File f=SD_MMC.open(game.jpg_path.c_str(),"r");if(!f)return false;
   uint8_t*buf=(uint8_t*)ps_malloc(sz);if(!buf){f.close();return false;}
   f.read(buf,sz);f.close();
-  if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return false;}
-  int jw=jpegdec.getWidth(),jh=jpegdec.getHeight();
-  if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return false;}
-  // Use JPEGDEC's built-in downscale: decoding a big cover at 1/2, 1/4 or 1/8
-  // is up to 16x less work than full-decode-then-shrink (the "slow covers" fix).
-  int opt=0,div=1;
-  if(jw>=CAR_TILE*8&&jh>=CAR_TILE*8){opt=JPEG_SCALE_EIGHTH;div=8;}
-  else if(jw>=CAR_TILE*4&&jh>=CAR_TILE*4){opt=JPEG_SCALE_QUARTER;div=4;}
-  else if(jw>=CAR_TILE*2&&jh>=CAR_TILE*2){opt=JPEG_SCALE_HALF;div=2;}
-  int djw=jw/div,djh=jh/div;
-  jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)djw*djh*2);
-  if(!jpeg_tmp_buf){jpegdec.close();free(buf);return false;}
-  memset(jpeg_tmp_buf,0,(size_t)djw*djh*2);jpeg_tmp_w=djw;jpeg_tmp_h=djh;
-  jpegdec.decode(0,0,opt);jpegdec.close();free(buf);
+  int djw=0,djh=0;
+  if(coverIsPng(game.jpg_path)){
+    if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){free(buf);return false;}
+    int jw=pngdec.getWidth(),jh=pngdec.getHeight();
+    if(jw<=0||jh<=0||jw>2000||jh>2000){pngdec.close();free(buf);return false;}
+    djw=jw;djh=jh;                          // PNGdec has no built-in downscale -> full decode, then shrink
+    jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)djw*djh*2);
+    if(!jpeg_tmp_buf){pngdec.close();free(buf);return false;}
+    memset(jpeg_tmp_buf,0,(size_t)djw*djh*2);jpeg_tmp_w=djw;jpeg_tmp_h=djh;
+    pngdec.decode(NULL,0);pngdec.close();free(buf);
+  } else {
+    if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return false;}
+    int jw=jpegdec.getWidth(),jh=jpegdec.getHeight();
+    if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return false;}
+    // Use JPEGDEC's built-in downscale: decoding a big cover at 1/2, 1/4 or 1/8
+    // is up to 16x less work than full-decode-then-shrink (the "slow covers" fix).
+    int opt=0,div=1;
+    if(jw>=CAR_TILE*8&&jh>=CAR_TILE*8){opt=JPEG_SCALE_EIGHTH;div=8;}
+    else if(jw>=CAR_TILE*4&&jh>=CAR_TILE*4){opt=JPEG_SCALE_QUARTER;div=4;}
+    else if(jw>=CAR_TILE*2&&jh>=CAR_TILE*2){opt=JPEG_SCALE_HALF;div=2;}
+    djw=jw/div;djh=jh/div;
+    jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)djw*djh*2);
+    if(!jpeg_tmp_buf){jpegdec.close();free(buf);return false;}
+    memset(jpeg_tmp_buf,0,(size_t)djw*djh*2);jpeg_tmp_w=djw;jpeg_tmp_h=djh;
+    jpegdec.decode(0,0,opt);jpegdec.close();free(buf);
+  }
   float sc=min((float)CAR_TILE/djw,(float)CAR_TILE/djh);if(sc>1.0f)sc=1.0f;
   int dw=(int)(djw*sc),dh=(int)(djh*sc);
   int ox=(CAR_TILE-dw)/2,oy=(CAR_TILE-dh)/2;
@@ -2119,14 +2193,26 @@ static bool ssDecode(const String&path){                     // decode one JPG -
   File f=SD_MMC.open(path.c_str(),"r"); if(!f)return false;
   uint8_t*buf=(uint8_t*)ps_malloc(sz); if(!buf){f.close();return false;}
   f.read(buf,sz); f.close();
-  if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return false;}
-  int jw=jpegdec.getWidth(),jh=jpegdec.getHeight();
-  if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return false;}
-  if((size_t)jw*jh*2>1500000){jpegdec.close();free(buf);return false;}   // decoded bitmap too big for PSRAM budget
-  jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)jw*jh*2);
-  if(!jpeg_tmp_buf){jpegdec.close();free(buf);return false;}
-  memset(jpeg_tmp_buf,0,(size_t)jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
-  jpegdec.decode(0,0,0); jpegdec.close(); free(buf);
+  int jw=0,jh=0;
+  if(coverIsPng(path)){
+    if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){free(buf);return false;}
+    jw=pngdec.getWidth();jh=pngdec.getHeight();
+    if(jw<=0||jh<=0||jw>2000||jh>2000){pngdec.close();free(buf);return false;}
+    if((size_t)jw*jh*2>1500000){pngdec.close();free(buf);return false;}   // decoded bitmap too big for PSRAM budget
+    jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)jw*jh*2);
+    if(!jpeg_tmp_buf){pngdec.close();free(buf);return false;}
+    memset(jpeg_tmp_buf,0,(size_t)jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
+    pngdec.decode(NULL,0); pngdec.close(); free(buf);
+  } else {
+    if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return false;}
+    jw=jpegdec.getWidth();jh=jpegdec.getHeight();
+    if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return false;}
+    if((size_t)jw*jh*2>1500000){jpegdec.close();free(buf);return false;}   // decoded bitmap too big for PSRAM budget
+    jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)jw*jh*2);
+    if(!jpeg_tmp_buf){jpegdec.close();free(buf);return false;}
+    memset(jpeg_tmp_buf,0,(size_t)jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
+    jpegdec.decode(0,0,0); jpegdec.close(); free(buf);
+  }
   float sc=(float)SS_MAX/(jw>jh?jw:jh); if(sc>1.0f)sc=1.0f;
   int dw=(int)(jw*sc),dh=(int)(jh*sc); if(dw<1)dw=1; if(dh<1)dh=1;
   g_ss_buf=(uint16_t*)ps_malloc((size_t)dw*dh*2);
@@ -2150,7 +2236,7 @@ static void scanScreensaver(){                               // arm iff /screens
     if(!e.isDirectory()){
       String nm=e.name(); int sl=nm.lastIndexOf('/'); if(sl>=0)nm=nm.substring(sl+1);
       String low=nm; low.toLowerCase();
-      if(low.endsWith(".jpg")||low.endsWith(".jpeg")) g_ss_paths.push_back(String("/screensaver/")+nm);
+      if(low.endsWith(".jpg")||low.endsWith(".jpeg")||low.endsWith(".png")) g_ss_paths.push_back(String("/screensaver/")+nm);
     }
     e.close();
     if(g_ss_paths.size()>=64)break;
@@ -2291,6 +2377,85 @@ static void doRescan(){
 // ════════════════════════════════════════════════════════════════════════════
 // ESP-NOW PAIRING
 // ════════════════════════════════════════════════════════════════════════════
+// ── Type-to-search (blocking). Live substring filter over the game list; tap a
+//    result row to jump the list straight to it. Returns true if a game was chosen
+//    (g_sel + scroll set), false on CLOSE. Reached from the magnifier atop the A-Z
+//    rail. v4.8.2. ──
+static bool doSearch(){
+  String q="";
+  static const char* SROWS[4]={"1234567890","QWERTYUIOP","ASDFGHJKL-","ZXCVBNM'."};
+  // ── Layout computed from the live canvas so it fits both landscape (VH=320,
+  //    tight) and portrait (VH=480, roomy). The keyboard block is anchored to
+  //    the BOTTOM; the result rows fill whatever's left between the input box
+  //    and a divider line above the keys. That divider is a deliberate
+  //    dead-zone: a slightly-low tap on the last game result lands on nothing
+  //    instead of spilling onto the "1"/"2" number keys. ──
+  const int gap=4,kh=34,bm=6;
+  const int kbBlock=5*kh+4*gap;                 // 4 letter rows + 1 control row
+  const int kbTop=VH-bm-kbBlock;                // keys hug the bottom edge
+  const int resTop=60,resRowH=20,resBoxH=resRowH-2,sepGap=6;
+  const int sepY=kbTop-sepGap;                  // divider sits here
+  int resMax=(sepY-resTop)/resRowH; if(resMax<2)resMax=2; if(resMax>8)resMax=8;
+  int matches[8];int nMatch=0,totalMatch=0;
+  bool dirty=true,pressed=false;int rel=0;
+  // drain the entering tap so it doesn't fire a key on the first frame
+  {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<600)delay(10);}
+  auto recompute=[&](){nMatch=0;totalMatch=0;if(!q.length())return;String ql=q;ql.toLowerCase();
+    for(int i=0;i<(int)g_games.size();i++){String nm=g_games[i].name;nm.toLowerCase();
+      if(nm.indexOf(ql)>=0){if(nMatch<resMax)matches[nMatch++]=i;totalMatch++;}}};
+  while(true){
+    if(dirty){dirty=false;
+      gfx_fillScreen(COL_BG);
+      bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
+      gfx_fillRect(0,0,VW,22,COL_BAR);gfx_setTextSize(1);gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);gfx_setCursor(6,7);gfx_print("SEARCH");
+      String cnt=q.length()?(String(totalMatch)+(totalMatch==1?" match":" matches")):"type to find a game";
+      gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR);gfx_setCursor(VW-gfx_textWidth(cnt)-6,7);gfx_print(cnt);
+      gfx_fillRoundRect(8,26,VW-16,30,6,COL_PANEL);gfx_drawRoundRect(8,26,VW-16,30,6,COL_AMBER);
+      gfx_setTextSize(2);gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL);
+      String shown=q;while(gfx_textWidth(shown)>VW-52&&shown.length()>0)shown=shown.substring(1);
+      gfx_setCursor(18,33);gfx_print(shown);gfx_print("_");
+      // result rows
+      for(int i=0;i<resMax;i++){int ry=resTop+i*resRowH;
+        if(i<nMatch){gfx_fillRoundRect(8,ry,VW-16,resBoxH,4,COL_SEL);gfx_setTextSize(1);gfx_setTextColor(inkFor(COL_SEL),COL_SEL);
+          String nm=g_games[matches[i]].name;while(gfx_textWidth(nm)>VW-28&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
+          gfx_setCursor(14,ry+(resBoxH-8)/2);gfx_print(nm);}
+        else gfx_fillRect(8,ry,VW-16,resBoxH,COL_BG);}
+      // divider — the dead-zone that separates the result rows from the keys
+      gfx_hline(8,sepY,VW-16,COL_SEP);
+      // keyboard, anchored to the bottom
+      int ky=kbTop;
+      for(int r=0;r<4;r++){int n=strlen(SROWS[r]);int kw=(VW-gap)/10-gap;int kx=gap+((10-n)*(kw+gap))/2;
+        for(int i=0;i<n;i++){char ch=SROWS[r][i];gfx_fillRoundRect(kx,ky,kw,kh,5,COL_BAR);gfx_setTextSize(2);gfx_setTextColor(inkFor(COL_BAR),COL_BAR);
+          char lb[2]={ch,0};gfx_setCursor(kx+(kw-gfx_textWidth(lb))/2,ky+(kh-16)/2);gfx_print(lb);kx+=kw+gap;}
+        ky+=kh+gap;}
+      int cw=(VW-4*gap)/3,cx=gap;const char* CTL[3]={"DEL","SPACE","CLOSE"};uint16_t cc[3]={0x8000,COL_BAR,COL_BAR};
+      for(int i=0;i<3;i++){gfx_fillRoundRect(cx,ky,cw,kh,6,cc[i]);gfx_setTextSize(1);gfx_setTextColor(inkFor(cc[i]),cc[i]);gfx_setCursor(cx+(cw-gfx_textWidth(CTL[i]))/2,ky+(kh-8)/2);gfx_print(CTL[i]);cx+=cw+gap;}
+      gfx_flush();
+    }
+    uint16_t tx=0,ty=0;bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){rel=0;
+      if(!pressed){pressed=true;bool handled=false;
+        // result rows — hit only within the drawn box (dead-zone above divider)
+        for(int i=0;i<nMatch&&!handled;i++){int ry=resTop+i*resRowH;
+          if(ty>=ry&&ty<ry+resBoxH&&tx>=8&&tx<VW-8){int t=matches[i];
+            g_sel=t;g_disk_sel=0;g_disk_page=0;g_scrollPx=min((float)(t*LIST_ITEM_H),(float)maxScrollPx());g_inertia_on=false;
+            setActiveLetter(bucketOf(g_games[t].name));return true;}}
+        int ky=kbTop;
+        for(int r=0;r<4&&!handled;r++){int n=strlen(SROWS[r]);int kw=(VW-gap)/10-gap;int kx0=gap+((10-n)*(kw+gap))/2;
+          if(ty>=ky&&ty<ky+kh){int i=((int)tx-kx0)/(kw+gap);int within=((int)tx-kx0)-i*(kw+gap);
+            if((int)tx>=kx0&&i>=0&&i<n&&within<kw){if(q.length()<24){q+=SROWS[r][i];recompute();}dirty=true;handled=true;}}
+          ky+=kh+gap;}
+        if(!handled&&ty>=ky&&ty<ky+kh){int cw=(VW-4*gap)/3;int i=((int)tx-gap)/(cw+gap);int cxi=gap+i*(cw+gap);
+          if(i>=0&&i<3&&(int)tx>=cxi&&(int)tx<cxi+cw){
+            if(i==0){if(q.length()){q.remove(q.length()-1);recompute();}dirty=true;}
+            else if(i==1){if(q.length()<24){q+=' ';recompute();}dirty=true;}
+            else if(i==2){return false;}}}
+      }
+    } else { if(pressed&&++rel>=3)pressed=false; }
+    delay(12);
+  }
+}
+
 // ── On-screen keyboard (blocking). Returns true on SAVE (result in out), false on CANCEL. ──
 static bool onScreenKeyboard(const String&macLabel,const String&initial,String&out){
   out=initial;
@@ -2506,7 +2671,9 @@ static void handleTap(uint16_t px,uint16_t py){
   }
 
   // ── A-Z bar (letters + toggle button) — suppressed where the INFO panel covers it ──
-  if(px>=AZ_X&&py>=AZ_TOP&&py<(uint16_t)(AZ_TOP+AZ_H)&&!(g_info_showing&&px<(uint16_t)(g_info_x+g_info_w)&&py<(uint16_t)g_info_bottom)){if(handleAlphabetTouch(px,py)){drawListAndCover();gfx_flush();}return;}
+  if(px>=AZ_X&&py>=AZ_TOP&&py<(uint16_t)(AZ_TOP+AZ_H)&&!(g_info_showing&&px<(uint16_t)(g_info_x+g_info_w)&&py<(uint16_t)g_info_bottom)){
+    if(py<(uint16_t)(AZ_TOP+AZ_SRCH_H)&&active_letter_count){doSearch();drawFullUI();gfx_flush();return;}   // v4.8.2: magnifier
+    if(handleAlphabetTouch(px,py)){drawListAndCover();gfx_flush();}return;}
 
   // ── INSERT/EJECT (cover button or compact action strip) ──
   {if(!g_games.empty()&&px>=(uint16_t)INS_X&&px<(uint16_t)(INS_X+INS_W)&&py>=(uint16_t)INS_Y&&py<(uint16_t)(INS_Y+INS_H)){

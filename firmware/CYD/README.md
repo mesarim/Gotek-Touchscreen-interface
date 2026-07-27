@@ -4,6 +4,10 @@ Wireless-only remote control for the GTi ecosystem: browse and FLING disks to a
 wireless dongle over ESP-NOW/WiFi. **No SD slot used, no USB disk role** — this
 build is purely the remote-control screen. Pairs with a Super Mini or XIAO dongle.
 
+> **Status: LEGACY.** This build is several versions behind the mainline GTi
+> and gets no new features. It works for what it is — a cheap wireless remote —
+> but for the real experience, use the Guition JC3248 build.
+
 ## Build (Arduino IDE)
 
 **Board support:** esp32 by Espressif Systems, core 3.x (Boards Manager).

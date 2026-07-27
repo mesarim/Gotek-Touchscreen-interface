@@ -1,6 +1,6 @@
 {
   "name": "Gotek Touchscreen Interface — JC3248 BETA (save era)",
-  "version": "4.8.1-beta",
+  "version": "4.8.4-beta",
   "new_install_prompt_erase": true,
   "builds": [
     {
