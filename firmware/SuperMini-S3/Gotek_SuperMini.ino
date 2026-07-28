@@ -27,7 +27,7 @@
 #include "esp_wifi.h"
 #include <LittleFS.h>
 
-#define FW_VERSION     "v3.3.0-mini"   // 3.3.x = the save-protocol line (3.2.0 = last pre-save build)
+#define FW_VERSION     "v3.4.0-mini"   // 3.4.0: TCP EJECT 0x03 (refuses when dirty) + EJECT_FORCE 0x04, for the GTi app. 3.3.x = save-protocol line.
 #define ESPNOW_CHANNEL 6
 #define LED_RED        1   // GP1 — status/attention
 #define LED_BLUE       2   // GP2 — activity
@@ -58,6 +58,8 @@
 #define TCP_CMD_ESCAPE  0xFFFFFFFFUL  // size header value that means "command, not disk"
 #define CMD_GET_SAVE    0x01
 #define CMD_GET_STATUS  0x02
+#define CMD_EJECT       0x03   // v3.4.0: app eject — REFUSES (reply 0x02) if unsaved writes pending
+#define CMD_EJECT_FORCE 0x04   // v3.4.0: app eject, no questions — drops unsaved writes
 
 #pragma pack(push,1)
 struct PktHello  { uint8_t type; uint8_t mac[6]; char ip[16]; uint8_t pad[227]; };
@@ -327,6 +329,24 @@ static WiFiServer _tcpServer(TCP_PORT);
 static inline void wrLE32(uint8_t*p,uint32_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);p[2]=(uint8_t)(v>>16);p[3]=(uint8_t)(v>>24);}
 static inline void wrLE16(uint8_t*p,uint16_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);}
 
+// EJECT (v3.4.0): the ESP-NOW eject's TCP twin, for the GTi app (which can't speak
+// ESP-NOW). The GTi screen drains saves BEFORE ejecting; the app can't yet — so the
+// plain eject REFUSES when unsaved writes are pending, and the app must confirm with
+// EJECT_FORCE. Replies: 0x01 = ejected ("nothing loaded" is also success),
+// 0x02 = refused, unsaved writes pending (0x03 only). Old dongles reply 0x00 (unknown).
+static void doEject(WiFiClient& client, bool force){
+  if (!force && g_dirty_count > 0) {
+    Serial.printf("[TCP] Eject refused — %u dirty sectors pending\n",(unsigned)g_dirty_count);
+    client.write((uint8_t)0x02); client.flush();
+    return;
+  }
+  if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
+  // Forced (or clean) eject: same policy as an old-GTi ESP-NOW eject — drop the bits.
+  dirtyReset();
+  digitalWrite(LED_BLUE, LOW);
+  oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (app)", "", "Ready");
+  client.write((uint8_t)0x01); client.flush();
+}
 // GET_STATUS: 'S','T',ver | load_id u32 | dirty_count u16 | age_ms u32 | total_writes u32 | image_size u32
 static void doGetStatus(WiFiClient& client){
   uint8_t r[21]; r[0]='S'; r[1]='T'; r[2]=SAVE_PROTO_VER;
@@ -411,8 +431,10 @@ static void handleTCPClient(WiFiClient& client) {
     if (!client.available()) { client.write((uint8_t)0x00); return; }
     uint8_t cmd = client.read();
     Serial.printf("[TCP] Command 0x%02X\n", cmd);
-    if      (cmd == CMD_GET_SAVE)   doGetSave(client);
-    else if (cmd == CMD_GET_STATUS) doGetStatus(client);
+    if      (cmd == CMD_GET_SAVE)    doGetSave(client);
+    else if (cmd == CMD_GET_STATUS)  doGetStatus(client);
+    else if (cmd == CMD_EJECT)       doEject(client,false);
+    else if (cmd == CMD_EJECT_FORCE) doEject(client,true);
     else client.write((uint8_t)0x00);
     return;
   }
