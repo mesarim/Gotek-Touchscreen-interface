@@ -30,7 +30,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "v4.8.4-JC3248"
+#define FW_VERSION "v4.8.6-JC3248"
 #include "espnow_server.h"
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
@@ -712,7 +712,7 @@ static uint32_t g_ss_idle_ms=SS_IDLE_MS, g_ss_load_ms=SS_LOAD_MS;   // hidden SS
 static int g_dongle_cap=32;   // CONFIG.TXT CAP= : max wireless dongles to discover/cast (1..64)
 static int g_hivemind=1;      // v4.8.1 (undocumented HIVEMIND=): 1 = FLING fans out to all MuCa dongles (classic), 0 = paired dongle only
 static int g_cracktro=0;      // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or 0 = pick one at random each boot
-static bool g_carousel_enabled=false;  // CONFIG.TXT CAROUSEL= : undocumented flag; enables the REEL button + coverflow UI
+static int g_car_bootmode=0;  // CONFIG.TXT CAROUSEL= : default boot VIEW — 0/OFF=list, 1/ON=reel, 2=LAST (restore last view, remembered in /.gtiview). v4.8.5+: carousel is ALWAYS available via the flip toggle regardless.
 // ── Item 4: load/eject behaviour toggles (all default OFF = safest) ──
 static bool g_tapload=false;    // ON = tapping the already-selected row loads it (old double-tap behaviour)
 static bool g_hotswap=false;    // ON = tapping another disk while loaded swaps to it instantly
@@ -1013,7 +1013,7 @@ static void loadConfig(){
   File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);if(!f)return;
   while(f.available()){String l=f.readStringUntil('\n');l.trim();if(l.startsWith("#"))continue;
     int eq=l.indexOf('=');if(eq<0)continue;String k=l.substring(0,eq),v=l.substring(eq+1);k.trim();v.trim();
-    if(k=="THEME")applyTheme(v.toInt());else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");else if(k=="CAROUSEL")g_carousel_enabled=(v=="1"||v=="ON"||v=="true");
+    if(k=="THEME")applyTheme(v.toInt());else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");else if(k=="CAROUSEL"){String cv=v;cv.toUpperCase();g_car_bootmode=(cv=="LAST")?2:((cv=="1"||cv=="ON"||cv=="TRUE")?1:0);}
     else if(k=="TAPLOAD")g_tapload=(v=="ON"||v=="1");else if(k=="HOTSWAP")g_hotswap=(v=="ON"||v=="1");else if(k=="FORCESWAP")g_forceswap=(v=="ON"||v=="1");
     else if(k=="FONT"){int f=1;if(v=="SMALL")f=0;else if(v=="LARGE")f=2;applyFont(f);}
     else if(k=="ROTATE"){g_rot=((v.toInt()/90)%4+4)%4;}
@@ -1509,22 +1509,33 @@ static bool handleAlphabetTouch(uint16_t px,uint16_t py){
   return true;
 }
 
+// v4.8.5: little pictograph glyphs (the 6x8 font can't draw these) for the
+// list<->carousel flip. Drawn inside the ~8px button circle at (cx,cy).
+static void drawListIcon(int cx,int cy,uint16_t col){
+  for(int r=-1;r<=1;r++) gfx_fillRect(cx-5,cy+r*4-1,10,2,col);   // three stacked rows
+}
+static void drawCarouselIcon(int cx,int cy,uint16_t col){
+  gfx_drawRect(cx-7,cy-4,4,9,col);      // left cover, peeking
+  gfx_drawRect(cx+3,cy-4,4,9,col);      // right cover, peeking
+  gfx_fillRect(cx-2,cy-6,5,13,col);     // center cover, front & tall
+}
 static void drawBottomBar(){
   int y=VH-BOTTOM_H;gfx_fillRect(0,y,VW,BOTTOM_H,COL_BAR);gfx_hline(0,y,VW,COL_SEP);
-  // 5 buttons when the (undocumented) carousel is enabled, classic 4 otherwise
-  int nb=g_carousel_enabled?5:4;int bw=VW/nb;
-  struct{const char*icon;const char*label;uint16_t col;}btns[5]={{"<","PREV",COL_ORANGE},{">","NEXT",COL_BLUE},{"#","THEME",COL_AMBER},{"o","REEL",COL_GREEN},{"i","INFO",COL_MID}};
+  // v4.8.5: the carousel is a first-class mode — REEL is ALWAYS present; its glyph is
+  // the coverflow pictograph so it reads as "flip to the reel".
+  const int nb=5;int bw=VW/nb;
+  struct{const char*icon;const char*label;uint16_t col;}btns[5]={{"<","PREV",COL_ORANGE},{">","NEXT",COL_BLUE},{"#","THEME",COL_AMBER},{"","REEL",COL_GREEN},{"i","INFO",COL_MID}};
   for(int i=0;i<nb;i++){
-    int bi=(i<3)?i:(g_carousel_enabled?i:i+1);   // slot -> button (skip REEL when disabled)
     int bx=i*bw;if(i>0)gfx_vline(bx,y+3,BOTTOM_H-6,COL_SEP);
-    int cx=bx+bw/2,cy2=y+10;gfx_fillCircle(cx,cy2,8,(uint16_t)(btns[bi].col>>2));gfx_drawCircle(cx,cy2,8,btns[bi].col);
-    gfx_setTextSize(1);gfx_setTextColor(btns[bi].col,(uint16_t)(btns[bi].col>>2));int tw=gfx_textWidth(btns[bi].icon);gfx_setCursor(cx-tw/2,cy2-4);gfx_print(btns[bi].icon);
-    gfx_setTextColor(COL_DIM,COL_BAR);tw=gfx_textWidth(btns[bi].label);gfx_setCursor(bx+(bw-tw)/2,y+22);gfx_print(btns[bi].label);}
+    int cx=bx+bw/2,cy2=y+10;gfx_fillCircle(cx,cy2,8,(uint16_t)(btns[i].col>>2));gfx_drawCircle(cx,cy2,8,btns[i].col);
+    if(i==3) drawCarouselIcon(cx,cy2,btns[i].col);           // REEL -> coverflow glyph
+    else{gfx_setTextSize(1);gfx_setTextColor(btns[i].col,(uint16_t)(btns[i].col>>2));int tw=gfx_textWidth(btns[i].icon);gfx_setCursor(cx-tw/2,cy2-4);gfx_print(btns[i].icon);}
+    gfx_setTextColor(COL_DIM,COL_BAR);int tw=gfx_textWidth(btns[i].label);gfx_setCursor(bx+(bw-tw)/2,y+22);gfx_print(btns[i].label);}
   gfx_setTextColor((uint16_t)(COL_AMBER>>1),COL_BAR);String tn=THEMES[g_theme_idx].name;int tw=gfx_textWidth(tn);gfx_setCursor(2*bw+(bw-tw)/2,y+33);gfx_print(tn);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// CAROUSEL — "fake coverflow" reel (undocumented; enabled by CAROUSEL=1)
+// CAROUSEL — "fake coverflow" reel (v4.8.5: first-class mode; CAROUSEL= sets default boot view)
 // Center cover full-size, neighbours scaled+squashed+dimmed, looping reel.
 // Sources cycle ALL -> FAV -> MOST -> RND (RND = shuffle-jump to one random
 // cover). Tap center = INSERT/EJECT (deliberate; no automount). [LIST] exits.
@@ -1675,9 +1686,8 @@ static uint16_t* carTile(int gi,bool mayDecode){
 // Build ALL cover thumbnails up-front — first launch of a card and RESCAN only
 // (Michael's call: one predictable pass with a progress bar, never live jank).
 // Fresh thumbs are stat-checked and skipped, so a re-run over a built card is
-// seconds, not minutes. Only runs when the carousel is enabled at all.
+// seconds, not minutes. v4.8.5: carousel is first-class, so thumbs always build.
 static void buildThumbs(){
-  if(!g_carousel_enabled)return;
   int n=(int)g_games.size(); if(!n)return;
   uint16_t*tmp=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2);
   if(!tmp)return;
@@ -1837,7 +1847,7 @@ static void drawCarousel(){
   gfx_vline(bw,y+3,BOTTOM_H-6,COL_SEP);gfx_vline(2*bw,y+3,BOTTOM_H-6,COL_SEP);
   // LIST
   gfx_fillCircle(bw/2,y+10,8,(uint16_t)(COL_ORANGE>>2));gfx_drawCircle(bw/2,y+10,8,COL_ORANGE);
-  gfx_setTextSize(1);gfx_setTextColor(COL_ORANGE,(uint16_t)(COL_ORANGE>>2));gfx_setCursor(bw/2-3,y+6);gfx_print("=");
+  drawListIcon(bw/2,y+10,COL_ORANGE);
   gfx_setTextColor(COL_DIM,COL_BAR);gfx_setCursor((bw-gfx_textWidth("LIST"))/2,y+22);gfx_print("LIST");
   // SOURCE (cycles ALL/FAV/MOST)
   gfx_fillCircle(bw+bw/2,y+10,8,(uint16_t)(COL_AMBER>>2));gfx_drawCircle(bw+bw/2,y+10,8,COL_AMBER);
@@ -1856,14 +1866,20 @@ static void drawCarousel(){
   if(g_car_dieShow&&carN()>0)carDrawDie();   // dice overlay rides on top of everything
 }
 
+// v4.8.6: remember the last view for CAROUSEL=LAST — a tiny 1-char file beside
+// the stats, written on each list<->reel flip, read once at boot.
+static const char* viewPath(){return "/.gtiview";}
+static void writeLastView(int carousel){File f=SD_MMC.open(viewPath(),FILE_WRITE);if(f){f.print(carousel?'1':'0');f.close();}}
+static int  readLastView(){File f=SD_MMC.open(viewPath(),FILE_READ);if(!f)return 0;int c=f.read();f.close();return (c=='1')?1:0;}
 static void carEnter(){
   carBuildList();                                        // stats/favs may have changed
   g_car_active=true;g_car_touch=false;g_car_coast=false;
+  if(g_car_bootmode==2)writeLastView(1);                 // CAROUSEL=LAST: remember we're in the reel
   int start=0;for(int i=0;i<carN();i++)if(g_car_list[i]==g_sel){start=i;break;}
   g_car_pos=(float)start;
   drawCarousel();gfx_flush();
 }
-static void carExit(){g_car_active=false;drawFullUI();gfx_flush();}
+static void carExit(){g_car_active=false;if(g_car_bootmode==2)writeLastView(0);drawFullUI();gfx_flush();}
 static void carCycleSrc(){
   g_car_src=(g_car_src+1)%3;carBuildList();          // ALL -> FAV -> MOST (RND is its own button now)
   g_car_spin=false;g_car_dieShow=false;
@@ -2607,7 +2623,7 @@ void setup(){
   SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);delay(100);
   bool sdok=SD_MMC.begin("/sdcard",true);if(!sdok){delay(200);sdok=SD_MMC.begin("/sdcard",true);}
   if(sdok){
-    if(!SD_MMC.exists("/ADF")){SD_MMC.mkdir("/ADF");ensureSampleFolder();}   // blank card: include the SAMPLE example
+    if(!SD_MMC.exists("/ADF")){SD_MMC.mkdir("/ADF");ensureSampleFolder();SD_MMC.mkdir("/screensaver");}   // blank card: SAMPLE example + arm the screensaver by default (v4.8.5 — DELETE /screensaver to disable it; empty = the bouncing starburst, drop in JPGs for a gallery)
     if(!SD_MMC.exists("/DSK"))SD_MMC.mkdir("/DSK");
     generateDefaultConfig();
     selfHealConfig();           // append any documented keys an older CONFIG.TXT is missing
@@ -2626,7 +2642,8 @@ void setup(){
   USB.onEvent(usbEventCB);MSC.vendorID("ESP32");MSC.productID("RAMDISK");MSC.productRevision("1.0");
   MSC.onRead(onRead);MSC.onWrite(onWrite);MSC.mediaPresent(true);
   MSC.begin(TOTAL_SECTORS,512);USB.begin();hardDetach();
-  drawFullUI();gfx_flush();
+  bool bootCar=(g_car_bootmode==1)||(g_car_bootmode==2&&readLastView()==1);   // v4.8.6: CAROUSEL= 0=list / 1=reel / LAST=restore
+  if(bootCar&&!g_games.empty())carEnter();else{drawFullUI();gfx_flush();}
   g_last_touch_ms=millis();
 }
 
@@ -2723,8 +2740,7 @@ static void handleTap(uint16_t px,uint16_t py){
 
   // ── Bottom bar ── (slot count follows drawBottomBar: 5 with carousel, else 4)
   if(py>=VH-BOTTOM_H){
-    int nb=g_carousel_enabled?5:4;int bw=VW/nb,btn=px/bw;if(btn>=nb)btn=nb-1;
-    if(btn>=3&&!g_carousel_enabled)btn++;   // slot -> logical button (skip REEL when disabled)
+    const int nb=5;int bw=VW/nb,btn=px/bw;if(btn>=nb)btn=nb-1;
     if(btn==0&&g_sel>0){g_sel--;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[g_sel].name));if((float)(g_sel*LIST_ITEM_H)<g_scrollPx)g_scrollPx=g_sel*LIST_ITEM_H;drawListAndCover();gfx_flush();}
     else if(btn==1&&g_sel<(int)g_games.size()-1){g_sel++;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[g_sel].name));if((float)((g_sel+1)*LIST_ITEM_H)>g_scrollPx+(LIST_BOTTOM-LIST_TOP))g_scrollPx=(g_sel+1)*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP);drawListAndCover();gfx_flush();}
     else if(btn==2){cycleTheme();}
