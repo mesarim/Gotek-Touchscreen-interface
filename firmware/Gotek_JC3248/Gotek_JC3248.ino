@@ -30,7 +30,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "v4.8.6-JC3248"
+#define FW_VERSION "v4.9.1-JC3248"
 #include "espnow_server.h"
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
@@ -352,20 +352,22 @@ static bool getTouchXY(uint16_t*x,uint16_t*y){if(!gTouchPts)return false;*x=cons
 // MSC RAM DISK
 // ════════════════════════════════════════════════════════════════════════════
 USBMSC MSC;static bool g_usb_online=false;
-static const uint16_t SECTOR_SIZE=512;static const uint32_t TOTAL_SECTORS=2048;
+static const uint16_t SECTOR_SIZE=512;static const uint32_t TOTAL_SECTORS=4096;   // v4.9: 2MB RAM disk so HD (1.76MB) images fit
 static const uint16_t RESERVED_SECTORS=1,SECTORS_PER_FAT=6,ROOT_DIR_SECTORS=4;
-static const uint8_t SECTORS_PER_CLUSTER=1,NUM_FATS=1;static const uint16_t ROOT_ENTRIES=64;
-static const uint32_t FAT_LBA=1,ROOT_LBA=7,DATA_LBA=11;
-static const uint32_t MAX_FILE_BYTES=(TOTAL_SECTORS-DATA_LBA)*512;
-static const uint32_t ADF_DEFAULT_SIZE=901120;
+static const uint8_t SECTORS_PER_CLUSTER=2,NUM_FATS=1;static const uint16_t ROOT_ENTRIES=64;   // v4.9: 1KB clusters -> ~2042 clusters, stays safely FAT12 (limit 4084)
+static const uint32_t FAT_LBA=1,ROOT_LBA=7,DATA_LBA=11;   // reserved(1)+FAT(6)+root(4); metadata region is cluster-size-independent, so unchanged
+static const uint32_t MAX_FILE_BYTES=(TOTAL_SECTORS-DATA_LBA)*512;   // ~1.99MB usable
+static const uint32_t ADF_DEFAULT_SIZE=901120;             // standard DD ADF = 880KB
+static const uint32_t ADF_HD_SIZE=1802240;                 // Amiga HD floppy = 1760KB (22 sectors/track, half-speed)
+static const uint32_t HD_FLAG_BYTES=1258291;               // >1.2MB => flag as HD; extended-DD disks (~900-960KB) stay DD (A500-readable)
 enum DiskMode{MODE_ADF=0,MODE_DSK=1};static DiskMode g_mode=MODE_ADF;
 static const char*getOutputFilename(){return g_mode==MODE_ADF?"DISK.ADF":"DISK.DSK";}
 uint8_t*g_disk=nullptr;
 static void wr16(uint8_t*p,int o,uint16_t v){p[o]=v;p[o+1]=v>>8;}
 static void wr32(uint8_t*p,int o,uint32_t v){p[o]=v;p[o+1]=v>>8;p[o+2]=v>>16;p[o+3]=v>>24;}
-static void build_boot_sector(uint8_t*bs){memset(bs,0,512);bs[0]=0xEB;bs[1]=0x3C;bs[2]=0x90;memcpy(bs+3,"MSDOS5.0",8);wr16(bs,11,512);bs[13]=1;wr16(bs,14,1);bs[16]=1;wr16(bs,17,64);wr16(bs,19,2048);bs[21]=0xF8;wr16(bs,22,6);wr16(bs,24,32);wr16(bs,26,64);bs[36]=0x80;bs[38]=0x29;wr32(bs,39,0x12345678);memcpy(bs+43,"ESP32MSC   ",11);memcpy(bs+54,"FAT12   ",8);bs[510]=0x55;bs[511]=0xAA;}
+static void build_boot_sector(uint8_t*bs){memset(bs,0,512);bs[0]=0xEB;bs[1]=0x3C;bs[2]=0x90;memcpy(bs+3,"MSDOS5.0",8);wr16(bs,11,512);bs[13]=SECTORS_PER_CLUSTER;wr16(bs,14,RESERVED_SECTORS);bs[16]=NUM_FATS;wr16(bs,17,ROOT_ENTRIES);wr16(bs,19,(uint16_t)TOTAL_SECTORS);bs[21]=0xF8;wr16(bs,22,SECTORS_PER_FAT);wr16(bs,24,32);wr16(bs,26,64);bs[36]=0x80;bs[38]=0x29;wr32(bs,39,0x12345678);memcpy(bs+43,"ESP32MSC   ",11);memcpy(bs+54,"FAT12   ",8);bs[510]=0x55;bs[511]=0xAA;}
 static void fat12_set(uint8_t*fat,uint16_t cl,uint16_t v){uint32_t i=(cl*3)/2;if(!(cl&1)){fat[i]=v&0xFF;fat[i+1]=(fat[i+1]&0xF0)|((v>>8)&0x0F);}else{fat[i]=(fat[i]&0x0F)|((v<<4)&0xF0);fat[i+1]=(v>>4)&0xFF;}}
-static void build_fat(uint8_t*fat,uint32_t fsz){memset(fat,0,SECTORS_PER_FAT*512);fat[0]=0xF8;fat[1]=0xFF;fat[2]=0xFF;uint32_t need=(fsz+511)/512;for(uint32_t i=0;i<need;i++)fat12_set(fat,2+i,i==need-1?0x0FFF:3+i);}
+static void build_fat(uint8_t*fat,uint32_t fsz){memset(fat,0,SECTORS_PER_FAT*512);fat[0]=0xF8;fat[1]=0xFF;fat[2]=0xFF;uint32_t clb=(uint32_t)SECTORS_PER_CLUSTER*512;uint32_t need=(fsz+clb-1)/clb;for(uint32_t i=0;i<need;i++)fat12_set(fat,2+i,i==need-1?0x0FFF:3+i);}
 static void build_root(uint8_t*root,const char*name,uint32_t fsz){memset(root,0,ROOT_DIR_SECTORS*512);char n[8],e[3];memset(n,' ',8);memset(e,' ',3);char tmp[32];size_t L=strlen(name);if(L>31)L=31;memcpy(tmp,name,L);tmp[L]=0;for(size_t i=0;i<L;i++)tmp[i]=toupper(tmp[i]);const char*dot=strrchr(tmp,'.');size_t nl=dot?(dot-tmp):strlen(tmp);size_t el=dot?strlen(dot+1):0;for(size_t i=0;i<nl&&i<8;i++)n[i]=tmp[i];for(size_t i=0;i<el&&i<3;i++)e[i]=dot[1+i];memcpy(root,n,8);memcpy(root+8,e,3);root[11]=0x20;wr16(root,26,2);wr32(root,28,fsz);}
 static void build_volume(const char*outName,uint32_t fsz){if(fsz>MAX_FILE_BYTES)fsz=MAX_FILE_BYTES;memset(g_disk,0,TOTAL_SECTORS*512);build_boot_sector(g_disk);build_fat(g_disk+RESERVED_SECTORS*512,fsz);build_root(g_disk+(RESERVED_SECTORS+SECTORS_PER_FAT)*512,outName,fsz);}
 static int32_t onRead(uint32_t lba,uint32_t off,void*buf,uint32_t n){uint32_t s=lba*512+off;if(s+n>TOTAL_SECTORS*512)return 0;memcpy(buf,g_disk+s,n);return n;}
@@ -373,7 +375,7 @@ static int32_t onRead(uint32_t lba,uint32_t off,void*buf,uint32_t n){uint32_t s=
 // STANDALONE: the Amiga writes to OUR RAM disk (we are the USB drive) — onWrite
 // below ticks the dirty map; a settle timer + eject flush persist to .sav.adf.
 // WIRELESS: the dongle ticks its own map and beacons; we pull + patch (espnow).
-#define SV_IMG_MAX_SECTORS (TOTAL_SECTORS-DATA_LBA)     // 2037
+#define SV_IMG_MAX_SECTORS (TOTAL_SECTORS-DATA_LBA)     // 4085 (v4.9: 2MB disk)
 #define SV_SETTLE_MS 3000
 static int      g_saves_mode=1;                          // 0=OFF 1=COPY 2=OVERWRITE (SAVES=)
 static uint8_t  g_sv_dirty[(SV_IMG_MAX_SECTORS+7)/8];
@@ -1299,6 +1301,18 @@ static void drawSaveFloppy(int x,int y){
   gfx_fillRect(x+3,y+8,8,4,TFT_WHITE);          // label
 }
 
+// v4.9: HD (1.76MB) disk indicators. Amber "HD" chip + a "no A500" roundel — an
+// A500 has no HD drive, so it can't read these. isHDImage flags anything over
+// ~1.2MB; extended-DD disks (~900-960KB) stay DD and get no badge (A500 reads them).
+static bool isHDImage(const String&path){String vfs="/sdcard"+path;struct stat st;if(stat(vfs.c_str(),&st)!=0)return false;return (uint32_t)st.st_size>HD_FLAG_BYTES;}
+static void drawHDChip(int x,int y){gfx_fillRoundRect(x,y,20,12,3,COL_AMBER);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,COL_AMBER);gfx_setCursor(x+4,y+2);gfx_print("HD");}
+static void drawNoA500(int cx,int cy,int r,uint16_t ring){
+  gfx_fillCircle(cx,cy,r-1,COL_BG);                         // dark backing so it reads on any cover art
+  gfx_drawCircle(cx,cy,r,ring);gfx_drawCircle(cx,cy,r-1,ring);
+  int d=(r*7)/10;for(int t=-d;t<=d;t++)gfx_fillRect(cx+t-1,cy+t-1,2,2,ring);   // TL->BR slash (no line primitive -> stepped)
+  if(r>=20){gfx_setTextSize(1);gfx_setTextColor(COL_LIT,COL_BG);int tw=gfx_textWidth("A500");gfx_setCursor(cx-tw/2,cy-3);gfx_print("A500");}
+}
+
 // v4.8.2: type-to-search. A little magnifier sits atop the A-Z rail (above # / A);
 // tapping it opens a keyboard that live-filters the library by substring and jumps
 // the list to whatever result you tap. The rail letters shrink slightly to make room.
@@ -1315,11 +1329,11 @@ static void drawCoverPanel(){
   gfx_fillRect(COVER_X,COVER_Y,COVER_W,COVER_H,COL_PANEL);if(g_games.empty())return;
   auto&game=g_games[g_sel];
   if(!game.jpg_path.length()){String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg))game.jpg_path=jpg;else game.jpg_path="?";}
-  static int lastNfoSel=-1;static String cachedNfoBlurb="";static bool cachedHasSav=false;
+  static int lastNfoSel=-1;static String cachedNfoBlurb="";static bool cachedHasSav=false;static bool cachedHD=false;
   if(lastNfoSel!=g_sel){lastNfoSel=g_sel;cachedNfoBlurb="";String nfoP,nT,nB;
     if(findNFOFor(g_files[game.first_file_idx],nfoP)){File nf=SD_MMC.open(nfoP,FILE_READ);if(nf){String txt;while(nf.available()&&txt.length()<512)txt+=(char)nf.read();nf.close();parseNFO(txt,nT,nB);
       if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=nT;cachedNfoBlurb=nB;}}
-    cachedHasSav=(g_saves_mode==1)&&savExistsFor(g_files[game.first_file_idx]);}   // v4.8.0 badge (checked once per selection)
+    cachedHasSav=(g_saves_mode==1)&&savExistsFor(g_files[game.first_file_idx]);cachedHD=isHDImage(g_files[game.first_file_idx]);}   // v4.8.0 badge + v4.9 HD flag (checked once per selection)
   // Cover art
   gfx_fillRoundRect(COVER_ART_X,COVER_ART_Y,COVER_ART_W,COVER_ART_H,5,COL_BAR);
   gfx_drawRoundRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,6,COL_ACCENT);
@@ -1327,6 +1341,7 @@ static void drawCoverPanel(){
   else{char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setCursor(COVER_ART_X+COVER_ART_W/2-6,COVER_ART_Y+COVER_ART_H/2-8);gfx_print(ib);}
   // v4.8.0: floppy icon — this game has a save-copy (INSERT will boot the save)
   if(cachedHasSav)drawSaveFloppy(COVER_ART_X+3,COVER_ART_Y+3);
+  if(cachedHD){drawHDChip(COVER_ART_X+COVER_ART_W-23,COVER_ART_Y+3);drawNoA500(COVER_ART_X+15,COVER_ART_Y+COVER_ART_H-15,13,TFT_RED);}   // v4.9 HD markers
   bool isL=g_loaded&&g_loaded_game_idx==g_sel;
   if(!g_portrait){
     int cb;
@@ -1341,7 +1356,7 @@ static void drawCoverPanel(){
     ty=drawWrapped(rx,ty,game.name,rw,10,3,COVER_ART_Y+COVER_ART_H,COL_LIT,COL_PANEL);
     if(cachedNfoBlurb.length()>0)drawWrapped(rx,ty+3,cachedNfoBlurb,rw,9,6,COVER_ART_Y+COVER_ART_H+2,COL_DIM,COL_PANEL);
     if(game.disk_count>1)drawDiskStepper(8,COVER_Y+COVER_H-70,VW-16,26,game.disk_count);   // full-width disk row above INSERT
-    else{gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_PANEL);gfx_setCursor(12,COVER_Y+COVER_H-58);gfx_print("Single disk  -  ADF 880KB");}
+    else{gfx_setTextSize(1);gfx_setTextColor(cachedHD?COL_ORANGE:COL_DIM,COL_PANEL);gfx_setCursor(12,COVER_Y+COVER_H-58);gfx_print(cachedHD?"HD 1.76MB - needs A3000/A4000":"Single disk  -  ADF 880KB");}
   }
   // INSERT/EJECT
   gfx_fillRoundRect(INS_X,INS_Y,INS_W,INS_H,8,isL?(uint16_t)0x4000:(uint16_t)0x0340);
@@ -2107,6 +2122,20 @@ static void svFetchWireless(){
 }
 
 static bool doLoadSelected(const String&adfPath){
+  // v4.9: HD can't be flung — no wireless dongle can hold a 1.76MB image (the
+  // Super Mini's 2MB PSRAM can't, and the current XIAO build is DD too). The JC
+  // does HD STANDALONE (cable); wireless stays DD-only until an HD dongle exists.
+  // (When one does, the pairing handshake will advertise capacity and this gates
+  // by that instead of blanket-blocking.) Standalone load of HD is unaffected.
+  if(g_wireless_mode && isHDImage(adfPath)){
+    gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
+    gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_PANEL);gfx_setCursor(6,STATUS_H+16);gfx_print("HD - NO WIRELESS");
+    gfx_setTextColor(COL_LIT,COL_PANEL);
+    gfx_setCursor(6,STATUS_H+30);gfx_print("No wireless device");
+    gfx_setCursor(6,STATUS_H+42);gfx_print("available for HD.");
+    gfx_setCursor(6,STATUS_H+56);gfx_print("Use the cable / standalone.");
+    gfx_flush();delay(2200);drawFullUI();gfx_flush();return false;
+  }
   // v4.8.0 interlocks: pending saves die when the RAM disk is rebuilt — drain first
   // (v4.8.1: own-disk flush runs in ANY mode — a wireless GTi can still be USB-attached)
   if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
