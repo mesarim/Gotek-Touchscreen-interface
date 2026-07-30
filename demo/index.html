@@ -13,8 +13,8 @@ canvas{display:block;border-radius:6px;image-rendering:pixelated;box-shadow:0 0 
 <div class="title"><h1>GOTEK TOUCHSCREEN <b>INTERFACE</b></h1><p>OMEGAWARE · JC3248 · interactive UI preview</p></div>
 <div class="device"><canvas id="screen" width="480" height="320" style="width:960px;height:640px"></canvas></div>
 <div class="controls"><button id="btnReset">⟲ Reboot (new cracktro)</button><button id="btnSkip">Skip intro</button></div>
-<p class="hint">Boot plays one of <b>6 cracktro styles</b> (the device picks one per boot via <code>CRACKTRO=</code>; here they cycle) — tap to continue. Then: tap a game to select · tap again (or INSERT) to mount · A–Z strip jumps by letter · THEME cycles palettes · INFO holds FONT, ROTATE, COMPACT, and <b>LOAD DIAG</b> (mounts the built-in Amiga Test Kit — works with no SD card).
-<br><span class="badge">Faithful re-creation of the device UI for preview — not the firmware itself.</span></p>
+<p class="hint">Boot plays one of <b>6 cracktro styles</b> (<code>CRACKTRO=</code>; here they cycle) — tap to continue. Then: tap a game to select · tap again (or INSERT) to mount · tap the <b>letter-circle</b> to favourite ★ · A–Z strip jumps by letter · THEME cycles palettes · INFO holds FONT / ROTATE / COMPACT + LOAD DIAG. Look for the <b>HD</b> badge &amp; &ldquo;no-A500&rdquo; marker on high-density disks, the green <b>save</b> floppy, the <b>D1/D2/D3</b> loaded-disk tag, and the <b>book button</b> — tap it to read a game&rsquo;s <b>.rtfm manual</b> (try <b>Speedball 2</b> or <b>Cannon Fodder</b>).
+<br><span class="badge">Faithful re-creation of the device UI for preview — not the firmware itself. Carousel &amp; type-to-search coming to the demo next.</span></p>
 <script>
 
 const cv=document.getElementById('screen'), ctx0=cv.getContext('2d');
@@ -55,7 +55,11 @@ function blit(){imgData.data.set(fb);ctx0.putImageData(imgData,0,0);}
 const RAW=[["1943",1],["4D Sports Boxing",1],["720 Degrees",1],["Arcade Pool",1],["Barbarian",1],["Cannon Fodder",1],["Chaos Engine",2],["Dune II - Battle for Arrakis",3],["Elite",1],["Eye of the Beholder",4],["Flashback",4],["Gods",1],["Hired Guns",4],["IK+",1],["James Pond 2",2],["Kick Off 2",1],["Lemmings",1],["Lotus Turbo Challenge 2",1],["Monkey Island 2 - LeChuck's Revenge",11],["Moonstone",1],["North & South",1],["Out Run",1],["Pinball Dreams",2],["Populous",1],["Qix",1],["R-Type",1],["Sensible World of Soccer",1],["Speedball 2 - Brutal Deluxe",1],["Syndicate",4],["Turrican II",2],["UFO Enemy Unknown",4],["Vroom",1],["Worms",1],["Xenon 2 Megablast",1],["Yo! Joe!",1],["Zool",1]];
 const BLURBS={"Monkey Island 2 - LeChuck's Revenge":"Guybrush hunts the treasure of Big Whoop. LucasArts SCUMM classic, eleven disks of pirate adventure.","Speedball 2 - Brutal Deluxe":"Ice hockey meets handball with a spiked metal ball. Bitmap Brothers. Ice cream! Ice cream!","Cannon Fodder":"War has never been so much fun. Sensible Software's darkly comic top-down shooter.","Lemmings":"Guide the suicidal little fellows to safety. DMA Design. Let's go!","Worms":"Turn-based artillery mayhem. Team17. Holy hand grenade incoming."};
 function bucket(n){const c=n[0].toUpperCase();return(c>="A"&&c<="Z")?c:"#";}
-const games=RAW.map(([name,dc])=>({name,disk_count:dc,letter:bucket(name),blurb:BLURBS[name]||""}));
+const MANUALS={"Speedball 2 - Brutal Deluxe":"SPEEDBALL 2 - BRUTAL DELUXE\n===========================\n\nManage your team and play the most violent sport of the future - a mix of ice hockey and handball with a spiked metal ball.\n\nCONTROLS\n  Joystick   move your player\n  Fire       tackle, or throw the ball\n  Fire + dir aim your throw\n\nGrab bonuses, upgrade your squad between matches, and batter the opposition into the boards. ICE CREAM! ICE CREAM!\n\n---\n\nThis text is a plain-text file (Speedball 2 - Brutal Deluxe.rtfm) sitting right next to the disk image. Any game can have one - drop a matching .rtfm file beside its .adf and a book button appears on the cover. SIZE resizes the text (it follows your menu font), drag to scroll, CLOSE goes back.","Cannon Fodder":"CANNON FODDER\n=============\n\nWar has never been so much fun.\n\nGuide your squad across the battlefield: tap to move them, tap an enemy to fire. Use trees and buildings for cover.\n\nKeep your veterans alive - they get better every mission, and Boot Hill fills up fast.\n\n---\n\nThe book button reads this .rtfm file from the SD card. Perfect for controls, cheats, and the copy-protection answers a game asks for."};
+const HDSET=new Set(["Hired Guns","UFO Enemy Unknown"]);
+const SAVSET=new Set(["Worms"]);
+const FAVSET=new Set(["Lemmings","Speedball 2 - Brutal Deluxe"]);
+const games=RAW.map(([name,dc])=>({name,disk_count:dc,letter:bucket(name),blurb:BLURBS[name]||"",manual:MANUALS[name]||"",hd:HDSET.has(name),sav:SAVSET.has(name),fav:FAVSET.has(name)}));
 const letters=[...new Set(games.map(g=>g.letter))].sort();
 const DISKS_PER_PAGE=6;
 
@@ -68,6 +72,7 @@ let loaded=false,loadedIdx=-1,loadedDisk=-1,loadedName="";
 let infoShowing=false,wireless=false;
 let orient='L',compact=false,fontMode=1,nameSz=2;
 let screen="cracktro";
+let manualBtn=null,manualText="",manualLines=[],manualScroll=0,manualSize=2;  // v4.9.2 RTFM reader
 let infoFontY=0,infoRotY=0,infoCompY=0,infoModeY=0,infoBH=22,infoRescanY=0,infoResetY=0;
 
 // ---- layout ----
@@ -165,7 +170,29 @@ function drawCracktro(){const now=performance.now();
   blit();}
 
 // ---- draw ----
-function drawStatusBar(){fillRect(0,0,VW,STATUS_H,C.bar);setSize(1);text(6,6,"OMEGAWARE",C.orange,C.bar);text(6+textW("OMEGAWARE"),6," v4.4.0",C.mid,C.bar);const t=wireless?"WIRELESS":"STANDALONE";text((VW-textW(t))/2|0,6,t,wireless?0xFD20:0x07FF,C.bar);fillCircle(VW-8,STATUS_H/2,3,loaded?0xE8C4:C.green);}
+// v4.9 badges + v4.9.2 manual reader (mirrors the firmware)
+function drawHDChip(x,y){fillRound(x,y,20,12,3,C.amber);setSize(1);text(x+4,y+2,"HD",BLACK,C.amber);}
+function drawNoA500(cx,cy,r){fillCircle(cx,cy,r,C.bg);drawCircle(cx,cy,r,0xF800);drawCircle(cx,cy,r-1,0xF800);const o=(r*0.7)|0;craLine(cx-o,cy-o,cx+o,cy+o,0xF800);craLine(cx-o,cy-o+1,cx+o,cy+o+1,0xF800);}
+function drawSaveFloppy(x,y){fillRound(x,y,12,12,2,C.green);fillRect(x+3,y+1,6,4,C.bg);fillRound(x+3,y+7,6,4,1,0x0560);}
+function drawBook(cx,cy,col){drawRect(cx-8,cy-6,16,13,col);vline(cx,cy-6,13,col);hline(cx-6,cy-2,4,col);hline(cx+3,cy-2,4,col);hline(cx-6,cy+1,4,col);hline(cx+3,cy+1,4,col);hline(cx-6,cy+4,4,col);hline(cx+3,cy+4,4,col);}
+function drawStar(cx,cy,col){vline(cx,cy-3,7,col);hline(cx-3,cy,7,col);px(cx-2,cy-2,col);px(cx+2,cy-2,col);px(cx-2,cy+2,col);px(cx+2,cy+2,col);}
+// RTFM manual reader (full-screen, scrolls; SIZE follows the menu font)
+function wrapManual(){manualLines=[];setSize(manualSize);const paras=manualText.split("\n");for(const p of paras){if(!p){manualLines.push("");continue;}const ws=p.split(" ");let line="";for(const w of ws){const t=line?line+" "+w:w;if(textW(t)>VW-16&&line){manualLines.push(line);line=w;}else line=t;}manualLines.push(line);}}
+function manualLineH(){return 8*manualSize+(manualSize>=2?5:3);}
+function manualMaxScroll(){const areaH=VH-28-25;return Math.max(0,manualLines.length*manualLineH()-areaH);}
+function openManual(g){if(!g.manual)return;manualText=g.manual;manualSize=nameSz;wrapManual();manualScroll=0;screen="manual";drawManual();}
+function drawManual(){fillScreen(C.bg);const lineH=manualLineH(),areaTop=25;setSize(manualSize);
+  let first=Math.floor(manualScroll/lineH);if(first<0)first=0;let yy=areaTop-(manualScroll-first*lineH);
+  for(let i=first;i<manualLines.length&&yy<VH-30;i++){text(8,yy|0,manualLines[i],C.lit,C.bg);yy+=lineH;}
+  const ms=manualMaxScroll();if(ms>0){const trkH=VH-30-areaTop,thH=Math.max(18,trkH*trkH/(manualLines.length*lineH)|0),thY=areaTop+((trkH-thH)*manualScroll/ms|0);fillRect(VW-4,areaTop,2,trkH,C.panel);fillRect(VW-4,thY,2,thH,C.amber);}
+  fillRect(0,0,VW,22,C.bar);setSize(1);text(6,7,"MANUAL",C.amber,C.bar);let nm=games[sel]?games[sel].name:"";while(textW(nm)>VW-120&&nm.length>1)nm=nm.slice(0,-1);text(VW-textW(nm)-6,7,nm,C.dim,C.bar);
+  const by=VH-28,bw=VW/3|0;fillRect(0,by,VW,28,C.bar);hline(0,by,VW,C.sep);
+  fillRound(4,by+4,bw-8,20,6,C.bar);drawRound(4,by+4,bw-8,20,6,C.accent);const sl="SIZE: "+(manualSize===1?"SMALL":manualSize===3?"LARGE":"NORMAL");text(4+((bw-8)-textW(sl))/2|0,by+10,sl,C.lit,C.bar);
+  const pct=ms>0?(manualScroll*100/ms|0):100;const ps=pct+"%";text(VW/2-textW(ps)/2|0,by+10,ps,C.dim,C.bar);
+  fillRound(2*bw+4,by+4,bw-8,20,6,0x8000);drawRound(2*bw+4,by+4,bw-8,20,6,C.amber);text(2*bw+4+((bw-8)-textW("CLOSE"))/2|0,by+10,"CLOSE",WHITE,0x8000);
+  blit();}
+function drawStatusBar(){fillRect(0,0,VW,STATUS_H,C.bar);setSize(1);text(6,6,"OMEGAWARE",C.orange,C.bar);text(6+textW("OMEGAWARE"),6," v4.9.5",C.mid,C.bar);const t=wireless?"WIRELESS":"STANDALONE";text((VW-textW(t))/2|0,6,t,wireless?0xFD20:0x07FF,C.bar);fillCircle(VW-8,STATUS_H/2,3,loaded?0xE8C4:C.green);
+  if(loaded&&loadedIdx>=0&&games[loadedIdx]&&games[loadedIdx].disk_count>1){setSize(1);const dl="D"+(loadedDisk+1);text(VW-13-textW(dl),(STATUS_H-8)/2|0,dl,0xE8C4,C.bar);}}
 function drawModeBar(){const mx=(COVER_ON&&orient==='L')?COVER_W:0,mw=VW-mx;fillRect(mx,STATUS_H,mw,MODE_BAR_H,C.bar);setSize(1);const isA=mode==="ADF";
   fillRound(mx+4,STATUS_H+2,36,14,7,isA?C.accent:C.bg);text(mx+10,STATUS_H+6,"ADF",isA?C.amber:C.dim,isA?C.accent:C.bg);
   fillRound(mx+44,STATUS_H+2,36,14,7,!isA?C.accent:C.bg);text(mx+50,STATUS_H+6,"DSK",!isA?C.amber:C.dim,!isA?C.accent:C.bg);
@@ -175,6 +202,10 @@ function coverArt(x,y,w,h,ib){fillRound(x,y,w,h,5,C.bar);drawRound(x-1<0?0:x-1,y
   const cr=Math.min(26,(w/3)|0);fillCircle(x+w/2,y+h/2,cr,C.bar);drawCircle(x+w/2,y+h/2,cr,C.lit);setSize(2);text(x+w/2-6,y+h/2-8,ib,C.lit,null);}
 function drawCover(){if(!COVER_ON||!games.length)return;const g=games[sel];fillRect(COVER_X,COVER_Y,COVER_W,COVER_H,C.panel);
   coverArt(ART_X,ART_Y,ART_W,ART_H,g.name[0].toUpperCase());
+  if(g.sav)drawSaveFloppy(ART_X+3,ART_Y+3);
+  if(g.hd){drawHDChip(ART_X+ART_W-23,ART_Y+3);drawNoA500(ART_X+15,ART_Y+ART_H-15,13);}
+  manualBtn=null;
+  if(g.manual){const mbw=26,mbh=22,mbx=ART_X+3,mby=ART_Y+((ART_H-mbh)/2|0);fillRound(mbx,mby,mbw,mbh,3,C.accent);drawRound(mbx,mby,mbw,mbh,3,C.amber);drawBook(mbx+mbw/2|0,mby+mbh/2|0,C.lit);manualBtn={x:mbx,y:mby,w:mbw,h:mbh};}
   const isL=loaded&&loadedIdx===sel;
   if(orient==='L'){
     let ty=ART_Y+ART_H+4;setSize(2);const cb=(g.disk_count>1)?(diskLayout(g).labelY-2):(INS_Y-4);
@@ -185,7 +216,7 @@ function drawCover(){if(!COVER_ON||!games.length)return;const g=games[sel];fillR
     for(const l of wrapText(g.name,rw,3)){text(rx,ty,l,WHITE,C.panel);ty+=18;}
     if(g.blurb){setSize(1);ty+=3;const bb=ART_Y+ART_H+2;for(const l of wrapText(g.blurb,rw,6)){if(ty+8>bb)break;text(rx,ty,l,C.dim,C.panel);ty+=10;}}
     if(g.disk_count>1)dsStepper(8,COVER_Y+COVER_H-70,VW-16,26,g);
-    else{setSize(1);text(12,COVER_Y+COVER_H-58,"Single disk  -  ADF 880KB",C.dim,C.panel);}
+    else{setSize(1);text(12,COVER_Y+COVER_H-58,g.hd?"HD 1.76MB - needs A3000/A4000":"Single disk  -  ADF 880KB",g.hd?C.orange:C.dim,C.panel);}
   }
   if(g.disk_count>1&&orient==='L')drawDiskSelector(g);
   fillRound(INS_X,INS_Y,INS_W,INS_H,8,isL?0x4000:0x0340);drawRound(INS_X,INS_Y,INS_W,INS_H,8,isL?0xE8C4:C.green);
@@ -219,7 +250,8 @@ function drawList(){fillRect(LIST_X,LIST_TOP,LIST_W,LIST_BOTTOM-LIST_TOP,C.bg);
     const nx=cx+r+6;setSize(nameSz);const maxNW=LIST_W-(nx-LIST_X)-8-(g.disk_count>1?36:0),fg=isS?WHITE:C.lit,bg=isS?C.sel:C.panel;
     if(isS&&textW(g.name)>maxNW){clipX0=nx;clipX1=nx+maxNW;text(nx-marqueeOff,cy-4*nameSz,g.name,fg,bg);clipX0=0;clipX1=VW;}
     else{let nm=g.name;while(textW(nm)>maxNW&&nm.length>3)nm=nm.slice(0,-1);text(nx,cy-4*nameSz,nm,fg,bg);}
-    if(g.disk_count>1){setSize(1);fillRound(LIST_X+LIST_W-38,cy-6,34,12,4,C.accent);text(LIST_X+LIST_W-34,cy-4,g.disk_count+"DSK",WHITE,C.accent);}}
+    if(g.disk_count>1){setSize(1);fillRound(LIST_X+LIST_W-38,cy-6,34,12,4,C.accent);text(LIST_X+LIST_W-34,cy-4,g.disk_count+"DSK",WHITE,C.accent);}
+    if(g.fav)drawStar(LIST_X+LIST_W-(g.disk_count>1?48:10),cy,C.amber);}
   clipY0=0;clipY1=VH;}
 function drawNowPlaying(){if(!NOW_ON)return;const y=NOW_Y;if(loaded&&loadedName){fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,C.now);drawRect(LIST_X,y,LIST_W,NOW_PLAY_H,C.green);fillCircle(LIST_X+8,y+NOW_PLAY_H/2,3,C.green);setSize(1);text(LIST_X+16,y+3,"NOW PLAYING",C.green,C.now);let n=loadedName;while(textW(n)>LIST_W-24&&n.length>3)n=n.slice(0,-1);text(LIST_X+16,y+12,n,WHITE,C.now);}else{fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,C.bg);setSize(1);text(LIST_X+8,y+NOW_PLAY_H/2-4,games.length+" games - tap INSERT",C.mid,C.bg);}}
 function drawActionStrip(){if(!STRIP_ON||!games.length)return;const g=games[sel],isL=loaded&&loadedIdx===sel;fillRect(0,STRIP_Y,VW,STRIP_H,C.panel);hline(0,STRIP_Y,VW,C.sep);
@@ -278,6 +310,8 @@ function hit(mx,my){
       return;
     }
   }
+  // v4.9.2 manual book button (on the cover)
+  if(!infoShowing&&manualBtn&&mx>=manualBtn.x&&mx<manualBtn.x+manualBtn.w&&my>=manualBtn.y&&my<manualBtn.y+manualBtn.h){openManual(g);return;}
   // A-Z
   if(mx>=AZ_X&&my>=AZ_TOP&&my<AZ_TOP+AZ_H&&letters.length){const togY=AZ_TOP+AZ_H-AZ_TOG_H;if(my>=togY){azPage=azPage?0:1;drawUI();return;}
     const barH=togY-AZ_TOP,p0=letters.filter(l=>l<="M"),p1=letters.filter(l=>l>="N"),half=azPage===0?p0:p1;if(!half.length){azPage=azPage?0:1;drawUI();return;}
@@ -299,7 +333,8 @@ function hit(mx,my){
   if(my>=STATUS_H&&my<STATUS_H+MODE_BAR_H&&mx>=mbx&&!infoShowing){if(mx<mbx+40)mode="ADF";else if(mx>=mbx+44&&mx<mbx+80)mode="DSK";drawUI();return;}
   // file list
   if(mx>=LIST_X&&mx<AZ_X&&my>=LIST_TOP&&my<LIST_BOTTOM){infoShowing=false;const gi=Math.floor((scrollPx+(my-LIST_TOP))/LIST_ITEM_H);
-    if(gi>=0&&gi<games.length){if(gi===sel){if(loaded&&loadedIdx===sel)unload();else load(sel,g.disk_count>1?diskSel:0);}else{sel=gi;setActiveLetter(games[gi].letter);diskSel=0;diskPage=0;}drawUI();}return;}
+    if(gi>=0&&gi<games.length){const rr=8+nameSz*3;if(mx<=LIST_X+6+2*rr+3){games[gi].fav=!games[gi].fav;drawUI();return;}   // tap the letter-circle = favourite
+      if(gi===sel){if(loaded&&loadedIdx===sel)unload();else load(sel,g.disk_count>1?diskSel:0);}else{sel=gi;setActiveLetter(games[gi].letter);diskSel=0;diskPage=0;}drawUI();}return;}
   // bottom bar
   if(my>=VH-BOTTOM_H){const bw=VW/4|0,b=mx/bw|0;
     if(b===0&&sel>0){sel--;setActiveLetter(games[sel].letter);diskSel=0;diskPage=0;if(sel*LIST_ITEM_H<scrollPx)scrollPx=sel*LIST_ITEM_H;}
@@ -308,10 +343,15 @@ function hit(mx,my){
     drawUI();return;}}
 function evtXY(e){const r=cv.getBoundingClientRect();const t=e.touches&&e.touches[0]?e.touches[0]:(e.changedTouches&&e.changedTouches[0]?e.changedTouches[0]:e);return[(t.clientX-r.left)*VW/r.width|0,(t.clientY-r.top)*VH/r.height|0];}
 const DRAG_THRESH=5;
-function pDown(x,y){inertiaOn=false;inertiaV=0;drag={x0:x,y0:y,px0:scrollPx,lastY:y,lastT:performance.now(),v:0,moved:false,inList:(screen==="ui"&&!infoShowing&&x>=LIST_X&&x<AZ_X&&y>=LIST_TOP&&y<LIST_BOTTOM)};}
+function pDown(x,y){inertiaOn=false;inertiaV=0;
+  if(screen==="manual"){drag={x0:x,y0:y,px0:manualScroll,moved:false,inManual:true};return;}
+  drag={x0:x,y0:y,px0:scrollPx,lastY:y,lastT:performance.now(),v:0,moved:false,inList:(screen==="ui"&&!infoShowing&&x>=LIST_X&&x<AZ_X&&y>=LIST_TOP&&y<LIST_BOTTOM)};}
 function pMove(x,y){if(!drag)return;if(Math.abs(y-drag.y0)>DRAG_THRESH||Math.abs(x-drag.x0)>DRAG_THRESH)drag.moved=true;
+  if(drag.inManual){manualScroll=drag.px0-(y-drag.y0);if(manualScroll<0)manualScroll=0;const mm=manualMaxScroll();if(manualScroll>mm)manualScroll=mm;drawManual();return;}
   if(drag.inList&&drag.moved){scrollPx=drag.px0-(y-drag.y0);if(scrollPx<0)scrollPx=0;const mp=maxScrollPx();if(scrollPx>mp)scrollPx=mp;const now=performance.now(),dt=now-drag.lastT;if(dt>0)drag.v=(drag.lastY-y)/dt*16;drag.lastY=y;drag.lastT=now;syncScroll();drawUI();}}
-function pUp(){if(!drag)return;const d=drag;drag=null;if(d.moved&&d.inList){inertiaV=Math.max(-40,Math.min(40,d.v));if(Math.abs(inertiaV)>1)inertiaOn=true;}else if(!d.moved){hit(d.x0,d.y0);}}
+function pUp(){if(!drag)return;const d=drag;drag=null;
+  if(d.inManual){if(!d.moved){const by=VH-28,bw=VW/3|0;if(d.y0>=by){if(d.x0<bw){manualSize=manualSize>=3?1:manualSize+1;wrapManual();const mm=manualMaxScroll();if(manualScroll>mm)manualScroll=mm;drawManual();}else if(d.x0>=2*bw){screen="ui";drawUI();}}else{screen="ui";drawUI();}}return;}
+  if(d.moved&&d.inList){inertiaV=Math.max(-40,Math.min(40,d.v));if(Math.abs(inertiaV)>1)inertiaOn=true;}else if(!d.moved){hit(d.x0,d.y0);}}
 function syncScroll(){if(games.length){const ti=Math.floor(scrollPx/LIST_ITEM_H);setActiveLetter(games[Math.max(0,Math.min(games.length-1,ti))].letter);}}
 
 // ---- controls + frame loop ----
@@ -326,7 +366,7 @@ window.addEventListener('touchend',()=>pUp());
 let lastMq=0;
 function frame(now){
   if(screen==="cracktro"){drawCracktro();}
-  else{
+  else if(screen==="ui"){
     if(inertiaOn){scrollPx+=inertiaV;inertiaV*=0.92;if(scrollPx<0){scrollPx=0;inertiaOn=false;}const mp=maxScrollPx();if(scrollPx>mp){scrollPx=mp;inertiaOn=false;}if(Math.abs(inertiaV)<0.6)inertiaOn=false;syncScroll();drawUI();}
     else if(!drag&&!infoShowing&&selOverflows()){
       if(marqueeSel!==sel){marqueeSel=sel;marqueeOff=0;marqueeDir=1;marqueePause=now;}

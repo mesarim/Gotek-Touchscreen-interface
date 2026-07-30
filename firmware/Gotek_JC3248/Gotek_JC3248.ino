@@ -30,7 +30,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "v4.9.1-JC3248"
+#define FW_VERSION "v4.9.7-JC3248"
 #include "espnow_server.h"
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
@@ -633,6 +633,7 @@ static void ensureSampleFolder(){
     "  /ADF/YourGame/YourGame.adf   the disk image\r\n"
     "  /ADF/YourGame/YourGame.jpg   cover art (JPEG or PNG, any size)\r\n"
     "  /ADF/YourGame/YourGame.nfo   this info file (plain text)\r\n"
+    "  /ADF/YourGame/YourGame.rtfm  how-to-play manual (plain text, optional)\r\n"
     "\r\n"
     "NFO rules:\r\n"
     "  'Title:' overrides the display name (any case: TITLE:/title:).\r\n"
@@ -643,6 +644,42 @@ static void ensureSampleFolder(){
     "Same pattern applies in /DSK for .dsk images.\r\n");f.close();}
   f=SD_MMC.open("/ADF/SAMPLE/Sample.jpg",FILE_WRITE);
   if(f){f.write(SAMPLE_JPG,sizeof(SAMPLE_JPG));f.close();}
+  // v4.9.4: a self-documenting manual — the reader opened by the book button explains itself.
+  f=SD_MMC.open("/ADF/SAMPLE/Sample.rtfm",FILE_WRITE);
+  if(f){f.print(
+    "HOW TO PLAY - and how this MANUAL works\r\n"
+    "=======================================\r\n"
+    "\r\n"
+    "You are reading the GTi manual viewer. This text came\r\n"
+    "from a plain-text file sitting next to the game:\r\n"
+    "\r\n"
+    "  /ADF/SAMPLE/Sample.rtfm\r\n"
+    "\r\n"
+    "Any game can have one. Drop a file named the same as\r\n"
+    "the disk, ending in .rtfm, beside it:\r\n"
+    "\r\n"
+    "  /ADF/YourGame/YourGame.rtfm\r\n"
+    "\r\n"
+    "...and a little book button appears on the cover art.\r\n"
+    "Tap it to read the game's instructions - controls,\r\n"
+    "cheats, copy-protection answers, whatever you like.\r\n"
+    "\r\n"
+    "USING THE READER\r\n"
+    "  - Drag up or down to scroll; flick for a fast spin.\r\n"
+    "  - SIZE cycles SMALL / NORMAL / LARGE text, following\r\n"
+    "    your menu font setting.\r\n"
+    "  - CLOSE (or tap the page) returns to the library.\r\n"
+    "\r\n"
+    "TIPS\r\n"
+    "  - Keep it plain ASCII text. Accents and smart quotes\r\n"
+    "    are cleaned up for you, but plain is safest.\r\n"
+    "  - Blank lines make paragraphs. Short lines read best.\r\n"
+    "  - Manuals are meant to be short and handy - a page or\r\n"
+    "    two of how-to-play basics.\r\n"
+    "\r\n"
+    "Read the fine manual. :)\r\n"
+    "\r\n"
+    "- OMEGAWARE\r\n");f.close();}
 }
 
 // ── Game cache — defined after STATE section below ──
@@ -696,6 +733,18 @@ static bool findJPGFor(const String&p,String&out){
     for(auto e:exts){String c=d+"/"+folderName+e;if(SD_MMC.exists(c.c_str())){out=c;return true;}}}
   return false;
 }
+// v4.9.2: per-game manual (.rtfm) lookup — mirrors findJPGFor. Plain-text "how to play"
+// file beside the ADF; opened full-screen by the book button on the cover panel.
+static bool manualFor(const String&p,String&out){
+  String b=basenameNoExt(filenameOnly(p)),d=parentDir(p),gb=getGameBaseName(p);
+  const char*exts[]={".rtfm",".RTFM"};
+  for(auto e:exts){String c=d+"/"+b+e;if(SD_MMC.exists(c.c_str())){out=c;return true;}}
+  if(gb!=b){for(auto e:exts){String c=d+"/"+gb+e;if(SD_MMC.exists(c.c_str())){out=c;return true;}}}
+  String folderName=d;int ls=folderName.lastIndexOf('/');if(ls>0)folderName=folderName.substring(ls+1);
+  if(folderName.length()&&folderName!=b&&folderName!=gb){
+    for(auto e:exts){String c=d+"/"+folderName+e;if(SD_MMC.exists(c.c_str())){out=c;return true;}}}
+  return false;
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // STATE
@@ -721,6 +770,7 @@ static bool g_hotswap=false;    // ON = tapping another disk while loaded swaps 
 static bool g_forceswap=false;  // ON = swap disk bytes in place without the USB eject/re-attach cycle
 static int g_info_rescan_btn_y=0,g_info_reset_btn_y=0,g_info_pair_now_btn_y=0,g_info_font_btn_y=0,g_info_hive_btn_y=0;
 static int g_info_x=0,g_info_w=150,g_info_rot_btn_y=0,g_info_comp_btn_y=0,g_info_mode_btn_y=0,g_info_bottom=0,g_info_bh=22;
+static String g_manual_path=""; static int g_manual_bx=0,g_manual_by=0,g_manual_bw=0,g_manual_bh=0;  // v4.9.2 .rtfm book button rect
 struct GameEntry{String name;int first_file_idx;int disk_count;String jpg_path;std::vector<int>disk_indices;bool fav=false;uint16_t plays=0;};
 static std::vector<String>g_files;static std::vector<GameEntry>g_games;
 static int g_sel=0,g_scroll=0,g_disk_sel=0,g_loaded_game_idx=-1,g_loaded_disk_idx=-1;
@@ -1264,6 +1314,9 @@ static void drawStatusBar(){
   if(g_wireless_mode){gfx_setTextColor(espnowIsPaired()?0x07E0:0xFD20,COL_BAR);gfx_setCursor(VW/2-40,6);gfx_print(espnowIsPaired()?"WIRELESS:PAIRED":"WIRELESS:PAIR");}
   else{gfx_setTextColor(0x07FF,COL_BAR);int tw=gfx_textWidth("STANDALONE");gfx_setCursor((VW-tw)/2,6);gfx_print("STANDALONE");}
   uint16_t ic=g_loaded?0xE8C4:COL_GREEN;gfx_fillCircle(VW-8,STATUS_H/2,3,ic);
+  if(g_loaded&&g_loaded_game_idx>=0&&g_loaded_game_idx<(int)g_games.size()&&g_games[g_loaded_game_idx].disk_count>1){   // v4.9.5: which disk of a multi-disk set is mounted
+    String dl="D"+String(g_loaded_disk_idx+1);gfx_setTextSize(1);gfx_setTextColor(ic,COL_BAR);
+    gfx_setCursor(VW-13-gfx_textWidth(dl),(STATUS_H-8)/2);gfx_print(dl);}
 }
 
 // disk grid geometry (landscape cover) — shared by draw + touch (struct declared up top)
@@ -1306,6 +1359,13 @@ static void drawSaveFloppy(int x,int y){
 // ~1.2MB; extended-DD disks (~900-960KB) stay DD and get no badge (A500 reads them).
 static bool isHDImage(const String&path){String vfs="/sdcard"+path;struct stat st;if(stat(vfs.c_str(),&st)!=0)return false;return (uint32_t)st.st_size>HD_FLAG_BYTES;}
 static void drawHDChip(int x,int y){gfx_fillRoundRect(x,y,20,12,3,COL_AMBER);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,COL_AMBER);gfx_setCursor(x+4,y+2);gfx_print("HD");}
+static void drawBookIcon(int cx,int cy,uint16_t col){   // open-book glyph (6x8 font can't draw it); enlarged v4.9.3
+  gfx_drawRect(cx-8,cy-6,16,13,col);     // outer covers
+  gfx_vline(cx,cy-6,13,col);             // spine down the middle
+  gfx_hline(cx-6,cy-2,4,col);gfx_hline(cx+3,cy-2,4,col);   // page-text lines, both leaves
+  gfx_hline(cx-6,cy+1,4,col);gfx_hline(cx+3,cy+1,4,col);
+  gfx_hline(cx-6,cy+4,4,col);gfx_hline(cx+3,cy+4,4,col);
+}
 static void drawNoA500(int cx,int cy,int r,uint16_t ring){
   gfx_fillCircle(cx,cy,r-1,COL_BG);                         // dark backing so it reads on any cover art
   gfx_drawCircle(cx,cy,r,ring);gfx_drawCircle(cx,cy,r-1,ring);
@@ -1325,15 +1385,16 @@ static void drawMagnifier(int cx,int cy,uint16_t col){
 }
 
 static void drawCoverPanel(){
+  g_manual_bw=0;   // v4.9.2: cleared each draw; set below only if this game has a .rtfm
   if(!COVER_ON)return;
   gfx_fillRect(COVER_X,COVER_Y,COVER_W,COVER_H,COL_PANEL);if(g_games.empty())return;
   auto&game=g_games[g_sel];
   if(!game.jpg_path.length()){String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg))game.jpg_path=jpg;else game.jpg_path="?";}
-  static int lastNfoSel=-1;static String cachedNfoBlurb="";static bool cachedHasSav=false;static bool cachedHD=false;
+  static int lastNfoSel=-1;static String cachedNfoBlurb="";static bool cachedHasSav=false;static bool cachedHD=false;static String cachedManual="";
   if(lastNfoSel!=g_sel){lastNfoSel=g_sel;cachedNfoBlurb="";String nfoP,nT,nB;
     if(findNFOFor(g_files[game.first_file_idx],nfoP)){File nf=SD_MMC.open(nfoP,FILE_READ);if(nf){String txt;while(nf.available()&&txt.length()<512)txt+=(char)nf.read();nf.close();parseNFO(txt,nT,nB);
       if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=nT;cachedNfoBlurb=nB;}}
-    cachedHasSav=(g_saves_mode==1)&&savExistsFor(g_files[game.first_file_idx]);cachedHD=isHDImage(g_files[game.first_file_idx]);}   // v4.8.0 badge + v4.9 HD flag (checked once per selection)
+    cachedHasSav=(g_saves_mode==1)&&savExistsFor(g_files[game.first_file_idx]);cachedHD=isHDImage(g_files[game.first_file_idx]);cachedManual="";{String mp;if(manualFor(g_files[game.first_file_idx],mp))cachedManual=mp;}}   // v4.8.0 badge + v4.9 HD flag + v4.9.2 .rtfm (checked once per selection)
   // Cover art
   gfx_fillRoundRect(COVER_ART_X,COVER_ART_Y,COVER_ART_W,COVER_ART_H,5,COL_BAR);
   gfx_drawRoundRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,6,COL_ACCENT);
@@ -1342,6 +1403,11 @@ static void drawCoverPanel(){
   // v4.8.0: floppy icon — this game has a save-copy (INSERT will boot the save)
   if(cachedHasSav)drawSaveFloppy(COVER_ART_X+3,COVER_ART_Y+3);
   if(cachedHD){drawHDChip(COVER_ART_X+COVER_ART_W-23,COVER_ART_Y+3);drawNoA500(COVER_ART_X+15,COVER_ART_Y+COVER_ART_H-15,13,TFT_RED);}   // v4.9 HD markers
+  if(cachedManual.length()){   // v4.9.2: book button, bottom-right of the cover art — only when a .rtfm exists
+    g_manual_bw=26;g_manual_bh=22;g_manual_bx=COVER_ART_X+3;g_manual_by=COVER_ART_Y+(COVER_ART_H-g_manual_bh)/2;g_manual_path=cachedManual;   // v4.9.3: bigger + left edge, clear of the fav/HD corners
+    gfx_fillRoundRect(g_manual_bx,g_manual_by,g_manual_bw,g_manual_bh,3,COL_ACCENT);gfx_drawRoundRect(g_manual_bx,g_manual_by,g_manual_bw,g_manual_bh,3,COL_AMBER);
+    drawBookIcon(g_manual_bx+g_manual_bw/2,g_manual_by+g_manual_bh/2,COL_LIT);
+  }
   bool isL=g_loaded&&g_loaded_game_idx==g_sel;
   if(!g_portrait){
     int cb;
@@ -1424,11 +1490,13 @@ static void drawInfoPanel(){
 }
 
 static void drawModeBar(){
+  int mbR=LIST_X+LIST_W+AZ_W;
   gfx_fillRect(LIST_X,STATUS_H,LIST_W+AZ_W,MODE_BAR_H,COL_BAR);gfx_setTextSize(1);
   bool isA=g_mode==MODE_ADF;
   gfx_fillRoundRect(LIST_X+4,STATUS_H+2,36,14,7,isA?COL_ACCENT:COL_BG);gfx_setTextColor(isA?COL_AMBER:COL_DIM,isA?COL_ACCENT:COL_BG);gfx_setCursor(LIST_X+10,STATUS_H+6);gfx_print("ADF");
   gfx_fillRoundRect(LIST_X+44,STATUS_H+2,36,14,7,!isA?COL_ACCENT:COL_BG);gfx_setTextColor(!isA?COL_AMBER:COL_DIM,!isA?COL_ACCENT:COL_BG);gfx_setCursor(LIST_X+50,STATUS_H+6);gfx_print("DSK");
-  gfx_setTextColor(COL_MID,COL_BAR);gfx_setCursor(LIST_X+86,STATUS_H+6);gfx_print(String(g_games.size())+" games");
+  gfx_fillRoundRect(LIST_X+84,STATUS_H+2,66,14,7,COL_BLUE);gfx_setTextColor(TFT_WHITE,COL_BLUE);gfx_setCursor(LIST_X+92,STATUS_H+6);gfx_print("USR-DSK");   // v4.9.7 user-disk manager
+  gfx_setTextColor(COL_MID,COL_BAR);String gt=String(g_games.size())+" games";gfx_setCursor(mbR-gfx_textWidth(gt)-6,STATUS_H+6);gfx_print(gt);
 }
 
 static void drawFileList(){
@@ -2366,10 +2434,34 @@ static bool ssMakeGhost(float phase){
   }
   g_ss_w=S; g_ss_h=S; return true;
 }
+// v4.9.6: an orange ice-lolly (Bubble Bobble style) — a gift for Claude. Third form in
+// the shapeshift cycle: a glossy orange popsicle on a little stick, swaying gently.
+static bool ssMakeLolly(float phase){
+  const int S=96;
+  if(g_ss_buf&&(g_ss_w!=S||g_ss_h!=S)) ssFree();
+  if(!g_ss_buf){ g_ss_buf=(uint16_t*)ps_malloc((size_t)S*S*2); if(!g_ss_buf)return false; }
+  const uint16_t ORANGE=0xFD20, ORANGE_HI=0xFEA0, STICK=0xC534, STICK_HI=0xD5B8;
+  float sway=2.2f*sinf(phase*1.6f);                          // gentle left-right sway
+  const float bx0=23,bx1=73,by0=9,by1=61,rad=15;            // ice block (rounded rect)
+  float glossX=31.0f+1.5f*sinf(phase*2.2f), glossY=24.0f;   // shimmering gloss highlight
+  for(int y=0;y<S;y++)for(int x=0;x<S;x++){
+    float xf=x-sway; uint16_t c=TFT_BLACK;
+    if(y>=58&&y<=90&&xf>=44.0f&&xf<=52.0f){ c=(xf<47.0f)?STICK_HI:STICK; }   // stick
+    if(xf>=bx0&&xf<=bx1&&y>=by0&&y<=by1){                    // rounded-rect body
+      float qx=(xf<bx0+rad)?(bx0+rad-xf):(xf>bx1-rad?xf-(bx1-rad):0.0f);
+      float qy=(y<by0+rad)?(by0+rad-y):(y>by1-rad?y-(by1-rad):0.0f);
+      if(qx*qx+qy*qy<=rad*rad){ c=ORANGE;
+        float gx=(xf-glossX)/9.0f, gy=(y-glossY)/13.0f;
+        if(gx*gx+gy*gy<=1.0f) c=ORANGE_HI; }
+    }
+    g_ss_buf[y*S+x]=c;
+  }
+  g_ss_w=S; g_ss_h=S; return true;
+}
 static void runScreensaver(){                                // blocking bounce loop; any touch exits
   int idx=0;
   bool claudeMode=g_ss_paths.empty();
-  bool ghostForm=false;                                      // v4.8.1: toggles on every wall hit
+  int ssForm=0;                                              // v4.8.1 ghost + v4.9.6 lolly: cycles on every wall hit
   float ph=0;
   if(claudeMode){
     // Empty /screensaver/ folder: bounce the (slowly spinning) Claude starburst
@@ -2392,8 +2484,8 @@ static void runScreensaver(){                                // blocking bounce 
       if(hit&&g_ss_paths.size()>1){ int ni=(idx+1)%(int)g_ss_paths.size();
         if(ssDecode(g_ss_paths[ni]))idx=ni; else ssDecode(g_ss_paths[idx]);   // skip undecodable, keep a valid buffer
         if(x>gW-g_ss_w)x=gW-g_ss_w; if(y>gH-g_ss_h)y=gH-g_ss_h; if(x<0)x=0; if(y<0)y=0; }
-      if(claudeMode&&hit)ghostForm=!ghostForm;         // v4.8.1: shapeshift on every wall bounce
-      if(claudeMode){ ph+=0.02f; if(ghostForm)ssMakeGhost(ph); else ssMakeClaude(ph); }   // re-render each frame
+      if(claudeMode&&hit)ssForm=(ssForm+1)%3;          // v4.8.1 ghost + v4.9.6 lolly: shapeshift on every wall bounce
+      if(claudeMode){ ph+=0.02f; if(ssForm==1)ssMakeGhost(ph); else if(ssForm==2)ssMakeLolly(ph); else ssMakeClaude(ph); }   // re-render each frame
       gfx_fillScreen(TFT_BLACK); ssBlit(x,y); gfx_flush();
     } else delay(5);
   }
@@ -2497,6 +2589,87 @@ static bool doSearch(){
             else if(i==2){return false;}}}
       }
     } else { if(pressed&&++rel>=3)pressed=false; }
+    delay(12);
+  }
+}
+
+// ── In-game manual reader (.rtfm) — full-screen scrolling plain text, blocking modal. v4.9.2.
+//    Text size FOLLOWS the game menu (g_font: SMALL/NORMAL/LARGE); the SIZE button cycles it
+//    live. Drag to scroll with flick inertia. The loader strips/transliterates non-ASCII so a
+//    messy file still renders clean on the 6x8 font. Capped ~16 KB (manuals are short by design).
+static void doManual(const String& path){
+  String raw="";
+  { File f=SD_MMC.open(path,FILE_READ);
+    if(f){ static const char* LAT="AAAAAAECEEEEIIIIDNOOOOOxOUUUUYPsaaaaaaeceeeeiiiidnooooo/ouuuuypy";
+      while(f.available()&&raw.length()<16000){ int c=f.read(); if(c<0)break; c&=0xFF;
+        if(c=='\r')continue;
+        if(c=='\t'){raw+="  ";continue;}
+        if(c=='\n'||(c>=32&&c<127)){raw+=(char)c;continue;}
+        if(c==0xE2){int a=f.read(),b=f.read();(void)a;                 // UTF-8 general punctuation
+          if(b==0x93||b==0x94)raw+='-'; else if(b==0x98||b==0x99)raw+='\''; else if(b==0x9C||b==0x9D)raw+='"'; else if(b==0xA6)raw+="..."; continue;}
+        if(c==0xC2){int a=f.read(); if(a==0xA9)raw+="(c)"; else if(a==0xAE)raw+="(r)"; else if(a==0xB0)raw+="deg"; continue;}
+        if(c==0xC3){int a=f.read(); int i=a-0x80; if(i>=0&&i<64)raw+=LAT[i]; continue;}   // Latin-1 accents -> base letter
+        // any other high/control byte: dropped
+      } f.close(); }
+  }
+  if(!raw.length())raw="(no manual text)";
+  const int margin=8, topH=22, botH=28;
+  const int areaTop=topH+3, areaBot=VH-botH-2, maxW=VW-2*margin;
+  int sz=g_name_sz, lineH=8*sz+(sz>=2?5:3);
+  std::vector<String> lines;
+  auto rewrap=[&](){ lines.clear(); sz=g_name_sz; lineH=8*sz+(sz>=2?5:3); gfx_setTextSize(sz);
+    String para="";
+    for(int i=0;i<=(int)raw.length();i++){ char c=i<(int)raw.length()?raw[i]:'\n';
+      if(c=='\n'){ String line="",word="";
+        for(int j=0;j<=(int)para.length();j++){ char d=j<(int)para.length()?para[j]:' ';
+          if(d==' '||j==(int)para.length()){ String cand=line.length()?line+" "+word:word;
+            if(gfx_textWidth(cand)>maxW&&line.length()){lines.push_back(line);line=word;} else line=cand; word=""; }
+          else word+=d; }
+        lines.push_back(line); para=""; }
+      else para+=c; } };
+  rewrap();
+  float scroll=0, vel=0; int y0=0; float s0=0; bool pressed=false, moved=false; int lastY=0, lastX=0, rel=0; bool dirty=true;
+  auto maxScroll=[&](){ int t=(int)lines.size()*lineH-(areaBot-areaTop); return t<0?0.f:(float)t; };
+  {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<600)delay(10);}   // drain the entering tap
+  while(true){
+    if(dirty||vel!=0){ dirty=false;
+      gfx_fillScreen(COL_BG);
+      gfx_setTextSize(sz); gfx_setTextColor(COL_LIT,COL_BG);
+      int first=(int)(scroll/lineH); if(first<0)first=0;
+      int yy=areaTop-((int)scroll-first*lineH);
+      for(int i=first;i<(int)lines.size()&&yy<areaBot;i++){ gfx_setCursor(margin,yy); gfx_print(lines[i]); yy+=lineH; }
+      float ms=maxScroll();
+      if(ms>0){ int trkH=areaBot-areaTop; int thH=max(18,(int)((float)trkH*trkH/((float)lines.size()*lineH))); int thY=areaTop+(int)((float)(trkH-thH)*(scroll/ms));
+        gfx_fillRect(VW-4,areaTop,2,trkH,COL_PANEL); gfx_fillRect(VW-4,thY,2,thH,COL_AMBER); }
+      bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
+      gfx_fillRect(0,0,VW,topH,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);
+      gfx_setCursor(6,7); gfx_print("MANUAL");
+      { String nm=g_games.empty()?String(""):g_games[g_sel].name; while(gfx_textWidth(nm)>VW-120&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
+        gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR); gfx_setCursor(VW-gfx_textWidth(nm)-6,7); gfx_print(nm); }
+      int by=VH-botH; gfx_fillRect(0,by,VW,botH,COL_BAR); gfx_hline(0,by,VW,COL_SEP); int bw=VW/3;
+      gfx_fillRoundRect(4,by+4,bw-8,botH-8,6,COL_BAR); gfx_drawRoundRect(4,by+4,bw-8,botH-8,6,COL_ACCENT);
+      { String s=String("SIZE: ")+fontName(g_font); gfx_setTextSize(1); gfx_setTextColor(COL_LIT,COL_BAR); gfx_setCursor(4+((bw-8)-gfx_textWidth(s))/2,by+(botH-8)/2); gfx_print(s); }
+      { int pct=ms>0?(int)(scroll*100/ms):100; String s=String(pct)+"%"; gfx_setTextColor(COL_DIM,COL_BAR); gfx_setCursor(VW/2-gfx_textWidth(s)/2,by+(botH-8)/2); gfx_print(s); }
+      gfx_fillRoundRect(2*bw+4,by+4,bw-8,botH-8,6,0x8000); gfx_drawRoundRect(2*bw+4,by+4,bw-8,botH-8,6,COL_AMBER);
+      { const char* s="CLOSE"; gfx_setTextColor(TFT_WHITE,0x8000); gfx_setCursor(2*bw+4+((bw-8)-gfx_textWidth(s))/2,by+(botH-8)/2); gfx_print(s); }
+      gfx_flush();
+    }
+    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){ rel=0;
+      if(!pressed){ pressed=true; moved=false; y0=ty; s0=scroll; lastY=ty; lastX=tx; vel=0; }
+      else { if(abs((int)ty-y0)>DRAG_THRESH)moved=true;
+        if(moved){ scroll=s0-(float)((int)ty-y0); float ms=maxScroll(); if(scroll<0)scroll=0; if(scroll>ms)scroll=ms; vel=(float)((int)ty-lastY); dirty=true; } }
+      lastX=tx; lastY=ty;
+    } else {
+      if(pressed&&++rel>=3){ pressed=false;
+        if(!moved){ int by=VH-botH, bw=VW/3;
+          if(lastY>=by){ if(lastX<bw){ applyFont((g_font+1)%3); saveConfigKey("FONT",fontName(g_font)); rewrap(); float ms=maxScroll(); if(scroll>ms)scroll=ms; dirty=true; }
+                         else if(lastX>=2*bw){ return; } }           // CLOSE button
+          else return;                                               // tap the body also closes (forgiving)
+        }
+      }
+    }
+    if(!pressed && vel!=0){ scroll-=vel; vel*=0.90f; if(fabs(vel)<0.4f)vel=0; float ms=maxScroll(); if(scroll<0){scroll=0;vel=0;} if(scroll>ms){scroll=ms;vel=0;} dirty=true; }
     delay(12);
   }
 }
@@ -2689,6 +2862,88 @@ static bool selNameOverflows(){
 }
 
 // Dispatch a completed tap (finger down + up with no drag) to the right UI region
+// ════════════════════════════════════════════════════════════════════════════
+// USER DISKS (v4.9.7) — create + manage pre-formatted OFS "save" disks in /USER-DISKS.
+// Template built + verified with amitools xdftool (empty OFS DD volume). Only 3 blocks
+// are non-zero (boot/root/bitmap); the rest is written as zeros at create time. The
+// volume name (USERnn) is patched into the root block with a fresh AmigaDOS checksum.
+// ════════════════════════════════════════════════════════════════════════════
+static const uint8_t UD_BOOT[12]={68,79,83,0,0,0,0,0,0,0,3,112};   // "DOS\0", chksum, rootblock ptr=880
+static const uint8_t UD_ROOT[512]={0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,72,0,0,0,0,114,92,102,229,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,255,255,255,255,0,0,3,113,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,69,78,0,0,5,62,0,0,11,34,4,83,65,86,69,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,69,78,0,0,5,62,0,0,11,34,0,0,69,78,0,0,5,62,0,0,11,34,68,79,83,0,0,0,0,0,0,0,0,0,0,0,0,1};
+static const uint8_t UD_BITMAP[512]={0,0,192,127,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,63,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255};
+static void scanUserDisks(std::vector<String>&out){
+  out.clear(); File d=SD_MMC.open("/USER-DISKS"); if(!d||!d.isDirectory())return;
+  File f; while((f=d.openNextFile())){ if(!f.isDirectory()){ String nm=f.name();int s=nm.lastIndexOf('/');if(s>=0)nm=nm.substring(s+1);
+    String low=nm;low.toLowerCase(); if(low.endsWith(".adf")&&!low.endsWith(".sav.adf")) out.push_back(String("/USER-DISKS/")+nm); } f.close(); }
+  d.close();
+}
+static bool createUserDisk(){
+  SD_MMC.mkdir("/USER-DISKS");
+  int n=1; char path[48];
+  for(;n<1000;n++){ snprintf(path,sizeof(path),"/USER-DISKS/USER%02d.adf",n); if(!SD_MMC.exists(path))break; }
+  uint8_t root[512]; memcpy(root,UD_ROOT,512);                       // patch volume name USERnn + checksum
+  char vol[12]; int vl=snprintf(vol,sizeof(vol),"USER%02d",n); if(vl>30)vl=30;
+  root[432]=(uint8_t)vl; memset(root+433,0,30); memcpy(root+433,vol,vl);
+  root[20]=root[21]=root[22]=root[23]=0;
+  uint32_t sum=0; for(int i=0;i<128;i++)sum+=((uint32_t)root[i*4]<<24)|((uint32_t)root[i*4+1]<<16)|((uint32_t)root[i*4+2]<<8)|root[i*4+3];
+  uint32_t ck=(uint32_t)(0-sum); root[20]=ck>>24;root[21]=ck>>16;root[22]=ck>>8;root[23]=(uint8_t)ck;
+  File f=SD_MMC.open(path,FILE_WRITE); if(!f)return false;
+  static const uint8_t zb[512]={0}; uint8_t b0[512]; memset(b0,0,512); memcpy(b0,UD_BOOT,12);
+  for(int b=0;b<1760;b++){ if(b==0)f.write(b0,512); else if(b==880)f.write(root,512); else if(b==881)f.write(UD_BITMAP,512); else f.write(zb,512); }
+  f.close(); return true;
+}
+// Blocking full-screen manager. Returns a path to LOAD (empty = just closed).
+static String doUserDisks(){
+  std::vector<String> disks; scanUserDisks(disks);
+  const int rowH=30, listTop=STATUS_H+MODE_BAR_H+34;
+  bool dirty=true, pressed=false; int rel=0, scroll=0;
+  {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<500)delay(10);}
+  while(true){
+    if(dirty){dirty=false;
+      gfx_fillScreen(COL_BG); drawStatusBar();
+      gfx_fillRect(0,STATUS_H,VW,MODE_BAR_H,COL_BAR); gfx_setTextSize(1);
+      gfx_fillRoundRect(4,STATUS_H+2,36,14,7,COL_BG);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(10,STATUS_H+6);gfx_print("ADF");
+      gfx_fillRoundRect(44,STATUS_H+2,36,14,7,COL_BG);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(50,STATUS_H+6);gfx_print("DSK");
+      gfx_fillRoundRect(84,STATUS_H+2,66,14,7,COL_AMBER);gfx_setTextColor(TFT_BLACK,COL_AMBER);gfx_setCursor(92,STATUS_H+6);gfx_print("USR-DSK");
+      gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);gfx_setCursor(8,STATUS_H+MODE_BAR_H+8);gfx_print("USER DISKS");
+      gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,STATUS_H+MODE_BAR_H+26);gfx_print("pre-formatted save disks - tap to insert");
+      int cy=listTop; gfx_fillRoundRect(8,cy,VW-16,rowH-4,6,COL_GREEN);gfx_setTextColor(TFT_BLACK,COL_GREEN);gfx_setCursor(16,cy+(rowH-12)/2);gfx_print("+  CREATE NEW DISK");
+      int y=listTop+rowH;
+      for(int i=scroll;i<(int)disks.size()&&y<VH-6;i++){
+        String nm=disks[i];int s=nm.lastIndexOf('/');if(s>=0)nm=nm.substring(s+1);int dot=nm.lastIndexOf('.');if(dot>0)nm=nm.substring(0,dot);
+        gfx_fillRoundRect(8,y,VW-16,rowH-4,6,COL_PANEL);gfx_setTextColor(COL_LIT,COL_PANEL);
+        while(gfx_textWidth(nm)>VW-88&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
+        gfx_setCursor(16,y+(rowH-12)/2);gfx_print(nm);
+        gfx_fillRoundRect(VW-68,y+3,60,rowH-10,5,COL_BAR);gfx_setTextColor(COL_AMBER,COL_BAR);gfx_setCursor(VW-60,y+(rowH-12)/2);gfx_print("RENAME");
+        y+=rowH;
+      }
+      if(disks.empty()){gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(16,listTop+rowH+8);gfx_print("(none yet - tap CREATE NEW DISK)");}
+      gfx_flush();
+    }
+    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){ rel=0;
+      if(!pressed){ pressed=true;
+        if(ty>=STATUS_H&&ty<STATUS_H+MODE_BAR_H){ return String(""); }         // tap the bar (USR-DSK) closes
+        if(ty>=listTop&&ty<listTop+rowH-4){ createUserDisk(); scanUserDisks(disks); dirty=true; }
+        else{ int y=listTop+rowH;
+          for(int i=scroll;i<(int)disks.size()&&y<VH-6;i++){
+            if(ty>=y&&ty<y+rowH-4){
+              if(tx>=(uint16_t)(VW-68)){                                       // RENAME chip
+                String nm=disks[i];int s=nm.lastIndexOf('/');if(s>=0)nm=nm.substring(s+1);int dot=nm.lastIndexOf('.');String base=(dot>0)?nm.substring(0,dot):nm;
+                String out; if(onScreenKeyboard("RENAME DISK",base,out)){ out.trim(); if(out.length()){ String np="/USER-DISKS/"+out+".adf"; if(!SD_MMC.exists(np.c_str()))SD_MMC.rename(disks[i].c_str(),np.c_str()); } scanUserDisks(disks); }
+                {uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<400)delay(10);} dirty=true;
+              } else return disks[i];                                          // tap row = load this disk
+              break;
+            }
+            y+=rowH;
+          }
+        }
+      }
+    } else { if(pressed&&++rel>=3)pressed=false; }
+    delay(12);
+  }
+}
+
 static void handleTap(uint16_t px,uint16_t py){
   // ── INFO / SETTINGS panel touches (only within the panel; taps below it fall through to the list) ──
   if(g_info_showing&&px<(uint16_t)(g_info_x+g_info_w)&&py<(uint16_t)g_info_bottom){
@@ -2715,6 +2970,10 @@ static void handleTap(uint16_t px,uint16_t py){
       gfx_fillRoundRect(g_info_x+4,g_info_reset_btn_y,hw,g_info_bh,6,0xE8C4);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0xE8C4);gfx_setCursor(g_info_x+10,g_info_reset_btn_y+(g_info_bh-8)/2);gfx_print("RESET...");gfx_flush();delay(700);ESP.restart();}
     return;
   }
+
+  // ── v4.9.2: book button on the cover — opens the .rtfm manual full-screen ──
+  if(!g_info_showing&&g_manual_bw&&g_manual_path.length()&&px>=(uint16_t)g_manual_bx&&px<(uint16_t)(g_manual_bx+g_manual_bw)&&py>=(uint16_t)g_manual_by&&py<(uint16_t)(g_manual_by+g_manual_bh)){
+    doManual(g_manual_path); drawFullUI(); gfx_flush(); return; }
 
   // ── A-Z bar (letters + toggle button) — suppressed where the INFO panel covers it ──
   if(px>=AZ_X&&py>=AZ_TOP&&py<(uint16_t)(AZ_TOP+AZ_H)&&!(g_info_showing&&px<(uint16_t)(g_info_x+g_info_w)&&py<(uint16_t)g_info_bottom)){
@@ -2750,7 +3009,8 @@ static void handleTap(uint16_t px,uint16_t py){
   // ── Mode bar ──
   if(py>=STATUS_H&&py<STATUS_H+MODE_BAR_H&&px>=LIST_X){
     if(px<LIST_X+40&&g_mode!=MODE_ADF){g_mode=MODE_ADF;g_files.clear();listImages(SD_MMC,g_files);if(!readGameCache()){buildGameList();buildThumbs();}buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));drawFullUI();gfx_flush();return;}
-    if(px>=LIST_X+44&&px<LIST_X+80&&g_mode!=MODE_DSK){g_mode=MODE_DSK;g_files.clear();listImages(SD_MMC,g_files);if(!readGameCache()){buildGameList();buildThumbs();}buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));drawFullUI();gfx_flush();return;}}
+    if(px>=LIST_X+44&&px<LIST_X+80&&g_mode!=MODE_DSK){g_mode=MODE_DSK;g_files.clear();listImages(SD_MMC,g_files);if(!readGameCache()){buildGameList();buildThumbs();}buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));drawFullUI();gfx_flush();return;}
+    if(px>=LIST_X+84&&px<LIST_X+150){String p=doUserDisks(); if(p.length()){ if(doLoadSelected(p)){g_loaded_game_idx=-1;String nm=p;int s=nm.lastIndexOf('/');if(s>=0)nm=nm.substring(s+1);int d=nm.lastIndexOf('.');if(d>0)nm=nm.substring(0,d);g_loaded_name=nm;} } drawFullUI();gfx_flush();return;}}   // v4.9.7 USR-DSK
 
   // ── File list ──
   if(px>=LIST_X&&px<AZ_X&&py>=LIST_TOP&&py<LIST_BOTTOM){
