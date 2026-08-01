@@ -30,7 +30,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "v4.9.7-JC3248"
+#define FW_VERSION "A.5.0.0-JC3248"
 #include "espnow_server.h"
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
@@ -1484,8 +1484,9 @@ static void drawInfoPanel(){
   {int gap=4,hw=(pw-gap)/2,dx=x+hw+gap;gfx_setTextSize(isz);
     gfx_fillRoundRect(x,y,hw,bh,6,0x8000);gfx_setTextColor(TFT_WHITE,0x8000);
     {int tw=gfx_textWidth("SOFT RESET");gfx_setCursor(x+(hw-tw)/2,y+ty);gfx_print("SOFT RESET");}
-    gfx_fillRoundRect(dx,y,hw,bh,6,COL_ACCENT);gfx_setTextColor(TFT_WHITE,COL_ACCENT);
-    {int tw=gfx_textWidth("LOAD DIAG");gfx_setCursor(dx+(hw-tw)/2,y+ty);gfx_print("LOAD DIAG");}
+    {bool diagOn=(g_loaded&&g_loaded_name=="AMIGA TEST KIT");uint16_t dc=diagOn?(uint16_t)0xE8C4:COL_ACCENT;const char*dl=diagOn?"EJECT DIAG":"LOAD DIAG";   // v4.9.8: eject the mounted test kit
+     gfx_fillRoundRect(dx,y,hw,bh,6,dc);gfx_setTextColor(diagOn?TFT_BLACK:TFT_WHITE,dc);
+     int tw=gfx_textWidth(dl);gfx_setCursor(dx+(hw-tw)/2,y+ty);gfx_print(dl);}
   }g_info_reset_btn_y=y;
 }
 
@@ -2966,7 +2967,7 @@ static void handleTap(uint16_t px,uint16_t py){
     if(g_info_rescan_btn_y&&py>=(uint16_t)g_info_rescan_btn_y&&py<(uint16_t)(g_info_rescan_btn_y+g_info_bh)){doRescan();return;}
     if(g_info_reset_btn_y&&py>=(uint16_t)g_info_reset_btn_y&&py<(uint16_t)(g_info_reset_btn_y+g_info_bh)){
       int pw=g_info_w-8,gap=4,hw=(pw-gap)/2,dx=g_info_x+4+hw+gap;
-      if(px>=(uint16_t)dx){doLoadDiag();return;}                 // right half = LOAD DIAG
+      if(px>=(uint16_t)dx){ if(g_loaded&&g_loaded_name=="AMIGA TEST KIT"){g_info_showing=false;doUnload();drawFullUI();gfx_flush();} else doLoadDiag(); return; }   // right half = LOAD / EJECT DIAG
       gfx_fillRoundRect(g_info_x+4,g_info_reset_btn_y,hw,g_info_bh,6,0xE8C4);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0xE8C4);gfx_setCursor(g_info_x+10,g_info_reset_btn_y+(g_info_bh-8)/2);gfx_print("RESET...");gfx_flush();delay(700);ESP.restart();}
     return;
   }

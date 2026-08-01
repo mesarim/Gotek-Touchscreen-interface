@@ -11,6 +11,8 @@ Built by **Mez** and **Dimmy** (Dimitri Hilverda) — **OMEGAWARE**.
 
 ---
 
+**Current release: A.5.0.0** — the save-game era, proven on a real Amiga and now the recommended stable build.
+
 ## What it is (and what it isn't)
 
 The GTi doesn't replace FlashFloppy — it makes it nicer to live with. FlashFloppy and HxC
