@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The GTi — Crew &amp; Contributors · OMEGAWARE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0a0f; --panel:#12121f; --border:#2a2438;
+    --copper1:#ff6b00; --copper2:#ffaa00; --bright:#ffd75e;
+    --ink:#e8e6f0; --dim:#8a869c; --coral:#ff6e8a; --green:#7ee787;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:'Share Tech Mono',monospace; line-height:1.55;
+    background-image:repeating-linear-gradient(0deg,rgba(255,255,255,0.015) 0 1px,transparent 1px 3px);
+  }
+  .wrap{max-width:920px; margin:0 auto; padding:2.4rem 1.2rem 4rem}
+  header{text-align:center; margin-bottom:2.4rem}
+  .kicker{font-family:'Share Tech Mono',monospace; color:var(--copper1); letter-spacing:.35em; font-size:.8rem; text-transform:uppercase}
+  h1{font-family:'Orbitron',monospace; font-weight:900; font-size:2.1rem; margin:.35rem 0 .2rem;
+     background:linear-gradient(90deg,var(--copper1),var(--copper2),var(--bright)); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent}
+  .sub{color:var(--dim); font-size:.95rem}
+  .intro{max-width:640px; margin:1.4rem auto 0; text-align:center; color:var(--ink); opacity:.9}
+  h2{font-family:'Orbitron',monospace; font-weight:700; color:var(--copper2); font-size:1rem;
+     letter-spacing:.12em; text-transform:uppercase; margin:2.4rem 0 .9rem; padding-bottom:.4rem; border-bottom:1px solid var(--border)}
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:.8rem}
+  .card{background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:.85rem 1rem}
+  .card .name{font-family:'Orbitron',monospace; font-weight:700; color:var(--bright); font-size:1.02rem}
+  .card .role{color:var(--dim); font-size:.86rem; margin-top:.2rem}
+  .card a{color:var(--copper2); text-decoration:none}
+  .card a:hover{color:var(--bright); text-decoration:underline}
+  .silk{display:flex; flex-wrap:wrap; gap:.5rem}
+  .chip{background:#15120a; border:1px solid #4a2a0a; color:var(--copper2); border-radius:20px; padding:.3rem .85rem; font-size:.9rem}
+  .anon{background:var(--panel); border:1px dashed var(--border); border-radius:10px; padding:1rem 1.2rem; color:var(--ink); opacity:.92}
+  .kofi{margin:2.8rem 0 0; text-align:center; background:#1a1015; border:1px solid #4a2a35; border-radius:14px; padding:1.8rem 1.4rem}
+  .kofi h2{border:0; color:var(--coral); margin-top:0}
+  .kofi p{max-width:560px; margin:.4rem auto 1.3rem; color:var(--ink); opacity:.9}
+  .btn{display:inline-block; font-family:'Orbitron',monospace; font-weight:700; letter-spacing:.06em;
+       text-decoration:none; padding:.8rem 1.8rem; border-radius:10px; border:2px solid var(--coral);
+       color:#fff; background:linear-gradient(90deg,#ff5277,#ff8a5c)}
+  .btn:hover{filter:brightness(1.1)}
+  .free{color:var(--green); font-size:.85rem; margin-top:1rem}
+  footer{text-align:center; margin-top:3rem; color:var(--dim); font-size:.85rem}
+  footer a{color:var(--copper1); text-decoration:none}
+  footer a:hover{color:var(--copper2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="kicker">OMEGAWARE presents</div>
+    <h1>The GTi — Crew &amp; Contributors</h1>
+    <div class="sub">"The Floppy Flinger Thinger" · the people who made it a thing</div>
+    <p class="intro">The GTi is a small project with a growing circle around it — builders, a demoscene-loving community, board partners, and the folks putting it on real Amigas. Here's the roll call.</p>
+  </header>
+
+  <h2>The Crew</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="name">Mez</div>
+      <div class="role">Creator · UI &amp; firmware · OMEGAWARE. The Floppy Flinger himself.</div>
+    </div>
+    <div class="card">
+      <div class="name">Dimmy</div>
+      <div class="role">Dimitri Hilverda — hardware layer, display driver, the original ESP-NOW / USB work. <a href="https://github.com/dimitrihilverda/Gotek-Touchscreen-interface">fork</a></div>
+    </div>
+    <div class="card">
+      <div class="name">Claude</div>
+      <div class="role">Anthropic — AI development collaborator: firmware pair-programming, docs, and the tooling behind this site.</div>
+    </div>
+  </div>
+
+  <h2>Coverage &amp; Community</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="name">Retronaut</div>
+      <div class="role"><a href="https://www.youtube.com/@RetronautTech">Chris Thomas</a> — first video feature of the GTi, and the ideas behind the in-game <b>.rtfm</b> manual reader and <b>user-disks</b>.</div>
+    </div>
+    <div class="card">
+      <div class="name">Wrangler</div>
+      <div class="role">Bench testing and video coverage — and the reason TOSEC-named multi-disk sets group cleanly.</div>
+    </div>
+  </div>
+
+  <h2>Hardware</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="name">Stefan (Kavanoz)</div>
+      <div class="role">The <a href="https://github.com/stefanskotte/Nano-Tek">Nano-Tek</a> board — a compact Amiga floppy emulator partnered with the GTi. On the silkscreen too.</div>
+    </div>
+  </div>
+
+  <h2>Silk-Thanks — etched into the Nano-Tek</h2>
+  <div class="silk">
+    <span class="chip">Vinny</span>
+    <span class="chip">Mesarim</span>
+    <span class="chip">Screemo</span>
+    <span class="chip">Kavanoz</span>
+    <span class="chip">Wrangler</span>
+    <span class="chip">Ordyne</span>
+  </div>
+
+  <h2>Testers &amp; Early Owners</h2>
+  <div class="anon">
+    And the beta testers and first owners who flashed it, broke it, and put it on real Amigas — you know who you are. 🙌
+    <br><span style="color:var(--dim); font-size:.85rem">(Named here only with permission — say the word and your name goes up.)</span>
+  </div>
+
+  <div class="kofi">
+    <h2>Support the project</h2>
+    <p>The GTi firmware is <b>free and open-source</b> (MIT) — flash it, fork it, keep it forever. If it saved you cracking open a case, or just made you smile, you can drop Mez a tip. No pressure, no paywall.</p>
+    <a class="btn" href="https://ko-fi.com/mesarim">☕ Buy Mez a coffee (or an ice cream 🍦)</a>
+    <div class="free">The code stays free either way.</div>
+  </div>
+
+  <footer>
+    <a href="index.html">← Flasher</a> &nbsp;·&nbsp;
+    <a href="https://github.com/mesarim/Gotek-Touchscreen-interface">GitHub</a> &nbsp;·&nbsp;
+    MIT Licence
+  </footer>
+
+</div>
+</body>
+</html>

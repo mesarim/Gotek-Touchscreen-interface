@@ -282,6 +282,10 @@ Amiga Test Kit © Keir Fraser, public domain (Unlicense) — bundled as the buil
 Libraries: [JPEGDEC](https://github.com/bitbank2/JPEGDEC) (Larry Bank), LovyanGFX (Waveshare 2.8"
 build), ESP32 Arduino core.
 
+## Support
+
+The GTi firmware is free and open-source — flash it, fork it, keep it. If it's useful to you, you can drop Mez a tip at **[ko-fi.com/mesarim](https://ko-fi.com/mesarim)** ☕ (no pressure; the code stays free). The full roll-call lives on the [contributors page](docs/contributors.html).
+
 ## Licence
 
 MIT — see [`LICENSE`](LICENSE).
