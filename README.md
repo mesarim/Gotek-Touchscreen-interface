@@ -240,6 +240,39 @@ To reboot into programming mode: hold **BOOT** and **RESET**, release **RESET**,
 
 ---
 
+## Generic mode (GEN) — use the GTi with (almost) any Gotek machine
+
+The GTi grew up on the Amiga, but it never actually *talks* to the Amiga — it hands disk **images**
+to the Gotek, and **FlashFloppy** does the floppy emulation to whatever machine it's fitted in. So
+the GTi can front-end a Gotek in an Atari ST, Amstrad, PC, or a classic **sampler / synth** (Akai,
+Roland, Yamaha, Ensoniq, Korg…) — anything on FlashFloppy's host list.
+
+Tap **GEN** on the mode line (beside ADF / DSK) to switch the browser to a **`/GENERIC/`** folder.
+It uses the same folder + sidecar layout as the Amiga library, but mounts **any** image and keeps
+its real name and extension so FlashFloppy detects the format:
+
+```
+/GENERIC/<Name>/<Name>.<ext>      the disk image — ANY format (.hfe, .img, .st, .adf, .dsk …)
+/GENERIC/<Name>/ff.cfg            OPTIONAL FlashFloppy config (see below)
+/GENERIC/<Name>/<Name>.jpg|.png   OPTIONAL cover art
+/GENERIC/<Name>/<Name>.nfo        OPTIONAL title / blurb
+/GENERIC/<Name>/<Name>.rtfm       OPTIONAL manual (opens in the RTFM reader)
+```
+
+The image is simply "the one file that isn't a known sidecar." Cover art, the `.nfo` info panel and
+the RTFM reader all work in GEN exactly as they do for Amiga games.
+
+**Do I need an `ff.cfg`?** Only for *raw, ambiguous* images. FlashFloppy auto-detects self-describing
+formats — **`.hfe`** (universal flux; works for any machine), `.adf`, a standard `.st` — so those
+need no config. A raw **`.img` / `.ima`** carries no geometry inside it, so drop an `ff.cfg` (with the
+right `host =` line for your machine) beside it and it rides onto the mounted disk. If a folder has an
+`ff.cfg`, GEN includes it; if not, FlashFloppy uses its defaults. Easiest universal route: convert
+your disks to **`.hfe`** (e.g. with the HxC tools) — then no config is needed at all.
+
+**Notes:** GEN is for **standalone / cable** (and the XIAO wireless dongle) — like HD, the 2 MB Super
+Mini dongle can't hold larger generic images. Amiga-only extras (save-writeback, user-disks) are off
+in GEN. Currently in **beta** — feedback very welcome via GitHub Issues/Discussions.
+
 ## Tested / not tested
 
 Being straight so nobody gets surprised:

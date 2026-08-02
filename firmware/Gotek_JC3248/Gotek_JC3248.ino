@@ -30,7 +30,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.1.3-JC3248"
+#define FW_VERSION "5.2.0-JC3248"
 #include "espnow_server.h"
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
@@ -360,7 +360,7 @@ static const uint32_t MAX_FILE_BYTES=(TOTAL_SECTORS-DATA_LBA)*512;   // ~1.99MB 
 static const uint32_t ADF_DEFAULT_SIZE=901120;             // standard DD ADF = 880KB
 static const uint32_t ADF_HD_SIZE=1802240;                 // Amiga HD floppy = 1760KB (22 sectors/track, half-speed)
 static const uint32_t HD_FLAG_BYTES=1258291;               // >1.2MB => flag as HD; extended-DD disks (~900-960KB) stay DD (A500-readable)
-enum DiskMode{MODE_ADF=0,MODE_DSK=1};static DiskMode g_mode=MODE_ADF;
+enum DiskMode{MODE_ADF=0,MODE_DSK=1,MODE_GEN=2};static DiskMode g_mode=MODE_ADF;   // v5.2: GEN = generic/any-machine library (/GENERIC)
 static const char*getOutputFilename(){return g_mode==MODE_ADF?"DISK.ADF":"DISK.DSK";}
 uint8_t*g_disk=nullptr;
 static void wr16(uint8_t*p,int o,uint16_t v){p[o]=v;p[o+1]=v>>8;}
@@ -444,7 +444,7 @@ static bool onStartStopSD(uint8_t,bool start,bool load_eject){if(load_eject&&!st
 // ════════════════════════════════════════════════════════════════════════════
 // SD + INDEX CACHE
 // ════════════════════════════════════════════════════════════════════════════
-static String indexFilePath(){return g_mode==MODE_ADF?"/ADF/.index":"/DSK/.index";}
+static String indexFilePath(){return g_mode==MODE_ADF?"/ADF/.index":g_mode==MODE_DSK?"/DSK/.index":"/GENERIC/.index";}
 static void writeIndexCache(const std::vector<String>&v){File f=SD_MMC.open(indexFilePath().c_str(),FILE_WRITE);if(!f)return;f.println("#COUNT="+String(v.size()));for(auto&p:v)f.println(p);f.close();}
 static bool readIndexCache(std::vector<String>&out){out.clear();File f=SD_MMC.open(indexFilePath().c_str(),FILE_READ);if(!f){return false;}
   long declaredCount=-1;
@@ -480,8 +480,20 @@ static void drawScanFrame(int count){
   gfx_flush();
 }
 
+// v5.2 GEN mode: a "disk image" is any file that ISN'T a known sidecar (cover/info/manual/
+// FlashFloppy config / index cache). Extension-agnostic by design — FlashFloppy identifies the
+// real format from the file itself. (u = UPPERCASE filename, path already stripped.)
+static bool isGenImage(const String&u){
+  if(u.startsWith("."))return false;
+  if(u.indexOf(".SAV.")>=0)return false;
+  if(u=="FF.CFG")return false;
+  if(u.endsWith(".JPG")||u.endsWith(".JPEG")||u.endsWith(".PNG"))return false;
+  if(u.endsWith(".NFO")||u.endsWith(".RTFM")||u.endsWith(".TXT"))return false;
+  if(u.endsWith(".INDEX")||u.endsWith(".GAMECACHE"))return false;
+  return true;
+}
 static std::vector<String> scanImagesAnimated(){
-  std::vector<String>out;String dir=g_mode==MODE_ADF?"/ADF":"/DSK",ext=g_mode==MODE_ADF?".ADF":".DSK";
+  std::vector<String>out;String dir=g_mode==MODE_ADF?"/ADF":g_mode==MODE_DSK?"/DSK":"/GENERIC",ext=g_mode==MODE_ADF?".ADF":".DSK";
   // Init ball position
   ball_x=gW/2;ball_y=gH/2-30;ball_dx=3;ball_dy=2;
   // Draw initial scan screen
@@ -506,13 +518,13 @@ static std::vector<String> scanImagesAnimated(){
       if(u.indexOf(".SAV.")>=0){
         if(u.endsWith(".TMP")){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;SD_MMC.remove(fp);}
         e.close();continue;}
-      if(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ")){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;out.push_back(fp);count++;
+      if(g_mode==MODE_GEN?isGenImage(u):(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ"))){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;out.push_back(fp);count++;
         if(millis()-lastDraw>80){drawScanFrame(count);lastDraw=millis();}}e.close();}}
     else{String fn=en;int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
       if(u.indexOf(".SAV.")>=0){
         if(u.endsWith(".TMP"))SD_MMC.remove(en);
         gd.close();continue;}
-      if(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ")){out.push_back(en);count++;
+      if(g_mode==MODE_GEN?isGenImage(u):(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ"))){out.push_back(en);count++;
         if(millis()-lastDraw>80){drawScanFrame(count);lastDraw=millis();}}}
     gd.close();}root.close();}
   // Final count
@@ -825,7 +837,7 @@ static uint32_t g_touch_lastMs=0;
 static char bucketOf(const String&name){char c=toupper(name.charAt(0));return (c>='A'&&c<='Z')?c:'#';}
 
 // ── Game cache — caches buildGameList output so NFO/JPG lookups only happen once ──
-static String gameCachePath(){return g_mode==MODE_ADF?"/ADF/.gamecache":"/DSK/.gamecache";}
+static String gameCachePath(){return g_mode==MODE_ADF?"/ADF/.gamecache":g_mode==MODE_DSK?"/DSK/.gamecache":"/GENERIC/.gamecache";}
 
 static void writeGameCache(){
   File f=SD_MMC.open(gameCachePath().c_str(),FILE_WRITE);if(!f)return;
@@ -1529,16 +1541,17 @@ static void drawInfoPanel(){
 static void drawModeBar(){
   int mbR=LIST_X+LIST_W+AZ_W;
   gfx_fillRect(LIST_X,STATUS_H,LIST_W+AZ_W,MODE_BAR_H,COL_BAR);gfx_setTextSize(1);
-  bool isA=g_mode==MODE_ADF;
-  gfx_fillRoundRect(LIST_X+4,STATUS_H+2,36,14,7,isA?COL_ACCENT:COL_BG);gfx_setTextColor(isA?COL_AMBER:COL_DIM,isA?COL_ACCENT:COL_BG);gfx_setCursor(LIST_X+10,STATUS_H+6);gfx_print("ADF");
-  gfx_fillRoundRect(LIST_X+44,STATUS_H+2,36,14,7,!isA?COL_ACCENT:COL_BG);gfx_setTextColor(!isA?COL_AMBER:COL_DIM,!isA?COL_ACCENT:COL_BG);gfx_setCursor(LIST_X+50,STATUS_H+6);gfx_print("DSK");
-  gfx_fillRoundRect(LIST_X+84,STATUS_H+2,66,14,7,COL_BLUE);gfx_setTextColor(TFT_WHITE,COL_BLUE);gfx_setCursor(LIST_X+92,STATUS_H+6);gfx_print("USR-DSK");   // v4.9.7 user-disk manager
+  bool isA=g_mode==MODE_ADF,isD=g_mode==MODE_DSK,isG=g_mode==MODE_GEN;   // v5.2: three library modes
+  gfx_fillRoundRect(LIST_X+4,STATUS_H+2,32,14,7,isA?COL_ACCENT:COL_BG);gfx_setTextColor(isA?COL_AMBER:COL_DIM,isA?COL_ACCENT:COL_BG);gfx_setCursor(LIST_X+9,STATUS_H+6);gfx_print("ADF");
+  gfx_fillRoundRect(LIST_X+40,STATUS_H+2,32,14,7,isD?COL_ACCENT:COL_BG);gfx_setTextColor(isD?COL_AMBER:COL_DIM,isD?COL_ACCENT:COL_BG);gfx_setCursor(LIST_X+45,STATUS_H+6);gfx_print("DSK");
+  gfx_fillRoundRect(LIST_X+76,STATUS_H+2,32,14,7,isG?COL_ACCENT:COL_BG);gfx_setTextColor(isG?COL_AMBER:COL_DIM,isG?COL_ACCENT:COL_BG);gfx_setCursor(LIST_X+81,STATUS_H+6);gfx_print("GEN");   // v5.2 generic/any-machine
+  gfx_fillRoundRect(LIST_X+112,STATUS_H+2,62,14,7,COL_BLUE);gfx_setTextColor(TFT_WHITE,COL_BLUE);gfx_setCursor(LIST_X+118,STATUS_H+6);gfx_print("USR-DSK");   // v4.9.7 user-disk manager
   gfx_setTextColor(COL_MID,COL_BAR);String gt=String(g_games.size())+" games";gfx_setCursor(mbR-gfx_textWidth(gt)-6,STATUS_H+6);gfx_print(gt);
 }
 
 static void drawFileList(){
   gfx_fillRect(LIST_X,LIST_TOP,LIST_W,LIST_BOTTOM-LIST_TOP,COL_BG);
-  if(g_games.empty()){gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_BG);gfx_setCursor(LIST_X+8,LIST_TOP+16);gfx_print(g_mode==MODE_ADF?"No .ADF files":"No .DSK files");return;}
+  if(g_games.empty()){gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_BG);gfx_setCursor(LIST_X+8,LIST_TOP+16);gfx_print(g_mode==MODE_ADF?"No .ADF files":g_mode==MODE_DSK?"No .DSK files":"No /GENERIC files");return;}
   if(g_scrollPx<0)g_scrollPx=0;int mp=maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;
   int first=(int)(g_scrollPx/LIST_ITEM_H),off=(int)(g_scrollPx-(float)first*LIST_ITEM_H);
   g_scroll=first;                                  // keep integer scroll in sync (thumb, etc.)
@@ -2271,12 +2284,13 @@ static bool doLoadSelected(const String&adfPath){
     gfx_setCursor(6,STATUS_H+44);gfx_print("Max is DD floppy");
     gfx_flush();delay(1800);drawFullUI();gfx_flush();return false;
   }
-  build_volume(getOutputFilename(),fsz);
+  if(g_mode==MODE_GEN){String gon=filenameOnly(adfPath);build_volume(gon.c_str(),fsz);}   // v5.2: keep the real name+ext so FlashFloppy detects the format
+  else build_volume(getOutputFilename(),fsz);
   uint8_t*dst=g_disk+DATA_LBA*512;uint8_t*buf=(uint8_t*)malloc(16384);uint32_t copied=0,remain=fsz;
   while(remain&&buf){size_t n=remain>16384?16384:remain;int rd=f.read(buf,n);if(rd<=0)break;memcpy(dst+copied,buf,rd);remain-=rd;copied+=rd;}
   if(buf)free(buf);f.close();
   // v4.8.0: fresh disk in the RAM disk = fresh save tracking
-  g_sv_img_size=fsz;svDirtyReset();
+  g_sv_img_size=(g_mode==MODE_GEN)?0:fsz;svDirtyReset();   // v5.2: GEN has no Amiga save-writeback (0 = no dirty tracking)
   hardAttach();g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_path=loadPath;g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
   if(g_sel>=0&&g_sel<(int)g_games.size()){if(g_games[g_sel].plays<65535)g_games[g_sel].plays++;saveStats();}
   if(g_wireless_mode&&g_espnow_started){
@@ -2289,7 +2303,7 @@ static bool doLoadSelected(const String&adfPath){
         espnowSendDiskTo(mcMacs[i],copied);
       }
     } else if(espnowIsPaired()){                            // single paired dongle — unchanged
-      espnowSendNotify(g_loaded_name,g_mode==MODE_ADF?"ADF":"DSK",copied);
+      espnowSendNotify(g_loaded_name,g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN",copied);
       if(espnowSendDisk(copied)){                           // v4.8.0: remember what we flung, keyed by the dongle's load_id
         g_sv_wl_path=loadPath;g_sv_wl_loadid=g_espnow_load_id;
       }
@@ -2919,6 +2933,7 @@ void setup(){
   if(sdok){
     if(!SD_MMC.exists("/ADF")){SD_MMC.mkdir("/ADF");ensureSampleFolder();SD_MMC.mkdir("/screensaver");}   // blank card: SAMPLE example + arm the screensaver by default (v4.8.5 — DELETE /screensaver to disable it; empty = the bouncing starburst, drop in JPGs for a gallery)
     if(!SD_MMC.exists("/DSK"))SD_MMC.mkdir("/DSK");
+    if(!SD_MMC.exists("/GENERIC"))SD_MMC.mkdir("/GENERIC");   // v5.2: generic/any-machine library
     generateDefaultConfig();
     selfHealConfig();           // append any documented keys an older CONFIG.TXT is missing
     loadConfig();
@@ -3038,6 +3053,14 @@ static String doUserDisks(){
   }
 }
 
+// v5.2: switch the browser to a library mode (ADF / DSK / GEN) — reload list, rebuild games, redraw.
+static void switchLib(int m){   // int, not DiskMode: Arduino auto-generates this prototype ABOVE the enum decl, so an enum param won't compile
+  g_mode=(DiskMode)m;g_files.clear();listImages(SD_MMC,g_files);
+  if(!readGameCache()){buildGameList();buildThumbs();}
+  buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;
+  if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
+  drawFullUI();gfx_flush();
+}
 static void handleTap(uint16_t px,uint16_t py){
   // ── v5.1.3: SD ACCESS hit-test runs BEFORE the panel's py<g_info_bottom guard, so the
   // button is fully tappable even when it renders past the panel's computed bottom edge.
@@ -3115,9 +3138,10 @@ static void handleTap(uint16_t px,uint16_t py){
 
   // ── Mode bar ──
   if(py>=STATUS_H&&py<STATUS_H+MODE_BAR_H&&px>=LIST_X){
-    if(px<LIST_X+40&&g_mode!=MODE_ADF){g_mode=MODE_ADF;g_files.clear();listImages(SD_MMC,g_files);if(!readGameCache()){buildGameList();buildThumbs();}buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));drawFullUI();gfx_flush();return;}
-    if(px>=LIST_X+44&&px<LIST_X+80&&g_mode!=MODE_DSK){g_mode=MODE_DSK;g_files.clear();listImages(SD_MMC,g_files);if(!readGameCache()){buildGameList();buildThumbs();}buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));drawFullUI();gfx_flush();return;}
-    if(px>=LIST_X+84&&px<LIST_X+150){String p=doUserDisks(); if(p.length()){ if(doLoadSelected(p)){g_loaded_game_idx=-1;String nm=p;int s=nm.lastIndexOf('/');if(s>=0)nm=nm.substring(s+1);int d=nm.lastIndexOf('.');if(d>0)nm=nm.substring(0,d);g_loaded_name=nm;} } drawFullUI();gfx_flush();return;}}   // v4.9.7 USR-DSK
+    if(px<LIST_X+38){ if(g_mode!=MODE_ADF)switchLib(MODE_ADF); return; }
+    if(px<LIST_X+74){ if(g_mode!=MODE_DSK)switchLib(MODE_DSK); return; }
+    if(px<LIST_X+110){ if(g_mode!=MODE_GEN)switchLib(MODE_GEN); return; }   // v5.2 GEN library
+    if(px<LIST_X+174){String p=doUserDisks(); if(p.length()){ if(doLoadSelected(p)){g_loaded_game_idx=-1;String nm=p;int s=nm.lastIndexOf('/');if(s>=0)nm=nm.substring(s+1);int d=nm.lastIndexOf('.');if(d>0)nm=nm.substring(0,d);g_loaded_name=nm;} } drawFullUI();gfx_flush();return;}}   // v4.9.7 USR-DSK
 
   // ── File list ──
   if(px>=LIST_X&&px<AZ_X&&py>=LIST_TOP&&py<LIST_BOTTOM){
