@@ -1,6 +1,6 @@
 {
-  "name": "Gotek Touchscreen Interface — JC3248 BETA (HD + saves + user-disks)",
-  "version": "4.9.7-beta",
+  "name": "Gotek Touchscreen Interface — JC3248 BETA (5.1.3 — SD Access)",
+  "version": "5.1.3-beta",
   "new_install_prompt_erase": true,
   "builds": [
     {

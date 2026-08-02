@@ -30,7 +30,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "A.5.0.0-JC3248"
+#define FW_VERSION "5.1.3-JC3248"
 #include "espnow_server.h"
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
@@ -407,6 +407,40 @@ static uint32_t g_rev=1;
 static void hardDetach(){MSC.mediaPresent(false);delay(100);tud_disconnect();delay(500);g_usb_online=false;}
 static void hardAttach(){char r[8];snprintf(r,8,"%lu",(unsigned long)g_rev++);MSC.productRevision(r);MSC.mediaPresent(true);delay(50);tud_connect();delay(200);g_usb_online=true;}
 
+// ── SD ACCESS (v5.1) ─────────────────────────────────────────────────────────
+// Plug the GTi into a PC to add games without cracking the case. The native USB-MSC
+// interface is fixed once USB.begin() runs, so we can't re-report the disk capacity
+// live — so SD Access is a dedicated BOOT MODE. The info-panel button stamps an RTC
+// flag and reboots; setup() sees it and brings MSC up backed by the SD card's RAW
+// sectors at the card's TRUE capacity (before USB.begin()). Exit (PC eject or DONE)
+// reboots to normal — the reboot also flushes any stale FATFS cache, so what the GTi
+// re-scans is exactly what the PC left behind. The GTi does NO filesystem work while
+// the PC holds the card: onReadSD/onWriteSD go straight to raw sectors, bypassing
+// FATFS, so there is only ever ONE master on the volume (the whole-card-corruption trap).
+RTC_NOINIT_ATTR uint32_t g_sdaccess_magic;           // NOINIT (not DATA): DATA is re-inited on a SW restart; NOINIT survives esp_restart(), cleared only on power loss
+#define SDACCESS_MAGIC 0x5DACCE55u
+static uint32_t g_sd_sectors=0;                       // real card size, set at SD-access boot
+static volatile uint32_t g_sd_rd=0,g_sd_wr=0;        // sector-op tallies for the activity readout
+static volatile bool g_sd_eject=false;               // set by the SCSI START/STOP (eject) callback
+static uint8_t g_sd_tmp[512];                         // scratch for the (rare) sub-sector transfer
+static int32_t onReadSD(uint32_t lba,uint32_t off,void*buf,uint32_t n){
+  uint8_t*out=(uint8_t*)buf;uint32_t done=0;
+  while(done<n){uint32_t sec=lba+(off+done)/512,so=(off+done)%512,chunk=512-so;if(chunk>n-done)chunk=n-done;
+    if(sec>=g_sd_sectors)return (int32_t)done;
+    if(so==0&&chunk==512){if(!SD_MMC.readRAW(out+done,sec))return (int32_t)done;}
+    else{if(!SD_MMC.readRAW(g_sd_tmp,sec))return (int32_t)done;memcpy(out+done,g_sd_tmp+so,chunk);}
+    g_sd_rd=g_sd_rd+1;done+=chunk;}
+  return (int32_t)done;}
+static int32_t onWriteSD(uint32_t lba,uint32_t off,uint8_t*buf,uint32_t n){
+  uint32_t done=0;
+  while(done<n){uint32_t sec=lba+(off+done)/512,so=(off+done)%512,chunk=512-so;if(chunk>n-done)chunk=n-done;
+    if(sec>=g_sd_sectors)return (int32_t)done;
+    if(so==0&&chunk==512){if(!SD_MMC.writeRAW(buf+done,sec))return (int32_t)done;}
+    else{if(!SD_MMC.readRAW(g_sd_tmp,sec))return (int32_t)done;memcpy(g_sd_tmp+so,buf+done,chunk);if(!SD_MMC.writeRAW(g_sd_tmp,sec))return (int32_t)done;}
+    g_sd_wr=g_sd_wr+1;done+=chunk;}
+  return (int32_t)done;}
+static bool onStartStopSD(uint8_t,bool start,bool load_eject){if(load_eject&&!start)g_sd_eject=true;return true;}
+
 // ════════════════════════════════════════════════════════════════════════════
 // SD + INDEX CACHE
 // ════════════════════════════════════════════════════════════════════════════
@@ -768,7 +802,7 @@ static int g_car_bootmode=0;  // CONFIG.TXT CAROUSEL= : default boot VIEW — 0/
 static bool g_tapload=false;    // ON = tapping the already-selected row loads it (old double-tap behaviour)
 static bool g_hotswap=false;    // ON = tapping another disk while loaded swaps to it instantly
 static bool g_forceswap=false;  // ON = swap disk bytes in place without the USB eject/re-attach cycle
-static int g_info_rescan_btn_y=0,g_info_reset_btn_y=0,g_info_pair_now_btn_y=0,g_info_font_btn_y=0,g_info_hive_btn_y=0;
+static int g_info_rescan_btn_y=0,g_info_reset_btn_y=0,g_info_pair_now_btn_y=0,g_info_font_btn_y=0,g_info_hive_btn_y=0,g_info_sdacc_btn_y=0;
 static int g_info_x=0,g_info_w=150,g_info_rot_btn_y=0,g_info_comp_btn_y=0,g_info_mode_btn_y=0,g_info_bottom=0,g_info_bh=22;
 static String g_manual_path=""; static int g_manual_bx=0,g_manual_by=0,g_manual_bw=0,g_manual_bh=0;  // v4.9.2 .rtfm book button rect
 struct GameEntry{String name;int first_file_idx;int disk_count;String jpg_path;std::vector<int>disk_indices;bool fav=false;uint16_t plays=0;};
@@ -1452,7 +1486,7 @@ static void drawInfoPanel(){
   // group is configured — the hidden feature reveals itself only to its owners.
   int mcInfoN=0;
   if(g_wireless_mode){uint8_t mm[64][6];mcInfoN=enumMuCaDongles(mm,g_dongle_cap);}
-  int contentH=4+11+btn+4+btn*3+4+lh*2+(g_wireless_mode?(lh+btn):0)+((mcInfoN>0)?btn:0)+btn+bh+6;
+  int contentH=4+11+btn+4+btn*3+4+lh*2+(g_wireless_mode?(lh+btn):0)+((mcInfoN>0)?btn:0)+btn+bh+4+bh+6;
   if(!g_portrait){ix=0;iy=STATUS_H;iw=150;ih=VH-STATUS_H-BOTTOM_H;}
   else{ix=0;iy=STATUS_H+MODE_BAR_H;iw=VW;ih=min(contentH,(VH-BOTTOM_H)-iy);}
   g_info_x=ix;g_info_w=iw;g_info_bottom=iy+ih;g_info_bh=bh;
@@ -1487,7 +1521,9 @@ static void drawInfoPanel(){
     {bool diagOn=(g_loaded&&g_loaded_name=="AMIGA TEST KIT");uint16_t dc=diagOn?(uint16_t)0xE8C4:COL_ACCENT;const char*dl=diagOn?"EJECT DIAG":"LOAD DIAG";   // v4.9.8: eject the mounted test kit
      gfx_fillRoundRect(dx,y,hw,bh,6,dc);gfx_setTextColor(diagOn?TFT_BLACK:TFT_WHITE,dc);
      int tw=gfx_textWidth(dl);gfx_setCursor(dx+(hw-tw)/2,y+ty);gfx_print(dl);}
-  }g_info_reset_btn_y=y;
+  }g_info_reset_btn_y=y;y+=btn;
+  // v5.1: SD ACCESS — sits directly under the LOAD DIAG / SOFT RESET row
+  {uint16_t sc=0x05FF;gfx_fillRoundRect(x,y,pw,bh,6,sc);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,sc);int tw=gfx_textWidth("SD ACCESS");gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print("SD ACCESS");}g_info_sdacc_btn_y=y;
 }
 
 static void drawModeBar(){
@@ -2817,8 +2853,63 @@ static void doPairNow(){ doScanDongles(); }
 // ════════════════════════════════════════════════════════════════════════════
 // SETUP
 // ════════════════════════════════════════════════════════════════════════════
+// ── SD ACCESS boot mode (see the note by onReadSD). Blocking; NEVER returns — reboots. ──
+static void sdAccessReboot(){
+  gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);
+  const char*m="RETURNING...";gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();
+  g_sdaccess_magic=0;delay(400);ESP.restart();
+}
+static void runSDAccessBoot(bool sdok){
+  g_sdaccess_magic=0;                                   // consume NOW: a hang can't trap us in this mode
+  {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<600)delay(10);}   // drain the entry tap
+  if(!sdok){
+    gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(TFT_RED,COL_BG);
+    {const char*e="NO SD CARD";gfx_setCursor((VW-gfx_textWidth(e))/2,VH/2-30);gfx_print(e);}
+    gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
+    {const char*h="insert a card, then tap to return";gfx_setCursor((VW-gfx_textWidth(h))/2,VH/2+4);gfx_print(h);}
+    gfx_flush();
+    while(true){uint16_t tx,ty;if(Touch_ReadFrame()&&getTouchXY(&tx,&ty))sdAccessReboot();delay(40);}
+  }
+  g_sd_sectors=(uint32_t)SD_MMC.numSectors();
+  MSC.vendorID("OMEGA");MSC.productID("GTi LIBRARY");MSC.productRevision("1.0");
+  MSC.onRead(onReadSD);MSC.onWrite(onWriteSD);MSC.onStartStop(onStartStopSD);
+  MSC.mediaPresent(true);MSC.begin(g_sd_sectors,512);USB.begin();               // (no hardDetach — we WANT the PC to see it)
+  uint64_t bytes=(uint64_t)g_sd_sectors*512ULL; char sz[24];
+  if(bytes>=1000000000ULL)snprintf(sz,sizeof(sz),"%.1f GB",bytes/1e9); else snprintf(sz,sizeof(sz),"%u MB",(unsigned)(bytes/1000000ULL));
+  const int NCELL=16, cellW=(VW-40)/NCELL, cellH=10, barY=VH/2+6;
+  const int doneW=140, doneH=34, doneX=(VW-doneW)/2, doneY=VH-46;
+  bool lastConn=false; int frame=0, pressed=0, rel=0;
+  gfx_fillScreen(COL_BG);
+  gfx_setTextSize(3);gfx_setTextColor(COL_LIT,COL_BG);{const char*t="SD ACCESS";gfx_setCursor((VW-gfx_textWidth(t))/2,18);gfx_print(t);}
+  gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);{String c=String("microSD  ")+sz;gfx_setCursor((VW-gfx_textWidth(c))/2,46);gfx_print(c);}
+  while(true){
+    bool conn=(g_sd_rd>0);
+    if(conn!=lastConn||frame==0){lastConn=conn;gfx_fillRect(0,62,VW,16,COL_BG);gfx_setTextSize(1);
+      gfx_setTextColor(conn?COL_GREEN:COL_AMBER,COL_BG);const char*s=conn?"CONNECTED - drag disks onto the GTi drive":"WAITING FOR PC...";
+      gfx_setCursor((VW-gfx_textWidth(s))/2,64);gfx_print(s);}
+    gfx_fillRect(0,84,VW,14,COL_BG);gfx_setTextSize(1);gfx_setTextColor(COL_MID,COL_BG);
+    {String a="read "+String(g_sd_rd/2)+"K   write "+String(g_sd_wr/2)+"K";gfx_setCursor((VW-gfx_textWidth(a))/2,86);gfx_print(a);}
+    int pos=frame%(NCELL*2); if(pos>=NCELL)pos=(NCELL*2-1)-pos;                  // Cylon sweep (a nod to the strobe idea)
+    for(int i=0;i<NCELL;i++){int d=abs(i-pos);uint16_t c=(d==0)?(uint16_t)0xF800:(d==1)?(uint16_t)0x8000:(d==2)?(uint16_t)0x3000:COL_PANEL;gfx_fillRoundRect(20+i*cellW,barY,cellW-3,cellH,2,c);}
+    gfx_fillRect(0,doneY-16,VW,12,COL_BG);gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
+    {const char*h="eject from your PC first, then tap DONE";gfx_setCursor((VW-gfx_textWidth(h))/2,doneY-14);gfx_print(h);}
+    gfx_fillRoundRect(doneX,doneY,doneW,doneH,8,COL_GREEN);gfx_setTextSize(2);gfx_setTextColor(TFT_BLACK,COL_GREEN);
+    {const char*d="DONE";gfx_setCursor(doneX+(doneW-gfx_textWidth(d))/2,doneY+(doneH-16)/2);gfx_print(d);}
+    gfx_flush();
+    if(g_sd_eject)sdAccessReboot();
+    uint16_t tx=0,ty=0;bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){rel=0;if(!pressed){pressed=1;if(tx>=(uint16_t)doneX&&tx<(uint16_t)(doneX+doneW)&&ty>=(uint16_t)doneY&&ty<(uint16_t)(doneY+doneH))sdAccessReboot();}}
+    else{if(pressed&&++rel>=3)pressed=0;}
+    frame++;delay(45);
+  }
+}
+
 void setup(){
   Serial.begin(115200);delay(200);
+  // v5.1: SD-access is requested only when our NOINIT flag survived a *software* restart
+  // (cold power-on => reset reason POWERON => never a false trigger from RTC garbage).
+  bool sdAccessReq=(g_sdaccess_magic==SDACCESS_MAGIC && esp_reset_reason()==ESP_RST_SW);
+  Serial.printf("[BOOT] rst=%d magic=%08X sdAccess=%d\n",(int)esp_reset_reason(),(unsigned)g_sdaccess_magic,(int)sdAccessReq);
   applyTheme(0);displayInit();touchInit();
   gfx_fillScreen(TFT_BLACK);gfx_flush();
   g_disk=(uint8_t*)ps_malloc(TOTAL_SECTORS*512);if(!g_disk){gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,160);gfx_print("RAM ALLOC FAILED");gfx_flush();while(1)delay(1000);}
@@ -2840,9 +2931,11 @@ void setup(){
     if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
     scanScreensaver();
   } else {gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,200);gfx_print("SD MOUNT FAILED");gfx_flush();delay(2000);relayout();}   // no card: still init layout so INFO/LOAD DIAG work
-  if(g_wireless_mode){espnowBegin();g_espnow_started=true;}
+  if(g_wireless_mode&&!sdAccessReq){espnowBegin();g_espnow_started=true;}   // v5.1: don't arm the radio when booting into SD access — no stray FATFS writes while the PC holds the card
   drawCracktro(g_cracktro);
-  USB.onEvent(usbEventCB);MSC.vendorID("ESP32");MSC.productID("RAMDISK");MSC.productRevision("1.0");
+  USB.onEvent(usbEventCB);
+  if(sdAccessReq){runSDAccessBoot(sdok);}   // v5.1: SD-access boot mode — never returns (reboots to normal)
+  MSC.vendorID("ESP32");MSC.productID("RAMDISK");MSC.productRevision("1.0");
   MSC.onRead(onRead);MSC.onWrite(onWrite);MSC.mediaPresent(true);
   MSC.begin(TOTAL_SECTORS,512);USB.begin();hardDetach();
   bool bootCar=(g_car_bootmode==1)||(g_car_bootmode==2&&readLastView()==1);   // v4.8.6: CAROUSEL= 0=list / 1=reel / LAST=restore
@@ -2946,6 +3039,17 @@ static String doUserDisks(){
 }
 
 static void handleTap(uint16_t px,uint16_t py){
+  // ── v5.1.3: SD ACCESS hit-test runs BEFORE the panel's py<g_info_bottom guard, so the
+  // button is fully tappable even when it renders past the panel's computed bottom edge.
+  // Uses the button's own drawn rect: full panel width, from 2px above the button down to
+  // 28px below it (the last row, so the space below is fair game). Flash then reboot.
+  if(g_info_showing&&g_info_sdacc_btn_y&&px>=(uint16_t)g_info_x&&px<(uint16_t)(g_info_x+g_info_w)
+     &&py>=(uint16_t)(g_info_sdacc_btn_y-2)&&py<(uint16_t)(g_info_sdacc_btn_y+g_info_bh+28)){
+    int bx=g_info_x+4,bw=g_info_w-8,isz=g_portrait?2:1,ty2=(g_info_bh-8*isz)/2;
+    gfx_fillRoundRect(bx,g_info_sdacc_btn_y,bw,g_info_bh,6,TFT_WHITE);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,TFT_WHITE);
+    {int tw=gfx_textWidth("SD ACCESS");gfx_setCursor(bx+(bw-tw)/2,g_info_sdacc_btn_y+ty2);gfx_print("SD ACCESS");}gfx_flush();delay(150);
+    gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(0x05FF,COL_BG);const char*m="ENTERING SD ACCESS...";gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();
+    g_sdaccess_magic=SDACCESS_MAGIC;delay(350);ESP.restart();}
   // ── INFO / SETTINGS panel touches (only within the panel; taps below it fall through to the list) ──
   if(g_info_showing&&px<(uint16_t)(g_info_x+g_info_w)&&py<(uint16_t)g_info_bottom){
     if(g_info_mode_btn_y&&py>=(uint16_t)g_info_mode_btn_y&&py<(uint16_t)(g_info_mode_btn_y+g_info_bh)){g_wireless_mode=!g_wireless_mode;saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE");if(g_wireless_mode)ensureEspNow();drawFullUI();drawInfoPanel();gfx_flush();return;}
@@ -2969,6 +3073,8 @@ static void handleTap(uint16_t px,uint16_t py){
       int pw=g_info_w-8,gap=4,hw=(pw-gap)/2,dx=g_info_x+4+hw+gap;
       if(px>=(uint16_t)dx){ if(g_loaded&&g_loaded_name=="AMIGA TEST KIT"){g_info_showing=false;doUnload();drawFullUI();gfx_flush();} else doLoadDiag(); return; }   // right half = LOAD / EJECT DIAG
       gfx_fillRoundRect(g_info_x+4,g_info_reset_btn_y,hw,g_info_bh,6,0xE8C4);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0xE8C4);gfx_setCursor(g_info_x+10,g_info_reset_btn_y+(g_info_bh-8)/2);gfx_print("RESET...");gfx_flush();delay(700);ESP.restart();}
+    // v5.1.3: SD ACCESS is handled ABOVE this block (before the py<g_info_bottom guard),
+    // because the button can render past the panel's computed bottom edge.
     return;
   }
 

@@ -536,10 +536,19 @@
     <b>SAVES=OFF/COPY/OVERWRITE</b> in CONFIG.TXT (default COPY). The JC BETA now also serves <b>high-density (HD, 1.76MB)</b> disk images over the cable &mdash; HD disks get an HD badge and a &ldquo;no A500&rdquo; marker (HD needs an A3000/A4000-class Amiga). To test wireless saves,
     flash <i>both</i> the JC BETA and the Super Mini BETA below. Bench-verified, not yet
     field-proven — please report results (good or broken) via GitHub issues.
-    The save-game era graduated to the stable <b>A.5.0.0</b> build above, proven on a real Amiga; what remains here is the wireless dongle half.
+    The save-game era graduated to the stable <b>A.5.0.0</b> build above, proven on a real Amiga. The <b>JC3248 BETA</b> is back for the next experiment &mdash; <b>SD Access</b> (mount the screen's own SD card on your PC over USB to add games without opening the case) &mdash; alongside the wireless dongle betas.
   </div>
 
   <div class="device-grid">
+
+    <div class="device-card" data-manifest="firmware/jc3248-beta/manifest.json" onclick="selectDevice(this)">
+      <div class="selected-indicator"></div>
+      <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC3248 3.5-inch touchscreen" loading="lazy">
+      <div class="device-name">Guition JC3248 &mdash; BETA</div>
+      <div class="device-chip">ESP32-S3 &middot; 3.5" 480×320 &middot; 5.1.3-beta &middot; SD Access</div>
+      <div class="device-desc">Everything in the stable <b>A.5.0.0</b> build, plus <b>SD Access</b>: plug the GTi straight into your PC and it mounts its own SD card as a USB drive &mdash; drag new disks on without opening the case. Tap <b>SD ACCESS</b> in the INFO panel (under LOAD DIAG), add your games, eject, done. Bench-tested; please report anything odd via GitHub.</div>
+      <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
+    </div>
 
     <div class="device-card" data-manifest="firmware/supermini-beta/manifest.json" onclick="selectDevice(this)">
       <div class="selected-indicator"></div>
@@ -981,6 +990,7 @@ relayout();bootCracktro();requestAnimationFrame(frame);
   MIT Licence
   &nbsp;·&nbsp;
   Requires Chrome or Edge for Web Serial
+  <div style="margin-top:0.7rem;opacity:0.65;font-size:0.85em;">Built by Mez &amp; Dimmy — OMEGAWARE · with Retronaut &amp; Claude (Anthropic)</div>
 </footer>
 
 <script>
@@ -1005,6 +1015,7 @@ relayout();bootCracktro();requestAnimationFrame(frame);
   // Device versions — update these when you build new firmware
   const deviceInfo = {
     'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware A.5.0.0' },
+    'firmware/jc3248-beta/manifest.json':{ name: 'Guition JC3248 BETA', version: 'Firmware 5.1.3-beta (SD Access)' },
     'firmware/waveshare7/manifest.json': { name: 'Waveshare 7"',  version: 'Firmware v4.6.2 BETA' },
     'firmware/waveshare28/manifest.json':{ name: 'Waveshare 2.8"', version: 'Firmware v3.4.7' },
     'firmware/supermini/manifest.json':  { name: 'Super Mini Dongle', version: 'Firmware v3.2.0' },

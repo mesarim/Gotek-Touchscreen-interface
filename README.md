@@ -273,6 +273,8 @@ talk to hardware and contains none of the firmware's SD/USB/wireless logic.
 - **Retronaut** ([Chris Thomas](https://www.youtube.com/@RetronautTech)) — feature suggestions: the
   in-game **.rtfm** manual reader and **user-disks** (create-your-own save disks); and the first
   video feature of the GTi
+- **Claude** (Anthropic) — AI development collaborator: firmware pair-programming (save era, RTFM
+  reader, user-disks, SD Access), the web flasher &amp; demo, and documentation
 - OMEGAWARE
 
 Amiga Test Kit © Keir Fraser, public domain (Unlicense) — bundled as the built-in diagnostic.
