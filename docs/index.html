@@ -548,6 +548,11 @@
       <div class="device-chip">ESP32-S3 &middot; 3.5" 480×320 &middot; 5.3.0-beta &middot; SD Access + GEN + FW Update</div>
       <div class="device-desc">Everything in the stable <b>A.5.0.0</b> build, plus <b>SD Access</b> (mount the SD on your PC to add games &mdash; no case-opening), <b>GEN mode</b> &mdash; a generic library (<code>/GENERIC/</code>) that mounts <i>any</i> disk image and lets FlashFloppy handle the format, a step toward the GTi front-ending <b>any Gotek machine</b> (Akai, Atari ST, PC, synths&hellip;) &mdash; and <b>NEW: SD firmware-update</b>, self-flash a new build from the SD card (no cable) with a verified image and dual-slot safety. <b>One-time note:</b> this build moves to a dual-OTA partition layout, so flashing it now is the last USB session your unit needs &mdash; every update after is drop-a-file-on-the-card. Bench-tested; testers very welcome via GitHub.</div>
       <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
+      <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
+        <b>Already on 5.3.0?</b> Update over the SD card &mdash; no re-flash:
+        <a href="firmware/jc3248-beta/GTi_update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi_update.bin (1.4&nbsp;MB)</a>,
+        drop it on the SD card root, then on the GTi tap <b>INFO &#9656; FW&nbsp;UPDATE</b>. (First move onto 5.3.0 with the web-flash above &mdash; that&rsquo;s the one-time USB step.)
+      </div>
     </div>
 
     <div class="device-card" data-manifest="firmware/supermini-beta/manifest.json" onclick="selectDevice(this)">
