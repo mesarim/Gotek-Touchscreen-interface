@@ -1,7 +1,7 @@
 // ESP32-S3 (Guition JC3248W535C) — USB MSC RAM Disk + ADF/DSK Browser
 // Full port of Waveshare 7" firmware v3.4.7 (Mez UI) onto Dimi's hardware layer
 // Board: ESP32S3 Dev Module | USB-OTG (TinyUSB) | CDC DISABLED | OPI PSRAM
-// Flash: 16MB QIO 120MHz | Partition: No FS 4MB (2MB APP x2)  [v5.3: dual-OTA slot required for SD firmware-update] | 240MHz
+// Flash: 16MB QIO 120MHz | Partition: Huge APP (3MB No OTA/1MB SPIFFS) | 240MHz
 
 #include <Arduino.h>
 #include "USB.h"
@@ -30,10 +30,8 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.3.0-JC3248"
+#define FW_VERSION "5.2.0-JC3248"
 #include "espnow_server.h"
-#include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
-#include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
 
@@ -1536,11 +1534,8 @@ static void drawInfoPanel(){
      gfx_fillRoundRect(dx,y,hw,bh,6,dc);gfx_setTextColor(diagOn?TFT_BLACK:TFT_WHITE,dc);
      int tw=gfx_textWidth(dl);gfx_setCursor(dx+(hw-tw)/2,y+ty);gfx_print(dl);}
   }g_info_reset_btn_y=y;y+=btn;
-  // v5.1/v5.3: SD ACCESS shares its row with FW UPDATE — both are SD-card / USB maintenance ops.
-  {int gap2=4,hw2=(pw-gap2)/2,dx2=x+hw2+gap2;gfx_setTextSize(isz);
-    uint16_t sc=0x05FF;gfx_fillRoundRect(x,y,hw2,bh,6,sc);gfx_setTextColor(TFT_BLACK,sc);{int tw=gfx_textWidth("SD ACCESS");gfx_setCursor(x+(hw2-tw)/2,y+ty);gfx_print("SD ACCESS");}
-    gfx_fillRoundRect(dx2,y,hw2,bh,6,COL_AMBER);gfx_setTextColor(TFT_BLACK,COL_AMBER);{int tw=gfx_textWidth("FW UPDATE");gfx_setCursor(dx2+(hw2-tw)/2,y+ty);gfx_print("FW UPDATE");}
-  }g_info_sdacc_btn_y=y;
+  // v5.1: SD ACCESS — sits directly under the LOAD DIAG / SOFT RESET row
+  {uint16_t sc=0x05FF;gfx_fillRoundRect(x,y,pw,bh,6,sc);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,sc);int tw=gfx_textWidth("SD ACCESS");gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print("SD ACCESS");}g_info_sdacc_btn_y=y;
 }
 
 static void drawModeBar(){
@@ -2923,95 +2918,6 @@ static void runSDAccessBoot(bool sdok){
   }
 }
 
-// ── FIRMWARE UPDATE via SD (v5.3) ────────────────────────────────────────────
-// Reads /GTi_update.bin off the SD and self-flashes the INACTIVE OTA slot via the
-// Update library. The image is fully hash-verified before the boot pointer is
-// flipped, so a corrupt/half-copied file (or a power cut mid-write) can't take
-// over — the running firmware is untouched and simply boots again. Needs an A/B
-// OTA partition table (Tools > Partition Scheme > a "2x…APP" 16M scheme); a
-// single-slot "No OTA" build has no spare slot and says so instead of failing ugly.
-#define FWUP_PATH "/GTi_update.bin"
-static void fwupMsg(int y,const char*s,uint16_t fg,uint16_t bg,int sz){gfx_setTextSize(sz);gfx_setTextColor(fg,bg);gfx_setCursor((VW-gfx_textWidth(s))/2,y);gfx_print(s);}
-static void fwupWait(){uint16_t tx,ty;gfx_flush();while(!(Touch_ReadFrame()&&getTouchXY(&tx,&ty)))delay(30);delay(200);}
-// Board-ID guard. Arduino stamps EVERY ESP32 sketch with the same esp_app_desc
-// project_name ("arduino-lib-builder"), so that field can't tell boards apart. Instead
-// every JC build carries this unique marker in its .rodata (it's referenced below, so the
-// linker always keeps it); a SuperMini/XIAO bin doesn't, so scanning the incoming image
-// for it reliably refuses a cross-board flash. Marker spans chunk boundaries safely.
-static const char GTI_FW_MARK[]="OMEGAWARE.GTi.JC3248.fw";
-static bool fwupHasMarker(File&f,const char*mark){
-  size_t ml=strlen(mark);if(ml==0||ml>32)return false;
-  static uint8_t buf[4096];uint8_t tail[32];size_t tlen=0;
-  f.seek(0);
-  while(true){
-    memcpy(buf,tail,tlen);
-    int n=f.read(buf+tlen,sizeof buf-tlen);
-    if(n<=0)break;
-    size_t total=tlen+(size_t)n;
-    for(size_t i=0;i+ml<=total;i++)if(memcmp(buf+i,mark,ml)==0){f.seek(0);return true;}
-    tlen=(total>=ml-1)?ml-1:total;memcpy(tail,buf+total-tlen,tlen);}
-  f.seek(0);return false;
-}
-static void doFirmwareUpdate(){
-  gfx_fillScreen(COL_BG);
-  File f=SD_MMC.open(FWUP_PATH,FILE_READ);
-  if(!f||f.isDirectory()){
-    if(f)f.close();
-    fwupMsg(VH/2-24,"NO UPDATE FILE",COL_ORANGE,COL_BG,2);
-    fwupMsg(VH/2+4,"Drop GTi_update.bin on the SD",COL_DIM,COL_BG,1);
-    fwupMsg(VH/2+18,"(use SD ACCESS), then try again.",COL_DIM,COL_BG,1);
-    fwupMsg(VH-22,"tap to return",COL_MID,COL_BG,1);fwupWait();return;}
-  size_t fsz=f.size();
-  uint8_t h0=0;f.read(&h0,1);f.seek(0);bool isImg=(h0==0xE9);   // ESP image magic
-  bool idOK=isImg&&fwupHasMarker(f,GTI_FW_MARK);                // JC builds carry GTI_FW_MARK in .rodata
-  if(esp_ota_get_next_update_partition(NULL)==NULL){     // single-slot build: no spare OTA slot
-    f.close();
-    fwupMsg(VH/2-30,"SD UPDATE NOT ENABLED",COL_ORANGE,COL_BG,2);
-    fwupMsg(VH/2-4,"This unit needs ONE more USB flash",COL_DIM,COL_BG,1);
-    fwupMsg(VH/2+10,"(web flasher) to add the OTA layout.",COL_DIM,COL_BG,1);
-    fwupMsg(VH/2+24,"After that, SD updates work forever.",COL_DIM,COL_BG,1);
-    fwupMsg(VH-22,"tap to return",COL_MID,COL_BG,1);fwupWait();return;}
-  // ── confirm ──
-  gfx_fillScreen(COL_BG);
-  fwupMsg(24,"FIRMWARE UPDATE",COL_LIT,COL_BG,2);
-  {char l[48];snprintf(l,sizeof l,"File: %u KB",(unsigned)(fsz/1024));fwupMsg(56,l,COL_DIM,COL_BG,1);}
-  fwupMsg(72,idOK?"Image: GTi-JC firmware  [OK]":(isImg?"Image: unrecognised (not GTi-JC)":"Image: not a firmware .bin"),idOK?COL_GREEN:COL_ORANGE,COL_BG,1);
-  {char l[64];snprintf(l,sizeof l,"Now running: %s",FW_VERSION);fwupMsg(88,l,COL_DIM,COL_BG,1);}
-  if(!idOK)fwupMsg(106,"! flash only a GTi-JC .bin here",COL_ORANGE,COL_BG,1);
-  int bw=124,bbh=42,gap=22,by=VH-64,cx=VW/2-bw-gap/2,ox=VW/2+gap/2;
-  gfx_fillRoundRect(cx,by,bw,bbh,8,COL_BAR);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setTextSize(2);gfx_setCursor(cx+(bw-gfx_textWidth("CANCEL"))/2,by+13);gfx_print("CANCEL");
-  {uint16_t okc=idOK?COL_GREEN:COL_ORANGE;const char*okl=idOK?"FLASH":"FLASH ANYWAY";int osz=idOK?2:1;
-   gfx_fillRoundRect(ox,by,bw,bbh,8,okc);gfx_setTextColor(TFT_BLACK,okc);gfx_setTextSize(osz);gfx_setCursor(ox+(bw-gfx_textWidth(okl))/2,by+(idOK?13:17));gfx_print(okl);}
-  gfx_flush();
-  bool go=false;
-  while(true){uint16_t tx,ty;if(Touch_ReadFrame()&&getTouchXY(&tx,&ty)){
-    if(ty>=(uint16_t)(by-8)&&ty<(uint16_t)(by+bbh+8)){
-      if(tx>=(uint16_t)(cx-8)&&tx<(uint16_t)(cx+bw+8)){go=false;break;}
-      if(tx>=(uint16_t)(ox-8)&&tx<(uint16_t)(ox+bw+8)){go=true;break;}}}
-    delay(25);}
-  if(!go){f.close();return;}
-  // ── flash ──
-  gfx_fillScreen(COL_BG);fwupMsg(VH/2-46,"FLASHING - DO NOT UNPLUG",COL_AMBER,COL_BG,2);gfx_flush();
-  if(!Update.begin(fsz,U_FLASH)){
-    f.close();gfx_fillScreen(COL_BG);fwupMsg(VH/2-8,"UPDATE FAILED",COL_ORANGE,COL_BG,2);fwupMsg(VH/2+16,Update.errorString(),COL_DIM,COL_BG,1);fwupMsg(VH-22,"tap to return",COL_MID,COL_BG,1);fwupWait();return;}
-  int pbx=30,pbw=VW-60,pby=VH/2,pbh=22;gfx_drawRoundRect(pbx,pby,pbw,pbh,5,COL_SEP);
-  static uint8_t buf[4096];size_t wrote=0;bool err=false;int since=0;
-  while(wrote<fsz){
-    int n=f.read(buf,sizeof buf);if(n<=0){err=true;break;}
-    if(Update.write(buf,n)!=(size_t)n){err=true;break;}
-    wrote+=n;
-    if(++since>=8||wrote>=fsz){since=0;
-      int fillw=(int)((uint64_t)(pbw-4)*wrote/fsz);gfx_fillRect(pbx+2,pby+2,fillw,pbh-4,COL_GREEN);
-      char pc[12];snprintf(pc,sizeof pc,"%u%%",(unsigned)(100ULL*wrote/fsz));gfx_fillRect(0,pby+pbh+10,VW,14,COL_BG);fwupMsg(pby+pbh+10,pc,COL_LIT,COL_BG,1);gfx_flush();}}
-  f.close();
-  if(err||!Update.end(true)){
-    Update.abort();gfx_fillScreen(COL_BG);fwupMsg(VH/2-14,"UPDATE FAILED",COL_ORANGE,COL_BG,2);
-    fwupMsg(VH/2+12,err?"read/write error - image unchanged":Update.errorString(),COL_DIM,COL_BG,1);
-    fwupMsg(VH/2+26,"current firmware kept.",COL_DIM,COL_BG,1);fwupMsg(VH-22,"tap to return",COL_MID,COL_BG,1);fwupWait();return;}
-  SD_MMC.rename(FWUP_PATH,"/GTi_update.installed");   // best-effort: don't re-offer the same file
-  gfx_fillScreen(COL_BG);fwupMsg(VH/2-8,"UPDATE OK - REBOOTING",COL_GREEN,COL_BG,2);gfx_flush();delay(900);ESP.restart();
-}
-
 void setup(){
   Serial.begin(115200);delay(200);
   // v5.1: SD-access is requested only when our NOINIT flag survived a *software* restart
@@ -3049,7 +2955,6 @@ void setup(){
   MSC.begin(TOTAL_SECTORS,512);USB.begin();hardDetach();
   bool bootCar=(g_car_bootmode==1)||(g_car_bootmode==2&&readLastView()==1);   // v4.8.6: CAROUSEL= 0=list / 1=reel / LAST=restore
   if(bootCar&&!g_games.empty())carEnter();else{drawFullUI();gfx_flush();}
-  esp_ota_mark_app_valid_cancel_rollback();   // v5.3: confirm this image booted OK (satisfies the A/B rollback handshake; harmless no-op on non-rollback bootloaders)
   g_last_touch_ms=millis();
 }
 
@@ -3163,15 +3068,9 @@ static void handleTap(uint16_t px,uint16_t py){
   // 28px below it (the last row, so the space below is fair game). Flash then reboot.
   if(g_info_showing&&g_info_sdacc_btn_y&&px>=(uint16_t)g_info_x&&px<(uint16_t)(g_info_x+g_info_w)
      &&py>=(uint16_t)(g_info_sdacc_btn_y-2)&&py<(uint16_t)(g_info_sdacc_btn_y+g_info_bh+28)){
-    int pw2=g_info_w-8,gap2=4,hw2=(pw2-gap2)/2,lx=g_info_x+4,dx2=lx+hw2+gap2,isz=g_portrait?2:1,ty2=(g_info_bh-8*isz)/2;
-    if(px>=(uint16_t)dx2){   // v5.3: right half = FW UPDATE
-      gfx_fillRoundRect(dx2,g_info_sdacc_btn_y,hw2,g_info_bh,6,TFT_WHITE);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,TFT_WHITE);
-      {int tw=gfx_textWidth("FW UPDATE");gfx_setCursor(dx2+(hw2-tw)/2,g_info_sdacc_btn_y+ty2);gfx_print("FW UPDATE");}gfx_flush();delay(120);
-      doFirmwareUpdate();   // blocking; returns here on cancel/fail (old firmware kept), reboots on success
-      g_info_showing=false;drawFullUI();gfx_flush();return;}
-    // left half = SD ACCESS
-    gfx_fillRoundRect(lx,g_info_sdacc_btn_y,hw2,g_info_bh,6,TFT_WHITE);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,TFT_WHITE);
-    {int tw=gfx_textWidth("SD ACCESS");gfx_setCursor(lx+(hw2-tw)/2,g_info_sdacc_btn_y+ty2);gfx_print("SD ACCESS");}gfx_flush();delay(150);
+    int bx=g_info_x+4,bw=g_info_w-8,isz=g_portrait?2:1,ty2=(g_info_bh-8*isz)/2;
+    gfx_fillRoundRect(bx,g_info_sdacc_btn_y,bw,g_info_bh,6,TFT_WHITE);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,TFT_WHITE);
+    {int tw=gfx_textWidth("SD ACCESS");gfx_setCursor(bx+(bw-tw)/2,g_info_sdacc_btn_y+ty2);gfx_print("SD ACCESS");}gfx_flush();delay(150);
     gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(0x05FF,COL_BG);const char*m="ENTERING SD ACCESS...";gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();
     g_sdaccess_magic=SDACCESS_MAGIC;delay(350);ESP.restart();}
   // ── INFO / SETTINGS panel touches (only within the panel; taps below it fall through to the list) ──

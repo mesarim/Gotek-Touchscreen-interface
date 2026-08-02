@@ -545,8 +545,8 @@
       <div class="selected-indicator"></div>
       <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC3248 3.5-inch touchscreen" loading="lazy">
       <div class="device-name">Guition JC3248 &mdash; BETA</div>
-      <div class="device-chip">ESP32-S3 &middot; 3.5" 480×320 &middot; 5.2.0-beta &middot; SD Access + GEN</div>
-      <div class="device-desc">Everything in the stable <b>A.5.0.0</b> build, plus <b>SD Access</b> (mount the SD on your PC to add games &mdash; no case-opening) and <b>NEW: GEN mode</b> &mdash; a generic library (<code>/GENERIC/</code>) that mounts <i>any</i> disk image and lets FlashFloppy handle the format, a step toward the GTi front-ending <b>any Gotek machine</b> (Akai, Atari ST, PC, synths&hellip;), not just Amiga. Bench-tested; testers very welcome via GitHub.</div>
+      <div class="device-chip">ESP32-S3 &middot; 3.5" 480×320 &middot; 5.3.0-beta &middot; SD Access + GEN + FW Update</div>
+      <div class="device-desc">Everything in the stable <b>A.5.0.0</b> build, plus <b>SD Access</b> (mount the SD on your PC to add games &mdash; no case-opening), <b>GEN mode</b> &mdash; a generic library (<code>/GENERIC/</code>) that mounts <i>any</i> disk image and lets FlashFloppy handle the format, a step toward the GTi front-ending <b>any Gotek machine</b> (Akai, Atari ST, PC, synths&hellip;) &mdash; and <b>NEW: SD firmware-update</b>, self-flash a new build from the SD card (no cable) with a verified image and dual-slot safety. <b>One-time note:</b> this build moves to a dual-OTA partition layout, so flashing it now is the last USB session your unit needs &mdash; every update after is drop-a-file-on-the-card. Bench-tested; testers very welcome via GitHub.</div>
       <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
     </div>
 
@@ -1040,7 +1040,7 @@ relayout();bootCracktro();requestAnimationFrame(frame);
   // Device versions — update these when you build new firmware
   const deviceInfo = {
     'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware A.5.0.0' },
-    'firmware/jc3248-beta/manifest.json':{ name: 'Guition JC3248 BETA', version: 'Firmware 5.2.0-beta (SD Access + GEN)' },
+    'firmware/jc3248-beta/manifest.json':{ name: 'Guition JC3248 BETA', version: 'Firmware 5.3.0-beta (SD Access + GEN + FW Update)' },
     'firmware/waveshare7/manifest.json': { name: 'Waveshare 7"',  version: 'Firmware v4.6.2 BETA' },
     'firmware/waveshare28/manifest.json':{ name: 'Waveshare 2.8"', version: 'Firmware v3.4.7' },
     'firmware/supermini/manifest.json':  { name: 'Super Mini Dongle', version: 'Firmware v3.2.0' },

@@ -273,6 +273,30 @@ your disks to **`.hfe`** (e.g. with the HxC tools) — then no config is needed 
 Mini dongle can't hold larger generic images. Amiga-only extras (save-writeback, user-disks) are off
 in GEN. Currently in **beta** — feedback very welcome via GitHub Issues/Discussions.
 
+## Firmware updates over the SD card (JC3248)
+
+From **5.3.0-beta**, the JC3248 can flash a new firmware build straight from its SD card — no
+cable, no opening the case. Pair it with **SD Access** and the whole loop is: plug into a PC, drop
+the update file on, unplug, tap a button.
+
+How to update:
+
+1. Put the app image on the SD card root as **`GTi_update.bin`** (the `Gotek_JC3248.ino.bin`
+   from *Sketch → Export Compiled Binary* — the ~1.4 MB app file, **not** the 16 MB `.merged.bin`).
+   Copy it over with **SD Access** if you don't want to pop the card.
+2. On the GTi: **INFO → FW UPDATE**. A confirm screen shows the file size and verifies it's a real
+   GTi-JC image (a Super Mini / XIAO bin is refused). Tap **FLASH**.
+3. Watch the progress bar; it reboots into the new build. Done.
+
+**Safety:** the image is fully hash-verified before the boot pointer is switched, so a corrupt or
+half-copied file — or a power cut mid-flash — can't take over; your current firmware simply boots
+again. Updates land in a spare OTA slot, leaving the previous build intact.
+
+**One-time transition:** self-update needs a dual-slot (A/B OTA) partition layout, which older units
+don't have. Flashing **5.3.0-beta** through the web flasher once moves your unit onto that layout —
+that's the **last USB session it ever needs**; every update after is a file on the card. Your games
+are untouched (they live on the SD; the disk image lives in PSRAM).
+
 ## Tested / not tested
 
 Being straight so nobody gets surprised:

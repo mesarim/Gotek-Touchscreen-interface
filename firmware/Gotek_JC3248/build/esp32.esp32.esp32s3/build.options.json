@@ -3,7 +3,7 @@
   "builtInLibrariesFolders": "C:\\Users\\mesar\\AppData\\Local\\Arduino15\\libraries",
   "compiler.optimization_flags": "-Os",
   "customBuildProperties": "",
-  "fqbn": "esp32:esp32:esp32s3:UploadSpeed=921600,USBMode=default,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio120,FlashSize=16M,PartitionScheme=huge_app,DebugLevel=none,PSRAM=opi,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default,ZigbeeMode=default",
+  "fqbn": "esp32:esp32:esp32s3:UploadSpeed=921600,USBMode=default,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio120,FlashSize=16M,PartitionScheme=no_fs,DebugLevel=none,PSRAM=opi,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default,ZigbeeMode=default",
   "hardwareFolders": "C:\\Users\\mesar\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.10,C:\\Users\\mesar\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.10",
   "otherLibrariesFolders": "c:\\Users\\mesar\\OneDrive\\Documents\\Arduino\\libraries",
   "sketchLocation": "D:\\GitClone\\Gotek-Touchscreen-interface\\firmware\\Gotek_JC3248"
