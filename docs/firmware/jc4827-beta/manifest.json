@@ -1,0 +1,13 @@
+{
+  "name": "Gotek Touchscreen Interface — JC4827W543 4.3\" BETA (5.3.3)",
+  "version": "5.3.3-beta",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        { "path": "Gotek_JC4827W543.ino.merged.bin", "offset": 0 }
+      ]
+    }
+  ]
+}

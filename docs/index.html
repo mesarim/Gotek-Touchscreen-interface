@@ -555,6 +555,20 @@
       </div>
     </div>
 
+    <div class="device-card" data-manifest="firmware/jc4827-beta/manifest.json" onclick="selectDevice(this)">
+      <div class="selected-indicator"></div>
+      <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC4827W543 4.3-inch touchscreen" loading="lazy">
+      <div class="device-name">Guition JC4827W543 4.3&Prime; &mdash; BETA</div>
+      <div class="device-chip">ESP32-S3 &middot; 4.3" 480×272 &middot; 5.3.3-beta &middot; NV3041A QSPI</div>
+      <div class="device-desc"><b>NEW: the bigger 4.3-inch GTi.</b> Everything the JC3248 beta does &mdash; the full interface, cover art, GEN mode, <b>SD Access</b> and cable-free <b>SD firmware-update</b> &mdash; on a roomier 4.3&Prime; QSPI screen (still smooth-rotating, no RGB jank). Capacitive touch, dual-role (standalone <i>and</i> wireless). <b>Bench-verified on a real Amiga</b>; freshly ported, so testers especially welcome via GitHub. Uses a 4&nbsp;MB / OTA layout, so SD firmware-updates work out of the box.</div>
+      <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
+      <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
+        <b>Already on 5.3.x?</b> Update over the SD card &mdash; no re-flash:
+        <a href="firmware/jc4827-beta/GTi_update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi_update.bin (1.4&nbsp;MB)</a>,
+        drop it on the SD card root, then tap <b>INFO &#9656; FW&nbsp;UPDATE</b>.
+      </div>
+    </div>
+
     <div class="device-card" data-manifest="firmware/supermini-beta/manifest.json" onclick="selectDevice(this)">
       <div class="selected-indicator"></div>
       <div class="device-name">Super Mini Dongle &mdash; BETA</div>
@@ -1046,6 +1060,7 @@ relayout();bootCracktro();requestAnimationFrame(frame);
   const deviceInfo = {
     'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware A.5.0.0' },
     'firmware/jc3248-beta/manifest.json':{ name: 'Guition JC3248 BETA', version: 'Firmware 5.3.0-beta (SD Access + GEN + FW Update)' },
+    'firmware/jc4827-beta/manifest.json':{ name: 'Guition JC4827W543 4.3" BETA', version: 'Firmware 5.3.3-beta (4.3" NV3041A)' },
     'firmware/waveshare7/manifest.json': { name: 'Waveshare 7"',  version: 'Firmware v4.6.2 BETA' },
     'firmware/waveshare28/manifest.json':{ name: 'Waveshare 2.8"', version: 'Firmware v3.4.7' },
     'firmware/supermini/manifest.json':  { name: 'Super Mini Dongle', version: 'Firmware v3.2.0' },
