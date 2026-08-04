@@ -28,10 +28,11 @@
 #include <Wire.h>
 #include <vector>
 #include <algorithm>
+#include <set>
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.3.3-JC4827"
+#define FW_VERSION "5.4.0-JC4827"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -64,9 +65,10 @@ struct DiskGrid{int pages,pageStart,pageEnd,COLS,dbw,dbh,dgap,gridW,gx,gridY,gri
 #define TOUCH_INT 3
 #define TOUCH_RST 38
 #define TOUCH_ADDR 0x5D   // GT911 (0x5D w/ INT low at reset; try 0x14 if no touch)
-#define SD_CLK 12   // 4827: assumed same TF wiring as JC3248 (SD_MMC 1-bit) - CONFIRM on bench
+#define SD_CLK 12   // 4827: same TF wiring as JC3248 (SD_MMC 1-bit) - CONFIRMED
 #define SD_CMD 11
 #define SD_D0 13
+static int g_sd_freq=20000;   // 5.3.5: SDIO clock kHz. 20000=safe default, 40000=fast (SDSPEED= in CONFIG.TXT, auto-falls back)
 
 #define TFT_BLACK   0x0000
 #define TFT_WHITE   0xFFFF
@@ -449,8 +451,10 @@ static bool isGenImage(const String&u){
   if(u.endsWith(".INDEX")||u.endsWith(".GAMECACHE"))return false;
   return true;
 }
+static std::set<String> g_coverset;   // 5.3.7: lowercased cover-image paths (jpg/png) harvested during the scan walk, so buildThumbs resolves each cover from RAM instead of probing the card. Covers ONLY — .nfo/.rtfm are read on demand when you open a game, never in bulk, so they were dead weight here.
+static inline bool isCoverExtU(const String&u){return u.endsWith(".JPG")||u.endsWith(".JPEG")||u.endsWith(".PNG");}
 static std::vector<String> scanImagesAnimated(){
-  std::vector<String>out;String dir=g_mode==MODE_ADF?"/ADF":g_mode==MODE_DSK?"/DSK":"/GENERIC",ext=g_mode==MODE_ADF?".ADF":".DSK";
+  std::vector<String>out;g_coverset.clear();String dir=g_mode==MODE_ADF?"/ADF":g_mode==MODE_DSK?"/DSK":"/GENERIC",ext=g_mode==MODE_ADF?".ADF":".DSK";
   // Init ball position
   ball_x=gW/2;ball_y=gH/2-30;ball_dx=3;ball_dy=2;
   // Draw initial scan screen
@@ -470,6 +474,7 @@ static std::vector<String> scanImagesAnimated(){
        // plus macOS SD litter like .Trashes / .Spotlight-V100 — free immunity)
        if(leaf=="SAMPLE"||leaf.startsWith(".")){gd.close();continue;}}
       File e;while((e=gd.openNextFile())){String fn=e.name();int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
+      if(isCoverExtU(u)){String ap=en+"/"+fn;if(!ap.startsWith("/"))ap="/"+ap;ap.toLowerCase();g_coverset.insert(ap);}   // 5.3.7: harvest the cover image while we're already reading this dir entry
       // v4.8.0: .sav.adf files attach to their master (INSERT prefers them) — never list
       // them as games. Orphaned .tmp from an interrupted save persist gets swept here.
       if(u.indexOf(".SAV.")>=0){
@@ -478,6 +483,7 @@ static std::vector<String> scanImagesAnimated(){
       if(g_mode==MODE_GEN?isGenImage(u):(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ"))){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;out.push_back(fp);count++;
         if(millis()-lastDraw>80){drawScanFrame(count);lastDraw=millis();}}e.close();}}
     else{String fn=en;int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
+      if(isCoverExtU(u)){String ap=en;ap.toLowerCase();g_coverset.insert(ap);}   // 5.3.7: harvest root-level cover image
       if(u.indexOf(".SAV.")>=0){
         if(u.endsWith(".TMP"))SD_MMC.remove(en);
         gd.close();continue;}
@@ -725,15 +731,17 @@ static bool findNFOFor(const String&p,String&out){
 }
 static bool findJPGFor(const String&p,String&out){
   String b=basenameNoExt(filenameOnly(p)),d=parentDir(p),gb=getGameBaseName(p);
-  const char*exts[]={".jpg",".jpeg",".png",".JPG",".JPEG",".PNG"};
-  // Try exact basename in same dir
-  for(auto e:exts){String c=d+"/"+b+e;if(SD_MMC.exists(c.c_str())){out=c;return true;}}
-  // Try game base name (for multi-disk: GameName.jpg instead of GameName-1.jpg)
-  if(gb!=b){for(auto e:exts){String c=d+"/"+gb+e;if(SD_MMC.exists(c.c_str())){out=c;return true;}}}
-  // Try folder name as JPG name (common pattern: /ADF/GameName/GameName.jpg where folder = game)
-  String folderName=d;int ls=folderName.lastIndexOf('/');if(ls>0)folderName=folderName.substring(ls+1);
-  if(folderName.length()&&folderName!=b&&folderName!=gb){
-    for(auto e:exts){String c=d+"/"+folderName+e;if(SD_MMC.exists(c.c_str())){out=c;return true;}}}
+  // 5.3.7: VFAT lookups are case-insensitive, so the upper-case variants were pure
+  // redundancy (6 probes -> 3). Name stems tried in priority order: exact, game base
+  // (multi-disk), folder name (/ADF/Game/Game.jpg pattern).
+  const char*exts[]={".jpg",".jpeg",".png"};
+  String stems[3];int ns=0;stems[ns++]=b;if(gb!=b)stems[ns++]=gb;
+  String folderName=d;{int ls=folderName.lastIndexOf('/');if(ls>0)folderName=folderName.substring(ls+1);}
+  if(folderName.length()&&folderName!=b&&folderName!=gb)stems[ns++]=folderName;
+  bool harvested=!g_coverset.empty();   // set populated by the scan? then it's authoritative — zero card I/O
+  for(int si=0;si<ns;si++)for(auto e:exts){String c=d+"/"+stems[si]+e;
+    if(harvested){String cl=c;cl.toLowerCase();if(g_coverset.count(cl)){out=c;return true;}}
+    else if(SD_MMC.exists(c.c_str())){out=c;return true;}}   // fallback: lazy call with no harvest (warm-boot cover-less game)
   return false;
 }
 // v4.9.2: per-game manual (.rtfm) lookup — mirrors findJPGFor. Plain-text "how to play"
@@ -921,11 +929,24 @@ static const int NUM_THEMES=6;static int g_theme_idx=0;
 static uint16_t COL_BG,COL_PANEL,COL_BAR,COL_SEL,COL_SEP,COL_DIM,COL_MID,COL_LIT;
 static uint16_t COL_GREEN,COL_ORANGE,COL_AMBER,COL_BLUE,COL_NOW,COL_ACCENT,COL_CIRC,COL_CIRC_TEXT;
 
+// v5.3.4 (4827): the NV3041A renders paler / lower-contrast than the JC3248's AXS15231B.
+// Boost saturation + contrast on the palette to compensate. Tune the two gains (1.0 = off).
+// Applied to UI colours only; cover-art photos go through fb_setPixel and stay natural.
+#define COLOR_CONTRAST 1.16f
+#define COLOR_SAT      1.28f
+static uint16_t punch565(uint16_t c){
+  int R=((c>>11)&0x1F)*255/31, G=((c>>5)&0x3F)*255/63, B=(c&0x1F)*255/31;
+  R=128+(int)((R-128)*COLOR_CONTRAST); G=128+(int)((G-128)*COLOR_CONTRAST); B=128+(int)((B-128)*COLOR_CONTRAST);
+  int L=(R*77+G*150+B*29)>>8;
+  R=L+(int)((R-L)*COLOR_SAT); G=L+(int)((G-L)*COLOR_SAT); B=L+(int)((B-L)*COLOR_SAT);
+  R=R<0?0:(R>255?255:R); G=G<0?0:(G>255?255:G); B=B<0?0:(B>255?255:B);
+  return (uint16_t)(((R>>3)<<11)|((G>>2)<<5)|(B>>3));
+}
 static void applyTheme(int idx){
   g_theme_idx=idx%NUM_THEMES;const Theme&t=THEMES[g_theme_idx];
-  COL_BG=t.bg;COL_PANEL=t.panel;COL_BAR=t.bar;COL_SEL=t.sel;COL_SEP=t.sep;
-  COL_DIM=t.dim;COL_MID=t.mid;COL_LIT=t.lit;COL_GREEN=t.green;COL_ORANGE=t.orange;
-  COL_AMBER=t.amber;COL_BLUE=t.blue;COL_NOW=t.now;COL_ACCENT=t.accent;COL_CIRC=t.circ;COL_CIRC_TEXT=t.circ_text;
+  COL_BG=punch565(t.bg);COL_PANEL=punch565(t.panel);COL_BAR=punch565(t.bar);COL_SEL=punch565(t.sel);COL_SEP=punch565(t.sep);
+  COL_DIM=punch565(t.dim);COL_MID=punch565(t.mid);COL_LIT=punch565(t.lit);COL_GREEN=punch565(t.green);COL_ORANGE=punch565(t.orange);
+  COL_AMBER=punch565(t.amber);COL_BLUE=punch565(t.blue);COL_NOW=punch565(t.now);COL_ACCENT=punch565(t.accent);COL_CIRC=punch565(t.circ);COL_CIRC_TEXT=punch565(t.circ_text);
 }
 
 static void saveConfigKey(const String&key,const String&val){
@@ -1022,6 +1043,11 @@ static void generateDefaultConfig(){
   f.println("#   OVERWRITE = writes are patched straight into the master .adf");
   f.println("SAVES=COPY");
   f.println("");
+  f.println("# SDSPEED: SD card clock speed.");
+  f.println("#   20 = safe default, works with every card.");
+  f.println("#   40 = ~1.7x faster reads if your card can hold it (auto-falls back to 20 if it can't mount).");
+  f.println("SDSPEED=20");
+  f.println("");
   f.println("# Wireless dongle MAC (auto-filled when you pair via INFO screen)");
   f.println("# XIAO_MAC=");
   f.close();
@@ -1048,6 +1074,7 @@ static void selfHealConfig(){
     {"HOTSWAP",  "# HOTSWAP: ON = tapping another disk while loaded swaps to it instantly\nHOTSWAP=OFF\n"},
     {"FORCESWAP","# FORCESWAP: ON = swap disk contents without the USB eject/re-attach cycle\nFORCESWAP=OFF\n"},
     {"SAVES",    "\n# SAVES: save-game persistence. OFF = classic (lost on eject),\n# COPY = kept as GameName.sav.adf beside the master, OVERWRITE = patch the master.\nSAVES=COPY\n"},
+    {"SDSPEED",  "\n# SDSPEED: SD card clock. 20 = safe default, 40 = ~1.7x faster reads if your card holds it (auto-falls back to 20).\nSDSPEED=20\n"},
   };
   const int NK=sizeof(KEYS)/sizeof(KEYS[0]);
   bool present[NK]; for(int i=0;i<NK;i++)present[i]=false;
@@ -1077,8 +1104,9 @@ static void loadConfig(){
     else if(k=="SS_IDLE"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_idle_ms=s*1000UL;}
     else if(k=="SS_LOAD"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_load_ms=s*1000UL;}
     else if(k=="CAP"){int c=v.toInt(); if(c>=1&&c<=64)g_dongle_cap=c;}
-    else if(k=="CRACKTRO"){int c=v.toInt(); if(c>=0&&c<=6)g_cracktro=c;}
+    else if(k=="CRACKTRO"){String cu=v;cu.trim();cu.toUpperCase(); if(cu=="DENISE")g_cracktro=7; else if(cu=="WRANGLER")g_cracktro=8; else{int c=v.toInt(); if(c>=0&&c<=6)g_cracktro=c;}}
     else if(k=="SAVES"){v.toUpperCase(); g_saves_mode=(v=="OVERWRITE")?2:(v=="OFF"||v=="0")?0:1;}
+    else if(k=="SDSPEED"){int hz=v.toInt(); g_sd_freq=(hz>=40||hz>=40000)?40000:20000;}
     else if(k=="HIVEMIND"){g_hivemind=(v=="OFF"||v=="0")?0:1;}}
   f.close();
 }
@@ -1151,6 +1179,16 @@ static void syncIndexToScroll(){if(g_games.empty())return;int ti=(int)(g_scrollP
 // ════════════════════════════════════════════════════════════════════════════
 // CRACKTRO SPLASH
 // ════════════════════════════════════════════════════════════════════════════
+// ==== Custom wordmark bitmaps (1bpp, MSB-first, row-major) — hidden CRACKTRO themes (5.4.0) ====
+#define GTI_DENISE_W 163
+#define GTI_DENISE_H 57
+static const uint8_t GTI_DENISE_BITS[] PROGMEM = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,255,192,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,31,255,248,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,127,255,254,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,248,0,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,224,0,63,128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,15,128,0,31,192,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,31,7,128,7,224,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,62,15,128,7,224,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,124,31,128,3,240,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,120,63,0,1,240,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,248,63,0,1,248,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,240,126,0,1,248,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,240,126,0,0,248,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,240,126,0,0,252,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,240,252,0,0,252,0,0,0,0,0,0,0,3,224,0,0,0,0,0,0,0,240,252,0,0,252,0,0,0,0,0,0,0,15,224,0,0,0,0,0,0,0,112,248,0,0,252,0,0,0,0,0,0,0,15,224,0,0,0,0,0,0,0,1,248,0,0,252,0,0,0,0,0,0,0,31,224,0,0,0,0,0,0,0,1,248,0,0,252,0,0,0,0,0,0,0,15,192,0,0,0,0,0,0,0,1,240,0,0,252,0,0,0,0,0,0,0,7,128,0,0,0,0,0,0,0,3,240,0,0,252,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,240,0,0,252,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,224,0,0,252,0,0,0,0,0,0,0,0,0,12,0,0,0,0,0,0,7,224,0,1,248,0,0,0,0,0,0,0,0,0,30,0,0,0,0,0,0,7,224,0,1,248,0,126,0,0,0,0,0,0,0,60,0,0,15,192,0,0,7,192,0,1,248,1,255,0,0,0,0,0,112,0,60,0,0,63,224,0,0,7,192,0,1,248,7,255,128,0,0,0,0,248,0,60,0,0,255,240,0,0,15,192,0,3,248,15,199,128,0,0,0,1,248,0,62,0,1,248,240,0,0,15,128,0,3,240,31,131,128,0,31,0,1,240,0,126,0,3,240,112,0,0,15,128,0,3,240,63,7,131,192,127,128,3,240,0,126,0,7,224,240,0,0,31,128,0,7,240,126,7,135,193,255,192,7,224,0,223,0,15,192,240,0,0,31,128,0,7,224,252,15,7,227,255,192,7,224,1,223,0,31,129,224,0,0,31,0,0,15,225,248,15,7,199,255,224,15,192,1,159,0,63,1,224,0,0,63,0,0,15,193,240,30,7,207,7,224,15,192,3,15,128,62,3,192,0,0,63,0,0,31,195,240,60,15,222,7,224,31,128,7,15,128,126,7,128,0,0,62,0,0,31,131,224,248,15,252,7,224,31,128,14,15,128,124,31,0,0,0,62,0,0,63,7,225,240,15,248,7,224,63,0,60,15,128,252,62,1,0,0,126,0,0,127,7,199,224,31,240,7,192,63,0,120,15,192,248,252,3,0,0,124,0,0,126,7,255,128,31,224,7,192,126,0,252,7,193,255,240,3,0,0,124,0,0,252,15,254,0,63,192,15,192,126,0,254,7,193,255,192,6,0,0,252,0,1,248,15,224,0,127,192,15,128,254,0,247,7,195,252,0,14,0,0,252,0,3,248,15,128,0,255,128,15,129,254,0,227,135,199,240,0,28,0,0,248,0,3,240,15,128,1,255,0,15,131,252,1,225,255,221,240,0,56,0,0,248,0,7,224,15,128,3,255,0,31,7,126,3,240,127,249,240,0,120,0,1,248,0,15,128,15,128,7,254,0,15,142,62,7,240,31,225,240,0,240,0,1,248,0,63,0,15,192,31,124,0,15,252,63,30,120,15,129,248,3,224,0,1,240,0,126,0,7,224,124,124,0,7,248,63,252,124,63,0,252,15,128,0,1,240,1,252,0,3,255,248,56,0,3,224,31,240,63,254,0,127,255,0,0,1,240,7,240,0,1,255,224,0,0,0,0,7,192,31,252,0,63,252,0,0,1,240,63,192,0,0,127,0,0,0,0,0,0,0,7,240,0,15,224,0,0,0,255,255,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,127,248,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+#define GTI_VINCENT_W 187
+#define GTI_VINCENT_H 57
+static const uint8_t GTI_VINCENT_BITS[] PROGMEM = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,240,0,0,224,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,31,248,0,1,240,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,127,254,0,3,248,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,248,126,0,7,252,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,240,63,0,3,252,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,224,31,0,1,252,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,224,31,128,0,252,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,192,31,128,0,124,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,192,31,128,0,124,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,15,192,31,128,0,126,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,112,0,15,128,31,128,0,124,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,240,0,15,128,31,128,0,124,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,240,0,15,128,31,128,0,124,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,240,0,15,128,31,128,0,124,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,224,0,7,128,31,128,0,124,0,248,0,0,0,0,0,0,0,0,0,0,0,0,0,7,224,0,3,192,31,128,0,124,3,248,0,0,0,0,0,0,0,0,0,0,0,0,0,15,192,0,1,192,31,128,0,120,3,248,0,0,0,0,0,0,0,0,0,0,0,0,0,15,192,0,0,0,31,128,0,120,7,248,0,0,0,0,0,0,0,0,0,0,0,0,0,31,128,0,0,0,63,128,0,248,3,240,0,0,0,0,0,0,0,0,0,0,0,0,0,31,128,0,0,0,63,128,0,248,1,224,0,0,0,0,0,0,0,0,0,0,0,0,0,63,0,0,0,0,63,0,0,240,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,63,0,0,0,0,63,0,0,240,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,126,0,0,0,0,63,0,1,224,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,124,0,0,0,0,63,0,1,224,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,252,0,0,0,0,126,0,1,224,0,0,0,0,0,0,0,0,0,31,128,0,0,0,0,248,0,0,0,0,126,0,3,192,28,0,0,0,0,0,7,192,0,127,192,0,0,0,1,248,0,0,0,0,126,0,3,192,62,0,0,0,0,0,31,240,1,255,224,0,0,0,1,240,0,0,0,0,126,0,7,128,126,0,0,0,0,0,127,240,3,241,224,0,0,0,15,255,255,0,0,0,252,0,7,128,124,0,0,31,0,0,252,56,7,224,224,0,7,192,15,255,255,0,0,0,252,0,15,0,252,3,192,127,128,1,248,56,15,193,224,240,31,224,3,224,0,0,0,0,252,0,15,1,248,7,193,255,192,3,240,120,31,129,225,240,127,240,7,192,0,0,0,1,252,0,30,1,248,7,227,255,192,7,224,120,63,3,193,248,255,240,7,192,0,0,0,1,248,0,30,3,240,7,199,255,224,7,192,112,126,3,193,241,255,248,7,192,0,0,0,1,248,0,60,3,240,7,207,7,224,15,192,240,124,7,129,243,193,248,15,128,0,0,0,1,248,0,60,7,224,15,222,7,224,31,128,224,252,15,3,247,129,248,15,128,0,0,0,3,240,0,120,7,224,15,252,7,224,31,128,0,248,62,3,255,1,248,15,128,0,0,0,3,240,0,112,7,192,15,248,7,224,63,0,1,248,124,3,254,1,248,15,0,1,0,0,3,240,0,240,15,192,31,240,7,192,63,0,1,241,248,7,252,1,240,31,0,1,0,0,7,224,1,224,15,128,31,224,7,192,126,0,1,255,224,7,248,1,240,31,0,2,0,0,7,224,1,192,15,128,31,192,15,192,126,0,3,255,128,15,240,3,240,31,0,6,0,0,7,224,3,192,15,128,63,192,15,128,254,0,3,248,0,31,240,3,224,63,0,4,0,0,15,224,7,128,15,128,63,128,15,129,254,0,7,224,0,63,224,3,224,127,0,12,0,0,15,192,7,0,31,0,127,0,15,131,190,0,7,224,0,127,192,3,224,255,0,24,0,0,15,192,14,0,31,128,255,0,31,7,62,0,15,224,0,255,192,7,193,255,0,48,0,0,15,192,28,0,15,129,254,0,15,142,62,0,31,224,1,255,128,3,227,159,0,96,0,0,15,192,60,0,15,199,252,0,15,252,62,0,123,240,7,223,0,3,255,31,1,192,0,0,15,192,120,0,15,255,124,0,7,248,63,0,241,248,31,31,0,1,254,31,207,128,0,0,15,192,240,0,7,252,56,0,3,224,31,199,192,255,254,14,0,0,248,15,255,0,0,0,15,193,224,0,1,240,0,0,0,0,31,255,128,127,248,0,0,0,0,15,252,0,0,0,15,199,128,0,0,0,0,0,0,0,15,254,0,31,192,0,0,0,0,3,240,0,0,0,15,255,0,0,0,0,0,0,0,0,3,248,0,0,0,0,0,0,0,0,0,0,0,0,7,252,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,240,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+#define GTI_WRANGLER_W 285
+#define GTI_WRANGLER_H 40
+static const uint8_t GTI_WRANGLER_BITS[] PROGMEM = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,192,0,0,0,0,0,0,0,0,0,0,0,0,0,31,255,0,126,1,255,251,255,255,224,0,0,15,240,0,31,252,0,255,254,0,127,254,0,127,255,0,7,255,255,255,31,255,255,0,0,31,255,0,126,1,255,251,255,255,248,0,0,15,240,0,31,254,0,255,254,0,255,255,128,127,255,0,7,255,255,255,31,255,255,192,0,31,255,0,254,1,255,251,255,255,254,0,0,31,240,0,31,255,0,255,254,3,255,255,224,127,255,0,7,255,255,255,31,255,255,240,0,31,255,0,254,1,255,251,255,255,255,0,0,31,248,0,31,255,0,255,254,7,255,255,240,127,255,0,7,255,255,255,31,255,255,248,0,3,248,0,255,0,63,192,127,255,255,128,0,63,248,0,3,255,128,31,240,15,255,255,240,15,248,0,0,255,255,255,3,255,255,252,0,3,248,1,255,0,31,128,63,128,255,128,0,63,248,0,1,255,128,7,224,31,248,15,240,7,240,0,0,127,0,63,1,252,7,252,0,1,248,1,255,0,31,128,63,128,63,192,0,63,252,0,1,255,192,7,224,31,224,3,240,7,240,0,0,127,0,63,1,252,1,254,0,1,248,1,255,128,63,128,63,128,63,192,0,127,252,0,1,255,224,7,224,63,192,3,240,7,240,0,0,127,0,63,1,252,1,254,0,1,252,3,255,128,63,0,63,128,31,192,0,126,252,0,1,255,224,7,224,63,128,3,240,7,240,0,0,127,0,63,1,252,0,254,0,1,252,3,255,128,63,0,63,128,31,192,0,126,126,0,1,255,240,7,224,127,128,1,240,7,240,0,0,127,0,0,1,252,0,254,0,0,252,3,255,192,63,0,63,128,31,192,0,254,126,0,1,255,248,7,224,127,0,1,240,7,240,0,0,127,0,0,1,252,0,254,0,0,252,7,255,192,127,0,63,128,31,192,0,252,127,0,1,251,248,7,224,127,0,0,0,7,240,0,0,127,0,0,1,252,0,254,0,0,254,7,239,192,126,0,63,128,31,192,0,252,63,0,1,251,252,7,224,254,0,0,0,7,240,0,0,127,0,0,1,252,0,254,0,0,126,7,239,224,126,0,63,128,63,128,1,252,63,0,1,249,252,7,224,254,0,0,0,7,240,0,0,127,0,0,1,252,1,252,0,0,126,15,231,224,126,0,63,128,255,128,1,248,63,128,1,248,254,7,224,254,0,0,0,7,240,0,0,127,255,224,1,252,7,252,0,0,126,15,199,224,252,0,63,255,255,0,3,248,31,128,1,248,255,7,224,254,0,0,0,7,240,0,0,127,255,224,1,255,255,248,0,0,127,15,199,240,252,0,63,255,252,0,3,248,31,128,1,248,127,7,224,254,0,0,0,7,240,0,0,127,255,224,1,255,255,224,0,0,63,15,195,240,252,0,63,255,248,0,3,240,31,192,1,248,63,135,224,254,0,127,248,7,240,0,0,127,255,224,1,255,255,192,0,0,63,31,131,240,252,0,63,255,254,0,7,240,15,192,1,248,63,199,224,254,0,127,248,7,240,0,0,127,255,224,1,255,255,240,0,0,63,31,131,249,248,0,63,255,255,0,7,240,15,192,1,248,31,199,224,254,0,127,248,7,240,0,0,127,0,0,1,255,255,248,0,0,63,159,129,249,248,0,63,128,255,128,7,255,255,224,1,248,15,231,224,254,0,127,248,7,240,0,0,127,0,0,1,252,7,252,0,0,31,191,129,249,248,0,63,128,63,192,15,255,255,224,1,248,15,247,224,254,0,127,248,7,240,0,0,127,0,0,1,252,1,254,0,0,31,191,1,249,248,0,63,128,31,192,15,255,255,240,1,248,7,247,224,127,0,3,248,7,240,0,0,127,0,0,1,252,0,254,0,0,31,255,0,255,240,0,63,128,31,192,15,255,255,240,1,248,3,255,224,127,0,3,248,7,240,0,0,127,0,0,1,252,0,254,0,0,31,255,0,255,240,0,63,128,31,192,31,255,255,240,1,248,3,255,224,127,0,3,248,7,240,3,224,127,0,0,1,252,0,254,0,0,15,254,0,255,240,0,63,128,31,192,31,192,3,248,1,248,1,255,224,63,128,3,248,7,240,3,224,127,0,31,1,252,0,254,0,0,15,254,0,127,224,0,63,128,31,192,63,128,3,248,1,248,1,255,224,63,192,3,248,7,240,3,224,127,0,31,1,252,0,254,0,0,15,254,0,127,224,0,63,128,31,192,63,128,1,248,1,248,0,255,224,31,224,3,248,7,240,7,224,127,0,31,1,252,0,254,0,0,7,252,0,127,224,0,63,128,15,224,63,128,1,252,1,248,0,127,224,31,248,7,248,7,240,7,224,127,0,31,1,252,0,127,0,0,7,252,0,63,224,0,255,224,15,240,127,128,1,252,7,254,0,127,224,15,255,255,248,31,255,255,225,255,255,255,7,255,0,127,128,0,7,252,0,63,192,3,255,248,15,249,255,224,7,255,159,255,192,63,224,7,255,255,248,127,255,255,231,255,255,255,31,255,192,127,192,0,7,248,0,63,192,3,255,248,15,249,255,224,7,255,159,255,192,31,224,3,255,255,240,127,255,255,231,255,255,255,31,255,192,127,192,0,3,248,0,31,192,3,255,248,7,249,255,224,7,255,159,255,192,31,224,0,255,255,224,127,255,255,231,255,255,255,31,255,192,63,192,0,3,248,0,31,192,3,255,248,1,249,255,224,7,255,159,255,192,15,224,0,63,255,0,127,255,255,231,255,255,255,31,255,192,15,192,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,128,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 #define NUM_STARS 60
 static int16_t star_x[NUM_STARS],star_y[NUM_STARS],star_speed[NUM_STARS];
 static void initStars(){for(int i=0;i<NUM_STARS;i++){star_x[i]=random(0,gW);star_y[i]=random(0,gH);star_speed[i]=random(1,4);}}
@@ -1190,14 +1228,20 @@ static void crk_txtC(int cx,int y,const char*s,int sz,uint16_t col){crk_txt(cx-c
 static void crk_txtShadow(int cx,int y,const char*s,int sz,uint16_t col){
   crk_txt(cx-crk_txtW(s,sz)/2+2,y+2,s,sz,CRK_RGB(5,6,12));crk_txtC(cx,y,s,sz,col);}
 
+static void crk_mask(const uint8_t*bits,int mw,int mh,int x0,int y0,uint16_t col){
+  int rb=(mw+7)/8;
+  for(int r=0;r<mh;r++){int vy=y0+r; if(vy<0||vy>=gH)continue;
+    for(int c=0;c<mw;c++){ if(pgm_read_byte(&bits[r*rb+(c>>3)])&(0x80>>(c&7))){int vx=x0+c; if(vx>=0&&vx<gW)gfx_drawPixel(vx,vy,col);} }}}
+static void crk_maskC(const uint8_t*bits,int mw,int mh,int cx,int y0,uint16_t col){crk_mask(bits,mw,mh,cx-mw/2,y0,col);}
 static const char* CRK_SCROLL="        OMEGAWARE PRESENTS ... THE GTi ... THE FLOPPY FLINGER THINGER ... CODED BY MEZ & DIMMY ... A LITTLE TRIBUTE TO THE AMIGA CRACKTRO LEGENDS ... GREETINGS TO EVERYONE KEEPING THE SCENE ALIVE ... NOW GO LOAD A GAME ...        ";
-static void crk_scroller(float t,uint16_t col,float amp,bool rainbow){
-  const int sz=2,cw=12; int slen=strlen(CRK_SCROLL);
+static void crk_scrollerT(float t,const char*STR,uint16_t col,float amp,bool rainbow){
+  const int sz=2,cw=12; int slen=strlen(STR);
   long cs=(long)(t*0.13f); int sc=(int)(cs/cw), px=(int)(cs%cw);
   gfx_fillRect(0,gH-30,gW,30,CRK_RGB(5,7,15));
-  for(int c=0;c<gW/cw+3;c++){char ch=CRK_SCROLL[(((sc+c)%slen)+slen)%slen]; int x=-px+c*cw;
+  for(int c=0;c<gW/cw+3;c++){char ch=STR[(((sc+c)%slen)+slen)%slen]; int x=-px+c*cw;
     int y=gH-26+(int)(sinf(x*0.035f+t*0.004f)*amp);
     crk_char(ch,x,y,sz, rainbow?crk_hue(x*1.2f+t*0.2f):col);}}
+static void crk_scroller(float t,uint16_t col,float amp,bool rainbow){ crk_scrollerT(t,CRK_SCROLL,col,amp,rainbow); }
 static void crk_stars(){
   for(int i=0;i<NUM_STARS;i++){star_x[i]-=star_speed[i];if(star_x[i]<0){star_x[i]=gW-1;star_y[i]=random(0,gH-30);}
     uint16_t c=star_speed[i]==3?TFT_WHITE:star_speed[i]==2?CRK_RGB(159,180,214):CRK_RGB(66,80,110);
@@ -1273,8 +1317,41 @@ static void crkSynth(float t){
   crk_scroller(t,CRK_RGB(255,79,160),8,false);
 }
 
+// ── 5.4.0: hidden custom cracktros (CRACKTRO=DENISE / CRACKTRO=WRANGLER) ──
+static const char* CRK_SCROLL_DENISE="        OMEGAWARE PRESENTS ...  DENISE  ...  BUILT BY VINAY DHIR ...  PURPLE DREAMS ...  GREETINGS FROM THE GTi CREW ...  NOW GO LOAD A GAME ...        ";
+static void crkDenise(float t){
+  for(int y=0;y<gH;y++) gfx_fillRect(0,y,gW,1,crk_lerp(30,15,58, 13,6,26, (float)y/gH));
+  crk_stars();
+  int lx=gW/2, ly=gH/2-72;
+  uint16_t GLOW=CRK_RGB(158,58,208), CREAM=CRK_RGB(244,238,225);
+  crk_maskC(GTI_DENISE_BITS,GTI_DENISE_W,GTI_DENISE_H,lx-1,ly,GLOW);
+  crk_maskC(GTI_DENISE_BITS,GTI_DENISE_W,GTI_DENISE_H,lx+1,ly,GLOW);
+  crk_maskC(GTI_DENISE_BITS,GTI_DENISE_W,GTI_DENISE_H,lx,ly-1,GLOW);
+  crk_maskC(GTI_DENISE_BITS,GTI_DENISE_W,GTI_DENISE_H,lx,ly+1,GLOW);
+  crk_maskC(GTI_DENISE_BITS,GTI_DENISE_W,GTI_DENISE_H,lx,ly,CREAM);
+  crk_txtC(gW/2, ly+GTI_DENISE_H+16, "by Vinay Dhir",2,CRK_RGB(234,223,247));
+  crk_txtC(gW/2, ly+GTI_DENISE_H+42, "~ PURPLE DREAMS ~",1,CRK_RGB(180,143,230));
+  crk_scrollerT(t,CRK_SCROLL_DENISE,CRK_RGB(230,95,224),9,false);
+}
+static const char* CRK_SCROLL_WRANGLER="        BIG RESPECT TO WRANGLER_AMIGA ...  THE MAN WHO SHOWED THE GTi TO THE WORLD ...  A GENUINE GAMECHANGER - HIS WORDS, NOT OURS ...  CHEERS FOR THE COVERAGE, LEGEND ...  FIND HIM ON YOUTUBE @ WRANGLER_AMIGA ...  NOW GO WRANGLE A FLOPPY ...        ";
+static void crkWrangler(float t){
+  for(int y=0;y<gH;y++) gfx_fillRect(0,y,gW,1,crk_lerp(44,92,156, 15,47,88, (float)y/gH));
+  int lx=gW/2, ly=gH/2-66;
+  uint16_t ORA=CRK_RGB(229,138,52), TAN=CRK_RGB(236,220,180);
+  crk_maskC(GTI_WRANGLER_BITS,GTI_WRANGLER_W,GTI_WRANGLER_H,lx-1,ly,ORA);
+  crk_maskC(GTI_WRANGLER_BITS,GTI_WRANGLER_W,GTI_WRANGLER_H,lx+1,ly,ORA);
+  crk_maskC(GTI_WRANGLER_BITS,GTI_WRANGLER_W,GTI_WRANGLER_H,lx,ly-1,ORA);
+  crk_maskC(GTI_WRANGLER_BITS,GTI_WRANGLER_W,GTI_WRANGLER_H,lx,ly+1,ORA);
+  crk_maskC(GTI_WRANGLER_BITS,GTI_WRANGLER_W,GTI_WRANGLER_H,lx,ly,TAN);
+  crk_txtC(gW/2, ly+GTI_WRANGLER_H+14, "@WRANGLER_AMIGA",2,CRK_RGB(244,164,78));
+  int pw=(gW-100)<300?(gW-100):300; int px=gW/2-pw/2, py=ly+GTI_WRANGLER_H+40;
+  gfx_fillRect(px,py,pw,24,CRK_RGB(91,61,34)); gfx_drawRect(px,py,pw,24,CRK_RGB(201,138,74));
+  crk_txtC(gW/2, py+8, "A GENUINE GAMECHANGER",1,CRK_RGB(240,224,192));
+  crk_scrollerT(t,CRK_SCROLL_WRANGLER,CRK_RGB(244,164,78),7,false);
+}
 // Boot cracktro runner. style: 1..6 forces a style, 0 = random pick each boot.
 static void drawCracktro(int style){
+  bool denise=(style==7), wrangler=(style==8);   // 5.4.0: hidden custom themes
   int s=(style>=1&&style<=6)?(style-1):(int)(esp_random()%6);
   initStars();
   unsigned long startMs=millis();
@@ -1283,7 +1360,9 @@ static void drawCracktro(int style){
     if(Touch_ReadFrame()){unsigned long t0=millis();while(Touch_ReadFrame()&&millis()-t0<500)delay(10);break;}
     if(!g_loop_cracktro&&millis()-startMs>=6000)break;
     float t=(float)(millis()-startMs);
-    switch(s){case 0:crkCopper(t);break;case 1:crkStarfield(t);break;case 2:crkRaster(t);break;
+    if(denise)crkDenise(t);
+    else if(wrangler)crkWrangler(t);
+    else switch(s){case 0:crkCopper(t);break;case 1:crkStarfield(t);break;case 2:crkRaster(t);break;
       case 3:crkPlasma(t);break;case 4:crkBoing(t);break;default:crkSynth(t);break;}
     if(((int)(t/450.0f))%2) crk_txtC(gW/2,gH-46,"TAP TO CONTINUE",1,CRK_RGB(150,168,200));
     gfx_flush();delay(6);
@@ -1816,6 +1895,7 @@ static void buildThumbs(){
   }
   free(tmp);
   writeGameCache();   // persist jpg paths resolved during the build (faster covers later too)
+  g_coverset.clear();   // 5.3.7: cover set has done its job — free the PSRAM
 }
 
 static inline uint16_t carDim(uint16_t c,int lvl){
@@ -2370,6 +2450,7 @@ static void scanScreensaver(){                               // arm iff /screens
   // bounces instead (the third member of the crew, haunting the idle screen).
   g_ss_claude=g_ss_paths.empty();
   g_ss_have=!g_ss_paths.empty()||g_ss_claude;
+  if(g_cracktro==7)g_ss_have=true;   // 5.4.0: Denise theme arms the saver even with no /screensaver folder
 }
 // Procedurally draw the Claude starburst into the bounce buffer (no JPEG needed):
 // 12 tapered coral rays around a solid hub. It's math, not a bitmap — so it
@@ -2469,12 +2550,28 @@ static bool ssMakeLolly(float phase){
   }
   g_ss_w=S; g_ss_h=S; return true;
 }
+// 5.4.0: hidden Denise theme screensaver — bounce the Denise / Vincent wordmarks,
+// swapping on every wall hit (armed by CRACKTRO=DENISE).
+static bool ssMakeName(bool vincent){
+  const uint8_t*bits=vincent?GTI_VINCENT_BITS:GTI_DENISE_BITS;
+  int w=vincent?GTI_VINCENT_W:GTI_DENISE_W, h=vincent?GTI_VINCENT_H:GTI_DENISE_H;
+  if(g_ss_buf&&(g_ss_w!=w||g_ss_h!=h)) ssFree();
+  if(!g_ss_buf){ g_ss_buf=(uint16_t*)ps_malloc((size_t)w*h*2); if(!g_ss_buf)return false; }
+  const uint16_t CREAM=CRK_RGB(244,238,225); int rb=(w+7)/8;
+  for(int y=0;y<h;y++)for(int x=0;x<w;x++)
+    g_ss_buf[y*w+x]=(pgm_read_byte(&bits[y*rb+(x>>3)])&(0x80>>(x&7)))?CREAM:TFT_BLACK;
+  g_ss_w=w; g_ss_h=h; return true;
+}
 static void runScreensaver(){                                // blocking bounce loop; any touch exits
   int idx=0;
-  bool claudeMode=g_ss_paths.empty();
+  bool deniseMode=(g_cracktro==7);                          // 5.4.0: hidden Denise theme
+  bool vincent=false;
+  bool claudeMode=(!deniseMode)&&g_ss_paths.empty();
   int ssForm=0;                                              // v4.8.1 ghost + v4.9.6 lolly: cycles on every wall hit
   float ph=0;
-  if(claudeMode){
+  if(deniseMode){
+    if(!ssMakeName(false)){g_ss_have=false;return;}
+  } else if(claudeMode){
     // Empty /screensaver/ folder: bounce the (slowly spinning) Claude starburst
     if(!g_ss_claude||!ssMakeClaude(0)){g_ss_have=false;return;}
   } else {
@@ -2482,7 +2579,13 @@ static void runScreensaver(){                                // blocking bounce 
     for(int t=0;t<(int)g_ss_paths.size();t++){ if(ssDecode(g_ss_paths[t])){idx=t;ok=true;break;} }
     if(!ok){ssFree();g_ss_have=false;return;}   // no decodable image -> disarm, back to UI
   }
-  int x=(gW-g_ss_w)/2, y=(gH-g_ss_h)/2, vx=2, vy=2;
+  int x,y,vx,vy;
+  if(deniseMode){                                           // 5.4.0: random start pos + direction (no two-corner lock)
+    x=(int)(esp_random()%(uint32_t)(gW-g_ss_w>0?gW-g_ss_w:1));
+    y=(int)(esp_random()%(uint32_t)(gH-g_ss_h>0?gH-g_ss_h:1));
+    vx=1+(int)(esp_random()%3); if(esp_random()&1)vx=-vx;
+    vy=1+(int)(esp_random()%3); if(esp_random()&1)vy=-vy;
+  } else { x=(gW-g_ss_w)/2; y=(gH-g_ss_h)/2; vx=2; vy=2; }
   gfx_fillScreen(TFT_BLACK);
   uint32_t last=millis();
   while(true){
@@ -2492,7 +2595,9 @@ static void runScreensaver(){                                // blocking bounce 
       x+=vx; y+=vy; bool hit=false;
       if(x<=0){x=0;vx=-vx;hit=true;} else if(x>=gW-g_ss_w){x=gW-g_ss_w;vx=-vx;hit=true;}
       if(y<=0){y=0;vy=-vy;hit=true;} else if(y>=gH-g_ss_h){y=gH-g_ss_h;vy=-vy;hit=true;}
-      if(hit&&g_ss_paths.size()>1){ int ni=(idx+1)%(int)g_ss_paths.size();
+      if(deniseMode&&hit){ vincent=!vincent; ssMakeName(vincent);   // 5.4.0: swap Denise <-> Vincent on each wall hit
+        if(x>gW-g_ss_w)x=gW-g_ss_w; if(y>gH-g_ss_h)y=gH-g_ss_h; if(x<0)x=0; if(y<0)y=0; }
+      else if(hit&&!claudeMode&&g_ss_paths.size()>1){ int ni=(idx+1)%(int)g_ss_paths.size();
         if(ssDecode(g_ss_paths[ni]))idx=ni; else ssDecode(g_ss_paths[idx]);   // skip undecodable, keep a valid buffer
         if(x>gW-g_ss_w)x=gW-g_ss_w; if(y>gH-g_ss_h)y=gH-g_ss_h; if(x<0)x=0; if(y<0)y=0; }
       if(claudeMode&&hit)ssForm=(ssForm+1)%3;          // v4.8.1 ghost + v4.9.6 lolly: shapeshift on every wall bounce
@@ -2978,7 +3083,7 @@ void setup(){
   g_disk=(uint8_t*)ps_malloc(TOTAL_SECTORS*512);if(!g_disk){gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,160);gfx_print("RAM ALLOC FAILED");gfx_flush();while(1)delay(1000);}
   build_volume(getOutputFilename(),g_mode==MODE_ADF?ADF_DEFAULT_SIZE:64);
   SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);delay(100);
-  bool sdok=SD_MMC.begin("/sdcard",true);if(!sdok){delay(200);sdok=SD_MMC.begin("/sdcard",true);}
+  bool sdok=SD_MMC.begin("/sdcard",true,false,20000);if(!sdok){delay(200);sdok=SD_MMC.begin("/sdcard",true,false,20000);}
   if(sdok){
     if(!SD_MMC.exists("/ADF")){SD_MMC.mkdir("/ADF");ensureSampleFolder();SD_MMC.mkdir("/screensaver");}   // blank card: SAMPLE example + arm the screensaver by default (v4.8.5 — DELETE /screensaver to disable it; empty = the bouncing starburst, drop in JPGs for a gallery)
     if(!SD_MMC.exists("/DSK"))SD_MMC.mkdir("/DSK");
@@ -2986,6 +3091,10 @@ void setup(){
     generateDefaultConfig();
     selfHealConfig();           // append any documented keys an older CONFIG.TXT is missing
     loadConfig();
+    if(g_sd_freq==40000){           // 5.3.5: SDSPEED=40 opt-in — remount fast, fall back to 20 if it won't take
+      SD_MMC.end();delay(30);SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);
+      if(!SD_MMC.begin("/sdcard",true,false,40000)){g_sd_freq=20000;SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);SD_MMC.begin("/sdcard",true,false,20000);}
+    }
     espnowSetScanCap(g_dongle_cap);
     relayout();                 // apply ROTATE/COMPACT from config before first draw
     listImages(SD_MMC,g_files);
