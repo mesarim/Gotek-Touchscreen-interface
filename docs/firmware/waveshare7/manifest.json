@@ -1,13 +1,12 @@
 {
-  "name": "Gotek Touchscreen Interface — Waveshare 7\"",
-  "version": "4.6.2",
+  "name": "Gotek Touchscreen Interface — Waveshare 7\" BETA (v4.7.6-7IN)",
+  "version": "4.7.6-7IN-beta",
   "new_install_prompt_erase": true,
   "builds": [
     {
       "chipFamily": "ESP32-S3",
       "parts": [
-        { "path": "Gotek_7inch.ino.merged.bin",  "offset": 0 }
-
+        { "path": "Gotek_7inch.ino.merged.bin", "offset": 0 }
       ]
     }
   ]
