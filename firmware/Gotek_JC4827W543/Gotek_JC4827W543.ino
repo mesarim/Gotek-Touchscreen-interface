@@ -32,7 +32,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.4.1-JC4827"
+#define FW_VERSION "5.4.2-JC4827"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -1728,6 +1728,8 @@ static uint32_t g_car_lastMs=0;
 static bool  g_car_spin=false, g_car_dieShow=false, g_car_die23=false;
 static float g_car_spinTarget=0;
 static uint8_t g_car_die=1, g_car_dieTick=0;
+static uint32_t g_car_die_rest_ms=0;   // v5.4.2: millis() when the die settled (for auto-hide)
+#define DIE_HIDE_MS 2500               // v5.4.2: hide the rested die this many ms after the roll settles
 static int g_car_ins_x=0,g_car_ins_y=0,g_car_ins_w=0,g_car_ins_h=0;   // INSERT button rect (set by drawCarousel)
 static void runScreensaver();   // defined below; the reel's idle tick can summon it
 #define CAR_TILE  150                            // decoded cover tile size (px)
@@ -1913,7 +1915,7 @@ static void carBlit(uint16_t*tile,int cx,int cy,int w,int h,int dim){
 
 // The d6 overlay: pips while rolling, final face at rest — or "23" on the lucky roll.
 static void carDrawDie(){
-  int s=26,bw=VW/3,x=2*bw+(bw-s)/2,y=VH-BOTTOM_H+(BOTTOM_H-s)/2;   // v5.4.1: roll over the ROLL button (was top-centre, over the cover/title)
+  int s=26,bw=VW/3,x=2*bw+(bw-s)/2,y=VH-BOTTOM_H-s-14;   // v5.4.2: hover a few lines ABOVE the ROLL button (dice / gap / button)
   gfx_fillRoundRect(x,y,s,s,5,0xFFFF);
   gfx_drawRoundRect(x,y,s,s,5,COL_ACCENT);
   int c=x+s/2,m=y+s/2,o=7;
@@ -2070,7 +2072,7 @@ static void carRollDice(){
   int off=((tgt-cur)%n+n)%n; if(off<15)off+=n;       // at least 15 covers of travel
   g_car_pos=(float)cur;
   g_car_spinTarget=(float)cur+(float)off;
-  g_car_spin=true; g_car_dieShow=true; g_car_coast=false;
+  g_car_spin=true; g_car_dieShow=true; g_car_coast=false; g_car_die_rest_ms=0;
   g_car_die=1+(uint8_t)(esp_random()%6);
   g_car_die23=((esp_random()%23)==0);                // the impossible roll
   drawCarousel();gfx_flush();
@@ -2145,9 +2147,14 @@ static void carTick(bool touch,uint16_t px,uint16_t py,uint32_t now){
       g_car_pos=(float)carWrap((int)lroundf(g_car_spinTarget));
       g_car_spin=false;                                  // die rests on its final face
       g_car_die=1+(uint8_t)(esp_random()%6);
+      g_car_die_rest_ms=now;                             // v5.4.2: arm the auto-hide timer
     }
     drawCarousel();gfx_flush();
     return;
+  }
+  // v5.4.2: auto-hide the rested die a few seconds after the roll settles
+  if(g_car_dieShow&&!g_car_spin&&g_car_die_rest_ms&&now-g_car_die_rest_ms>=DIE_HIDE_MS){
+    g_car_dieShow=false;g_car_die_rest_ms=0;drawCarousel();gfx_flush();return;
   }
   if(g_car_coast&&n>0){
     g_car_pos+=g_car_ivel;g_car_ivel*=0.92f;
