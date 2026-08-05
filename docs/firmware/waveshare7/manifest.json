@@ -1,6 +1,6 @@
 {
-  "name": "Gotek Touchscreen Interface — Waveshare 7\" BETA (v4.7.6-7IN)",
-  "version": "4.7.6-7IN-beta",
+  "name": "Gotek Touchscreen Interface — Waveshare 7\" BETA (v4.8.0-7IN)",
+  "version": "4.8.0-7IN-beta",
   "new_install_prompt_erase": true,
   "builds": [
     {

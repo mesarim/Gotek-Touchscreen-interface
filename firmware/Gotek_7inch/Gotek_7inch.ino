@@ -33,6 +33,12 @@
 #include "esp_lcd_panel_rgb.h"
 #include <Wire.h>
 #include <JPEGDEC.h>
+// JPEGDEC and PNGdec both define INTELSHORT/INTELLONG/MOTOSHORT/MOTOLONG — undef before PNGdec.
+#undef INTELSHORT
+#undef INTELLONG
+#undef MOTOSHORT
+#undef MOTOLONG
+#include <PNGdec.h>      // v4.7.7: PNG cover support (Larry Bank's PNGdec library)
 #include <sys/stat.h>
 #include <vector>
 #include <algorithm>
@@ -44,7 +50,7 @@
 #include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 
 // ---------- Version ----------
-#define FW_VERSION  "v4.7.6-7IN"
+#define FW_VERSION  "v4.8.0-7IN"
 
 // ---------- ESP-NOW server (peer-to-peer, no WiFi AP needed) ----------
 #include "espnow_server.h"
@@ -624,6 +630,7 @@ static int32_t onRead(uint32_t lba,uint32_t off,void* buf,uint32_t n) {
 #define SV_IMG_MAX_SECTORS (TOTAL_SECTORS-DATA_LBA)
 #define SV_SETTLE_MS 3000
 static int      g_saves_mode=1;                          // 0=OFF 1=COPY 2=OVERWRITE (SAVES=)
+static int      g_car_bootmode=0;                        // 0=list 1=boot into reel (CAROUSEL=)
 static uint8_t  g_sv_dirty[(SV_IMG_MAX_SECTORS+7)/8];
 static volatile uint16_t g_sv_dirty_count=0;
 static volatile uint32_t g_sv_last_write=0;
@@ -1363,6 +1370,7 @@ static void loadTheme(){
     else if(key == "FONT"){ String v=val; v.toUpperCase(); applyFont(v=="SMALL"?0:(v=="LARGE"?2:1)); }
     else if(key == "ROTATE"){ int d=((val.toInt()/90)%4+4)%4; if(d==1||d==3) d=(d==1)?0:2; g_rot=d; }
     else if(key == "SAVES"){ String v=val; v.toUpperCase(); g_saves_mode=(v=="OVERWRITE")?2:((v=="OFF"||v=="0")?0:1); }
+    else if(key == "CAROUSEL"){ String v=val; v.toUpperCase(); g_car_bootmode=(v=="1"||v=="ON"||v=="TRUE")?1:0; }
     // LANDSCAPE-LOCKED: this RGB panel has no HW portrait; 90/270 is a slow SW transpose (~1-2fps),
     // so portrait is snapped to the nearest landscape (90->0, 270->180). Only 0/180 are allowed.
   }
@@ -1819,6 +1827,16 @@ static int jpeg_buf_cb(JPEGDRAW*pDraw){
     if(cw>0) memcpy(&jpeg_tmp_buf[row*jpeg_tmp_w+pDraw->x],&pDraw->pPixels[yy*pDraw->iWidth],cw*2);
   } return 1;
 }
+// ── PNG decode via PNGdec (v4.7.7). Shares jpeg_tmp_buf with the JPEG path so the
+//    scale/blit tail is identical. PNGdec has no built-in downscale -> full decode. ──
+static PNG pngdec;
+static bool coverIsPng(const String&p){int d=p.lastIndexOf('.');if(d<0)return false;String e=p.substring(d+1);e.toLowerCase();return e=="png";}
+static int png_buf_cb(PNGDRAW*pDraw){   // PNGdec's PNG_DRAW_CALLBACK returns int
+  if(!jpeg_tmp_buf)return 0;
+  int row=pDraw->y; if(row<0||row>=jpeg_tmp_h)return 1;
+  pngdec.getLineAsRGB565(pDraw,&jpeg_tmp_buf[row*jpeg_tmp_w],PNG_RGB565_LITTLE_ENDIAN,0x00000000);
+  return 1;
+}
 // Decode JPEG from SD via JPEGDEC, scale to fit maxW x maxH, blit with LovyanGFX pushImage.
 // Replaces UG->drawJpgFile(SD_MMC,...) which fails to compile on newer LovyanGFX+core (SDMMCFS abstract).
 static void drawJpegFit(const String&path,int boxX,int boxY,int maxW,int maxH){
@@ -1862,6 +1880,41 @@ static void drawJpegFit(const String&path,int boxX,int boxY,int maxW,int maxH){
 }
 
 
+static void drawPngFit(const String&path,int boxX,int boxY,int maxW,int maxH){
+  File f=SD_MMC.open(path.c_str(),FILE_READ); if(!f) return;
+  size_t sz=f.size();
+  if(sz==0){ f.close(); struct stat st; String vp="/sdcard"+path; if(stat(vp.c_str(),&st)==0) sz=st.st_size; f=SD_MMC.open(path.c_str(),FILE_READ); if(!f) return; }
+  if(sz==0||sz>500000){ f.close(); return; }
+  uint8_t*buf=(uint8_t*)ps_malloc(sz); if(!buf){ buf=(uint8_t*)malloc(sz); } if(!buf){ f.close(); return; }
+  f.read(buf,sz); f.close();
+  if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){ free(buf); return; }
+  int jw=pngdec.getWidth(),jh=pngdec.getHeight();
+  if(jw<=0||jh<=0||jw>2000||jh>2000){ pngdec.close(); free(buf); return; }
+  jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)jw*jh*2);
+  if(!jpeg_tmp_buf){ pngdec.close(); free(buf); return; }
+  memset(jpeg_tmp_buf,0,(size_t)jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
+  pngdec.decode(NULL,0); pngdec.close(); free(buf);
+  float scX=(float)maxW/jw,scY=(float)maxH/jh,sc=min(scX,scY);
+  if(sc>1.0f)sc=1.0f;
+  int dw=(int)(jw*sc),dh=(int)(jh*sc);
+  if(dw<=0||dh<=0){ free(jpeg_tmp_buf); jpeg_tmp_buf=NULL; return; }
+  int ox=boxX+(maxW-dw)/2,oy=boxY+(maxH-dh)/2;
+  if(sc>=0.999f){
+    UG->pushImage(ox,oy,jw,jh,jpeg_tmp_buf);
+  } else {
+    uint16_t*rowbuf=(uint16_t*)malloc(dw*2);
+    if(rowbuf){
+      for(int r=0;r<dh;r++){ int srcY=(int)(r/sc); if(srcY>=jh)srcY=jh-1;
+        for(int c=0;c<dw;c++){ int srcX=(int)(c/sc); if(srcX>=jw)srcX=jw-1;
+          rowbuf[c]=jpeg_tmp_buf[srcY*jw+srcX]; }
+        UG->pushImage(ox,oy+r,dw,1,rowbuf);
+        if(r%20==0)yield();
+      }
+      free(rowbuf);
+    }
+  }
+  free(jpeg_tmp_buf); jpeg_tmp_buf=NULL;
+}
 static void drawCoverPanel(){ UiFrame _uf;
   // Flat fill cover panel background (portrait = full-width top block; landscape = left column)
   if(g_portrait_mode) UG->fillRect(0, STATUS_H+MODE_BAR_H, LCD_WIDTH, COVER_H, COL_PANEL);
@@ -1906,7 +1959,8 @@ static void drawCoverPanel(){ UiFrame _uf;
 
   if(hasJpg){
     int boxW=artW-4, boxH=artH-4;
-    drawJpegFit(game.jpg_path, artX+2, artY+2, boxW, boxH);
+    if(coverIsPng(game.jpg_path)) drawPngFit(game.jpg_path, artX+2, artY+2, boxW, boxH);
+    else                         drawJpegFit(game.jpg_path, artX+2, artY+2, boxW, boxH);
   } else {
     // No art — draw floppy icon as placeholder
     int is = min(artW, artH) * 3 / 4;
@@ -2238,21 +2292,31 @@ static void redrawListArea(){ UiFrame _uf; drawFileList(); drawNowPlayingBar(); 
 // ============================================================================
 // BOTTOM BAR
 // ============================================================================
+// v4.8.0-7IN: little pictograph glyphs for the list<->reel flip (drawn in the ~10px button circle)
+static void drawListIcon(int cx,int cy,uint16_t col){
+  for(int r=-1;r<=1;r++) UG->fillRect(cx-6,cy+r*5-1,12,2,col);   // three stacked rows
+}
+static void drawCarouselIcon(int cx,int cy,uint16_t col){
+  UG->drawRect(cx-9,cy-5,5,11,col);      // left cover, peeking
+  UG->drawRect(cx+4,cy-5,5,11,col);      // right cover, peeking
+  UG->fillRect(cx-3,cy-7,6,15,col);      // center cover, front & tall
+}
 static void drawBottomBar(){ UiFrame _uf;
   int y=LCD_HEIGHT-BOTTOM_H;
   drawGradientBg(0, y, LCD_WIDTH, BOTTOM_H, COL_BAR, COL_PANEL);
   UG->drawFastHLine(0, y, LCD_WIDTH, COL_SEP);
-  int bw=LCD_WIDTH/4;
+  const int nb=5; int bw=LCD_WIDTH/nb;   // v4.8.0-7IN: REEL is a first-class 5th button
 
   struct BtnDef { const char* icon; const char* label; uint16_t col; };
-  BtnDef btns[4] = {
+  BtnDef btns[5] = {
     { "<", "PREV", COL_ORANGE },
     { ">", "NEXT", COL_BLUE },
     { "#", "THEME", COL_AMBER },
+    { "", "REEL", COL_GREEN },
     { "i", "INFO", COL_MID },
   };
 
-  for(int i=0;i<4;i++){
+  for(int i=0;i<nb;i++){
     int bx = i*bw;
     if(i>0) UG->drawFastVLine(bx, y+4, BOTTOM_H-8, COL_SEP);
 
@@ -2260,19 +2324,22 @@ static void drawBottomBar(){ UiFrame _uf;
     int cx = bx + bw/2, cy = y + 13;
     UG->fillCircle(cx, cy, 10, (uint16_t)(btns[i].col >> 2));
     UG->drawCircle(cx, cy, 10, btns[i].col);
-    UG->setFont(&lgfx::fonts::DejaVu12);
-    UG->setTextColor(btns[i].col, (uint16_t)(btns[i].col >> 2));
-    int tw = UG->textWidth(btns[i].icon);
-    UG->setCursor(cx-tw/2, cy-7); UG->print(btns[i].icon);
+    if(i==3){ drawCarouselIcon(cx, cy, btns[i].col); }           // REEL -> coverflow glyph
+    else {
+      UG->setFont(&lgfx::fonts::DejaVu12);
+      UG->setTextColor(btns[i].col, (uint16_t)(btns[i].col >> 2));
+      int tw = UG->textWidth(btns[i].icon);
+      UG->setCursor(cx-tw/2, cy-7); UG->print(btns[i].icon);
+    }
 
     // Label
     UG->setFont(&lgfx::fonts::DejaVu9);
     UG->setTextColor(COL_DIM, COL_PANEL);
-    tw = UG->textWidth(btns[i].label);
+    int tw = UG->textWidth(btns[i].label);
     UG->setCursor(bx+(bw-tw)/2, y+26); UG->print(btns[i].label);
   }
 
-  // Theme name
+  // Theme name (under the THEME button, slot 2)
   UG->setFont(&lgfx::fonts::DejaVu9);
   UG->setTextColor((uint16_t)(COL_AMBER>>1), COL_PANEL);
   String tn=THEMES[g_theme_idx].name;
@@ -2707,6 +2774,466 @@ static bool doSearch(){
   }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// CAROUSEL — "fake coverflow" reel (v4.8.0-7IN: ported from the JC 5.4.x engine)
+// ALL-source only on the 7" for now (GameEntry has no fav/plays fields yet — the
+// middle bottom-bar slot is reserved for FAV/MOST once those land). Center cover
+// full-size, neighbours scaled+squashed+dimmed, looping reel. Center tap = dead
+// zone; INSERT button loads/ejects; [LIST] exits; [ROLL] shuffle-jumps with a d6.
+// Two-tier thumbnail cache: persistent SD .tnl tiles + 16-slot PSRAM LRU.
+// ════════════════════════════════════════════════════════════════════════════
+static bool g_car_active=false;
+static std::vector<int> g_car_list;             // reel order -> g_games indices
+static float g_car_pos=0;                       // fractional reel position
+static bool g_car_touch=false,g_car_moved=false,g_car_coast=false;
+static int  g_car_x0=0,g_car_y0=0,g_car_lastX=0,g_car_rel=0;
+static float g_car_pos0=0,g_car_vel=0,g_car_ivel=0;
+static uint32_t g_car_lastMs=0;
+#define CAR_PX_PER_STEP 160.0f
+static bool  g_car_spin=false, g_car_dieShow=false, g_car_die23=false;
+static float g_car_spinTarget=0;
+static uint8_t g_car_die=1, g_car_dieTick=0;
+static uint32_t g_car_die_rest_ms=0;
+#define DIE_HIDE_MS 2500
+static int g_car_ins_x=0,g_car_ins_y=0,g_car_ins_w=0,g_car_ins_h=0;   // INSERT button rect (set by drawCarousel)
+static bool g_car_built=false;                  // build the thumb cache once per session (first reel entry)
+#define CAR_TILE  200                            // decoded cover tile size (px) — bigger stage than the JC
+#define CAR_SLOTS 16                             // LRU tile cache entries (PSRAM, ~1.28 MB)
+static uint16_t* car_buf[CAR_SLOTS]={0};
+static int      car_game[CAR_SLOTS]={-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
+static uint32_t car_stamp[CAR_SLOTS]={0};
+static uint32_t car_tick_ctr=0;
+
+static int carN(){return (int)g_car_list.size();}
+static int carWrap(int i){int n=carN();if(n<=0)return 0;i%=n;if(i<0)i+=n;return i;}
+static void carBuildList(){                      // ALL source only (A-Z order)
+  g_car_list.clear();
+  int n=(int)g_games.size();
+  for(int i=0;i<n;i++)g_car_list.push_back(i);
+}
+
+// Decode a game's cover into a CAR_TILE x CAR_TILE tile (aspect-fit, COL_BAR letterbox).
+static bool carDecodeTile(int gi,uint16_t*dst){
+  for(int i=0;i<CAR_TILE*CAR_TILE;i++)dst[i]=COL_BAR;
+  GameEntry&game=g_games[gi];
+  if(!game.jpg_path.length()){String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg))game.jpg_path=jpg;else game.jpg_path="?";}
+  if(!(game.jpg_path.length()>0&&game.jpg_path!="?"))return false;
+  String vfsPath="/sdcard"+game.jpg_path;struct stat st;
+  if(stat(vfsPath.c_str(),&st)!=0||st.st_size==0||st.st_size>500000)return false;
+  size_t sz=(size_t)st.st_size;
+  File f=SD_MMC.open(game.jpg_path.c_str(),"r");if(!f)return false;
+  uint8_t*buf=(uint8_t*)ps_malloc(sz);if(!buf){f.close();return false;}
+  f.read(buf,sz);f.close();
+  int djw=0,djh=0;
+  if(coverIsPng(game.jpg_path)){
+    if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){free(buf);return false;}
+    int jw=pngdec.getWidth(),jh=pngdec.getHeight();
+    if(jw<=0||jh<=0||jw>2000||jh>2000){pngdec.close();free(buf);return false;}
+    djw=jw;djh=jh;                          // PNGdec has no built-in downscale -> full decode, then shrink
+    jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)djw*djh*2);
+    if(!jpeg_tmp_buf){pngdec.close();free(buf);return false;}
+    memset(jpeg_tmp_buf,0,(size_t)djw*djh*2);jpeg_tmp_w=djw;jpeg_tmp_h=djh;
+    pngdec.decode(NULL,0);pngdec.close();free(buf);
+  } else {
+    if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return false;}
+    jpegdec.setPixelType(RGB565_LITTLE_ENDIAN);   // 7": native LE framebuffer (the JC omits this — its FB is byte-swapped)
+    int jw=jpegdec.getWidth(),jh=jpegdec.getHeight();
+    if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return false;}
+    // JPEGDEC's built-in downscale: a big cover at 1/2, 1/4 or 1/8 is up to 16x less work.
+    int opt=0,div=1;
+    if(jw>=CAR_TILE*8&&jh>=CAR_TILE*8){opt=JPEG_SCALE_EIGHTH;div=8;}
+    else if(jw>=CAR_TILE*4&&jh>=CAR_TILE*4){opt=JPEG_SCALE_QUARTER;div=4;}
+    else if(jw>=CAR_TILE*2&&jh>=CAR_TILE*2){opt=JPEG_SCALE_HALF;div=2;}
+    djw=jw/div;djh=jh/div;
+    jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)djw*djh*2);
+    if(!jpeg_tmp_buf){jpegdec.close();free(buf);return false;}
+    memset(jpeg_tmp_buf,0,(size_t)djw*djh*2);jpeg_tmp_w=djw;jpeg_tmp_h=djh;
+    jpegdec.decode(0,0,opt);jpegdec.close();free(buf);
+  }
+  float sc=min((float)CAR_TILE/djw,(float)CAR_TILE/djh);if(sc>1.0f)sc=1.0f;
+  int dw=(int)(djw*sc),dh=(int)(djh*sc);
+  int ox=(CAR_TILE-dw)/2,oy=(CAR_TILE-dh)/2;
+  for(int r=0;r<dh;r++){int sy=(int)(r/sc);if(sy>=djh)sy=djh-1;
+    for(int c=0;c<dw;c++){int sx=(int)(c/sc);if(sx>=djw)sx=djw-1;
+      dst[(oy+r)*CAR_TILE+(ox+c)]=jpeg_tmp_buf[sy*djw+sx];}
+    if(r%20==0)yield();}
+  free(jpeg_tmp_buf);jpeg_tmp_buf=NULL;return true;
+}
+// Persistent SD thumbnail cache (one central folder per side: /ADF/.thumbs, /DSK/.thumbs).
+static String carThumbRoot(int gi){
+  return (g_files[g_games[gi].first_file_idx].startsWith("/DSK"))?String("/DSK/.thumbs"):String("/ADF/.thumbs");
+}
+static String carThumbPath(int gi){
+  GameEntry&g=g_games[gi];
+  const String&p=g_files[g.first_file_idx];
+  uint32_t h=5381; for(unsigned i=0;i<p.length();i++)h=((h<<5)+h)^(uint8_t)p[i];   // djb2-xor
+  char hx[6]; snprintf(hx,sizeof(hx),"%04X",(unsigned)(h&0xFFFF));
+  return carThumbRoot(gi)+"/"+getGameBaseName(p)+"_"+hx+".tnl";
+}
+static bool carLoadThumb(int gi,uint16_t*dst){
+  GameEntry&g=g_games[gi];
+  if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return false;
+  String tp=carThumbPath(gi);
+  struct stat stT,stJ;
+  String vT="/sdcard"+tp,vJ="/sdcard"+g.jpg_path;
+  if(stat(vT.c_str(),&stT)!=0)return false;
+  if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))return false;
+  if(stat(vJ.c_str(),&stJ)==0&&stJ.st_mtime>stT.st_mtime)return false;   // cover replaced -> stale
+  File f=SD_MMC.open(tp.c_str(),"r");if(!f)return false;
+  size_t want=(size_t)CAR_TILE*CAR_TILE*2;
+  size_t got=f.read((uint8_t*)dst,want);f.close();
+  return got==want;
+}
+static void carSaveThumb(int gi,uint16_t*src){
+  GameEntry&g=g_games[gi];
+  if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return;
+  String root=carThumbRoot(gi);
+  if(!SD_MMC.exists(root.c_str()))SD_MMC.mkdir(root.c_str());
+  File f=SD_MMC.open(carThumbPath(gi).c_str(),FILE_WRITE);if(!f)return;
+  f.write((uint8_t*)src,(size_t)CAR_TILE*CAR_TILE*2);f.close();
+}
+// Fetch a game's tile (NULL if uncached and decoding isn't allowed right now).
+static uint16_t* carTile(int gi,bool mayDecode){
+  for(int s=0;s<CAR_SLOTS;s++)if(car_buf[s]&&car_game[s]==gi){car_stamp[s]=++car_tick_ctr;return car_buf[s];}
+  if(!mayDecode)return NULL;
+  int slot=-1;uint32_t old=0xFFFFFFFF;
+  for(int s=0;s<CAR_SLOTS;s++){
+    if(!car_buf[s]){car_buf[s]=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2);if(!car_buf[s])continue;car_game[s]=-1;car_stamp[s]=0;}
+    if(car_game[s]<0){slot=s;break;}
+    if(car_stamp[s]<old){old=car_stamp[s];slot=s;}
+  }
+  if(slot<0)return NULL;
+  car_game[slot]=gi;car_stamp[slot]=++car_tick_ctr;
+  if(!carLoadThumb(gi,car_buf[slot])){                       // fast path: raw thumb
+    if(carDecodeTile(gi,car_buf[slot]))carSaveThumb(gi,car_buf[slot]);   // self-heal fallback (rare)
+  }
+  return car_buf[slot];
+}
+// Build ALL cover thumbnails up-front (first reel entry / rescan). Fresh thumbs are
+// stat-checked and skipped, so a re-run over a built card is seconds, not minutes.
+static void buildThumbs(){
+  int n=(int)g_games.size(); if(!n)return;
+  uint16_t*tmp=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2);
+  if(!tmp)return;
+  uint32_t lastDraw=0;
+  for(int i=0;i<n;i++){
+    GameEntry&g=g_games[i];
+    if(!g.jpg_path.length()){String jpg;if(findJPGFor(g_files[g.first_file_idx],jpg))g.jpg_path=jpg;else g.jpg_path="?";}
+    bool need=false;
+    if(g.jpg_path.length()>0&&g.jpg_path!="?"){
+      String vT="/sdcard"+carThumbPath(i),vJ="/sdcard"+g.jpg_path;
+      struct stat stT,stJ;
+      if(stat(vT.c_str(),&stT)!=0)need=true;
+      else if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))need=true;
+      else if(stat(vJ.c_str(),&stJ)==0&&stJ.st_mtime>stT.st_mtime)need=true;
+    }
+    if(need&&carDecodeTile(i,tmp))carSaveThumb(i,tmp);
+    uint32_t nowMs=millis();
+    if(nowMs-lastDraw>100||i==n-1){
+      lastDraw=nowMs;
+      { UiFrame _uf;
+        UG->fillScreen(COL_BG);
+        UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(COL_AMBER,COL_BG);
+        { const char*s="BUILDING COVER CACHE"; int tw=UG->textWidth(s); UG->setCursor((LCD_WIDTH-tw)/2,LCD_HEIGHT/2-52); UG->print(s); }
+        UG->setFont(&lgfx::fonts::DejaVu9); UG->setTextColor(COL_MID,COL_BG);
+        { String m=String(i+1)+" / "+String(n); int tw=UG->textWidth(m); UG->setCursor((LCD_WIDTH-tw)/2,LCD_HEIGHT/2-22); UG->print(m); }
+        int bw2=LCD_WIDTH-160,bx=80,by=LCD_HEIGHT/2;
+        UG->drawRect(bx,by,bw2,14,COL_SEP);
+        UG->fillRect(bx+2,by+2,(int)((long)(bw2-4)*(i+1)/n),10,COL_GREEN);
+        UG->setTextColor(COL_DIM,COL_BG);
+        { const char*s="one-off: reel thumbnails (first launch / rescan)"; int tw=UG->textWidth(s); UG->setCursor((LCD_WIDTH-tw)/2,LCD_HEIGHT/2+30); UG->print(s); }
+      }
+    }
+    if((i&7)==0)yield();
+  }
+  free(tmp);
+  writeGameCache();   // persist jpg paths resolved during the build
+}
+
+static inline uint16_t carDim(uint16_t c,int lvl){
+  if(lvl<=0)return c;
+  if(lvl==1)return (uint16_t)((c>>1)&0x7BEF);    // ~50%
+  return (uint16_t)((c>>2)&0x39E7);              // ~25%
+}
+// Blit a tile scaled to w x h centred at (cx,cy), dim level 0..2, nearest-neighbour.
+static void carBlit(uint16_t*tile,int cx,int cy,int w,int h,int dim){
+  int x0=cx-w/2,y0=cy-h/2;
+  for(int dy=0;dy<h;dy++){int sy=dy*CAR_TILE/h;
+    for(int dx=0;dx<w;dx++){int sx=dx*CAR_TILE/w;
+      UG->drawPixel(x0+dx,y0+dy,carDim(tile?tile[sy*CAR_TILE+sx]:COL_BAR,dim));}}
+}
+// The d6 overlay: pips while rolling, final face at rest — or "23" on the lucky roll.
+static void carDrawDie(){
+  int third=LCD_WIDTH/3,s=30,x=2*third+(third-s)/2,y=LCD_HEIGHT-BOTTOM_H-s-16;   // hover a few lines ABOVE the ROLL button
+  UG->fillRoundRect(x,y,s,s,6,0xFFFF);
+  UG->drawRoundRect(x,y,s,s,6,COL_ACCENT);
+  int c=x+s/2,m=y+s/2,o=8;
+  if(g_car_die23&&!g_car_spin){
+    UG->setFont(&lgfx::fonts::DejaVu12);UG->setTextColor(TFT_BLACK,0xFFFF);
+    UG->setCursor(c-8,m-6);UG->print("23");return;   // a d6, and it came out 23
+  }
+  uint8_t f=g_car_die;
+  if(f&1)UG->fillCircle(c,m,2,TFT_BLACK);
+  if(f>=2){UG->fillCircle(c-o,m-o,2,TFT_BLACK);UG->fillCircle(c+o,m+o,2,TFT_BLACK);}
+  if(f>=4){UG->fillCircle(c+o,m-o,2,TFT_BLACK);UG->fillCircle(c-o,m+o,2,TFT_BLACK);}
+  if(f==6){UG->fillCircle(c-o,m,2,TFT_BLACK);UG->fillCircle(c+o,m,2,TFT_BLACK);}
+}
+
+static void drawCarousel(){ UiFrame _uf;   // KGfx UiFrame -> one VSYNC flush per reel frame
+  int W=LCD_WIDTH,H=LCD_HEIGHT;
+  drawStatusBar();
+  UG->fillRect(0,STATUS_H,W,H-STATUS_H-BOTTOM_H,COL_BG);
+  int n=carN();
+  int ccx=W/2, ccy=STATUS_H+16+CAR_TILE/2;
+  if(n==0){
+    UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextColor(COL_LIT,COL_BG);
+    String m="NO GAMES";
+    UG->setCursor((W-UG->textWidth(m))/2,ccy);UG->print(m);
+  }else{
+    int ci=(int)lroundf(g_car_pos);
+    float frac=g_car_pos-(float)ci;                      // -0.5..0.5
+    bool moving=(g_car_touch&&g_car_moved)||g_car_coast||g_car_spin;
+    int maxOff=(n>=5)?2:((n>=2)?1:0);
+    // Warm the cache CENTER-FIRST when settled (the star of the show decodes first).
+    if(!moving){
+      carTile(g_car_list[carWrap(ci)],true);
+      if(maxOff>=1){carTile(g_car_list[carWrap(ci-1)],true);carTile(g_car_list[carWrap(ci+1)],true);}
+    }
+    float SPX=CAR_TILE*0.74f;
+    static const int order[5]={-2,2,-1,1,0};             // far to near, center last (painter's order)
+    for(int oi=0;oi<5;oi++){
+      int off=order[oi];if(abs(off)>maxOff)continue;
+      int gi=g_car_list[carWrap(ci+off)];
+      float rel=(float)off-frac;
+      float ar=fabsf(rel);if(ar>2.6f)continue;
+      int x=ccx+(int)(rel*SPX*(1.0f-min(ar,1.0f)*0.22f));
+      float scale=1.0f-ar*0.28f;if(scale<0.42f)scale=0.42f;
+      float squash=1.0f-ar*0.20f;if(squash<0.55f)squash=0.55f;
+      int h=(int)(CAR_TILE*scale),w=(int)(CAR_TILE*scale*squash);
+      int dim=(ar<0.5f)?0:((ar<1.6f)?1:2);
+      uint16_t*tile=carTile(gi,!moving&&ar<1.6f);
+      carBlit(tile,x,ccy,w,h,dim);
+      GameEntry&gm=g_games[gi];
+      bool isLd=(g_loaded&&g_loaded_game_idx==gi);
+      uint16_t bord=(ar<0.5f)?(isLd?COL_GREEN:COL_AMBER):COL_ACCENT;
+      UG->drawRect(x-w/2-1,ccy-h/2-1,w+2,h+2,bord);
+      if(isLd)UG->drawRect(x-w/2-2,ccy-h/2-2,w+4,h+4,COL_GREEN);
+      // no-art placeholder letter
+      if(gm.jpg_path=="?"){
+        UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextSize((w>=CAR_TILE*3/4)?2:1);
+        char ib[2]={(char)toupper(gm.name.charAt(0)),0};
+        UG->setTextColor(carDim(COL_LIT,dim),carDim(COL_BAR,dim));
+        int gw=UG->textWidth(ib),gh=UG->charH();
+        UG->setCursor(x-gw/2,ccy-gh/2);UG->print(ib);
+        UG->setTextSize(1);
+      }
+    }
+    // center title
+    int gi=g_car_list[carWrap(ci)];
+    GameEntry&game=g_games[gi];
+    UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextColor(COL_LIT,COL_BG);
+    String t=game.name;while(UG->textWidth(t)>W-40&&t.length()>3)t=t.substring(0,t.length()-1);
+    int titleY=ccy+CAR_TILE/2+16;
+    UG->setCursor((W-UG->textWidth(t))/2,titleY);UG->print(t);
+    // lazy NFO blurb (keyed to the center game)
+    static int carNfoSel=-1;static String carBlurb="";
+    if(carNfoSel!=gi){carNfoSel=gi;carBlurb="";String nfoP;
+      if(findNFOFor(g_files[game.first_file_idx],nfoP)){File nf=SD_MMC.open(nfoP,FILE_READ);
+        if(nf){String txt;while(nf.available()&&txt.length()<512)txt+=(char)nf.read();nf.close();String nT,nB;parseNFO(txt,nT,nB);
+          if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=nT;carBlurb=nB;}}}
+    if(carBlurb.length()){
+      UG->setFont(&lgfx::fonts::DejaVu9);UG->setTextColor(COL_MID,COL_BG);
+      int by=titleY+22,bw=W-160,bx=80,lines=0;String line="",word="";
+      String s=carBlurb+" ";
+      for(unsigned i=0;i<s.length()&&lines<3;i++){char c=s[i];
+        if(c==' '||c=='\n'){String cand=line.length()?line+" "+word:word;
+          if(UG->textWidth(cand)>bw&&line.length()){UG->setCursor(bx,by);UG->print(line);by+=12;lines++;line=word;}
+          else line=cand; word="";}
+        else word+=c;}
+      if(lines<3&&line.length()){UG->setCursor(bx,by);UG->print(line);}
+    }
+    // reel position "i/n" top-right of the stage
+    UG->setFont(&lgfx::fonts::DejaVu9);UG->setTextColor(COL_DIM,COL_BG);
+    String pn=String(carWrap(ci)+1)+"/"+String(n);
+    UG->setCursor(W-10-UG->textWidth(pn),STATUS_H+6);UG->print(pn);
+    // INSERT/EJECT — explicit button (center tap is a dead zone)
+    {bool isLd=(g_loaded&&g_loaded_game_idx==gi);
+     g_car_ins_w=200;g_car_ins_h=40;
+     g_car_ins_x=(W-g_car_ins_w)/2;g_car_ins_y=H-BOTTOM_H-52;
+     uint16_t bf=isLd?(uint16_t)0xE8C4:COL_GREEN;
+     UG->fillRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,8,bf);
+     UG->drawRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,8,isLd?COL_AMBER:COL_GREEN);
+     UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextColor(TFT_BLACK,bf);
+     const char*lbl=isLd?"EJECT":"INSERT";int tw=UG->textWidth(lbl);
+     UG->setCursor(g_car_ins_x+(g_car_ins_w-tw)/2,g_car_ins_y+(g_car_ins_h-16)/2);UG->print(lbl);}
+  }
+  // carousel bottom bar: [LIST] | [ALL] | [ROLL]
+  int y=H-BOTTOM_H;UG->fillRect(0,y,W,BOTTOM_H,COL_BAR);UG->drawFastHLine(0,y,W,COL_SEP);
+  int third=W/3;
+  UG->drawFastVLine(third,y+4,BOTTOM_H-8,COL_SEP);UG->drawFastVLine(2*third,y+4,BOTTOM_H-8,COL_SEP);
+  // LIST
+  UG->fillCircle(third/2,y+14,10,(uint16_t)(COL_ORANGE>>2));UG->drawCircle(third/2,y+14,10,COL_ORANGE);
+  drawListIcon(third/2,y+14,COL_ORANGE);
+  UG->setFont(&lgfx::fonts::DejaVu9);UG->setTextColor(COL_DIM,COL_BAR);
+  UG->setCursor((third-UG->textWidth("LIST"))/2,y+30);UG->print("LIST");
+  // SOURCE (ALL — reserved for FAV/MOST later)
+  UG->fillCircle(third+third/2,y+14,10,(uint16_t)(COL_AMBER>>2));UG->drawCircle(third+third/2,y+14,10,COL_AMBER);
+  UG->setTextColor(COL_AMBER,(uint16_t)(COL_AMBER>>2));UG->setCursor(third+third/2-3,y+9);UG->print("*");
+  UG->setTextColor(COL_AMBER,COL_BAR);
+  UG->setCursor(third+(third-UG->textWidth("ALL"))/2,y+30);UG->print("ALL");
+  // ROLL — icon is a tiny die
+  {int dx=2*third+third/2,dy2=y+14,ds=18;
+   UG->fillRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,0xFFFF);
+   UG->drawRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,COL_GREEN);
+   int o=5;
+   UG->fillCircle(dx,dy2,1,TFT_BLACK);
+   UG->fillCircle(dx-o,dy2-o,1,TFT_BLACK);UG->fillCircle(dx+o,dy2+o,1,TFT_BLACK);
+   UG->fillCircle(dx+o,dy2-o,1,TFT_BLACK);UG->fillCircle(dx-o,dy2+o,1,TFT_BLACK);
+   UG->setTextColor(COL_DIM,COL_BAR);UG->setCursor(2*third+(third-UG->textWidth("ROLL"))/2,y+30);UG->print("ROLL");}
+  if(g_car_dieShow&&carN()>0)carDrawDie();   // dice overlay rides on top
+}
+
+static void carEnter(){
+  if(!g_car_built){buildThumbs();g_car_built=true;}      // one predictable build pass, first entry
+  carBuildList();
+  g_car_active=true;g_car_touch=false;g_car_coast=false;g_car_spin=false;g_car_dieShow=false;
+  int start=0;for(int i=0;i<carN();i++)if(g_car_list[i]==g_sel){start=i;break;}
+  g_car_pos=(float)start;
+  drawCarousel();
+}
+static void carExit(){
+  g_car_active=false;
+  // bring the selected game into view in the list before the full redraw
+  int mp=maxScrollPx();
+  float sp=(float)(g_sel*LIST_ITEM_H)-(float)(LIST_BOTTOM-LIST_TOP)/2.0f;
+  if(sp<0)sp=0; if(sp>(float)mp)sp=(float)mp;
+  g_scrollPx=sp; g_scroll=(int)(sp/LIST_ITEM_H); g_inertia_on=false;
+  drawFullUI();
+}
+// ROLL — spins to a random cover with a d6 overlay. Every tap re-rolls.
+static void carRollDice(){
+  int n=carN(); if(n<=0)return;
+  int tgt=(int)(esp_random()%n);
+  int cur=carWrap((int)lroundf(g_car_pos));
+  int off=((tgt-cur)%n+n)%n; if(off<15)off+=n;       // at least 15 covers of travel
+  g_car_pos=(float)cur;
+  g_car_spinTarget=(float)cur+(float)off;
+  g_car_spin=true; g_car_dieShow=true; g_car_coast=false; g_car_die_rest_ms=0;
+  g_car_die=1+(uint8_t)(esp_random()%6);
+  g_car_die23=((esp_random()%23)==0);                // the impossible roll
+  drawCarousel();
+}
+static void carHandleTap(uint16_t px,uint16_t py){
+  int W=LCD_WIDTH,H=LCD_HEIGHT;
+  if(py>=(uint16_t)(H-BOTTOM_H)){
+    int third=W/3;
+    if(px<(uint16_t)third)carExit();
+    else if(px<(uint16_t)(2*third)){/* middle (ALL) — reserved for FAV/MOST */}
+    else carRollDice();
+    return;
+  }
+  int n=carN();if(!n)return;
+  int ci=carWrap((int)lroundf(g_car_pos));
+  int ccx=W/2,ccy=STATUS_H+16+CAR_TILE/2;
+  // INSERT/EJECT button (checked first — its corners overlap the side zones)
+  if(px>=(uint16_t)g_car_ins_x&&px<(uint16_t)(g_car_ins_x+g_car_ins_w)&&
+     py>=(uint16_t)g_car_ins_y&&py<(uint16_t)(g_car_ins_y+g_car_ins_h)){
+    int gi=g_car_list[ci];
+    g_sel=gi;g_disk_sel=0;
+    if(g_loaded&&g_loaded_game_idx==gi)doUnload();
+    else{GameEntry&gm=g_games[gi];doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[0]]);}
+    if(g_car_active)drawCarousel();                     // repaint over the list redraw the loader did
+    return;
+  }
+  // center cover = DEAD ZONE (mounting is always the deliberate button)
+  if(px>=(uint16_t)(ccx-CAR_TILE/2)&&px<(uint16_t)(ccx+CAR_TILE/2)&&
+     py>=(uint16_t)(ccy-CAR_TILE/2)&&py<(uint16_t)(ccy+CAR_TILE/2))return;
+  // side tap = step one cover toward that side
+  if(px<(uint16_t)(ccx-CAR_TILE/2))g_car_pos-=1.0f;
+  else if(px>=(uint16_t)(ccx+CAR_TILE/2))g_car_pos+=1.0f;
+  else return;
+  g_car_pos=(float)carWrap((int)lroundf(g_car_pos));
+  g_car_coast=false;drawCarousel();
+}
+// Carousel touch state machine — mirrors the list's tap/drag/coast logic.
+static void carTick(bool touch,uint16_t px,uint16_t py,uint32_t now){
+  int n=carN();
+  if(touch){
+    g_car_rel=0;
+    if(!g_car_touch){
+      // a touch mid-roll skips the spin straight to the result; any touch clears the die
+      if(g_car_spin){g_car_spin=false;g_car_pos=(float)carWrap((int)lroundf(g_car_spinTarget));}
+      g_car_dieShow=false;
+      g_car_touch=true;g_car_moved=false;g_car_x0=px;g_car_y0=py;g_car_lastX=px;
+      g_car_pos0=g_car_pos;g_car_vel=0;g_car_coast=false;g_car_lastMs=now;
+    }else{
+      if(abs((int)px-g_car_x0)>DRAG_THRESH)g_car_moved=true;
+      if(g_car_moved&&n>0&&py<(uint16_t)(LCD_HEIGHT-BOTTOM_H)){
+        g_car_pos=g_car_pos0-((float)((int)px-g_car_x0))/CAR_PX_PER_STEP;
+        uint32_t dt=now-g_car_lastMs;
+        if(dt>0){g_car_vel=((float)((int)px-g_car_lastX))/(float)dt;g_car_lastX=px;g_car_lastMs=now;}
+        drawCarousel();
+      }
+    }
+    return;
+  }
+  if(g_car_touch){
+    if(++g_car_rel<RELEASE_FRAMES)return;
+    g_car_touch=false;g_car_rel=0;
+    if(g_car_moved){g_car_ivel=-g_car_vel*16.0f/CAR_PX_PER_STEP;g_car_coast=(fabsf(g_car_ivel)>0.004f);if(!g_car_coast){g_car_coast=true;g_car_ivel=0;}}
+    else carHandleTap((uint16_t)g_car_x0,(uint16_t)g_car_y0);
+    return;
+  }
+  if(g_car_spin&&n>0){
+    // dice-roll spin: ease-out toward the pre-chosen target, tumbling the die
+    float d=g_car_spinTarget-g_car_pos;
+    g_car_pos+=d*0.14f;
+    if((++g_car_dieTick&3)==0)g_car_die=1+(uint8_t)(esp_random()%6);   // tumble pips
+    if(fabsf(d)<0.05f){
+      g_car_pos=(float)carWrap((int)lroundf(g_car_spinTarget));
+      g_car_spin=false;                                  // die rests on its final face
+      g_car_die=1+(uint8_t)(esp_random()%6);
+      g_car_die_rest_ms=now;                             // arm the auto-hide timer
+    }
+    drawCarousel();
+    return;
+  }
+  // auto-hide the rested die a few seconds after the roll settles
+  if(g_car_dieShow&&!g_car_spin&&g_car_die_rest_ms&&now-g_car_die_rest_ms>=DIE_HIDE_MS){
+    g_car_dieShow=false;g_car_die_rest_ms=0;drawCarousel();return;
+  }
+  if(g_car_coast&&n>0){
+    g_car_pos+=g_car_ivel;g_car_ivel*=0.92f;
+    if(fabsf(g_car_ivel)<0.02f){
+      float target=(float)lroundf(g_car_pos);
+      float dd=target-g_car_pos;
+      if(fabsf(dd)<0.01f){g_car_pos=(float)carWrap((int)target);g_car_coast=false;}
+      else g_car_pos+=dd*0.35f;
+    }
+    drawCarousel();                                      // final settled draw decodes covers
+    return;
+  }
+  // Idle prefetch: while the reel rests, quietly warm the neighbours (one per ~150 ms).
+  if(n>0){
+    static uint32_t lastPre=0;
+    if(now-lastPre>=150){
+      lastPre=now;
+      int ci=carWrap((int)lroundf(g_car_pos));
+      int maxPre=min(5,n/2);
+      for(int d2=1;d2<=maxPre;d2++)for(int sgn=-1;sgn<=1;sgn+=2){
+        int gi=g_car_list[carWrap(ci+d2*sgn)];
+        bool cached=false;
+        for(int sl=0;sl<CAR_SLOTS;sl++)if(car_buf[sl]&&car_game[sl]==gi){cached=true;break;}
+        if(!cached){
+          carTile(gi,true);
+          if(d2<=2)drawCarousel();                       // it's on screen — show it
+          return;                                        // one tile per tick, stay responsive
+        }
+      }
+    }
+  }
+}
+
 void setup(){
   applyTheme(0);  // default colours before SD is available
   Serial.begin(115200); delay(200);
@@ -2758,7 +3285,8 @@ void setup(){
   MSC.onRead(onRead); MSC.onWrite(onWrite); MSC.mediaPresent(true);
   MSC.begin(TOTAL_SECTORS,SECTOR_SIZE); USB.begin();
   hardDetach();
-  drawFullUI();
+  if(g_car_bootmode==1 && !g_games.empty()) carEnter();   // CAROUSEL=1: boot straight into the reel
+  else drawFullUI();
 }
 
 void loop(void){
@@ -2786,6 +3314,9 @@ void loop(void){
   uint16_t px=0,py=0;
   bool haveTouch=frame&&getTouchXY(&px,&py);
   uint32_t nowMs=millis();
+
+  // ── Carousel mode: dedicated tap/drag/coast machine, then bail ──
+  if(g_car_active){ carTick(haveTouch,px,py,nowMs); return; }
 
   // ── Touch state machine: tap vs drag-scroll with flick inertia (JC engine) ──
   if(haveTouch){
@@ -3041,8 +3572,8 @@ static void handleTap(uint16_t px,uint16_t py){
 
   // ── Bottom bar ─────────────────────────────────────────────────────────────
   if(py>=LCD_HEIGHT-BOTTOM_H){
-    int bw=LCD_WIDTH/4;
-    int btn=px/bw;
+    int bw=LCD_WIDTH/5;
+    int btn=px/bw; if(btn>4)btn=4;
     if(btn==0){
       if(g_sel>0){
         g_sel--; g_disk_sel=0;
@@ -3062,6 +3593,9 @@ static void handleTap(uint16_t px,uint16_t py){
     } else if(btn==2){
       // THEME — cycle to next
       cycleTheme();
+    } else if(btn==3){
+      // REEL — enter the carousel
+      g_info_showing=false; carEnter();
     } else {
       // INFO — second tap toggles back to the regular cover panel
       if(g_info_showing){
