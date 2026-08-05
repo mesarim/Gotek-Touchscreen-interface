@@ -43,19 +43,8 @@
 #include "esp_system.h"
 #include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 
-// ---------- BOARD SELECT ----------
-// 0 = Waveshare 7" (800x480, PROVEN).  1 = Waveshare 7B (1024x600, BLIND port — no board on bench).
-// The 7B keeps the 7"'s EXACT pinout (RGB data + DE5/HSYNC46/VSYNC3/PCLK7 + touch@0x5D + expander@0x24 + SD 11/12/13);
-// ONLY resolution + RGB timing differ (see KLCD_W/H and the panel-config #if GTI_7B block). Flip to 1, Export, flash a 7B.
-#ifndef GTI_7B
-#define GTI_7B 0
-#endif
 // ---------- Version ----------
-#if GTI_7B
-#define FW_VERSION  "v4.7.6-7B"
-#else
 #define FW_VERSION  "v4.7.6-7IN"
-#endif
 
 // ---------- ESP-NOW server (peer-to-peer, no WiFi AP needed) ----------
 #include "espnow_server.h"
@@ -142,13 +131,8 @@ static float g_font_mult = 1.0f;   // multiplier applied to every glyph
 // textWidth/...) so the existing 300+ draw call sites compile unchanged, but
 // renders into a PSRAM compose buffer — JC3248 architecture, unified codebase.
 // ============================================================================
-#if GTI_7B
-#define KLCD_W 1024
-#define KLCD_H 600
-#else
 #define KLCD_W 800
 #define KLCD_H 480
-#endif
 // GT911 address is probed at boot (0x5D after our deterministic reset; 0x14 fallback)
 
 // 6x8 bitmap font, ASCII 32..126 (also used by the cracktro as crk_font).
@@ -287,34 +271,20 @@ public:
   bool init(){
     esp_lcd_rgb_panel_config_t cfg = {};
     cfg.clk_src = LCD_CLK_SRC_DEFAULT;
+    cfg.timings.pclk_hz            = 16000000;   // proven on this panel
     cfg.timings.h_res              = KLCD_W;
     cfg.timings.v_res              = KLCD_H;
-#if GTI_7B
-    // 7B 1024x600 — BLIND best-guess. Same pulse widths + front porches as the 7"
-    // family; larger back porches + faster pclk for the bigger panel (the common
-    // Arduino_GFX 1024x600 profile). *** TWEAK: drifts/wraps -> LOWER pclk (24/21M)
-    // or raise the bounce lines below; flickers/won't lock -> RAISE pclk toward 37M. ***
-    cfg.timings.pclk_hz            = 30000000;
-    cfg.timings.hsync_pulse_width  = 48;
-    cfg.timings.hsync_back_porch   = 128;
-    cfg.timings.hsync_front_porch  = 40;
-    cfg.timings.vsync_pulse_width  = 3;
-    cfg.timings.vsync_back_porch   = 45;
-    cfg.timings.vsync_front_porch  = 13;
-#else
-    cfg.timings.pclk_hz            = 16000000;   // proven on this panel
     cfg.timings.hsync_pulse_width  = 48;
     cfg.timings.hsync_back_porch   = 88;
     cfg.timings.hsync_front_porch  = 40;
     cfg.timings.vsync_pulse_width  = 3;
     cfg.timings.vsync_back_porch   = 32;
     cfg.timings.vsync_front_porch  = 13;
-#endif
     cfg.timings.flags.pclk_active_neg = 1;
     cfg.data_width            = 16;
     cfg.bits_per_pixel        = 16;
     cfg.num_fbs               = 2;                // double buffer -> VSYNC page-flip
-    cfg.bounce_buffer_size_px = KLCD_W * (GTI_7B ? 30 : 20);   // more lines on the 7B (higher pclk = tighter refill window):
+    cfg.bounce_buffer_size_px = KLCD_W * 20;      // 20 lines (~1.2ms stall tolerance):
                                                   // SD/JPEG/WiFi PSRAM bursts starved the
                                                   // LCD DMA at 10 -> image drift/wrap
     cfg.psram_trans_align     = 64;

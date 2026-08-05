@@ -537,12 +537,12 @@
       <div class="selected-indicator"></div>
       <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC3248 3.5-inch touchscreen" loading="lazy">
       <div class="device-name">Guition JC3248 &mdash; BETA</div>
-      <div class="device-chip">ESP32-S3 &middot; 3.5" 480×320 &middot; 5.4.0-beta &middot; SD Access + GEN + FW Update</div>
+      <div class="device-chip">ESP32-S3 &middot; 3.5" 480×320 &middot; 5.4.1-beta &middot; SD Access + GEN + FW Update</div>
       <div class="device-desc">Everything in the stable <b>A.5.0.0</b> build, plus <b>SD Access</b> (mount the SD on your PC to add games &mdash; no case-opening), <b>GEN mode</b> &mdash; a generic library (<code>/GENERIC/</code>) that mounts <i>any</i> disk image and lets FlashFloppy handle the format, a step toward the GTi front-ending <b>any Gotek machine</b> (Akai, Atari ST, PC, synths&hellip;) &mdash; and <b>NEW: SD firmware-update</b>, self-flash a new build from the SD card (no cable) with a verified image and dual-slot safety. <b>One-time note:</b> this build moves to a dual-OTA partition layout, so flashing it now is the last USB session your unit needs &mdash; every update after is drop-a-file-on-the-card. Bench-tested; testers very welcome via GitHub.</div>
       <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
       <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
         <b>Already on 5.3.0 or later?</b> Update over the SD card &mdash; no re-flash:
-        <a href="firmware/jc3248-beta/GTi-3.5-5.4.0-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-3.5-5.4.0-update.bin</a> &mdash; save it as <b>GTi_update.bin</b>,
+        <a href="firmware/jc3248-beta/GTi-3.5-5.4.1-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-3.5-5.4.1-update.bin</a> &mdash; save it as <b>GTi_update.bin</b>,
         drop it on the SD card root, then on the GTi tap <b>INFO &#9656; FW&nbsp;UPDATE</b>. (First move onto 5.3.0 with the web-flash above &mdash; that&rsquo;s the one-time USB step.)
       </div>
     </div>
@@ -551,12 +551,12 @@
       <div class="selected-indicator"></div>
       <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC4827W543 4.3-inch touchscreen" loading="lazy">
       <div class="device-name">Guition JC4827W543 4.3&Prime; &mdash; BETA</div>
-      <div class="device-chip">ESP32-S3 &middot; 4.3" 480×272 &middot; 5.4.0-beta &middot; NV3041A QSPI</div>
+      <div class="device-chip">ESP32-S3 &middot; 4.3" 480×272 &middot; 5.4.1-beta &middot; NV3041A QSPI</div>
       <div class="device-desc"><b>NEW: the bigger 4.3-inch GTi.</b> Everything the JC3248 beta does &mdash; the full interface, cover art, GEN mode, <b>SD Access</b> and cable-free <b>SD firmware-update</b> &mdash; on a roomier 4.3&Prime; QSPI screen (still smooth-rotating, no RGB jank). Capacitive touch, dual-role (standalone <i>and</i> wireless). <b>Bench-verified on a real Amiga</b>; freshly ported, so testers especially welcome via GitHub. Uses a 4&nbsp;MB / OTA layout, so SD firmware-updates work out of the box.</div>
       <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
       <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
         <b>Already on 5.3.x?</b> Update over the SD card &mdash; no re-flash:
-        <a href="firmware/jc4827-beta/GTi-4.3-5.4.0-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-4.3-5.4.0-update.bin</a> &mdash; save it as <b>GTi_update.bin</b>,
+        <a href="firmware/jc4827-beta/GTi-4.3-5.4.1-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-4.3-5.4.1-update.bin</a> &mdash; save it as <b>GTi_update.bin</b>,
         drop it on the SD card root, then tap <b>INFO &#9656; FW&nbsp;UPDATE</b>.
       </div>
     </div>
@@ -570,6 +570,19 @@
       <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
         <b>Already on an older 7&Prime; build?</b> Update over the SD card &mdash; no re-flash:
         <a href="firmware/waveshare7/GTi-7in-4.7.6-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-7in-4.7.6-update.bin</a> &mdash; save it as <b>GTi_update.bin</b>,
+        drop it on the SD card root, then tap <b>INFO &#9656; FW&nbsp;UPDATE</b>.
+      </div>
+    </div>
+
+    <div class="device-card" data-manifest="firmware/waveshare7b-beta/manifest.json" onclick="selectDevice(this)">
+      <div class="selected-indicator"></div>
+      <div class="device-name">Waveshare 7B &mdash; BETA</div>
+      <div class="device-chip">ESP32-S3 &middot; 7" 1024×600 RGB &middot; v4.7.6-7B &middot; UNTESTED &middot; first-tester build</div>
+      <div class="device-desc"><b>The higher-res 1024×600 sibling of the 7".</b> Same features as the 7" beta &mdash; SD Access, cable-free SD firmware-update, type-to-search, GEN library, save-writeback, plus large-font &amp; high-visibility accessibility modes &mdash; adapted for the 1024×600 panel. <b>Flashed blind (no 7B on our bench)</b>, so the display timing is a best-guess: if the image drifts or flickers it's tunable &mdash; please report back. Dual-role (standalone <i>and</i> wireless).</div>
+      <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
+      <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
+        <b>Already on a 7B build?</b> Update over the SD card &mdash; no re-flash:
+        <a href="firmware/waveshare7b-beta/GTi-7B-4.7.6-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-7B-4.7.6-update.bin</a> &mdash; save it as <b>GTi_update.bin</b>,
         drop it on the SD card root, then tap <b>INFO &#9656; FW&nbsp;UPDATE</b>.
       </div>
     </div>
@@ -1064,9 +1077,10 @@ relayout();bootCracktro();requestAnimationFrame(frame);
   // Device versions — update these when you build new firmware
   const deviceInfo = {
     'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware A.5.0.0' },
-    'firmware/jc3248-beta/manifest.json':{ name: 'Guition JC3248 BETA', version: 'Firmware 5.4.0-beta (SD Access + GEN + FW Update)' },
-    'firmware/jc4827-beta/manifest.json':{ name: 'Guition JC4827W543 4.3" BETA', version: 'Firmware 5.4.0-beta (4.3" NV3041A)' },
+    'firmware/jc3248-beta/manifest.json':{ name: 'Guition JC3248 BETA', version: 'Firmware 5.4.1-beta (SD Access + GEN + FW Update)' },
+    'firmware/jc4827-beta/manifest.json':{ name: 'Guition JC4827W543 4.3" BETA', version: 'Firmware 5.4.1-beta (4.3" NV3041A)' },
     'firmware/waveshare7/manifest.json': { name: 'Waveshare 7" BETA',  version: 'Firmware v4.7.6-7IN BETA (SD Access · Search · GEN · Saves)' },
+    'firmware/waveshare7b-beta/manifest.json': { name: 'Waveshare 7B BETA', version: 'Firmware v4.7.6-7B BETA (1024×600 · first-tester)' },
     'firmware/waveshare28/manifest.json':{ name: 'Waveshare 2.8"', version: 'Firmware v3.4.7' },
     'firmware/supermini/manifest.json':  { name: 'Super Mini Dongle', version: 'Firmware v3.2.0' },
     'firmware/xiao/manifest.json':       { name: 'XIAO Dongle',   version: 'Firmware v3.2.0' },

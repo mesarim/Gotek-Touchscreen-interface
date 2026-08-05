@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.4.0-JC3248"
+#define FW_VERSION "5.4.1-JC3248"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -1945,7 +1945,7 @@ static void carBlit(uint16_t*tile,int cx,int cy,int w,int h,int dim){
 
 // The d6 overlay: pips while rolling, final face at rest — or "23" on the lucky roll.
 static void carDrawDie(){
-  int s=26,x=VW/2-s/2,y=STATUS_H+4;
+  int s=26,bw=VW/3,x=2*bw+(bw-s)/2,y=VH-BOTTOM_H+(BOTTOM_H-s)/2;   // v5.4.1: roll over the ROLL button (was top-centre, over the cover/title)
   gfx_fillRoundRect(x,y,s,s,5,0xFFFF);
   gfx_drawRoundRect(x,y,s,s,5,COL_ACCENT);
   int c=x+s/2,m=y+s/2,o=7;
