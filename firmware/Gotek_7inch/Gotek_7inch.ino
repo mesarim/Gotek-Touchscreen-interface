@@ -38,10 +38,13 @@
 #include <algorithm>
 #include <ctype.h>
 #include "esp_random.h"
+#include "Update.h"
+#include "esp_ota_ops.h"
+#include "esp_system.h"
 #include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 
 // ---------- Version ----------
-#define FW_VERSION  "v4.6.4-7IN"
+#define FW_VERSION  "v4.7.5-7IN"
 
 // ---------- ESP-NOW server (peer-to-peer, no WiFi AP needed) ----------
 #include "espnow_server.h"
@@ -118,6 +121,10 @@ static void initExpander() {
 static int gW = 800, gH = 480;
 
 // ============================================================================
+// v4.6.5-7IN: accessibility font scale (FONT=SMALL/NORMAL/LARGE). Declared here so the
+// KGfx setFont() below can read it — one global hook scales all text.
+static int   g_font      = 1;      // 0=small 1=normal 2=large
+static float g_font_mult = 1.0f;   // multiplier applied to every glyph
 // K DISPLAY ENGINE — esp_lcd RGB panel, double framebuffer, VSYNC page-flip.
 // Bench-proven in K_DISPLAYTEST v3 (tear-free). All UI code below draws through
 // the KGfx shim, which keeps the LovyanGFX-style API (setCursor/print/fillRect/
@@ -373,6 +380,7 @@ public:
       case 3:  fscale=2.0f; break;   // DejaVu18 -> 12x16
       default: fscale=1.0f; break;   // Font0 / DejaVu9 -> 6x8
     }
+    fscale*=g_font_mult;   // v4.6.5-7IN: FONT=SMALL/NORMAL/LARGE accessibility scale
   }
   void setTextSize(int s){ tsize=(s<1)?1:s; }
   void setTextColor(uint16_t f,uint16_t b){ tfg=f; tbg=b; }
@@ -537,7 +545,7 @@ static const uint32_t DATA_SECTORS    = (TOTAL_SECTORS - DATA_LBA);
 static const uint32_t MAX_FILE_BYTES  = DATA_SECTORS * SECTOR_SIZE;
 static const uint32_t ADF_DEFAULT_SIZE = 901120;
 
-enum DiskMode { MODE_ADF=0, MODE_DSK=1 };
+enum DiskMode { MODE_ADF=0, MODE_DSK=1, MODE_GEN=2 };
 static DiskMode g_mode = MODE_ADF;
 
 static inline const char* getOutputFilename() {
@@ -608,9 +616,37 @@ static int32_t onRead(uint32_t lba,uint32_t off,void* buf,uint32_t n) {
   uint32_t s=lba*SECTOR_SIZE+off; if(s+n>TOTAL_SECTORS*SECTOR_SIZE) return 0;
   memcpy(buf,g_disk+s,n); return (int32_t)n;
 }
+// ── Save-game persistence (v4.8.0, standalone) ──────────────────────────────
+// The Amiga writes to OUR RAM disk (we are the USB drive); onWrite ticks a dirty
+// map, and a 3s settle timer (or eject/unload) copies the master to
+// GameName.sav.adf and patches the changed sectors. SAVES=OFF/COPY/OVERWRITE.
+// The wireless-dongle save-fetch path is a separate subsystem, not ported here.
+#define SV_IMG_MAX_SECTORS (TOTAL_SECTORS-DATA_LBA)
+#define SV_SETTLE_MS 3000
+static int      g_saves_mode=1;                          // 0=OFF 1=COPY 2=OVERWRITE (SAVES=)
+static uint8_t  g_sv_dirty[(SV_IMG_MAX_SECTORS+7)/8];
+static volatile uint16_t g_sv_dirty_count=0;
+static volatile uint32_t g_sv_last_write=0;
+static volatile uint32_t g_sv_total_writes=0;
+static String   g_loaded_path="";                        // SD path of the mounted image ("" = diag/none)
+static uint32_t g_sv_img_size=0;                          // bytes of the mounted image
+static uint8_t  g_sv_fail=0;
+static inline bool svGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
+static inline void svSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
+static void svDirtyReset(){memset(g_sv_dirty,0,sizeof(g_sv_dirty));g_sv_dirty_count=0;g_sv_last_write=0;}
 static int32_t onWrite(uint32_t lba,uint32_t off,uint8_t* buf,uint32_t n) {
   uint32_t s=lba*SECTOR_SIZE+off; if(s+n>TOTAL_SECTORS*SECTOR_SIZE) return 0;
-  memcpy(g_disk+s,buf,n); return (int32_t)n;
+  memcpy(g_disk+s,buf,n);
+  // tick the dirty scorecard for every image sector this write touches
+  g_sv_total_writes=g_sv_total_writes+1;
+  uint32_t first=s/512,last=(s+n-1)/512,imgSecs=(g_sv_img_size+511)/512;
+  if(imgSecs>SV_IMG_MAX_SECTORS)imgSecs=SV_IMG_MAX_SECTORS;
+  for(uint32_t l=first;l<=last;l++){
+    if(l<DATA_LBA)continue; uint32_t i=l-DATA_LBA; if(i>=imgSecs)continue;
+    if(!svGet(g_sv_dirty,i)){svSet(g_sv_dirty,i);g_sv_dirty_count=g_sv_dirty_count+1;}
+  }
+  g_sv_last_write=millis();
+  return (int32_t)n;
 }
 static void usbEventCallback(void*,esp_event_base_t,int32_t,void*){}
 
@@ -628,14 +664,62 @@ static void hardAttach(){
   g_usb_online=true;
 }
 
+// ---------- SD ACCESS (ported from JC v5.1) ----------
+// Plug the GTi into a PC to add games without pulling the SD. Native USB-MSC is
+// fixed once USB.begin() runs, so SD Access is a dedicated BOOT MODE: the INFO
+// button stamps an RTC flag + reboots; setup() sees it and brings MSC up backed
+// by the SD card's RAW sectors (true capacity) BEFORE USB.begin(). Exit reboots
+// to normal. onReadSD/onWriteSD go straight to raw sectors (bypass FATFS) so the
+// PC is the only master on the volume while it holds the card.
+RTC_NOINIT_ATTR uint32_t g_sdaccess_magic;   // NOINIT survives esp_restart(); cleared on power loss
+RTC_NOINIT_ATTR uint32_t g_sdaccess_key;     // 2nd word: guards against RTC garbage false-triggering on cold boot
+#define SDACCESS_MAGIC 0x5DACCE55u
+#define SDACCESS_KEY   0xA5A50FF0u
+// The Waveshare 7" reports a reset reason other than ESP_RST_SW after ESP.restart(),
+// so the JC's reset-reason gate vetoed every request here. Instead we require BOTH
+// RTC words to match (~2^-64 as garbage) — board-independent, no reset-reason needed.
+static uint32_t g_sd_sectors=0;                       // real card size, set at SD-access boot
+static volatile uint32_t g_sd_rd=0,g_sd_wr=0;         // sector-op tallies for the activity readout
+static volatile bool g_sd_eject=false;                // set by the SCSI START/STOP (eject) callback
+static uint8_t g_sd_tmp[512];                          // scratch for the (rare) sub-sector transfer
+static int32_t onReadSD(uint32_t lba,uint32_t off,void*buf,uint32_t n){
+  uint8_t*out=(uint8_t*)buf;uint32_t done=0;
+  while(done<n){uint32_t sec=lba+(off+done)/512,so=(off+done)%512,chunk=512-so;if(chunk>n-done)chunk=n-done;
+    if(sec>=g_sd_sectors)return (int32_t)done;
+    if(so==0&&chunk==512){if(!SD_MMC.readRAW(out+done,sec))return (int32_t)done;}
+    else{if(!SD_MMC.readRAW(g_sd_tmp,sec))return (int32_t)done;memcpy(out+done,g_sd_tmp+so,chunk);}
+    g_sd_rd=g_sd_rd+1;done+=chunk;}
+  return (int32_t)done;}
+static int32_t onWriteSD(uint32_t lba,uint32_t off,uint8_t*buf,uint32_t n){
+  uint32_t done=0;
+  while(done<n){uint32_t sec=lba+(off+done)/512,so=(off+done)%512,chunk=512-so;if(chunk>n-done)chunk=n-done;
+    if(sec>=g_sd_sectors)return (int32_t)done;
+    if(so==0&&chunk==512){if(!SD_MMC.writeRAW(buf+done,sec))return (int32_t)done;}
+    else{if(!SD_MMC.readRAW(g_sd_tmp,sec))return (int32_t)done;memcpy(g_sd_tmp+so,buf+done,chunk);if(!SD_MMC.writeRAW(g_sd_tmp,sec))return (int32_t)done;}
+    g_sd_wr=g_sd_wr+1;done+=chunk;}
+  return (int32_t)done;}
+static bool onStartStopSD(uint8_t,bool start,bool load_eject){if(load_eject&&!start)g_sd_eject=true;return true;}
+
 // ---------- SD card (SD_MMC 1-bit) ----------
 #define SD_MOSI 11
 #define SD_CLK  12
 #define SD_MISO 13
 
+// v5.2 GEN mode: a "disk image" is any file that ISN'T a known sidecar
+// (cover / info / manual / config / index cache). Extension-agnostic by design
+// — FlashFloppy identifies the real format from the file itself. (u = UPPERCASE name)
+static bool isGenImage(const String& u){
+  if(u.startsWith("."))return false;
+  if(u.indexOf(".SAV.")>=0)return false;
+  if(u=="FF.CFG")return false;
+  if(u.endsWith(".JPG")||u.endsWith(".JPEG")||u.endsWith(".PNG"))return false;
+  if(u.endsWith(".NFO")||u.endsWith(".RTFM")||u.endsWith(".TXT"))return false;
+  if(u.endsWith(".INDEX")||u.endsWith(".GAMECACHE"))return false;
+  return true;
+}
 static bool listImages(fs::FS& fs, std::vector<String>& out) {
   out.clear();
-  String modeDir = (g_mode == MODE_ADF) ? "/ADF" : "/DSK";
+  String modeDir = (g_mode == MODE_ADF) ? "/ADF" : (g_mode == MODE_DSK) ? "/DSK" : "/GENERIC";
   String ext1    = (g_mode == MODE_ADF) ? ".ADF" : ".DSK";
 
   // Primary scan: /ADF/<GameFolder>/<file>.adf  or  /ADF/<file>.adf
@@ -654,7 +738,7 @@ static bool listImages(fs::FS& fs, std::vector<String>& out) {
           int slash = fname.lastIndexOf('/');
           if (slash >= 0) fname = fname.substring(slash + 1);
           String upper = fname; upper.toUpperCase();
-          if (upper.endsWith(ext1) || upper.endsWith(".IMG") || upper.endsWith(".ADZ")) {
+          if ((g_mode==MODE_GEN ? isGenImage(upper) : (upper.endsWith(ext1) || upper.endsWith(".IMG") || upper.endsWith(".ADZ")))) {
             String fullPath = entryName + "/" + fname;
             if (!fullPath.startsWith("/")) fullPath = "/" + fullPath;
             out.push_back(fullPath);
@@ -667,7 +751,7 @@ static bool listImages(fs::FS& fs, std::vector<String>& out) {
         int slash = fname.lastIndexOf('/');
         if (slash >= 0) fname = fname.substring(slash + 1);
         String upper = fname; upper.toUpperCase();
-        if (upper.endsWith(ext1) || upper.endsWith(".IMG") || upper.endsWith(".ADZ")) {
+        if ((g_mode==MODE_GEN ? isGenImage(upper) : (upper.endsWith(ext1) || upper.endsWith(".IMG") || upper.endsWith(".ADZ")))) {
           out.push_back(entryName);
         }
       }
@@ -678,7 +762,7 @@ static bool listImages(fs::FS& fs, std::vector<String>& out) {
 
   // Fallback: also scan root for any .ADF/.DSK files (legacy / flat SD layout)
   // Only add if no file with the same basename already exists from subfolder scan
-  File rootDir = SD_MMC.open("/");
+  File rootDir = (g_mode==MODE_GEN) ? File() : SD_MMC.open("/");   // GEN scans /GENERIC only
   if (rootDir) {
     File entry;
     while ((entry = rootDir.openNextFile())) {
@@ -958,20 +1042,21 @@ static void relayout(){
   AZ_X=LCD_WIDTH-AZ_W;
   if(!g_portrait_mode){
     // ── Landscape (0/2): original layout, byte-identical to the old #defines ──
-    COVER_W=200; COVER_H=LCD_HEIGHT-STATUS_H-BOTTOM_H;
-    COVER_ART_X=8; COVER_ART_Y=STATUS_H+6; COVER_ART_W=184; COVER_ART_H=150;
+    COVER_W=300; COVER_H=LCD_HEIGHT-STATUS_H-BOTTOM_H;   // v4.6.5-7IN: +50% cover (room on the big panel)
+    COVER_ART_X=8; COVER_ART_Y=STATUS_H+6; COVER_ART_W=284; COVER_ART_H=225;
     LIST_X=COVER_W; LIST_W=LCD_WIDTH-COVER_W-AZ_W;
     LIST_TOP=STATUS_H+MODE_BAR_H;
     LIST_BOTTOM=LCD_HEIGHT-BOTTOM_H-NOW_PLAY_H;
-    ITEMS_VIS=8; LIST_ITEM_H=(LIST_BOTTOM-LIST_TOP)/ITEMS_VIS;
+    ITEMS_VIS=(int)(8.0f/g_font_mult+0.5f); if(ITEMS_VIS<3)ITEMS_VIS=3;   // v4.6.5-7IN: fewer/taller rows on LARGE
+    LIST_ITEM_H=(LIST_BOTTOM-LIST_TOP)/ITEMS_VIS;
   } else {
     // ── Portrait (1/3): cover full-width on top, list full-width below ──
-    COVER_W=LCD_WIDTH; COVER_H=196;
-    COVER_ART_X=8; COVER_ART_Y=STATUS_H+MODE_BAR_H+8; COVER_ART_W=150; COVER_ART_H=150;
+    COVER_W=LCD_WIDTH; COVER_H=270;   // v4.6.5-7IN: +50% cover
+    COVER_ART_X=8; COVER_ART_Y=STATUS_H+MODE_BAR_H+8; COVER_ART_W=225; COVER_ART_H=225;
     LIST_X=0; LIST_W=LCD_WIDTH-AZ_W;
     LIST_TOP=STATUS_H+MODE_BAR_H+COVER_H;
     LIST_BOTTOM=LCD_HEIGHT-BOTTOM_H-NOW_PLAY_H;
-    int rowH=58; ITEMS_VIS=(LIST_BOTTOM-LIST_TOP)/rowH; if(ITEMS_VIS<1)ITEMS_VIS=1;
+    int rowH=(int)(58*g_font_mult); ITEMS_VIS=(LIST_BOTTOM-LIST_TOP)/rowH; if(ITEMS_VIS<1)ITEMS_VIS=1;
     LIST_ITEM_H=(LIST_BOTTOM-LIST_TOP)/ITEMS_VIS;
   }
 }
@@ -1020,8 +1105,24 @@ static const Theme THEMES[] = {
     0x1000, 0x1800, 0x2000, 0x4200, 0x1800, 0x5240, 0x7440, 0xC5A0,
     0x0560, 0xFCA0, 0xFCC0, 0xFCA0, 0x1800, 0x3200,
     0x3200, 0xFCC0 },
+  // ── v4.6.5-7IN high-vis accessibility themes ──
+  // HIVIS  (bright yellow on black)
+  { "HIVIS",
+    0x0000, 0x0000, 0x2965, 0x8400, 0x4208, 0x9CD3, 0xFFE0, 0xFFFF,
+    0x07E0, 0xFD20, 0xFFE0, 0x5D1F, 0x2965, 0xFFE0,
+    0x4208, 0xFFE0 },
+  // HICON  (white + cyan on black)
+  { "HICON",
+    0x0000, 0x0841, 0x2124, 0x001F, 0x39C7, 0xAD55, 0xFFFF, 0xFFFF,
+    0x07E0, 0xFD20, 0xFFE0, 0x07FF, 0x2124, 0x07FF,
+    0x39C7, 0xFFFF },
+  // INVERT (black on white — high-contrast light)
+  { "INVERT",
+    0xFFFF, 0xEF7D, 0xC618, 0xFFE0, 0xADB6, 0x630C, 0x0000, 0x0000,
+    0x03E0, 0xC200, 0xAB00, 0x0017, 0xC618, 0x0000,
+    0xC618, 0x0000 },
 };
-static const int NUM_THEMES = 6;
+static const int NUM_THEMES = sizeof(THEMES)/sizeof(THEMES[0]);
 static int g_theme_idx = 0;
 
 // Runtime colour vars — updated when theme changes
@@ -1125,6 +1226,9 @@ static void ensureConfig(){
         "ROTATE=0\n"
         "MODE=STANDALONE\n"
         "LASTMODE=ADF\n"
+        "# Save-games: OFF = lost on eject (classic), COPY = kept as GameName.sav.adf\n"
+        "# beside the master (recommended), OVERWRITE = patch the master in place.\n"
+        "SAVES=COPY\n"
         "#\n"
         "# WiFi AP settings (XIAO connects to this)\n"
         "WIFI_SSID=GotekWifi\n"
@@ -1214,6 +1318,7 @@ static void ensureConfig(){
       r.close();
     }
   }
+  if(!SD_MMC.exists("/GENERIC")) SD_MMC.mkdir("/GENERIC");   // v5.2 GEN: generic / any-machine library
 }
 
 // After a firmware update adds a new key, an existing CONFIG.TXT won't have it.
@@ -1235,6 +1340,10 @@ static void selfHealConfig(){
     fw.close(); }
 }
 
+static void applyFont(int f){   // v4.6.5-7IN
+  g_font=(f<0)?0:(f>2)?2:f;
+  g_font_mult=(g_font==0)?0.85f:(g_font==2)?1.35f:1.0f;
+}
 static void loadTheme(){
   File f = SD_MMC.open("/CONFIG.TXT", FILE_READ);
   if(!f){ applyTheme(0); return; }
@@ -1248,7 +1357,9 @@ static void loadTheme(){
     else if(key == "LOOP") g_loop_cracktro = (val == "1" || val == "true");
     else if(key == "MODE") g_wireless_mode = (val == "WIRELESS");
     else if(key == "CRACKTRO"){ int c=val.toInt(); if(c>=0&&c<=6) g_cracktro=c; }
+    else if(key == "FONT"){ String v=val; v.toUpperCase(); applyFont(v=="SMALL"?0:(v=="LARGE"?2:1)); }
     else if(key == "ROTATE"){ int d=((val.toInt()/90)%4+4)%4; if(d==1||d==3) d=(d==1)?0:2; g_rot=d; }
+    else if(key == "SAVES"){ String v=val; v.toUpperCase(); g_saves_mode=(v=="OVERWRITE")?2:((v=="OFF"||v=="0")?0:1); }
     // LANDSCAPE-LOCKED: this RGB panel has no HW portrait; 90/270 is a slow SW transpose (~1-2fps),
     // so portrait is snapped to the nearest landscape (90->0, 270->180). Only 0/180 are allowed.
   }
@@ -1364,7 +1475,7 @@ static void parseNFO(const String& txt,String& outTitle,String& outBlurb){
 // GAME LIST BUILDER — groups multi-disk games, finds cover art
 // ============================================================================
 // ── Game cache — caches buildGameList output so NFO/JPG lookups only happen once ──
-static String gameCachePath(){return g_mode==MODE_ADF?"/ADF/.gamecache":"/DSK/.gamecache";}
+static String gameCachePath(){return g_mode==MODE_ADF?"/ADF/.gamecache":g_mode==MODE_DSK?"/DSK/.gamecache":"/GENERIC/.gamecache";}
 
 static void writeGameCache(){
   File f=SD_MMC.open(gameCachePath().c_str(),FILE_WRITE);if(!f)return;
@@ -1969,35 +2080,35 @@ static void drawCoverPanel(){ UiFrame _uf;
 }
 
 // ============================================================================
+// Pick black/white ink for legible text on an arbitrary RGB565 background
+// (matters for the high-vis accessibility themes). Ported concept from JC 5.4.0.
+static inline uint16_t inkFor(uint16_t c){
+  int r=((c>>11)&0x1F)<<3, g=((c>>5)&0x3F)<<2, b=(c&0x1F)<<3;
+  int lum=(r*77+g*150+b*29)>>8;
+  return lum>140 ? TFT_BLACK : TFT_WHITE;
+}
 static void drawModeBar(){ UiFrame _uf;
   UG->fillRect(LIST_X,STATUS_H,LIST_W+AZ_W,MODE_BAR_H,COL_BAR);
   UG->setFont(&lgfx::fonts::DejaVu9);
-  bool isADF=(g_mode==MODE_ADF);
   int by=STATUS_H+3, bh=18;
-  // ADF pill
-  if(isADF){
-    UG->fillRoundRect(LIST_X+4,by,44,bh,9,COL_ACCENT);
-    UG->drawRoundRect(LIST_X+4,by,44,bh,9,COL_AMBER);
-    UG->setTextColor(COL_AMBER,COL_ACCENT);
-  } else {
-    UG->fillRoundRect(LIST_X+4,by,44,bh,9,COL_BG);
-    UG->setTextColor(COL_DIM,COL_BG);
+  // ADF / DSK / GEN library pills (v5.2: three modes)
+  const char* MLBL[3]={"ADF","DSK","GEN"};
+  const int   mx[3]={LIST_X+4,LIST_X+52,LIST_X+100};
+  for(int m=0;m<3;m++){
+    bool on=(g_mode==(DiskMode)m);
+    if(on){ UG->fillRoundRect(mx[m],by,44,bh,9,COL_ACCENT); UG->drawRoundRect(mx[m],by,44,bh,9,COL_AMBER); UG->setTextColor(COL_AMBER,COL_ACCENT); }
+    else  { UG->fillRoundRect(mx[m],by,44,bh,9,COL_BG); UG->setTextColor(COL_DIM,COL_BG); }
+    UG->setCursor(mx[m]+(44-UG->textWidth(MLBL[m]))/2,by+5); UG->print(MLBL[m]);
   }
-  UG->setCursor(LIST_X+12,by+5); UG->print("ADF");
-  // DSK pill
-  if(!isADF){
-    UG->fillRoundRect(LIST_X+52,by,44,bh,9,COL_ACCENT);
-    UG->drawRoundRect(LIST_X+52,by,44,bh,9,COL_AMBER);
-    UG->setTextColor(COL_AMBER,COL_ACCENT);
-  } else {
-    UG->fillRoundRect(LIST_X+52,by,44,bh,9,COL_BG);
-    UG->setTextColor(COL_DIM,COL_BG);
-  }
-  UG->setCursor(LIST_X+60,by+5); UG->print("DSK");
-  // Count
   UG->setTextColor(COL_MID,COL_BAR);
-  UG->setCursor(LIST_X+102,by+5);
+  UG->setCursor(LIST_X+152,by+5);
   UG->print(String(g_games.size())+" games");
+  // SEARCH pill (right) — type-to-find; big high-contrast target for low-vision use
+  { int sw=88, sx=LCD_WIDTH-4-sw;
+    UG->fillRoundRect(sx,by,sw,bh,9,COL_AMBER);
+    UG->setTextColor(inkFor(COL_AMBER),COL_AMBER);
+    UG->setCursor(sx+(sw-UG->textWidth("SEARCH"))/2,by+5); UG->print("SEARCH");
+  }
 }
 
 // ============================================================================
@@ -2011,7 +2122,7 @@ static void drawFileList(){ UiFrame _uf;
     UG->setFont(&lgfx::fonts::DejaVu12);
     UG->setTextColor(0xE8C4, COL_BG);
     UG->setCursor(LIST_X+10, LIST_TOP+20);
-    UG->print(g_mode==MODE_ADF?"No .ADF files":"No .DSK files"); return;
+    UG->print(g_mode==MODE_ADF?"No .ADF files":g_mode==MODE_DSK?"No .DSK files":"No /GENERIC files"); return;
   }
   // Pixel-smooth scroll: g_scrollPx is the source of truth; rows draw at a
   // fractional offset inside a clip window so partial rows slide cleanly.
@@ -2200,7 +2311,62 @@ static void drawListAndCover(){ UiFrame _uf;
 // ============================================================================
 // LOAD / UNLOAD
 // ============================================================================
+// ════════════════════════════════════════════════════════════════════════════
+// SAVE-GAME PERSISTENCE (v4.8.0, standalone) — .sav.adf beside the master.
+// Ported from JC (gfx_* -> UG->). Wireless dongle save-fetch NOT ported.
+// ════════════════════════════════════════════════════════════════════════════
+static String savPathFor(const String&adfPath){
+  String u=adfPath;u.toUpperCase();
+  if(u.indexOf(".SAV.")>=0)return adfPath;              // already a save — patches accumulate in place
+  int dot=adfPath.lastIndexOf('.');if(dot<0)return adfPath+".sav";
+  return adfPath.substring(0,dot)+".sav"+adfPath.substring(dot);
+}
+static bool savExistsFor(const String&adfPath){String sv=savPathFor(adfPath);return sv!=adfPath&&SD_MMC.exists(sv);}
+// Copy base->sav.tmp, patch dirty sectors from RAM (g_disk), atomic rename.
+static bool svPatchCore(const String&master,const String&sav,const uint8_t*map,uint32_t mapBits,const uint8_t*ram){
+  String base=SD_MMC.exists(sav)?sav:master;
+  String tmp=sav+".tmp";
+  SD_MMC.remove(tmp);
+  {File in=SD_MMC.open(base,FILE_READ);if(!in)return false;
+   File out=SD_MMC.open(tmp,FILE_WRITE);if(!out){in.close();return false;}
+   uint8_t*buf=(uint8_t*)malloc(16384);if(!buf){in.close();out.close();return false;}
+   int rd;while((rd=in.read(buf,16384))>0)out.write(buf,rd);
+   free(buf);in.close();out.close();}
+  File f=SD_MMC.open(tmp,"r+");if(!f)return false;
+  bool ok=true;
+  for(uint32_t i=0;i<mapBits;i++){
+    if(!((map[i>>3]>>(i&7))&1))continue;
+    const uint8_t*src=ram+(size_t)(DATA_LBA+i)*512;
+    if(!f.seek(i*512UL)||f.write(src,512)!=512){ok=false;break;}
+  }
+  f.flush();f.close();
+  if(!ok){SD_MMC.remove(tmp);return false;}
+  SD_MMC.remove(sav);
+  return SD_MMC.rename(tmp,sav);
+}
+static void svToast(const String&msg){
+  UG->fillRect(0,0,LCD_WIDTH,STATUS_H,COL_GREEN);UG->setFont(&lgfx::fonts::DejaVu12);UG->setTextColor(TFT_BLACK,COL_GREEN);
+  int tw=UG->textWidth(msg.c_str());UG->setCursor((LCD_WIDTH-tw)/2,6);UG->print(msg);uiFlush();
+  delay(1200);drawStatusBar();uiFlush();
+}
+// Standalone flush: persist our RAM disk's dirty sectors to SD.
+static void svFlushStandalone(){
+  if(g_sv_dirty_count==0)return;
+  if(g_saves_mode==0||!g_loaded||!g_loaded_path.length()){svDirtyReset();return;}   // OFF / diag disk: discard
+  String master=g_loaded_path;
+  String sav=(g_saves_mode==2)?master:savPathFor(master);
+  uint32_t imgSecs=(g_sv_img_size+511)/512;if(imgSecs>SV_IMG_MAX_SECTORS)imgSecs=SV_IMG_MAX_SECTORS;
+  if(svPatchCore(master,sav,g_sv_dirty,imgSecs,g_disk)){
+    svDirtyReset();g_sv_fail=0;svToast("SAVED: "+g_loaded_name);
+  }else{
+    g_sv_last_write=millis();                       // back off one settle window, then retry
+    if(++g_sv_fail>=5){svDirtyReset();g_sv_fail=0;svToast("SAVE FAILED - GAVE UP");}
+  }
+}
 static bool doLoadSelected(const String& adfPath){
+  if(g_sv_dirty_count) svFlushStandalone();          // persist the OUTGOING disk before g_disk is overwritten
+  String loadPath=adfPath;
+  if(g_saves_mode==1 && savExistsFor(adfPath)) loadPath=savPathFor(adfPath);   // SAVES=COPY: resume from the .sav
   // Loading overlay in cover panel
   UG->fillRect(0,STATUS_H,COVER_W,LCD_HEIGHT-STATUS_H-BOTTOM_H,COL_PANEL);
   UG->setFont(&lgfx::fonts::DejaVu12);
@@ -2213,7 +2379,7 @@ static bool doLoadSelected(const String& adfPath){
   UG->setCursor(8,STATUS_H+38); UG->print("Loading...");
   uiFlush();   // portrait: show the loading overlay (progress bar below repaints at the end)
 
-  File f=openNamedImage(adfPath);
+  File f=openNamedImage(loadPath);
   if(!f){
     UG->setTextColor(0xE8C4,COL_PANEL); UG->setCursor(8,STATUS_H+56);
     UG->print("Open failed"); delay(1000); drawListAndCover(); return false;
@@ -2221,7 +2387,7 @@ static bool doLoadSelected(const String& adfPath){
   uint32_t fsz=f.size();
   if(fsz==0){ f.close(); drawListAndCover(); return false; }
   if(fsz>MAX_FILE_BYTES) fsz=MAX_FILE_BYTES;
-  build_volume_with_file(getOutputFilename(),fsz);
+  build_volume_with_file(g_mode==MODE_GEN?filenameOnly(adfPath).c_str():getOutputFilename(),fsz);   // GEN keeps the real name+ext so FlashFloppy detects the format
 
   int barX=8,barY=STATUS_H+58,barW=COVER_W-16,barH=14;
   UG->drawRoundRect(barX,barY,barW,barH,4,COL_DIM);
@@ -2256,10 +2422,13 @@ static bool doLoadSelected(const String& adfPath){
   g_loaded_name=basenameNoExt(filenameOnly(adfPath));
   g_loaded_game_idx=g_sel;
   g_loaded_disk_idx=g_disk_sel;
+  g_loaded_path=loadPath;
+  g_sv_img_size=(g_mode==MODE_GEN)?0:fsz;   // GEN has no Amiga save-writeback (0 = no dirty tracking)
+  svDirtyReset();
 
   // Send to XIAO via WiFi TCP if in wireless mode
   if (g_wireless_mode && espnowIsPaired()) {
-    String modeName = (g_mode==MODE_ADF) ? "ADF" : "DSK";
+    String modeName = (g_mode==MODE_ADF) ? "ADF" : (g_mode==MODE_DSK) ? "DSK" : "GEN";
     espnowSendNotify(g_loaded_name, modeName, copied);
     espnowSendDisk(copied);
   }
@@ -2290,9 +2459,10 @@ static void doLoadDiag(){
 }
 
 static void doUnload(){
+  if(g_sv_dirty_count) svFlushStandalone();     // persist before eject
   hardDetach();
-  g_loaded=false; g_loaded_name="";
-  g_loaded_game_idx=-1; g_loaded_disk_idx=-1;
+  g_loaded=false; g_loaded_name=""; g_loaded_path="";
+  g_loaded_game_idx=-1; g_loaded_disk_idx=-1; svDirtyReset();
   if (g_wireless_mode && espnowIsPaired()) espnowSendEject();
   drawStatusBar();
   drawListAndCover();
@@ -2305,9 +2475,241 @@ static const uint32_t BTN_COOLDOWN_MS=200;
 static uint32_t bbLastActionMs=0;
 static void handleTap(uint16_t px,uint16_t py);   // tap dispatcher (below loop)
 
+// ════════════════════════════════════════════════════════════════════════════
+// SD ACCESS boot mode + FIRMWARE UPDATE (ported from JC v5.1/v5.3, KGfx API)
+// ════════════════════════════════════════════════════════════════════════════
+// KGfx has no gfx_setTextSize()-style scalar; map a "scale" to font+size.
+//   1 = body (DejaVu12 ~12px)   2 = heading (DejaVu18 ~16px)   3 = title (DejaVu18 x2 ~32px)
+static void mzScale(int sc){
+  if(sc>=3){ UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(2); }
+  else if(sc==2){ UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(1); }
+  else { UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextSize(1); }
+}
+static void mzCenter(int y,const char*t,uint16_t fg,uint16_t bg,int sc){
+  mzScale(sc); UG->setTextColor(fg,bg);
+  int tw=UG->textWidth(t); UG->setCursor((LCD_WIDTH-tw)/2,y); UG->print(t);
+}
+static void sdAccessReboot(){
+  UG->fillScreen(COL_BG);
+  mzCenter(LCD_HEIGHT/2-12,"RETURNING...",COL_LIT,COL_BG,2);
+  uiFlush(); g_sdaccess_magic=0; g_sdaccess_key=0; delay(400); ESP.restart();
+}
+// Blocking; NEVER returns — always reboots (to normal, or back into access on error).
+static void runSDAccessBoot(bool sdok){
+  g_sdaccess_magic=0; g_sdaccess_key=0;                   // consume NOW: a hang can't trap us in this mode
+  { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<600) delay(10); }   // drain the entry tap
+  if(!sdok){
+    UG->fillScreen(COL_BG);
+    mzCenter(LCD_HEIGHT/2-40,"NO SD CARD",COL_ORANGE,COL_BG,3);
+    mzCenter(LCD_HEIGHT/2+10,"insert a card, then tap to return",COL_DIM,COL_BG,1);
+    uiFlush();
+    while(true){ uint16_t tx,ty; if(Touch_ReadFrame()&&getTouchXY(&tx,&ty)) sdAccessReboot(); delay(40); }
+  }
+  g_sd_sectors=(uint32_t)SD_MMC.numSectors();
+  MSC.vendorID("OMEGA"); MSC.productID("GTi LIBRARY"); MSC.productRevision("1.0");
+  MSC.onRead(onReadSD); MSC.onWrite(onWriteSD); MSC.onStartStop(onStartStopSD);
+  MSC.mediaPresent(true); MSC.begin(g_sd_sectors,512); USB.begin();   // no hardDetach — we WANT the PC to see it
+  uint64_t bytes=(uint64_t)g_sd_sectors*512ULL; char sz[24];
+  if(bytes>=1000000000ULL) snprintf(sz,sizeof(sz),"%.1f GB",bytes/1e9); else snprintf(sz,sizeof(sz),"%u MB",(unsigned)(bytes/1000000ULL));
+  const int NCELL=20, cellW=(LCD_WIDTH-80)/NCELL, cellH=16, barY=LCD_HEIGHT/2+10;
+  const int doneW=240, doneH=56, doneX=(LCD_WIDTH-doneW)/2, doneY=LCD_HEIGHT-96;
+  bool lastConn=false; int frame=0, pressed=0, rel=0;
+  UG->fillScreen(COL_BG);
+  mzCenter(28,"SD ACCESS",COL_LIT,COL_BG,3);
+  { String c=String("microSD  ")+sz; mzCenter(72,c.c_str(),COL_DIM,COL_BG,1); }
+  while(true){
+    bool conn=(g_sd_rd>0);
+    if(conn!=lastConn||frame==0){ lastConn=conn; UG->fillRect(0,100,LCD_WIDTH,24,COL_BG);
+      const char*st=conn?"CONNECTED - drag disks onto the GTi drive":"WAITING FOR PC...";
+      mzCenter(100,st,conn?COL_GREEN:COL_AMBER,COL_BG,2); }
+    UG->fillRect(0,134,LCD_WIDTH,20,COL_BG);
+    { String a="read "+String(g_sd_rd/2)+"K   write "+String(g_sd_wr/2)+"K"; mzCenter(136,a.c_str(),COL_MID,COL_BG,1); }
+    int pos=frame%(NCELL*2); if(pos>=NCELL)pos=(NCELL*2-1)-pos;                     // Cylon sweep
+    for(int i=0;i<NCELL;i++){ int d=abs(i-pos); uint16_t c=(d==0)?(uint16_t)0xF800:(d==1)?(uint16_t)0x8000:(d==2)?(uint16_t)0x3000:COL_PANEL; UG->fillRoundRect(40+i*cellW,barY,cellW-4,cellH,3,c); }
+    UG->fillRect(0,doneY-26,LCD_WIDTH,20,COL_BG);
+    mzCenter(doneY-24,"eject from your PC first, then tap DONE",COL_DIM,COL_BG,1);
+    UG->fillRoundRect(doneX,doneY,doneW,doneH,10,COL_GREEN);
+    mzScale(3); UG->setTextColor(TFT_BLACK,COL_GREEN); { int tw=UG->textWidth("DONE"); UG->setCursor(doneX+(doneW-tw)/2,doneY+(doneH-32)/2); } UG->print("DONE");
+    uiFlush();
+    if(g_sd_eject) sdAccessReboot();
+    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){ rel=0; if(!pressed){ pressed=1; if(tx>=(uint16_t)doneX&&tx<(uint16_t)(doneX+doneW)&&ty>=(uint16_t)doneY&&ty<(uint16_t)(doneY+doneH)) sdAccessReboot(); } }
+    else { if(pressed&&++rel>=3) pressed=0; }
+    frame++; delay(45);
+  }
+}
+
+// ---------- FIRMWARE UPDATE via SD (ported from JC v5.3) ----------
+// Reads /GTi_update.bin off the SD and self-flashes the INACTIVE OTA slot via the
+// Update library (fully hash-verified before the boot pointer flips). Needs an A/B
+// OTA partition scheme; a single-slot "No OTA" build has no spare slot and says so.
+#define FWUP_PATH "/GTi_update.bin"
+static void fwupMsg(int y,const char*t,uint16_t fg,uint16_t bg,int sc){ mzScale(sc); UG->setTextColor(fg,bg); int tw=UG->textWidth(t); UG->setCursor((LCD_WIDTH-tw)/2,y); UG->print(t); }
+static void fwupWait(){ uint16_t tx,ty; uiFlush(); while(!(Touch_ReadFrame()&&getTouchXY(&tx,&ty))) delay(30); delay(200); }
+// Board-ID guard: every 7" build carries this unique marker in .rodata; a JC/XIAO
+// bin doesn't, so scanning the incoming image for it refuses a cross-board flash.
+static const char GTI_FW_MARK[]="OMEGAWARE.GTi.7IN.fw";
+static bool fwupHasMarker(File&f,const char*mark){
+  size_t ml=strlen(mark); if(ml==0||ml>32) return false;
+  static uint8_t buf[4096]; uint8_t tail[32]; size_t tlen=0;
+  f.seek(0);
+  while(true){
+    memcpy(buf,tail,tlen);
+    int n=f.read(buf+tlen,sizeof buf-tlen);
+    if(n<=0) break;
+    size_t total=tlen+(size_t)n;
+    for(size_t i=0;i+ml<=total;i++) if(memcmp(buf+i,mark,ml)==0){ f.seek(0); return true; }
+    tlen=(total>=ml-1)?ml-1:total; memcpy(tail,buf+total-tlen,tlen); }
+  f.seek(0); return false;
+}
+static void doFirmwareUpdate(){
+  UG->fillScreen(COL_BG);
+  File f=SD_MMC.open(FWUP_PATH,FILE_READ);
+  if(!f||f.isDirectory()){
+    if(f)f.close();
+    fwupMsg(LCD_HEIGHT/2-30,"NO UPDATE FILE",COL_ORANGE,COL_BG,3);
+    fwupMsg(LCD_HEIGHT/2+18,"Drop GTi_update.bin on the SD (use SD ACCESS),",COL_DIM,COL_BG,1);
+    fwupMsg(LCD_HEIGHT/2+38,"then try again.",COL_DIM,COL_BG,1);
+    fwupMsg(LCD_HEIGHT-40,"tap to return",COL_MID,COL_BG,1); fwupWait(); return; }
+  size_t fsz=f.size();
+  uint8_t h0=0; f.read(&h0,1); f.seek(0); bool isImg=(h0==0xE9);     // ESP image magic
+  bool idOK=isImg&&fwupHasMarker(f,GTI_FW_MARK);
+  if(esp_ota_get_next_update_partition(NULL)==NULL){                 // single-slot build: no spare OTA slot
+    f.close();
+    fwupMsg(LCD_HEIGHT/2-40,"SD UPDATE NOT ENABLED",COL_ORANGE,COL_BG,3);
+    fwupMsg(LCD_HEIGHT/2-4,"This unit needs ONE more USB flash (web flasher)",COL_DIM,COL_BG,1);
+    fwupMsg(LCD_HEIGHT/2+16,"to add the OTA layout. After that SD updates work forever.",COL_DIM,COL_BG,1);
+    fwupMsg(LCD_HEIGHT-40,"tap to return",COL_MID,COL_BG,1); fwupWait(); return; }
+  // ── confirm ──
+  UG->fillScreen(COL_BG);
+  fwupMsg(40,"FIRMWARE UPDATE",COL_LIT,COL_BG,3);
+  { char l[48]; snprintf(l,sizeof l,"File: %u KB",(unsigned)(fsz/1024)); fwupMsg(92,l,COL_DIM,COL_BG,2); }
+  fwupMsg(122,idOK?"Image: GTi-7IN firmware  [OK]":(isImg?"Image: unrecognised (not GTi-7IN)":"Image: not a firmware .bin"),idOK?COL_GREEN:COL_ORANGE,COL_BG,2);
+  { char l[64]; snprintf(l,sizeof l,"Now running: %s",FW_VERSION); fwupMsg(150,l,COL_DIM,COL_BG,1); }
+  if(!idOK) fwupMsg(174,"! flash only a GTi-7IN .bin here",COL_ORANGE,COL_BG,1);
+  int bw=200,bbh=64,gap=40,by=LCD_HEIGHT-110,cx=LCD_WIDTH/2-bw-gap/2,ox=LCD_WIDTH/2+gap/2;
+  UG->fillRoundRect(cx,by,bw,bbh,10,COL_BAR); mzScale(3); UG->setTextColor(COL_LIT,COL_BAR); { int tw=UG->textWidth("CANCEL"); UG->setCursor(cx+(bw-tw)/2,by+16); } UG->print("CANCEL");
+  { uint16_t okc=idOK?COL_GREEN:COL_ORANGE; const char*okl=idOK?"FLASH":"FLASH ANYWAY"; int osz=idOK?3:2;
+    UG->fillRoundRect(ox,by,bw,bbh,10,okc); mzScale(osz); UG->setTextColor(TFT_BLACK,okc); int tw=UG->textWidth(okl); UG->setCursor(ox+(bw-tw)/2,by+(idOK?16:22)); UG->print(okl); }
+  uiFlush();
+  bool go=false;
+  while(true){ uint16_t tx,ty; if(Touch_ReadFrame()&&getTouchXY(&tx,&ty)){
+    if(ty>=(uint16_t)(by-8)&&ty<(uint16_t)(by+bbh+8)){
+      if(tx>=(uint16_t)(cx-8)&&tx<(uint16_t)(cx+bw+8)){ go=false; break; }
+      if(tx>=(uint16_t)(ox-8)&&tx<(uint16_t)(ox+bw+8)){ go=true; break; } } }
+    delay(25); }
+  if(!go){ f.close(); return; }
+  // ── flash ──
+  UG->fillScreen(COL_BG); fwupMsg(LCD_HEIGHT/2-60,"FLASHING - DO NOT UNPLUG",COL_AMBER,COL_BG,3); uiFlush();
+  if(!Update.begin(fsz,U_FLASH)){
+    f.close(); UG->fillScreen(COL_BG); fwupMsg(LCD_HEIGHT/2-12,"UPDATE FAILED",COL_ORANGE,COL_BG,3); fwupMsg(LCD_HEIGHT/2+20,Update.errorString(),COL_DIM,COL_BG,1); fwupMsg(LCD_HEIGHT-40,"tap to return",COL_MID,COL_BG,1); fwupWait(); return; }
+  int pbx=60,pbw=LCD_WIDTH-120,pby=LCD_HEIGHT/2,pbh=30; UG->drawRoundRect(pbx,pby,pbw,pbh,6,COL_SEP);
+  static uint8_t buf[4096]; size_t wrote=0; bool err=false; int since=0;
+  while(wrote<fsz){
+    int n=f.read(buf,sizeof buf); if(n<=0){ err=true; break; }
+    if(Update.write(buf,n)!=(size_t)n){ err=true; break; }
+    wrote+=n;
+    if(++since>=8||wrote>=fsz){ since=0;
+      int fillw=(int)((uint64_t)(pbw-4)*wrote/fsz); UG->fillRect(pbx+2,pby+2,fillw,pbh-4,COL_GREEN);
+      char pc[12]; snprintf(pc,sizeof pc,"%u%%",(unsigned)(100ULL*wrote/fsz)); UG->fillRect(0,pby+pbh+14,LCD_WIDTH,20,COL_BG); fwupMsg(pby+pbh+14,pc,COL_LIT,COL_BG,2); uiFlush(); } }
+  f.close();
+  if(err||!Update.end(true)){
+    Update.abort(); UG->fillScreen(COL_BG); fwupMsg(LCD_HEIGHT/2-20,"UPDATE FAILED",COL_ORANGE,COL_BG,3);
+    fwupMsg(LCD_HEIGHT/2+16,err?"read/write error - image unchanged":Update.errorString(),COL_DIM,COL_BG,1);
+    fwupMsg(LCD_HEIGHT/2+36,"current firmware kept.",COL_DIM,COL_BG,1); fwupMsg(LCD_HEIGHT-40,"tap to return",COL_MID,COL_BG,1); fwupWait(); return; }
+  SD_MMC.rename(FWUP_PATH,"/GTi_update.installed");   // best-effort: don't re-offer the same file
+  UG->fillScreen(COL_BG); fwupMsg(LCD_HEIGHT/2-12,"UPDATE OK - REBOOTING",COL_GREEN,COL_BG,3); uiFlush(); delay(900); ESP.restart();
+}
+
+
+// ── Type-to-search (blocking). Live substring filter over the game list; tap a
+//    result row to jump the list straight to it. Returns true if a game was chosen
+//    (g_sel + scroll set), false on CLOSE. Big keys + big text for low-vision use.
+//    Ported from JC v4.8.2 (gfx_* -> UG->, sized up for 800x480). ──
+static bool doSearch(){
+  String q="";
+  static const char* SROWS[4]={"1234567890","QWERTYUIOP","ASDFGHJKL-","ZXCVBNM'."};
+  const int gap=6, kh=46, bm=8;
+  const int kbBlock=5*kh+4*gap;                 // 4 letter rows + 1 control row
+  const int kbTop=LCD_HEIGHT-bm-kbBlock;        // keys hug the bottom edge
+  const int resTop=88, resRowH=38, resBoxH=34, sepGap=8;
+  const int sepY=kbTop-sepGap;                  // divider dead-zone above the keys
+  int resMax=(sepY-resTop)/resRowH; if(resMax<3)resMax=3; if(resMax>6)resMax=6;
+  int matches[6]; int nMatch=0,totalMatch=0;
+  bool dirty=true,pressed=false; int rel=0;
+  { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<600) delay(10); }   // drain the entering tap
+  auto recompute=[&](){ nMatch=0; totalMatch=0; if(!q.length())return; String ql=q; ql.toLowerCase();
+    for(int i=0;i<(int)g_games.size();i++){ String nm=g_games[i].name; nm.toLowerCase();
+      if(nm.indexOf(ql)>=0){ if(nMatch<resMax)matches[nMatch++]=i; totalMatch++; } } };
+  while(true){
+    if(dirty){ dirty=false;
+      UG->fillScreen(COL_BG);
+      UG->fillRect(0,0,LCD_WIDTH,30,COL_BAR);
+      UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(inkFor(COL_BAR),COL_BAR);
+      UG->setCursor(8,7); UG->print("SEARCH");
+      { String cnt=q.length()?(String(totalMatch)+(totalMatch==1?" match":" matches")):String("type to find a game");
+        UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(inkFor(COL_BAR),COL_BAR);
+        UG->setCursor(LCD_WIDTH-UG->textWidth(cnt)-8,9); UG->print(cnt); }
+      // input box
+      UG->fillRoundRect(8,34,LCD_WIDTH-16,44,8,COL_PANEL); UG->drawRoundRect(8,34,LCD_WIDTH-16,44,8,COL_AMBER);
+      UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(2); UG->setTextColor(inkFor(COL_PANEL),COL_PANEL);
+      { String shown=q; while(UG->textWidth(shown)>LCD_WIDTH-64&&shown.length()>0)shown=shown.substring(1);
+        UG->setCursor(20,40); UG->print(shown); UG->print("_"); }
+      UG->setTextSize(1);
+      // result rows
+      for(int i=0;i<resMax;i++){ int ry=resTop+i*resRowH;
+        if(i<nMatch){ UG->fillRoundRect(8,ry,LCD_WIDTH-16,resBoxH,6,COL_SEL);
+          UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(inkFor(COL_SEL),COL_SEL);
+          String nm=g_games[matches[i]].name; while(UG->textWidth(nm)>LCD_WIDTH-36&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
+          UG->setCursor(16,ry+(resBoxH-16)/2); UG->print(nm); }
+        else UG->fillRect(8,ry,LCD_WIDTH-16,resBoxH,COL_BG); }
+      UG->drawFastHLine(8,sepY,LCD_WIDTH-16,COL_SEP);
+      // keyboard, anchored to the bottom
+      int ky=kbTop;
+      for(int r=0;r<4;r++){ int n=strlen(SROWS[r]); int kw=(LCD_WIDTH-gap)/10-gap; int kx=gap+((10-n)*(kw+gap))/2;
+        for(int i=0;i<n;i++){ char ch=SROWS[r][i];
+          UG->fillRoundRect(kx,ky,kw,kh,6,COL_BAR);
+          UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(inkFor(COL_BAR),COL_BAR);
+          char lb[2]={ch,0}; UG->setCursor(kx+(kw-UG->textWidth(lb))/2,ky+(kh-16)/2); UG->print(lb); kx+=kw+gap; }
+        ky+=kh+gap; }
+      int cw=(LCD_WIDTH-4*gap)/3, cx=gap; const char* CTL[3]={"DEL","SPACE","CLOSE"}; uint16_t cc[3]={(uint16_t)0x8000,COL_BAR,COL_BAR};
+      for(int i=0;i<3;i++){ UG->fillRoundRect(cx,ky,cw,kh,8,cc[i]);
+        UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(i==0?TFT_WHITE:inkFor(cc[i]),cc[i]);
+        UG->setCursor(cx+(cw-UG->textWidth(CTL[i]))/2,ky+(kh-16)/2); UG->print(CTL[i]); cx+=cw+gap; }
+      uiFlush();
+    }
+    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){ rel=0;
+      if(!pressed){ pressed=true; bool handled=false;
+        // result rows — hit only within the drawn box (dead-zone above divider)
+        for(int i=0;i<nMatch&&!handled;i++){ int ry=resTop+i*resRowH;
+          if(ty>=ry&&ty<ry+resBoxH&&tx>=8&&tx<LCD_WIDTH-8){ int t=matches[i];
+            g_sel=t; g_disk_sel=0; g_scroll=t;
+            int maxOff=(int)g_games.size()-ITEMS_VIS; if(maxOff<0)maxOff=0; if(g_scroll>maxOff)g_scroll=maxOff;
+            g_scrollPx=(float)(g_scroll*LIST_ITEM_H); g_inertia_on=false;
+            return true; } }
+        int ky=kbTop;
+        for(int r=0;r<4&&!handled;r++){ int n=strlen(SROWS[r]); int kw=(LCD_WIDTH-gap)/10-gap; int kx0=gap+((10-n)*(kw+gap))/2;
+          if(ty>=ky&&ty<ky+kh){ int i=((int)tx-kx0)/(kw+gap); int within=((int)tx-kx0)-i*(kw+gap);
+            if((int)tx>=kx0&&i>=0&&i<n&&within<kw){ if(q.length()<24){ q+=SROWS[r][i]; recompute(); } dirty=true; handled=true; } }
+          ky+=kh+gap; }
+        if(!handled&&ty>=ky&&ty<ky+kh){ int cw=(LCD_WIDTH-4*gap)/3; int i=((int)tx-gap)/(cw+gap); int cxi=gap+i*(cw+gap);
+          if(i>=0&&i<3&&(int)tx>=cxi&&(int)tx<cxi+cw){
+            if(i==0){ if(q.length()){ q.remove(q.length()-1); recompute(); } dirty=true; }
+            else if(i==1){ if(q.length()<24){ q+=' '; recompute(); } dirty=true; }
+            else if(i==2){ return false; } } }
+      }
+    } else { if(pressed&&++rel>=3)pressed=false; }
+    delay(12);
+  }
+}
+
 void setup(){
   applyTheme(0);  // default colours before SD is available
   Serial.begin(115200); delay(200);
+  // SD-access is requested only when our NOINIT flag survived a *software* restart
+  // (cold power-on => reset reason POWERON => never a false trigger from RTC garbage).
+  bool sdAccessReq=(g_sdaccess_magic==SDACCESS_MAGIC && g_sdaccess_key==SDACCESS_KEY);   // both RTC words: no reset-reason gate (unreliable on the 7")
 
   initExpander();
   uiInit();
@@ -2336,7 +2738,7 @@ void setup(){
   }
 
   // ESP-NOW starts after SD so XIAO_MAC can be loaded from CONFIG.TXT
-  espnowBegin();
+  if(!sdAccessReq) espnowBegin();   // don't arm the radio during SD access (no stray FATFS writes while the PC holds the card)
 
   // Battery ADC init AFTER SD_MMC — SD_MMC may have touched IO20
   batInit();
@@ -2348,6 +2750,7 @@ void setup(){
   drawCracktro(g_cracktro);   // 6-style boot cracktro (CRACKTRO= config). K engine — no LovyanGFX version pin needed.
 
   USB.onEvent(usbEventCallback);
+  if(sdAccessReq){ runSDAccessBoot(sdok); }   // SD-access boot mode — never returns (reboots to normal)
   MSC.vendorID("ESP32"); MSC.productID("RAMDISK"); MSC.productRevision("1.0");
   MSC.onRead(onRead); MSC.onWrite(onWrite); MSC.mediaPresent(true);
   MSC.begin(TOTAL_SECTORS,SECTOR_SIZE); USB.begin();
@@ -2370,6 +2773,8 @@ void loop(void){
     drawStatusBar();
   }
 
+  // v4.8.0: settle-timer save flush — persist once the Amiga has been quiet SV_SETTLE_MS
+  if(g_loaded&&g_sv_dirty_count&&g_sv_last_write&&millis()-g_sv_last_write>SV_SETTLE_MS) svFlushStandalone();
   static uint32_t last=0;
   if(millis()-last<16){ delay(1); return; }
   last=millis();
@@ -2511,6 +2916,20 @@ static void handleTap(uint16_t px,uint16_t py){
       return;
     }
 
+    // SD ACCESS (left half) + FW UPDATE (right half) share one row (SD/USB maintenance)
+    int sdfwBtnY = LCD_HEIGHT - BOTTOM_H - 40;
+    if(py >= (uint16_t)sdfwBtnY && py < (uint16_t)(sdfwBtnY+30) &&
+       px >= 6 && px < COVER_W-6) {
+      int hw=(pw-6)/2, dx=6+hw+6;
+      if(px >= (uint16_t)dx){ doFirmwareUpdate(); g_info_showing=false; drawFullUI(); return; }   // right = FW UPDATE (returns on cancel/fail)
+      // left = SD ACCESS: stamp RTC magic + reboot into SD-access boot mode
+      UG->fillScreen(COL_BG);
+      mzScale(2); UG->setTextColor((uint16_t)0x05FF, COL_BG);
+      { const char* m="ENTERING SD ACCESS..."; int tw=UG->textWidth(m); UG->setCursor((LCD_WIDTH-tw)/2, LCD_HEIGHT/2-8); UG->print(m); }
+      uiFlush();
+      g_sdaccess_magic=SDACCESS_MAGIC; g_sdaccess_key=SDACCESS_KEY; delay(350); ESP.restart();
+    }
+
     // PAIR NOW button (only in wireless mode, 36px tall)
     if(g_wireless_mode && py >= (uint16_t)pairBtnY && py < (uint16_t)(pairBtnY+36) &&
        px >= 6 && px < COVER_W-6) {
@@ -2524,7 +2943,7 @@ static void handleTap(uint16_t px,uint16_t py){
       insHit = (px>=8&&px<LCD_WIDTH-8&&py>=(uint16_t)pb&&py<(uint16_t)(pb+34)); }
     else { int btnY=LCD_HEIGHT-BOTTOM_H-40;
       insHit = (px<COVER_W&&py>=(uint16_t)btnY&&py<(uint16_t)(LCD_HEIGHT-BOTTOM_H)); }
-    if(insHit && !g_games.empty()){
+    if(insHit && !g_info_showing && !g_games.empty()){
       bool isLoaded=(g_loaded&&g_loaded_game_idx==g_sel);
       if(isLoaded){
         doUnload();
@@ -2589,6 +3008,16 @@ static void handleTap(uint16_t px,uint16_t py){
       if(!readGameCache())buildGameList(); buildActiveLetters(); g_sel=0; g_scroll=0; g_disk_sel=0;
       g_scrollPx=0; g_inertia_on=false;
       drawFullUI(); return;
+    }
+    if(px>=LIST_X+96&&px<LIST_X+140&&g_mode!=MODE_GEN){
+      g_mode=MODE_GEN;
+      if(!listImages(SD_MMC,g_files)) g_files.clear();
+      if(!readGameCache())buildGameList(); buildActiveLetters(); g_sel=0; g_scroll=0; g_disk_sel=0;
+      g_scrollPx=0; g_inertia_on=false;
+      drawFullUI(); return;
+    }
+    if(px>=(uint16_t)(LCD_WIDTH-92)&&px<(uint16_t)(LCD_WIDTH-4)){   // SEARCH pill -> type-to-find
+      g_info_showing=false; doSearch(); drawFullUI(); return;
     }
   }
 
@@ -2771,6 +3200,24 @@ static void handleTap(uint16_t px,uint16_t py){
         UG->setTextColor(TFT_WHITE, COL_ACCENT);
         { int tw=UG->textWidth("LOAD DIAG"); UG->setCursor(dx+(hw-tw)/2, resetBtnY+9); }
         UG->print("LOAD DIAG");
+      }
+
+      // SD ACCESS (left half) + FW UPDATE (right half) — SD-card / USB maintenance
+      int sdfwBtnY = LCD_HEIGHT - BOTTOM_H - 40;
+      { int hw=(pw-6)/2, dx=6+hw+6;
+        UG->setFont(&lgfx::fonts::DejaVu12);
+        // left: SD ACCESS (cyan)
+        UG->fillRoundRect(6, sdfwBtnY, hw, 30, 8, (uint16_t)0x05FF);
+        UG->drawRoundRect(6, sdfwBtnY, hw, 30, 8, (uint16_t)0x05FF);
+        UG->setTextColor(TFT_BLACK, (uint16_t)0x05FF);
+        { int tw=UG->textWidth("SD ACCESS"); UG->setCursor(6+(hw-tw)/2, sdfwBtnY+9); }
+        UG->print("SD ACCESS");
+        // right: FW UPDATE (amber)
+        UG->fillRoundRect(dx, sdfwBtnY, hw, 30, 8, COL_AMBER);
+        UG->drawRoundRect(dx, sdfwBtnY, hw, 30, 8, COL_AMBER);
+        UG->setTextColor(TFT_BLACK, COL_AMBER);
+        { int tw=UG->textWidth("FW UPDATE"); UG->setCursor(dx+(hw-tw)/2, sdfwBtnY+9); }
+        UG->print("FW UPDATE");
       }
 
       g_info_showing = true;
