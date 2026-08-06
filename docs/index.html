@@ -564,12 +564,12 @@
     <div class="device-card" data-manifest="firmware/waveshare7/manifest.json" onclick="selectDevice(this)">
       <div class="selected-indicator"></div>
       <div class="device-name">Waveshare 7&Prime; &mdash; BETA</div>
-      <div class="device-chip">ESP32-S3 &middot; 7" 800×480 RGB &middot; v4.8.0-7IN-beta &middot; SD Access + Search + GEN + Saves + Reel</div>
+      <div class="device-chip">ESP32-S3 &middot; 7" 800×480 RGB &middot; v4.8.1-7IN-beta &middot; SD Access + Search + GEN + Saves + Reel</div>
       <div class="device-desc"><b>The big-screen GTi, climbing to parity.</b> The full interface on a 7-inch panel &mdash; cover-art browser, <b>SD Access</b>, cable-free <b>SD firmware-update</b>, type-to-search, GEN library and standalone save-writeback &mdash; plus <b>large-font &amp; high-visibility accessibility modes</b>. Dual-role (standalone <i>and</i> wireless). Ships an A/B OTA layout so SD firmware-updates work out of the box. Actively developed &mdash; testers welcome via GitHub.</div>
       <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
       <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
         <b>Already on an older 7&Prime; build?</b> Update over the SD card &mdash; no re-flash:
-        <a href="firmware/waveshare7/GTi-7in-4.8.0-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-7in-4.8.0-update.bin</a> &mdash; save it as <b>GTi_update.bin</b>,
+        <a href="firmware/waveshare7/GTi-7in-4.8.1-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-7in-4.8.1-update.bin</a> &mdash; save it as <b>GTi_update.bin</b>,
         drop it on the SD card root, then tap <b>INFO &#9656; FW&nbsp;UPDATE</b>.
       </div>
     </div>
@@ -577,12 +577,12 @@
     <div class="device-card" data-manifest="firmware/waveshare7b-beta/manifest.json" onclick="selectDevice(this)">
       <div class="selected-indicator"></div>
       <div class="device-name">Waveshare 7B &mdash; BETA</div>
-      <div class="device-chip">ESP32-S3 &middot; 7" 1024×600 RGB &middot; v4.8.0-7B &middot; UNTESTED &middot; first-tester build</div>
+      <div class="device-chip">ESP32-S3 &middot; 7" 1024×600 RGB &middot; v4.8.1-7B &middot; UNTESTED &middot; first-tester build</div>
       <div class="device-desc"><b>The higher-res 1024×600 sibling of the 7".</b> Same features as the 7" beta &mdash; SD Access, cable-free SD firmware-update, type-to-search, GEN library, save-writeback, plus large-font &amp; high-visibility accessibility modes &mdash; adapted for the 1024×600 panel. <b>Flashed blind (no 7B on our bench)</b>, so the display timing is a best-guess: if the image drifts or flickers it's tunable &mdash; please report back. Dual-role (standalone <i>and</i> wireless).</div>
       <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
       <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
         <b>Already on a 7B build?</b> Update over the SD card &mdash; no re-flash:
-        <a href="firmware/waveshare7b-beta/GTi-7B-4.8.0-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-7B-4.8.0-update.bin</a> &mdash; save it as <b>GTi_update.bin</b>,
+        <a href="firmware/waveshare7b-beta/GTi-7B-4.8.1-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-7B-4.8.1-update.bin</a> &mdash; save it as <b>GTi_update.bin</b>,
         drop it on the SD card root, then tap <b>INFO &#9656; FW&nbsp;UPDATE</b>.
       </div>
     </div>
@@ -1079,8 +1079,8 @@ relayout();bootCracktro();requestAnimationFrame(frame);
     'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware A.5.0.0' },
     'firmware/jc3248-beta/manifest.json':{ name: 'Guition JC3248 BETA', version: 'Firmware 5.4.2-beta (SD Access + GEN + FW Update)' },
     'firmware/jc4827-beta/manifest.json':{ name: 'Guition JC4827W543 4.3" BETA', version: 'Firmware 5.4.2-beta (4.3" NV3041A)' },
-    'firmware/waveshare7/manifest.json': { name: 'Waveshare 7" BETA',  version: 'Firmware v4.8.0-7IN BETA (SD Access · Search · GEN · Saves · Reel)' },
-    'firmware/waveshare7b-beta/manifest.json': { name: 'Waveshare 7B BETA', version: 'Firmware v4.8.0-7B BETA (1024×600 · first-tester)' },
+    'firmware/waveshare7/manifest.json': { name: 'Waveshare 7" BETA',  version: 'Firmware v4.8.1-7IN BETA (SD Access · Search · GEN · Saves · Reel)' },
+    'firmware/waveshare7b-beta/manifest.json': { name: 'Waveshare 7B BETA', version: 'Firmware v4.8.1-7B BETA (1024×600 · first-tester)' },
     'firmware/waveshare28/manifest.json':{ name: 'Waveshare 2.8"', version: 'Firmware v3.4.7' },
     'firmware/supermini/manifest.json':  { name: 'Super Mini Dongle', version: 'Firmware v3.2.0' },
     'firmware/xiao/manifest.json':       { name: 'XIAO Dongle',   version: 'Firmware v3.2.0' },

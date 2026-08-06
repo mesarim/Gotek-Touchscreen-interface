@@ -57,7 +57,7 @@
 // *** Keep in sync with the 7" base when features change there. ***
 // ============================================================================
 // ---------- Version ----------
-#define FW_VERSION  "v4.8.0-7B"
+#define FW_VERSION  "v4.8.1-7B"
 
 // ---------- ESP-NOW server (peer-to-peer, no WiFi AP needed) ----------
 #include "espnow_server.h"
@@ -3294,6 +3294,7 @@ void setup(){
   hardDetach();
   if(g_car_bootmode==1 && !g_games.empty()) carEnter();   // CAROUSEL=1: boot straight into the reel
   else drawFullUI();
+  esp_ota_mark_app_valid_cancel_rollback();   // v4.8.1: confirm this image booted OK (satisfies the A/B rollback handshake on dual-OTA; harmless no-op otherwise). Without it the 7B boots once then rolls back to a blank slot.
 }
 
 void loop(void){
