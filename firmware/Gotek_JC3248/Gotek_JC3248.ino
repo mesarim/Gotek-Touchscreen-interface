@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.5.2-JC3248"
+#define FW_VERSION "5.5.5-JC3248"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -1635,55 +1635,63 @@ static void drawActionStrip(){
 }
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
+// ── v5.5.4: full-screen paginated INFO/settings model ──
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE };
+struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
+static InfoItem g_ii[16]; static int g_ii_n=0;
+struct InfoRect { int x,y,w,h; uint8_t act; };
+static InfoRect g_ir[16]; static int g_ir_n=0;
+static int g_info_page=0, g_info_pages=1;
+static void drawInfoFull();   // paginated settings + INFO bottom bar + flush
 static void drawInfoPanel(){
-  int ix,iy,iw,ih;
-  // Larger text in portrait (wide panel); size 1 in the narrow 150px landscape column.
-  int isz=g_portrait?2:1, bh=g_portrait?28:22, lh=g_portrait?17:9, btn=bh+3, ty=(bh-8*isz)/2;
-  // v4.8.1: HIVEMIND toggle row exists only when wireless AND a MuCa multicast
-  // group is configured — the hidden feature reveals itself only to its owners.
-  int mcInfoN=0;
-  if(g_wireless_mode){uint8_t mm[64][6];mcInfoN=enumMuCaDongles(mm,g_dongle_cap);}
-  int contentH=4+11+btn+4+btn*3+4+lh*2+(g_wireless_mode?(lh+btn):0)+((mcInfoN>0)?btn:0)+btn+bh+4+bh+6;
-  if(!g_portrait){ix=0;iy=STATUS_H;iw=150;ih=VH-STATUS_H-BOTTOM_H;}
-  else{ix=0;iy=STATUS_H+MODE_BAR_H;iw=VW;ih=min(contentH,(VH-BOTTOM_H)-iy);}
-  g_info_x=ix;g_info_w=iw;g_info_bottom=iy+ih;g_info_bh=bh;
-  gfx_fillRect(ix,iy,iw,ih,COL_PANEL);gfx_drawRect(ix,iy,iw,ih,COL_SEP);
-  int y=iy+4,pw=iw-8,x=ix+4;gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_PANEL);gfx_setCursor(x+2,y);gfx_print(T(L_SETTINGS));y+=11;
-  {uint16_t c=g_wireless_mode?COL_BLUE:COL_GREEN;gfx_fillRoundRect(x,y,pw,bh,6,c);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,c);String s=String("MODE: ")+(g_wireless_mode?T(L_WIRELESS):T(L_STANDALONE));int tw=gfx_textWidth(s);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(s);}g_info_mode_btn_y=y;y+=btn;
-  gfx_hline(x+2,y,pw-4,COL_SEP);y+=4;
-  {gfx_fillRoundRect(x,y,pw,bh,6,COL_AMBER);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,COL_AMBER);String s=String("FONT: ")+fontName(g_font);int tw=gfx_textWidth(s);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(s);}g_info_font_btn_y=y;y+=btn;
-  {const char*rn=g_portrait?"PORTRAIT":"LANDSCAPE";gfx_fillRoundRect(x,y,pw,bh,6,COL_BLUE);gfx_setTextSize(isz);gfx_setTextColor(TFT_WHITE,COL_BLUE);String s=String("ROTATE: ")+rn;int tw=gfx_textWidth(s);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(s);}g_info_rot_btn_y=y;y+=btn;
-  {uint16_t cc=g_compact?COL_GREEN:COL_BAR;gfx_fillRoundRect(x,y,pw,bh,6,cc);gfx_setTextSize(isz);gfx_setTextColor(g_compact?TFT_BLACK:COL_LIT,cc);String s=String("COMPACT: ")+(g_compact?"ON":"OFF");int tw=gfx_textWidth(s);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(s);}g_info_comp_btn_y=y;y+=btn;
-  gfx_hline(x+2,y,pw-4,COL_SEP);y+=4;
-  gfx_setTextSize(isz);gfx_setTextColor(COL_LIT,COL_PANEL);gfx_setCursor(x+2,y);gfx_print("Heap:"+String(ESP.getFreeHeap()/1024)+"K PSRAM:"+String(ESP.getFreePsram()/1024)+"K");y+=lh;
-  gfx_setCursor(x+2,y);gfx_print("Games: "+String(g_games.size())+"  Wr:"+String(g_sv_total_writes));y+=lh;
+  // v5.5.4: full-screen, single-column, paginated. Build the item list (dynamic
+  // labels + conditional rows), then draw only the current page's buttons and
+  // record their rects in g_ir[] so the tap handler hits exactly what's drawn.
+  g_ii_n=0;
+  auto add=[&](const String&l,uint16_t bg,uint16_t fg,uint8_t act){
+    if(g_ii_n>=16)return; strncpy(g_ii[g_ii_n].lbl,l.c_str(),31); g_ii[g_ii_n].lbl[31]=0;
+    g_ii[g_ii_n].bg=bg; g_ii[g_ii_n].fg=fg; g_ii[g_ii_n].act=act; g_ii_n++; };
+  add(String("MODE: ")+(g_wireless_mode?T(L_WIRELESS):T(L_STANDALONE)), g_wireless_mode?COL_BLUE:COL_GREEN, TFT_BLACK, IA_MODE);
+  add(String("FONT: ")+fontName(g_font), COL_AMBER, TFT_BLACK, IA_FONT);
+  add(String("LANG: ")+LANG_NAMES[g_lang], (uint16_t)0x79D6, TFT_WHITE, IA_LANG);
+  add(String("ROTATE: ")+(g_portrait?"PORTRAIT":"LANDSCAPE"), COL_BLUE, TFT_WHITE, IA_ROTATE);
+  add(String("COMPACT: ")+(g_compact?"ON":"OFF"), g_compact?COL_GREEN:COL_BAR, g_compact?TFT_BLACK:COL_LIT, IA_COMPACT);
   if(g_wireless_mode){
-    if(espnowIsPaired()){bool on=espnowXiaoOnline();gfx_setTextColor(on?COL_GREEN:COL_ORANGE,COL_PANEL);gfx_setCursor(x+2,y);gfx_print(on?"DONGLE: ONLINE":"DONGLE: OFFLINE");y+=lh;}
-    else{gfx_setTextColor(COL_ORANGE,COL_PANEL);gfx_setCursor(x+2,y);gfx_print(T(L_NOT_PAIRED));y+=lh;}
-    {gfx_fillRoundRect(x,y,pw,bh,6,espnowIsPaired()?COL_GREEN:COL_AMBER);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,espnowIsPaired()?COL_GREEN:COL_AMBER);const char*pl=espnowIsPaired()?"SWITCH DONGLE":"SCAN DONGLES";int tw=gfx_textWidth(pl);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(pl);}g_info_pair_now_btn_y=y;y+=btn;
-    // v4.8.1: HIVEMIND cast toggle — ON = FLING fans out to every MuCa dongle,
-    // OFF = paired dongle only (group stays intact, no renames). MuCa owners only.
-    if(mcInfoN>0){
-      uint16_t hc=g_hivemind?COL_ACCENT:COL_BAR;
-      gfx_fillRoundRect(x,y,pw,bh,6,hc);gfx_setTextSize(isz);gfx_setTextColor(g_hivemind?TFT_WHITE:COL_LIT,hc);
-      String hs=String("HIVEMIND: ")+(g_hivemind?"ON":"OFF");int tw=gfx_textWidth(hs);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(hs);
-      g_info_hive_btn_y=y;y+=btn;
-    } else g_info_hive_btn_y=0;
-  } else {g_info_pair_now_btn_y=0;g_info_hive_btn_y=0;}
-  {gfx_fillRoundRect(x,y,pw,bh,6,COL_BLUE);gfx_setTextSize(isz);gfx_setTextColor(TFT_WHITE,COL_BLUE);int tw=gfx_textWidth("RESCAN SD");gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(T(L_RESCAN_SD));}g_info_rescan_btn_y=y;y+=btn;
-  // Last row split in two: SOFT RESET (rarely used) shares the row with LOAD DIAG.
-  {int gap=4,hw=(pw-gap)/2,dx=x+hw+gap;gfx_setTextSize(isz);
-    gfx_fillRoundRect(x,y,hw,bh,6,0x8000);gfx_setTextColor(TFT_WHITE,0x8000);
-    {int tw=gfx_textWidth("SOFT RESET");gfx_setCursor(x+(hw-tw)/2,y+ty);gfx_print(T(L_SOFT_RESET));}
-    {bool diagOn=(g_loaded&&g_loaded_name=="AMIGA TEST KIT");uint16_t dc=diagOn?(uint16_t)0xE8C4:COL_ACCENT;const char*dl=diagOn?T(L_EJECT_DIAG):T(L_LOAD_DIAG);   // v4.9.8: eject the mounted test kit
-     gfx_fillRoundRect(dx,y,hw,bh,6,dc);gfx_setTextColor(diagOn?TFT_BLACK:TFT_WHITE,dc);
-     int tw=gfx_textWidth(dl);gfx_setCursor(dx+(hw-tw)/2,y+ty);gfx_print(dl);}
-  }g_info_reset_btn_y=y;y+=btn;
-  // v5.1/v5.3: SD ACCESS shares its row with FW UPDATE — both are SD-card / USB maintenance ops.
-  {int gap2=4,hw2=(pw-gap2)/2,dx2=x+hw2+gap2;gfx_setTextSize(isz);
-    uint16_t sc=0x05FF;gfx_fillRoundRect(x,y,hw2,bh,6,sc);gfx_setTextColor(TFT_BLACK,sc);{int tw=gfx_textWidth("SD ACCESS");gfx_setCursor(x+(hw2-tw)/2,y+ty);gfx_print(T(L_SD_ACCESS));}
-    gfx_fillRoundRect(dx2,y,hw2,bh,6,COL_AMBER);gfx_setTextColor(TFT_BLACK,COL_AMBER);{int tw=gfx_textWidth("FW UPDATE");gfx_setCursor(dx2+(hw2-tw)/2,y+ty);gfx_print(T(L_FW_UPDATE));}
-  }g_info_sdacc_btn_y=y;
+    add(espnowIsPaired()?String("SWITCH DONGLE"):String("SCAN DONGLES"), espnowIsPaired()?COL_GREEN:COL_AMBER, TFT_BLACK, IA_DONGLE);
+    uint8_t mm[64][6]; int mcN=enumMuCaDongles(mm,g_dongle_cap);
+    if(mcN>0) add(String("HIVEMIND: ")+(g_hivemind?"ON":"OFF"), g_hivemind?COL_ACCENT:COL_BAR, g_hivemind?TFT_WHITE:COL_LIT, IA_HIVEMIND);
+  }
+  add(T(L_RESCAN_SD), COL_BLUE, TFT_WHITE, IA_RESCAN);
+  add(T(L_SOFT_RESET), (uint16_t)0x8000, TFT_WHITE, IA_RESET);
+  {bool diagOn=(g_loaded&&g_loaded_name=="AMIGA TEST KIT");
+   add(diagOn?T(L_EJECT_DIAG):T(L_LOAD_DIAG), diagOn?(uint16_t)0xE8C4:COL_ACCENT, diagOn?TFT_BLACK:TFT_WHITE, IA_DIAG);}
+  add(T(L_SD_ACCESS), (uint16_t)0x05FF, TFT_BLACK, IA_SDACCESS);
+  add(T(L_FW_UPDATE), COL_AMBER, TFT_BLACK, IA_FWUPDATE);
+  int ix=0,iy=STATUS_H,iw=VW,ih=VH-STATUS_H-BOTTOM_H;
+  gfx_fillRect(ix,iy,iw,ih,COL_BG);
+  gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,iy+5);gfx_print(T(L_SETTINGS));
+  int headerH=18, footerH=14, pad=8, gap=6, colGap=8, bh=34, cols=(g_portrait?1:2);   // v5.5.5: 2 cols landscape (half-width), 1 col portrait (full-width, paginates)
+  int areaTop=iy+headerH, areaH=ih-headerH-footerH;
+  int colW=(iw-pad*2-colGap*(cols-1))/cols;
+  int rowsPP=(areaH+gap)/(bh+gap); if(rowsPP<1)rowsPP=1;
+  int perPage=rowsPP*cols;
+  g_info_pages=(g_ii_n+perPage-1)/perPage; if(g_info_pages<1)g_info_pages=1;
+  if(g_info_page>=g_info_pages)g_info_page=g_info_pages-1; if(g_info_page<0)g_info_page=0;
+  {String pn="PAGE "+String(g_info_page+1)+"/"+String(g_info_pages);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(iw-8-gfx_textWidth(pn),iy+5);gfx_print(pn);}
+  int startI=g_info_page*perPage, endI=min(g_ii_n,startI+perPage);
+  g_ir_n=0;
+  for(int i2=startI;i2<endI;i2++){
+    int idx=i2-startI, col=idx%cols, row=idx/cols;
+    int bx=ix+pad+col*(colW+colGap), by=areaTop+row*(bh+gap);
+    gfx_fillRoundRect(bx,by,colW,bh,8,g_ii[i2].bg);
+    int sz=2; gfx_setTextSize(sz); int tw=gfx_textWidth(g_ii[i2].lbl);
+    if(tw>colW-8){ sz=1; gfx_setTextSize(sz); tw=gfx_textWidth(g_ii[i2].lbl); }   // shrink an over-long label to fit the half-width cell
+    gfx_setTextColor(g_ii[i2].fg,g_ii[i2].bg);
+    gfx_setCursor(bx+(colW-tw)/2,by+(bh-8*sz)/2);gfx_print(g_ii[i2].lbl);
+    if(g_ir_n<16){g_ir[g_ir_n].x=bx;g_ir[g_ir_n].y=by;g_ir[g_ir_n].w=colW;g_ir[g_ir_n].h=bh;g_ir[g_ir_n].act=g_ii[i2].act;g_ir_n++;}
+  }
+  gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
+  gfx_setCursor(8,iy+ih-11);gfx_print("Heap:"+String(ESP.getFreeHeap()/1024)+"K PSRAM:"+String(ESP.getFreePsram()/1024)+"K  Games:"+String(g_games.size()));
 }
 
 static void drawModeBar(){
@@ -2698,7 +2706,7 @@ static void runScreensaver(){                                // blocking bounce 
   } else if(wranglerMode){
     curName="@wrangler_amiga"; nameSz=3; gfx_setTextSize(nameSz);
     while(nameSz>1&&gfx_textWidth(curName)>gW-8){nameSz--;gfx_setTextSize(nameSz);}
-    g_ss_w=gfx_textWidth(curName); g_ss_h=8*nameSz;
+    if(!ssMakeClaude(0)){g_ss_have=false;return;}   // v5.5.5: start on a sprite; wall hits flip @wrangler_amiga <-> sprite
   } else if(claudeMode){
     // Empty /screensaver/ folder: bounce the (slowly spinning) Claude starburst
     if(!g_ss_claude||!ssMakeClaude(0)){g_ss_have=false;return;}
@@ -2728,9 +2736,9 @@ static void runScreensaver(){                                // blocking bounce 
       else if(hit&&!claudeMode&&!wranglerMode&&g_ss_paths.size()>1){ int ni=(idx+1)%(int)g_ss_paths.size();
         if(ssDecode(g_ss_paths[ni]))idx=ni; else ssDecode(g_ss_paths[idx]);   // skip undecodable, keep a valid buffer
         if(x>gW-g_ss_w)x=gW-g_ss_w; if(y>gH-g_ss_h)y=gH-g_ss_h; if(x<0)x=0; if(y<0)y=0; }
-      if(claudeMode&&hit){ if((esp_random()%5)<2){ showName=true; curName=NAMES[(int)(esp_random()%(uint32_t)N_NAMES)]; nameSz=3; gfx_setTextSize(nameSz); while(nameSz>1&&gfx_textWidth(curName)>gW-8){nameSz--;gfx_setTextSize(nameSz);} g_ss_w=gfx_textWidth(curName); g_ss_h=8*nameSz; if(x>gW-g_ss_w)x=gW-g_ss_w; if(y>gH-g_ss_h)y=gH-g_ss_h; if(x<0)x=0; if(y<0)y=0; } else { showName=false; ssForm=(int)(esp_random()%3); if(x>gW-96)x=gW-96; if(y>gH-96)y=gH-96; if(x<0)x=0; if(y<0)y=0; } }   // v5.5.1: ~40% of bounces flip to a name
-      if(claudeMode&&!showName){ ph+=0.02f; if(ssForm==1)ssMakeGhost(ph); else if(ssForm==2)ssMakeLolly(ph); else ssMakeClaude(ph); }   // re-render each frame
-      gfx_fillScreen(TFT_BLACK); if((claudeMode&&showName)||wranglerMode){ gfx_setTextSize(nameSz); gfx_setTextColor(CRK_RGB(244,238,225),TFT_BLACK); gfx_setCursor(x,y); gfx_print(curName); } else ssBlit(x,y); gfx_flush();
+      if((claudeMode||wranglerMode)&&hit){ if((esp_random()%5)<2){ showName=true; curName=wranglerMode?"@wrangler_amiga":NAMES[(int)(esp_random()%(uint32_t)N_NAMES)]; nameSz=3; gfx_setTextSize(nameSz); while(nameSz>1&&gfx_textWidth(curName)>gW-8){nameSz--;gfx_setTextSize(nameSz);} g_ss_w=gfx_textWidth(curName); g_ss_h=8*nameSz; if(x>gW-g_ss_w)x=gW-g_ss_w; if(y>gH-g_ss_h)y=gH-g_ss_h; if(x<0)x=0; if(y<0)y=0; } else { showName=false; ssForm=(int)(esp_random()%3); if(x>gW-96)x=gW-96; if(y>gH-96)y=gH-96; if(x<0)x=0; if(y<0)y=0; } }   // v5.5.1: ~40% of bounces flip to a name
+      if((claudeMode||wranglerMode)&&!showName){ ph+=0.02f; if(ssForm==1)ssMakeGhost(ph); else if(ssForm==2)ssMakeLolly(ph); else ssMakeClaude(ph); }   // re-render each frame
+      gfx_fillScreen(TFT_BLACK); if((claudeMode||wranglerMode)&&showName){ gfx_setTextSize(nameSz); gfx_setTextColor(CRK_RGB(244,238,225),TFT_BLACK); gfx_setCursor(x,y); gfx_print(curName); } else ssBlit(x,y); gfx_flush();
     } else delay(5);
   }
   ssFree();
@@ -3119,6 +3127,7 @@ static void runSDAccessBoot(bool sdok){
 // OTA partition table (Tools > Partition Scheme > a "2x…APP" 16M scheme); a
 // single-slot "No OTA" build has no spare slot and says so instead of failing ugly.
 #define FWUP_PATH "/GTi_update.bin"
+#define FWUP_TAG  "JC35"   // v5.5.3: SD update auto-detects any *.bin whose name carries this tag (no rename)
 static void fwupMsg(int y,const char*s,uint16_t fg,uint16_t bg,int sz){gfx_setTextSize(sz);gfx_setTextColor(fg,bg);gfx_setCursor((VW-gfx_textWidth(s))/2,y);gfx_print(s);}
 static void fwupWait(){uint16_t tx,ty;gfx_flush();while(!(Touch_ReadFrame()&&getTouchXY(&tx,&ty)))delay(30);delay(200);}
 // Board-ID guard. Arduino stamps EVERY ESP32 sketch with the same esp_app_desc
@@ -3140,14 +3149,38 @@ static bool fwupHasMarker(File&f,const char*mark){
     tlen=(total>=ml-1)?ml-1:total;memcpy(tail,buf+total-tlen,tlen);}
   f.seek(0);return false;
 }
+// v5.5.3: locate the SD update image without forcing a rename. Pass 1 = any *.bin
+// whose NAME carries this board tag (FWUP_TAG). Pass 2 = any *.bin whose CONTENTS carry
+// our board marker (name-independent safety net). Else the legacy /GTi_update.bin.
+static String fwupFindFile(){
+  for(int pass=0;pass<2;pass++){
+    File root=SD_MMC.open("/"); if(!root)break;
+    File e;
+    while((e=root.openNextFile())){
+      if(!e.isDirectory()){
+        String nm=e.name(); String up=nm; up.toUpperCase();
+        int sl=up.lastIndexOf(0x2F); String leaf=(sl>=0)?up.substring(sl+1):up;
+        if(leaf.endsWith(".BIN")){
+          bool hit=(pass==0)?(leaf.indexOf(FWUP_TAG)>=0):fwupHasMarker(e,GTI_FW_MARK);
+          if(hit){ String p=nm; if(!p.startsWith("/"))p=String("/")+p; e.close(); root.close(); return p; }
+        }
+      }
+      e.close();
+    }
+    root.close();
+  }
+  if(SD_MMC.exists(FWUP_PATH)) return String(FWUP_PATH);
+  return String();
+}
 static void doFirmwareUpdate(){
   gfx_fillScreen(COL_BG);
-  File f=SD_MMC.open(FWUP_PATH,FILE_READ);
+  String fpath=fwupFindFile();
+  File f; if(fpath.length())f=SD_MMC.open(fpath,FILE_READ);
   if(!f||f.isDirectory()){
     if(f)f.close();
     fwupMsg(VH/2-24,"NO UPDATE FILE",COL_ORANGE,COL_BG,2);
-    fwupMsg(VH/2+4,"Drop GTi_update.bin on the SD",COL_DIM,COL_BG,1);
-    fwupMsg(VH/2+18,"(use SD ACCESS), then try again.",COL_DIM,COL_BG,1);
+    fwupMsg(VH/2+2,"Drop a GTi-" FWUP_TAG "-*.bin on the SD",COL_DIM,COL_BG,1);
+    fwupMsg(VH/2+16,"(no rename needed), then try again.",COL_DIM,COL_BG,1);
     fwupMsg(VH-22,"tap to return",COL_MID,COL_BG,1);fwupWait();return;}
   size_t fsz=f.size();
   uint8_t h0=0;f.read(&h0,1);f.seek(0);bool isImg=(h0==0xE9);   // ESP image magic
@@ -3162,6 +3195,7 @@ static void doFirmwareUpdate(){
   // ── confirm ──
   gfx_fillScreen(COL_BG);
   fwupMsg(24,"FIRMWARE UPDATE",COL_LIT,COL_BG,2);
+  {String leaf=fpath;int sl=leaf.lastIndexOf(0x2F);if(sl>=0)leaf=leaf.substring(sl+1);fwupMsg(40,leaf.c_str(),COL_MID,COL_BG,1);}
   {char l[48];snprintf(l,sizeof l,"File: %u KB",(unsigned)(fsz/1024));fwupMsg(56,l,COL_DIM,COL_BG,1);}
   fwupMsg(72,idOK?"Image: GTi-JC firmware  [OK]":(isImg?"Image: unrecognised (not GTi-JC)":"Image: not a firmware .bin"),idOK?COL_GREEN:COL_ORANGE,COL_BG,1);
   {char l[64];snprintf(l,sizeof l,"Now running: %s",FW_VERSION);fwupMsg(88,l,COL_DIM,COL_BG,1);}
@@ -3196,7 +3230,7 @@ static void doFirmwareUpdate(){
     Update.abort();gfx_fillScreen(COL_BG);fwupMsg(VH/2-14,"UPDATE FAILED",COL_ORANGE,COL_BG,2);
     fwupMsg(VH/2+12,err?"read/write error - image unchanged":Update.errorString(),COL_DIM,COL_BG,1);
     fwupMsg(VH/2+26,"current firmware kept.",COL_DIM,COL_BG,1);fwupMsg(VH-22,"tap to return",COL_MID,COL_BG,1);fwupWait();return;}
-  SD_MMC.rename(FWUP_PATH,"/GTi_update.installed");   // best-effort: don't re-offer the same file
+  SD_MMC.rename(fpath.c_str(),(fpath+".installed").c_str());   // best-effort: don't re-offer the same file
   gfx_fillScreen(COL_BG);fwupMsg(VH/2-8,"UPDATE OK - REBOOTING",COL_GREEN,COL_BG,2);gfx_flush();delay(900);ESP.restart();
 }
 
@@ -3348,52 +3382,55 @@ static void switchLib(int m){   // int, not DiskMode: Arduino auto-generates thi
   if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
   drawFullUI();gfx_flush();
 }
+static void drawInfoBottomBar(){
+  int y=VH-BOTTOM_H,bw=VW/5;
+  gfx_fillRect(0,y,VW,BOTTOM_H,COL_BAR);gfx_hline(0,y,VW,COL_SEP);
+  struct{const char*l;uint16_t col;bool on;}bb[5]={
+    {"< PAGE",COL_ORANGE,g_info_page>0},{"PAGE >",COL_BLUE,g_info_page<g_info_pages-1},
+    {"THEME",COL_AMBER,true},{"",COL_BAR,false},{"CLOSE",COL_GREEN,true}};
+  for(int i=0;i<5;i++){
+    int bx=i*bw; if(i)gfx_vline(bx,y+3,BOTTOM_H-6,COL_SEP);
+    if(!bb[i].l[0])continue;
+    gfx_setTextSize(1);gfx_setTextColor(bb[i].on?bb[i].col:COL_DIM,COL_BAR);
+    int tw=gfx_textWidth(bb[i].l);gfx_setCursor(bx+(bw-tw)/2,y+BOTTOM_H/2-4);gfx_print(bb[i].l);
+  }
+}
+static void drawInfoFull(){
+  gfx_fillScreen(COL_BG);drawStatusBar();drawInfoPanel();drawInfoBottomBar();gfx_flush();
+}
+static void infoAction(uint8_t act){
+  switch(act){
+    case IA_MODE: g_wireless_mode=!g_wireless_mode;saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE");if(g_wireless_mode)ensureEspNow();drawInfoFull();break;
+    case IA_FONT: applyFont((g_font+1)%3);saveConfigKey("FONT",fontName(g_font));drawInfoFull();break;
+    case IA_LANG: g_lang=(g_lang+1)%LANG_N;saveConfigKey("LANG",LANG_NAMES[g_lang]);drawInfoFull();break;
+    case IA_ROTATE: g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
+    case IA_COMPACT: g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
+    case IA_DONGLE: doPairNow();drawInfoFull();break;
+    case IA_HIVEMIND: g_hivemind=!g_hivemind;saveConfigKey("HIVEMIND",g_hivemind?"ON":"OFF");drawInfoFull();break;
+    case IA_RESCAN: doRescan();break;
+    case IA_RESET: {gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0xE8C4,COL_BG);const char*m=T(L_RESETTING);gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();delay(700);ESP.restart();}break;
+    case IA_DIAG: if(g_loaded&&g_loaded_name=="AMIGA TEST KIT"){g_info_showing=false;doUnload();drawFullUI();gfx_flush();}else doLoadDiag();break;
+    case IA_SDACCESS: {gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0x05FF,COL_BG);const char*m="ENTERING SD ACCESS...";gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();g_sdaccess_magic=SDACCESS_MAGIC;delay(350);ESP.restart();}break;
+    case IA_FWUPDATE: doFirmwareUpdate();g_info_showing=false;drawFullUI();gfx_flush();break;
+    default: break;
+  }
+}
 static void handleTap(uint16_t px,uint16_t py){
-  // ── v5.1.3: SD ACCESS hit-test runs BEFORE the panel's py<g_info_bottom guard, so the
-  // button is fully tappable even when it renders past the panel's computed bottom edge.
-  // Uses the button's own drawn rect: full panel width, from 2px above the button down to
-  // 28px below it (the last row, so the space below is fair game). Flash then reboot.
-  if(g_info_showing&&g_info_sdacc_btn_y&&px>=(uint16_t)g_info_x&&px<(uint16_t)(g_info_x+g_info_w)
-     &&py>=(uint16_t)(g_info_sdacc_btn_y-2)&&py<(uint16_t)(g_info_sdacc_btn_y+g_info_bh+28)){
-    int pw2=g_info_w-8,gap2=4,hw2=(pw2-gap2)/2,lx=g_info_x+4,dx2=lx+hw2+gap2,isz=g_portrait?2:1,ty2=(g_info_bh-8*isz)/2;
-    if(px>=(uint16_t)dx2){   // v5.3: right half = FW UPDATE
-      gfx_fillRoundRect(dx2,g_info_sdacc_btn_y,hw2,g_info_bh,6,TFT_WHITE);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,TFT_WHITE);
-      {int tw=gfx_textWidth("FW UPDATE");gfx_setCursor(dx2+(hw2-tw)/2,g_info_sdacc_btn_y+ty2);gfx_print(T(L_FW_UPDATE));}gfx_flush();delay(120);
-      doFirmwareUpdate();   // blocking; returns here on cancel/fail (old firmware kept), reboots on success
-      g_info_showing=false;drawFullUI();gfx_flush();return;}
-    // left half = SD ACCESS
-    gfx_fillRoundRect(lx,g_info_sdacc_btn_y,hw2,g_info_bh,6,TFT_WHITE);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,TFT_WHITE);
-    {int tw=gfx_textWidth("SD ACCESS");gfx_setCursor(lx+(hw2-tw)/2,g_info_sdacc_btn_y+ty2);gfx_print(T(L_SD_ACCESS));}gfx_flush();delay(150);
-    gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(0x05FF,COL_BG);const char*m="ENTERING SD ACCESS...";gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();
-    g_sdaccess_magic=SDACCESS_MAGIC;delay(350);ESP.restart();}
-  // ── INFO / SETTINGS panel touches (only within the panel; taps below it fall through to the list) ──
-  if(g_info_showing&&px<(uint16_t)(g_info_x+g_info_w)&&py<(uint16_t)g_info_bottom){
-    if(g_info_mode_btn_y&&py>=(uint16_t)g_info_mode_btn_y&&py<(uint16_t)(g_info_mode_btn_y+g_info_bh)){g_wireless_mode=!g_wireless_mode;saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE");if(g_wireless_mode)ensureEspNow();drawFullUI();drawInfoPanel();gfx_flush();return;}
-    // FONT — cycle SMALL/NORMAL/LARGE, keep INFO open, list re-renders
-    if(g_info_font_btn_y&&py>=(uint16_t)g_info_font_btn_y&&py<(uint16_t)(g_info_font_btn_y+g_info_bh)){
-      applyFont((g_font+1)%3);saveConfigKey("FONT",fontName(g_font));drawFullUI();drawInfoPanel();gfx_flush();return;}
-    // ROTATE — +90 each tap; reflow layout, keep INFO open
-    if(g_info_rot_btn_y&&py>=(uint16_t)g_info_rot_btn_y&&py<(uint16_t)(g_info_rot_btn_y+g_info_bh)){
-      g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));
-      {float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;} drawFullUI();drawInfoPanel();gfx_flush();return;}
-    // COMPACT — toggle cover vs list-maximised, keep INFO open
-    if(g_info_comp_btn_y&&py>=(uint16_t)g_info_comp_btn_y&&py<(uint16_t)(g_info_comp_btn_y+g_info_bh)){
-      g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");
-      {float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;} drawFullUI();drawInfoPanel();gfx_flush();return;}
-    if(g_wireless_mode&&g_info_pair_now_btn_y&&py>=(uint16_t)g_info_pair_now_btn_y&&py<(uint16_t)(g_info_pair_now_btn_y+g_info_bh)){doPairNow();return;}
-    // v4.8.1: HIVEMIND toggle (row only exists when a MuCa group is configured)
-    if(g_wireless_mode&&g_info_hive_btn_y&&py>=(uint16_t)g_info_hive_btn_y&&py<(uint16_t)(g_info_hive_btn_y+g_info_bh)){
-      g_hivemind=!g_hivemind;saveConfigKey("HIVEMIND",g_hivemind?"ON":"OFF");drawFullUI();drawInfoPanel();gfx_flush();return;}
-    if(g_info_rescan_btn_y&&py>=(uint16_t)g_info_rescan_btn_y&&py<(uint16_t)(g_info_rescan_btn_y+g_info_bh)){doRescan();return;}
-    if(g_info_reset_btn_y&&py>=(uint16_t)g_info_reset_btn_y&&py<(uint16_t)(g_info_reset_btn_y+g_info_bh)){
-      int pw=g_info_w-8,gap=4,hw=(pw-gap)/2,dx=g_info_x+4+hw+gap;
-      if(px>=(uint16_t)dx){ if(g_loaded&&g_loaded_name=="AMIGA TEST KIT"){g_info_showing=false;doUnload();drawFullUI();gfx_flush();} else doLoadDiag(); return; }   // right half = LOAD / EJECT DIAG
-      gfx_fillRoundRect(g_info_x+4,g_info_reset_btn_y,hw,g_info_bh,6,0xE8C4);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0xE8C4);gfx_setCursor(g_info_x+10,g_info_reset_btn_y+(g_info_bh-8)/2);gfx_print(T(L_RESETTING));gfx_flush();delay(700);ESP.restart();}
-    // v5.1.3: SD ACCESS is handled ABOVE this block (before the py<g_info_bottom guard),
-    // because the button can render past the panel's computed bottom edge.
+  // ── v5.5.4: full-screen paginated INFO — swallow ALL taps while settings are open ──
+  if(g_info_showing){
+    if(py>=(uint16_t)(VH-BOTTOM_H)){
+      int bw=VW/5,bsel=px/bw; if(bsel>4)bsel=4;
+      if(bsel==0){ if(g_info_page>0){g_info_page--;drawInfoFull();} }
+      else if(bsel==1){ if(g_info_page<g_info_pages-1){g_info_page++;drawInfoFull();} }
+      else if(bsel==2){ cycleTheme();drawInfoFull(); }
+      else if(bsel==4){ g_info_showing=false;drawFullUI();gfx_flush(); }
+      return;
+    }
+    for(int i=0;i<g_ir_n;i++){
+      if(px>=(uint16_t)g_ir[i].x&&px<(uint16_t)(g_ir[i].x+g_ir[i].w)&&py>=(uint16_t)g_ir[i].y&&py<(uint16_t)(g_ir[i].y+g_ir[i].h)){ infoAction(g_ir[i].act); return; }
+    }
     return;
   }
-
   // ── v4.9.2: book button on the cover — opens the .rtfm manual full-screen ──
   if(!g_info_showing&&g_manual_bw&&g_manual_path.length()&&px>=(uint16_t)g_manual_bx&&px<(uint16_t)(g_manual_bx+g_manual_bw)&&py>=(uint16_t)g_manual_by&&py<(uint16_t)(g_manual_by+g_manual_bh)){
     doManual(g_manual_path); drawFullUI(); gfx_flush(); return; }
@@ -3458,7 +3495,7 @@ static void handleTap(uint16_t px,uint16_t py){
     else if(btn==1&&g_sel<(int)g_games.size()-1){g_sel++;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[g_sel].name));if((float)((g_sel+1)*LIST_ITEM_H)>g_scrollPx+(LIST_BOTTOM-LIST_TOP))g_scrollPx=(g_sel+1)*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP);drawListAndCover();gfx_flush();}
     else if(btn==2){cycleTheme();}
     else if(btn==3){ g_info_showing=false; carEnter(); }   // REEL — enter the carousel
-    else if(btn==4){ g_info_showing=!g_info_showing; if(g_info_showing)drawInfoPanel(); else drawFullUI(); gfx_flush(); }
+    else if(btn==4){ g_info_showing=!g_info_showing; if(g_info_showing){g_info_page=0;drawInfoFull();} else {drawFullUI();gfx_flush();} }
     return;
   }
 }
