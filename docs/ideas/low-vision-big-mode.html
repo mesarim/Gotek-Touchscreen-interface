@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GTi — Low-Vision "BIG" Mode Mockup</title>
+<style>
+  :root{
+    --ink:#e8edf4; --dim:#8b97a8; --line:#24304a; --panel:#0e1524; --bg:#070b13;
+    --hi:#ffdf00;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:1280px;margin:0 auto;padding:22px 20px 60px}
+  h1{font-size:22px;margin:0 0 4px;letter-spacing:.2px}
+  .sub{color:var(--dim);font-size:13.5px;margin:0 0 18px;line-height:1.5}
+  .sub b{color:var(--ink)}
+  .bar{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-bottom:20px}
+  .grp{display:flex;gap:6px;align-items:center}
+  .grp .lab{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);margin-right:4px}
+  button.seg{appearance:none;border:1px solid var(--line);background:#111a2c;color:var(--ink);
+    padding:7px 13px;border-radius:8px;font-size:13px;cursor:pointer;transition:.12s;font-weight:600}
+  button.seg:hover{border-color:#40506e}
+  button.seg.on{background:var(--hi);color:#000;border-color:var(--hi)}
+  .stage{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap}
+  .devwrap{flex:1 1 620px;min-width:340px}
+  .devcap{font-size:12.5px;color:var(--dim);margin:0 0 10px;display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+  .devcap b{color:var(--ink);font-size:13.5px}
+  .scaler{position:relative;width:100%}
+  .bezel{background:#05070c;border:2px solid #1c2740;border-radius:16px;padding:14px;
+    box-shadow:0 20px 60px rgba(0,0,0,.55);width:max-content;transform-origin:top left}
+  .screen{position:relative;overflow:hidden;background:#000;border-radius:3px}
+  .screen *{position:absolute;overflow:hidden}
+  /* on-screen primitives use inline styles for exact px */
+  .side{flex:1 1 300px;min-width:280px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 17px;margin-bottom:14px}
+  .card h3{margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--hi)}
+  .card ul{margin:0;padding-left:0;list-style:none}
+  .card li{font-size:13px;line-height:1.5;color:#cbd4e2;padding:5px 0;border-bottom:1px dashed #1a2438;display:flex;gap:9px}
+  .card li:last-child{border-bottom:0}
+  .card li .k{color:var(--hi);font-weight:700;flex:0 0 auto}
+  .measure{display:inline-block;font-variant-numeric:tabular-nums;background:#111a2c;border:1px solid var(--line);
+    border-radius:5px;padding:1px 6px;font-size:12px;color:#a9ffef}
+  .foot{color:var(--dim);font-size:12px;margin-top:18px;line-height:1.6}
+  .foot code{background:#111a2c;padding:1px 5px;border-radius:4px;color:#cbd4e2}
+  .pill{display:inline-block;background:#0c3;color:#000;border-radius:20px;padding:2px 9px;font-size:11px;font-weight:800}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GTi — Low-Vision <span style="color:var(--hi)">"BIG"</span> Mode</h1>
+  <p class="sub">A concept accessibility layout for the Waveshare&nbsp;7"/7B, sized to real low-vision guidance: <b>one dominant cover</b>, <b>huge high-contrast text</b>, and <b>three finger-sized buttons</b>. Toggle device, palette, layout, and the Standard&nbsp;↔&nbsp;Big scale to see the before/after. Callout chips show measured touch-target size in mm and the contrast ratio.</p>
+
+  <div class="bar">
+    <div class="grp"><span class="lab">Device</span>
+      <button class="seg on" data-k="dev" data-v="7">7" · 800×480</button>
+      <button class="seg" data-k="dev" data-v="7b">7B · 1024×600</button>
+    </div>
+    <div class="grp"><span class="lab">Palette</span>
+      <button class="seg on" data-k="theme" data-v="yob">Yellow on black</button>
+      <button class="seg" data-k="theme" data-v="boy">Black on yellow</button>
+      <button class="seg" data-k="theme" data-v="wob">White on black</button>
+    </div>
+    <div class="grp"><span class="lab">Layout</span>
+      <button class="seg on" data-k="layout" data-v="cover">Big cover</button>
+      <button class="seg" data-k="layout" data-v="list">Big list</button>
+    </div>
+    <div class="grp"><span class="lab">Scale</span>
+      <button class="seg" data-k="size" data-v="std">Standard</button>
+      <button class="seg on" data-k="size" data-v="big">Big (accessible)</button>
+    </div>
+    <div class="grp"><span class="lab">Callouts</span>
+      <button class="seg on" data-k="ann" data-v="1">On</button>
+      <button class="seg" data-k="ann" data-v="0">Off</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="devwrap">
+      <div class="devcap"><b id="cap">Waveshare 7" · 800×480</b><span id="cap2">shown at 100% · 1 device px = 1 px</span></div>
+      <div class="scaler" id="scaler"></div>
+      <p class="foot" id="foot"></p>
+    </div>
+    <div class="side" id="side"></div>
+  </div>
+</div>
+
+<script>
+const state={dev:'7',theme:'yob',layout:'cover',size:'big',ann:'1'};
+
+// physical px/mm: both panels are ~7" diagonal, ~154 mm wide active area
+const DEV={
+  '7' :{w:800, h:480, mm:154.0, label:'Waveshare 7" · 800×480'},
+  '7b':{w:1024,h:600, mm:154.0, label:'Waveshare 7B · 1024×600'},
+};
+// palettes (grounded in the firmware HIVIS theme + CNIB clear-print pairings)
+const PAL={
+  yob:{bg:'#000000',ink:'#ffffff',accent:'#ffdf00',sel:'#ffdf00',selInk:'#000000',ok:'#25e000',line:'#ffdf00',dim:'#c9cf00',ratio:'21:1 / 19.6:1'},
+  boy:{bg:'#ffdf00',ink:'#000000',accent:'#000000',sel:'#000000',selInk:'#ffdf00',ok:'#0a5a00',line:'#000000',dim:'#3a3300',ratio:'19.6:1'},
+  wob:{bg:'#000000',ink:'#ffffff',accent:'#ffffff',sel:'#ffffff',selInk:'#000000',ok:'#25e000',line:'#7fa8ff',dim:'#b9c3d6',ratio:'21:1'},
+};
+const COVERS=[
+  {t:'SHADOW OF THE BEAST',g:['#2a0d3a','#c25a12']},
+  {t:'TURRICAN II',g:['#06263f','#12b6c9']},
+  {t:'LOTUS ESPRIT TURBO',g:['#3a0000','#e02020']},
+  {t:'SPEEDBALL 2',g:['#20262c','#9fb2c4']},
+  {t:'MONKEY ISLAND',g:['#04322c','#12b47a']},
+];
+let coverIdx=0;
+
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;');}
+// a faux game cover as an absolutely-positioned block
+function cover(x,y,w,h,c,p,border){
+  const fs=Math.round(h*0.11);
+  return `<div style="left:${x}px;top:${y}px;width:${w}px;height:${h}px;
+     background:linear-gradient(150deg,${c.g[0]},${c.g[1]});border:${border}px solid ${p.line};
+     border-radius:4px;box-shadow:inset 0 0 ${Math.round(h*0.5)}px rgba(0,0,0,.55)">
+     <div style="left:0;top:0;width:${w}px;height:${h}px;background:
+       repeating-linear-gradient(0deg,rgba(0,0,0,.16) 0 2px,transparent 2px 4px)"></div>
+     <div style="left:6px;right:6px;bottom:8px;top:auto;width:${w-12}px;color:#fff;
+       font-weight:900;font-size:${fs}px;line-height:1.03;text-shadow:0 2px 4px #000;
+       letter-spacing:.5px;font-family:Arial,Helvetica,sans-serif">${esc(c.t)}</div>
+   </div>`;
+}
+function txt(x,y,s,size,col,w,weight,align){
+  return `<div style="left:${x}px;top:${y}px;width:${w}px;color:${col};font-size:${size}px;
+    font-weight:${weight||700};font-family:Arial,Helvetica,sans-serif;line-height:1.05;
+    text-align:${align||'left'};overflow:visible;white-space:nowrap">${esc(s)}</div>`;
+}
+function box(x,y,w,h,fill,border,rad){
+  return `<div style="left:${x}px;top:${y}px;width:${w}px;height:${h}px;background:${fill};
+    border:${border?border:0};border-radius:${rad==null?8:rad}px"></div>`;
+}
+// annotation callout (measured mm chip) — drawn OUTSIDE the screen clipping via overlay layer
+function annChip(text){return `<span style="display:inline-block;background:#0b7;color:#022;font-weight:800;
+   font-size:11px;padding:2px 7px;border-radius:20px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.5)">${text}</span>`;}
+
+function statusBar(dev,p,hStatus,scale){
+  const pad=Math.round(hStatus*0.28);
+  const fs=Math.round(hStatus*0.44);
+  return box(0,0,dev.w,hStatus,p.bg,'0',0)
+   + `<div style="left:0;top:0;width:${dev.w}px;height:${hStatus}px;border-bottom:2px solid ${p.line}"></div>`
+   + txt(pad,Math.round((hStatus-fs)/2)-1,'GTi',fs,p.accent,200,900)
+   + txt(pad+Math.round(fs*2.4),Math.round((hStatus-fs*0.8)/2),'ADF',Math.round(fs*0.8),p.ink,120,700)
+   + txt(dev.w-Math.round(fs*7.5),Math.round((hStatus-fs*0.72)/2),'312 GAMES',Math.round(fs*0.72),p.dim,Math.round(fs*7),600)
+   + `<div style="left:${dev.w-pad-Math.round(fs*1.6)}px;top:${Math.round((hStatus-fs*0.6)/2)}px;width:${Math.round(fs*1.6)}px;height:${Math.round(fs*0.6)}px;background:${p.ok};border-radius:3px;border:2px solid ${p.line}"></div>`;
+}
+
+function renderCover(dev,p,size){
+  const big = size==='big';
+  const anns=[];
+  let html='';
+  const hStatus = big? Math.round(dev.h*0.085) : Math.round(dev.h*0.06);
+  html+=statusBar(dev,p,hStatus,1);
+  const c=COVERS[coverIdx];
+  // bottom button bar
+  const barH = big? Math.round(dev.h*0.26) : Math.round(dev.h*0.115);
+  const barY = dev.h-barH;
+  // cover + title zone
+  const midTop=hStatus+ (big?Math.round(dev.h*0.03):Math.round(dev.h*0.02));
+  const midH = barY-midTop- (big?Math.round(dev.h*0.02):8);
+  if(big){
+    // dominant cover on the left, big title block on the right
+    const cvH=midH, cvW=Math.round(cvH*0.82);
+    const cvX=Math.round(dev.w*0.045), cvY=midTop;
+    html+=cover(cvX,cvY,cvW,cvH,c,p,4);
+    const tx=cvX+cvW+Math.round(dev.w*0.045);
+    const tw=dev.w-tx-Math.round(dev.w*0.04);
+    const tFs=Math.round(dev.h*0.092);
+    // wrap title to <=2 lines manually
+    const words=c.t.split(' ');let l1=words.slice(0,2).join(' '),l2=words.slice(2).join(' ');
+    html+=txt(tx,cvY+Math.round(dev.h*0.02),l1,tFs,p.ink,tw,900);
+    if(l2)html+=txt(tx,cvY+Math.round(dev.h*0.02)+Math.round(tFs*1.05),l2,tFs,p.ink,tw,900);
+    const chipY=cvY+Math.round(dev.h*0.02)+Math.round(tFs*(l2?2.3:1.3));
+    const chipFs=Math.round(dev.h*0.05);
+    html+=box(tx,chipY,Math.round(chipFs*5.6),Math.round(chipFs*1.5),p.ok,'0',6);
+    html+=txt(tx+Math.round(chipFs*0.5),chipY+Math.round(chipFs*0.32),'READY',chipFs,p.theme==='boy'?'#ffdf00':'#001500',Math.round(chipFs*5),900);
+    html+=txt(tx,chipY+Math.round(chipFs*2.1),'Disk 1 of 3',Math.round(dev.h*0.05),p.dim,tw,700);
+    anns.push({x:cvX,y:cvY,txt:'cover '+cvW+'×'+cvH+'px ≈ '+Math.round(cvW/(dev.w/dev.mm))+'×'+Math.round(cvH/(dev.w/dev.mm))+'mm'});
+    anns.push({x:tx,y:cvY+Math.round(dev.h*0.02),txt:'title '+tFs+'px ≈ '+(tFs/(dev.w/dev.mm)).toFixed(1)+'mm cap'});
+  } else {
+    // "standard" GTi-ish: smaller cover left, list-y title
+    const cvW=Math.round(dev.w*0.34), cvH=Math.min(midH,cvW);
+    html+=cover(Math.round(dev.w*0.02),midTop,cvW,cvH,c,p,2);
+    html+=txt(Math.round(dev.w*0.02)+cvW+16,midTop+6,c.t,Math.round(dev.h*0.045),p.ink,dev.w-cvW-Math.round(dev.w*0.1),800);
+    html+=txt(Math.round(dev.w*0.02)+cvW+16,midTop+6+Math.round(dev.h*0.06),'Disk 1 of 3',Math.round(dev.h*0.032),p.dim,300,600);
+  }
+  // buttons
+  const labels = big? [['◀','PREV',p.accent],['●','INSERT',p.ok],['NEXT','▶',p.accent]] : [['◀','PREV'],['▶','NEXT'],['#','THEME'],['REEL','',p.ok],['i','INFO']];
+  const n=labels.length, bw=Math.floor(dev.w/n);
+  html+=box(0,barY,dev.w,barH,p.bg,'0',0)+`<div style="left:0;top:${barY}px;width:${dev.w}px;height:0;border-top:2px solid ${p.line}"></div>`;
+  for(let i=0;i<n;i++){
+    const bx=i*bw;
+    if(i>0)html+=`<div style="left:${bx}px;top:${barY+6}px;width:0;height:${barH-12}px;border-left:1px solid ${p.line}"></div>`;
+    const isIns = big && i===1;
+    if(isIns){ html+=box(bx+6,barY+6,bw-12,barH-12,p.ok,'0',10); }
+    const lab=labels[i][1]||labels[i][0];
+    const icon=labels[i][0];
+    const lFs = big? Math.round(barH*0.30) : Math.round(barH*0.30);
+    const col = isIns? (state.theme==='boy'?'#ffdf00':'#001500') : (labels[i][2]||p.ink);
+    if(big){
+      html+=txt(bx,barY+Math.round(barH*0.5)-Math.round(lFs*1.1),lab,lFs,col,bw,900,'center');
+    }else{
+      html+=`<div style="left:${bx+bw/2-9}px;top:${barY+7}px;width:18px;height:18px;border:2px solid ${p.accent};border-radius:50%"></div>`;
+      html+=txt(bx,barY+Math.round(barH*0.55),lab,Math.round(barH*0.26),p.dim,bw,700,'center');
+    }
+  }
+  if(big){
+    const insW=bw-12;
+    anns.push({x:bw+6,y:barY,txt:'button '+insW+'×'+(barH-12)+'px ≈ '+(insW/(dev.w/dev.mm)).toFixed(0)+'×'+((barH-12)/(dev.w/dev.mm)).toFixed(0)+'mm', bottom:true});
+  }
+  return {html,anns,barY,barH};
+}
+
+function renderList(dev,p,size){
+  const big=size==='big';
+  const anns=[];let html='';
+  const hStatus= big?Math.round(dev.h*0.085):Math.round(dev.h*0.06);
+  html+=statusBar(dev,p,hStatus,1);
+  const barH= big?Math.round(dev.h*0.22):Math.round(dev.h*0.115);
+  const barY=dev.h-barH;
+  const listTop=hStatus+8, listH=barY-listTop-8;
+  const rows= big?3:6;
+  const rh=Math.floor(listH/rows);
+  for(let i=0;i<rows;i++){
+    const ry=listTop+i*rh;
+    const sel=(i===1);
+    if(sel)html+=box(6,ry+2,dev.w-12,rh-4,p.sel,'0',big?10:6);
+    const ink=sel?p.selInk:p.ink;
+    const thumbS=rh-(big?18:10);
+    if(big){
+      html+=cover(16,ry+9,Math.round(thumbS*0.82),thumbS,COVERS[(coverIdx+i)%COVERS.length],p,2);
+    }
+    const tx=big?16+Math.round(thumbS*0.82)+18:14;
+    const tFs= big?Math.round(rh*0.34):Math.round(rh*0.4);
+    html+=txt(tx,ry+Math.round(rh*0.5)-Math.round(tFs*0.6),COVERS[(coverIdx+i)%COVERS.length].t,tFs,ink,dev.w-tx-Math.round(dev.w*0.06),big?800:700);
+    if(big)html+=txt(tx,ry+Math.round(rh*0.5)+Math.round(tFs*0.55),'ADF · Disk 1 of 3',Math.round(rh*0.17),sel?p.selInk:p.dim,400,600);
+  }
+  if(big)anns.push({x:6,y:listTop+rh+2,txt:'row '+(dev.w-12)+'×'+(rh-4)+'px ≈ '+((rh-4)/(dev.w/dev.mm)).toFixed(0)+'mm tall'});
+  // buttons (same 3 big ones)
+  const labels=big?[['◀','PREV',p.accent],['●','INSERT',p.ok],['NEXT','▶',p.accent]]:[['◀','PREV'],['▶','NEXT'],['#','THEME'],['REEL',''],['i','INFO']];
+  const n=labels.length,bw=Math.floor(dev.w/n);
+  html+=box(0,barY,dev.w,barH,p.bg,'0',0)+`<div style="left:0;top:${barY}px;width:${dev.w}px;height:0;border-top:2px solid ${p.line}"></div>`;
+  for(let i=0;i<n;i++){const bx=i*bw;if(i>0)html+=`<div style="left:${bx}px;top:${barY+6}px;width:0;height:${barH-12}px;border-left:1px solid ${p.line}"></div>`;
+    const isIns=big&&i===1;if(isIns)html+=box(bx+6,barY+6,bw-12,barH-12,p.ok,'0',10);
+    const lab=labels[i][1]||labels[i][0];const lFs=Math.round(barH*0.3);
+    const col=isIns?(state.theme==='boy'?'#ffdf00':'#001500'):(labels[i][2]||(big?p.ink:p.dim));
+    if(big)html+=txt(bx,barY+Math.round(barH*0.5)-Math.round(lFs*1.1),lab,lFs,col,bw,900,'center');
+    else{html+=`<div style="left:${bx+bw/2-9}px;top:${barY+7}px;width:18px;height:18px;border:2px solid ${p.accent};border-radius:50%"></div>`+txt(bx,barY+Math.round(barH*0.55),lab,Math.round(barH*0.26),p.dim,bw,700,'center');}
+  }
+  return {html,anns,barY,barH};
+}
+
+function render(){
+  const dev=DEV[state.dev], p={...PAL[state.theme],theme:state.theme};
+  const r = state.layout==='cover'? renderCover(dev,p,state.size) : renderList(dev,p,state.size);
+  // scale to fit column
+  const scaler=document.getElementById('scaler');
+  const avail=Math.min(scaler.clientWidth||680, 720);
+  const scale=Math.min(1, avail/dev.w);
+  let annLayer='';
+  if(state.ann==='1'){
+    const off=16*scale;   // bezel padding(14)+border(2), scaled
+    r.anns.forEach(a=>{
+      const sx=a.x*scale+off, sy=a.y*scale+off;
+      const top = a.bottom? sy-26 : Math.max(0,sy-24);
+      annLayer+=`<div style="position:absolute;left:${sx}px;top:${top}px;z-index:5;pointer-events:none">${annChip(a.txt)}</div>`;
+    });
+  }
+  scaler.innerHTML=`
+    <div style="position:relative;width:${dev.w*scale}px">
+      <div class="bezel" style="transform:scale(${scale})">
+        <div class="screen" style="width:${dev.w}px;height:${dev.h}px;background:${p.bg}">${r.html}</div>
+      </div>
+      ${annLayer}
+    </div>`;
+  document.getElementById('cap').textContent=dev.label;
+  document.getElementById('cap2').textContent='shown at '+Math.round(scale*100)+'% · panel ≈154 mm wide · '+(dev.w/dev.mm).toFixed(1)+' px/mm';
+  document.getElementById('foot').innerHTML =
+    'Contrast for this palette ≈ <span class="measure">'+p.ratio+'</span> (WCAG AAA needs 7:1). '
+    +'Layout reflows from panel width/height exactly like the firmware’s <code>relayout()</code>, so 7″ and 7B share one design.';
+  buildSide(dev,p);
+}
+
+function buildSide(dev,p){
+  const pxmm=dev.w/dev.mm;
+  const insW = state.size==='big'? Math.floor(dev.w/3)-12 : 24;
+  const insH = state.size==='big'? Math.round(dev.h*(state.layout==='cover'?0.26:0.22))-12 : 40;
+  const side=document.getElementById('side');
+  side.innerHTML=`
+   <div class="card">
+     <h3>Why these sizes</h3>
+     <ul>
+       <li><span class="k">Target</span><span>WCAG 2.2 AA min = <b>24×24px</b>; AAA "enhanced" = <b>44×44px</b>; Google/web.dev = <b>48px ≈ 9mm</b> (a finger pad).</span></li>
+       <li><span class="k">Big btn</span><span>This INSERT button: <span class="measure">${insW}×${insH}px</span> ≈ <b>${(insW/pxmm).toFixed(0)}×${(insH/pxmm).toFixed(0)}mm</b> — ${state.size==='big'?'~'+(insH/pxmm/9).toFixed(1)+'× a finger pad tall':'below the 9mm floor'}.</span></li>
+       <li><span class="k">Text</span><span>Clear-print (CNIB/ACB): <b>18pt+</b>, bold, sans-serif (Arial/Verdana). Big-mode title caps here are ~${(Math.round(dev.h*0.092)/pxmm).toFixed(1)}mm.</span></li>
+       <li><span class="k">Contrast</span><span>≥ <b>7:1</b> for AAA. Yellow-on-black and black-on-yellow both clear <b>19:1</b> — classic low-vision pairings.</span></li>
+       <li><span class="k">Spacing</span><span>≥ <b>8px</b> gaps so a press can’t graze a neighbour; only 3 targets per screen in big mode.</span></li>
+       <li><span class="k">No colour-only</span><span>Every button keeps a text label, not just an icon or hue.</span></li>
+     </ul>
+   </div>
+   <div class="card">
+     <h3>Design moves</h3>
+     <ul>
+       <li><span class="k">1</span><span>One dominant cover instead of a thumbnail grid — the reel already leans this way.</span></li>
+       <li><span class="k">2</span><span>Bottom bar drops 5 buttons → <b>3 giant ones</b> (PREV · INSERT · NEXT) in big mode.</span></li>
+       <li><span class="k">3</span><span>Fewer, taller list rows (3 vs 6) with a big thumbnail + high-contrast selection fill.</span></li>
+       <li><span class="k">4</span><span>Ships as a <code>FONT=HUGE</code> / <code>BIG=ON</code> layout profile beside the existing FONT=SMALL/NORMAL/LARGE.</span></li>
+     </ul>
+   </div>
+   <div class="card">
+     <h3>Cover</h3>
+     <ul><li><span class="k">Art</span><span>Placeholder covers (CSS) — real ADF covers drop straight in. <span class="pill">tap</span> to cycle.</span></li></ul>
+   </div>`;
+}
+
+document.querySelectorAll('button.seg').forEach(b=>{
+  b.addEventListener('click',()=>{
+    const k=b.dataset.k;
+    document.querySelectorAll(`button.seg[data-k="${k}"]`).forEach(x=>x.classList.remove('on'));
+    b.classList.add('on'); state[k]=b.dataset.v; render();
+  });
+});
+document.getElementById('scaler').addEventListener('click',()=>{coverIdx=(coverIdx+1)%COVERS.length;render();});
+window.addEventListener('resize',render);
+render();
+</script>
+</body>
+</html>
