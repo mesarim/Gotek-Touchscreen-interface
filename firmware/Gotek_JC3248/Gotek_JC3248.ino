@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.4.2-JC3248"
+#define FW_VERSION "5.5.2-JC3248"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -1028,6 +1028,78 @@ static void cycleTheme(){applyTheme((g_theme_idx+1)%NUM_THEMES);saveConfigKey("T
 static bool g_espnow_started=false;
 static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=true;}}
 
+// ============================================================================
+// LANGUAGE / LOCALISATION (v5.5.0) — LANG= in CONFIG.TXT (SD-editable, persisted).
+// The UI vocabulary is tiny, so this is a flat string table. ASCII-folded: the
+// 6x8 font has no accent glyphs yet, and uppercase labels conventionally drop
+// accents anyway. Add a language = add a column. CJK (zh/ja) is a separate job
+// (needs a glyph font + multi-byte text), tracked in the roadmap.
+// >>> Translations are a DRAFT — Mez to verify IT, Jan to verify DE, review FR/ES. <<<
+// ============================================================================
+enum { LANG_EN=0, LANG_FR, LANG_IT, LANG_ES, LANG_DE, LANG_N };
+static int g_lang=0;
+static const char* const LANG_NAMES[LANG_N]={"EN","FR","IT","ES","DE"};
+enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_STR_N };
+static const char* const LSTR[L_STR_N][LANG_N]={
+  /*L_PREV          */ {"PREV","PREC","PREC","ANT","VORH"},
+  /*L_NEXT          */ {"NEXT","SUIV","SUCC","SIG","WEIT"},
+  /*L_THEME         */ {"THEME","THEME","TEMA","TEMA","THEMA"},
+  /*L_REEL          */ {"REEL","REEL","REEL","REEL","REEL"},
+  /*L_INFO          */ {"INFO","INFO","INFO","INFO","INFO"},
+  /*L_LIST          */ {"LIST","LISTE","LISTA","LISTA","LISTE"},
+  /*L_ROLL          */ {"ROLL","DES","DADI","DADO","WUERF"},
+  /*L_INSERT        */ {"INSERT","INSERER","INSERISCI","INSERTAR","EINLEGEN"},
+  /*L_EJECT         */ {"EJECT","EJECTER","ESPELLI","EXPULSAR","AUSWERF"},
+  /*L_SEARCH        */ {"SEARCH","RECHERCHE","CERCA","BUSCAR","SUCHE"},
+  /*L_SETTINGS      */ {"SETTINGS","REGLAGES","IMPOSTAZIONI","AJUSTES","OPTIONEN"},
+  /*L_NOW_PLAYING   */ {"NOW PLAYING","EN LECTURE","IN USO","EN USO","LAEUFT"},
+  /*L_NO_GAMES      */ {"NO GAMES","AUCUN JEU","NESSUN GIOCO","SIN JUEGOS","KEINE SPIELE"},
+  /*L_NO_FAVS       */ {"NO FAVOURITES YET","AUCUN FAVORI","NESSUN PREFERITO","SIN FAVORITOS","KEINE FAVORITEN"},
+  /*L_ALL           */ {"ALL","TOUT","TUTTI","TODO","ALLE"},
+  /*L_FAV           */ {"FAV","FAV","PREF","FAV","FAV"},
+  /*L_MOST          */ {"MOST","TOP","TOP","TOP","TOP"},
+  /*L_BUILDING      */ {"BUILDING COVER CACHE","CREATION DU CACHE","CREAZIONE CACHE","CREANDO CACHE","CACHE ERSTELLEN"},
+  /*L_ONEOFF        */ {"one-off: reel thumbnails (first launch / rescan)","unique: vignettes du reel (1er lancement)","una tantum: miniature reel (primo avvio)","una vez: miniaturas del reel (1er inicio)","einmalig: reel-vorschau (erststart)"},
+  /*L_LOADING       */ {"Loading...","Chargement...","Caricamento...","Cargando...","Laedt..."},
+  /*L_LOADING_DIAG  */ {"Loading diag...","Chargement diag...","Caricamento diag...","Cargando diag...","Diag laedt..."},
+  /*L_RESCAN_SD     */ {"RESCAN SD","RELIRE SD","RILEGGI SD","RELEER SD","SD NEU"},
+  /*L_SD_ACCESS     */ {"SD ACCESS","ACCES SD","ACCESSO SD","ACCESO SD","SD ZUGRIFF"},
+  /*L_FW_UPDATE     */ {"FW UPDATE","MAJ FW","AGG. FW","ACT. FW","FW UPDATE"},
+  /*L_SOFT_RESET    */ {"SOFT RESET","REINIT","RIAVVIA","REINICIAR","NEUSTART"},
+  /*L_RESETTING     */ {"RESET...","REINIT...","RIAVVIO...","REINICIO...","NEUSTART..."},
+  /*L_STANDALONE    */ {"STANDALONE","AUTONOME","AUTONOMO","AUTONOMO","STANDALONE"},
+  /*L_WIRELESS      */ {"WIRELESS","SANS FIL","WIRELESS","INALAMB.","FUNK"},
+  /*L_USER_DISKS    */ {"USER DISKS","DISQUES","DISCHI","DISCOS","DISKETTEN"},
+  /*L_RENAME        */ {"RENAME","RENOMMER","RINOMINA","RENOMBRAR","UMBENENN"},
+  /*L_BACK          */ {"BACK","RETOUR","INDIETRO","ATRAS","ZURUECK"},
+  /*L_CANCEL        */ {"CANCEL","ANNULER","ANNULLA","CANCELAR","ABBRECH"},
+  /*L_ACTIVE        */ {"ACTIVE","ACTIF","ATTIVO","ACTIVO","AKTIV"},
+  /*L_MANUAL        */ {"MANUAL","MANUEL","MANUALE","MANUAL","MANUELL"},
+  /*L_PAIRED        */ {"PAIRED","APPAIRE","ABBINATO","VINCULADO","GEKOPPELT"},
+  /*L_NOT_PAIRED    */ {"Not paired","Non appaire","Non abbinato","No vinculado","Nicht gekoppelt"},
+  /*L_NAME_DONGLE   */ {"NAME DONGLE","NOMMER DONGLE","NOMINA DONGLE","NOMBRAR DONGLE","DONGLE NAME"},
+  /*L_DONGLE_LINKED */ {"** DONGLE LINKED **","** DONGLE CONNECTE **","** DONGLE COLLEGATO **","** DONGLE CONECTADO **","** DONGLE VERBUNDEN **"},
+  /*L_CREATE_DISK   */ {"+  CREATE NEW DISK","+  NOUVEAU DISQUE","+  NUOVO DISCO","+  NUEVO DISCO","+  NEUE DISKETTE"},
+  /*L_NONE_YET      */ {"(none yet - tap CREATE NEW DISK)","(aucun - touchez NOUVEAU DISQUE)","(nessuno - tocca NUOVO DISCO)","(ninguno - toca NUEVO DISCO)","(keine - NEUE DISKETTE tippen)"},
+  /*L_PREFMT        */ {"pre-formatted save disks - tap to insert","disques de sauvegarde pre-formates - toucher","dischi di salvataggio pre-formattati - tocca","discos de guardado pre-formateados - toca","vorformatierte speicherdisks - tippen"},
+  /*L_CHECK_DONGLE  */ {"Check dongle is powered","Verifiez l'alim. du dongle","Verifica alim. dongle","Comprueba alim. del dongle","Dongle-Strom pruefen"},
+  /*L_NO_DONGLES    */ {"No dongles found","Aucun dongle trouve","Nessun dongle trovato","No se hallaron dongles","Keine Dongles gefunden"},
+  /*L_NO_WIRELESS_DEV*/ {"No wireless device","Aucun periph. sans fil","Nessun disp. wireless","Sin disp. inalambrico","Kein Funkgeraet"},
+  /*L_USE_CABLE     */ {"Use the cable / standalone.","Utilisez le cable / autonome.","Usa il cavo / autonomo.","Usa el cable / autonomo.","Kabel / Standalone nutzen."},
+  /*L_IN_RANGE      */ {"and in WIRELESS range.","et a portee sans fil.","e nel raggio wireless.","y en rango inalambrico.","und in Funkreichweite."},
+  /*L_AVAIL_HD      */ {"available for HD.","disponible pour HD.","disponibile per HD.","disponible para HD.","verfuegbar fuer HD."},
+  /*L_HD_NO_WIRELESS*/ {"HD - NO WIRELESS","HD - SANS FIL NON","HD - NO WIRELESS","HD - SIN INALAMB.","HD - KEIN FUNK"},
+  /*L_MAX_DD        */ {"Max is DD floppy","Max = disquette DD","Max = floppy DD","Max = disquete DD","Max = DD-Diskette"},
+  /*L_TOO_BIG       */ {"TOO BIG","TROP GROS","TROPPO GRANDE","MUY GRANDE","ZU GROSS"},
+  /*L_SIZE_ERR      */ {"SIZE ERR","ERR TAILLE","ERR DIMENS.","ERR TAMANO","GROESSENFEHL"},
+  /*L_FAILED        */ {"FAILED","ECHEC","FALLITO","FALLIDO","FEHLER"},
+  /*L_SD_MOUNT_FAIL */ {"SD MOUNT FAILED","ECHEC MONTAGE SD","MONTAGGIO SD FALLITO","FALLO MONTAJE SD","SD-MOUNT FEHLER"},
+  /*L_LOAD_DIAG     */ {"LOAD DIAG","CHARGER DIAG","CARICA DIAG","CARGAR DIAG","DIAG LADEN"},
+  /*L_EJECT_DIAG    */ {"EJECT DIAG","EJECTER DIAG","ESPELLI DIAG","EXPULSAR DIAG","DIAG AUSWERF"},
+  /*L_GAMES_TAP     */ {" games - tap INSERT"," jeux - toucher INSERER"," giochi - tocca INSERISCI"," juegos - toca INSERTAR"," Spiele - INSERT tippen"},
+};
+static inline const char* T(int id){ return LSTR[id][g_lang]; }
+
 static void generateDefaultConfig(){
   if(SD_MMC.exists("/CONFIG.TXT"))return;  // never overwrite an existing config
   File f=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);if(!f)return;
@@ -1050,6 +1122,9 @@ static void generateDefaultConfig(){
   f.println("");
   f.println("# Font size: SMALL, NORMAL, LARGE");
   f.println("FONT=NORMAL");
+  f.println("");
+  f.println("# Language: EN, FR, IT, ES, DE  (pull the SD and edit this line if you get stuck)");
+  f.println("LANG=EN");
   f.println("");
   f.println("# Screen rotation in degrees: 0 or 180 = landscape, 90 or 270 = portrait.");
   f.println("# Easiest to set with the ROTATE button on the INFO screen (each tap = +90).");
@@ -1099,6 +1174,7 @@ static void selfHealConfig(){
     {"LOOP",     "\n# Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s\nLOOP=0\n"},
     {"CRACKTRO", "\n# Boot cracktro style: 0=random each boot, or pick one:\n#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER\n#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE\nCRACKTRO=0\n"},
     {"FONT",     "\n# Font size: SMALL, NORMAL, LARGE\nFONT=NORMAL\n"},
+    {"LANG",     "\n# Language: EN, FR, IT, ES, DE  (pull the SD and edit this line if you get stuck)\nLANG=EN\n"},
     {"ROTATE",   "\n# Screen rotation in degrees: 0 or 180 = landscape, 90 or 270 = portrait.\nROTATE=0\n"},
     {"COMPACT",  "\n# COMPACT: OFF = cover art + list, ON = maximise the game list (cover collapses to a strip)\nCOMPACT=OFF\n"},
     {"CAP",      "\n# CAP: max wireless dongles the scan will list (default 32, up to 64)\nCAP=32\n"},
@@ -1130,6 +1206,7 @@ static void loadConfig(){
     if(k=="THEME")applyTheme(v.toInt());else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");else if(k=="CAROUSEL"){String cv=v;cv.toUpperCase();g_car_bootmode=(cv=="LAST")?2:((cv=="1"||cv=="ON"||cv=="TRUE")?1:0);}
     else if(k=="TAPLOAD")g_tapload=(v=="ON"||v=="1");else if(k=="HOTSWAP")g_hotswap=(v=="ON"||v=="1");else if(k=="FORCESWAP")g_forceswap=(v=="ON"||v=="1");
     else if(k=="FONT"){int f=1;if(v=="SMALL")f=0;else if(v=="LARGE")f=2;applyFont(f);}
+    else if(k=="LANG"){String lu=v;lu.toUpperCase();for(int i=0;i<LANG_N;i++)if(lu==LANG_NAMES[i]){g_lang=i;break;}}
     else if(k=="ROTATE"){g_rot=((v.toInt()/90)%4+4)%4;}
     else if(k=="COMPACT"){g_compact=(v=="ON"||v=="1");}
     else if(k=="SCREENSAVER"){g_ss_enabled=(v!="OFF"&&v!="0");}
@@ -1426,7 +1503,7 @@ static void drawStatusBar(){
   gfx_setTextColor(COL_ORANGE,COL_BAR);gfx_setCursor(6,6);gfx_print("OMEGAWARE");
   gfx_setTextColor(COL_MID,COL_BAR);gfx_print("  " FW_VERSION);
   if(g_wireless_mode){gfx_setTextColor(espnowIsPaired()?0x07E0:0xFD20,COL_BAR);gfx_setCursor(VW/2-40,6);gfx_print(espnowIsPaired()?"WIRELESS:PAIRED":"WIRELESS:PAIR");}
-  else{gfx_setTextColor(0x07FF,COL_BAR);int tw=gfx_textWidth("STANDALONE");gfx_setCursor((VW-tw)/2,6);gfx_print("STANDALONE");}
+  else{gfx_setTextColor(0x07FF,COL_BAR);int tw=gfx_textWidth("STANDALONE");gfx_setCursor((VW-tw)/2,6);gfx_print(T(L_STANDALONE));}
   uint16_t ic=g_loaded?0xE8C4:COL_GREEN;gfx_fillCircle(VW-8,STATUS_H/2,3,ic);
   if(g_loaded&&g_loaded_game_idx>=0&&g_loaded_game_idx<(int)g_games.size()&&g_games[g_loaded_game_idx].disk_count>1){   // v4.9.5: which disk of a multi-disk set is mounted
     String dl="D"+String(g_loaded_disk_idx+1);gfx_setTextSize(1);gfx_setTextColor(ic,COL_BAR);
@@ -1542,7 +1619,7 @@ static void drawCoverPanel(){
   gfx_fillRoundRect(INS_X,INS_Y,INS_W,INS_H,8,isL?(uint16_t)0x4000:(uint16_t)0x0340);
   gfx_drawRoundRect(INS_X,INS_Y,INS_W,INS_H,8,isL?(uint16_t)0xE8C4:COL_GREEN);
   gfx_setTextSize(2);gfx_setTextColor(TFT_WHITE,isL?(uint16_t)0x4000:(uint16_t)0x0340);
-  const char*lbl=isL?"EJECT":"INSERT";int tw=gfx_textWidth(lbl);gfx_setCursor(INS_X+(INS_W-tw)/2,INS_Y+(INS_H-16)/2);gfx_print(lbl);
+  const char*lbl=isL?T(L_EJECT):T(L_INSERT);int tw=gfx_textWidth(lbl);gfx_setCursor(INS_X+(INS_W-tw)/2,INS_Y+(INS_H-16)/2);gfx_print(lbl);
 }
 
 // Compact action strip (both orientations): thumbnail + selected name + INSERT
@@ -1554,7 +1631,7 @@ static void drawActionStrip(){
   gfx_setTextSize(2);gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL);String nm=game.name;int maxw=INS_X-(th+16)-6;while(gfx_textWidth(nm)>maxw&&nm.length()>3)nm=nm.substring(0,nm.length()-1);gfx_setCursor(th+16,STRIP_Y+8);gfx_print(nm);
   gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_PANEL);gfx_setCursor(th+16,STRIP_Y+26);gfx_print(game.disk_count>1?("disk "+String(g_disk_sel+1)+"/"+String(game.disk_count)+"  < tap >"):"1 disk  ADF 880KB");
   gfx_fillRoundRect(INS_X,INS_Y,INS_W,INS_H,6,isL?(uint16_t)0x4000:COL_GREEN);gfx_drawRoundRect(INS_X,INS_Y,INS_W,INS_H,6,isL?(uint16_t)0xE8C4:COL_GREEN);
-  gfx_setTextSize(2);gfx_setTextColor(isL?TFT_WHITE:TFT_BLACK,isL?(uint16_t)0x4000:COL_GREEN);const char*lbl=isL?"EJECT":"INSERT";int tw=gfx_textWidth(lbl);gfx_setCursor(INS_X+(INS_W-tw)/2,INS_Y+(INS_H-16)/2);gfx_print(lbl);
+  gfx_setTextSize(2);gfx_setTextColor(isL?TFT_WHITE:TFT_BLACK,isL?(uint16_t)0x4000:COL_GREEN);const char*lbl=isL?T(L_EJECT):T(L_INSERT);int tw=gfx_textWidth(lbl);gfx_setCursor(INS_X+(INS_W-tw)/2,INS_Y+(INS_H-16)/2);gfx_print(lbl);
 }
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
@@ -1571,8 +1648,8 @@ static void drawInfoPanel(){
   else{ix=0;iy=STATUS_H+MODE_BAR_H;iw=VW;ih=min(contentH,(VH-BOTTOM_H)-iy);}
   g_info_x=ix;g_info_w=iw;g_info_bottom=iy+ih;g_info_bh=bh;
   gfx_fillRect(ix,iy,iw,ih,COL_PANEL);gfx_drawRect(ix,iy,iw,ih,COL_SEP);
-  int y=iy+4,pw=iw-8,x=ix+4;gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_PANEL);gfx_setCursor(x+2,y);gfx_print("SETTINGS");y+=11;
-  {uint16_t c=g_wireless_mode?COL_BLUE:COL_GREEN;gfx_fillRoundRect(x,y,pw,bh,6,c);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,c);String s=String("MODE: ")+(g_wireless_mode?"WIRELESS":"STANDALONE");int tw=gfx_textWidth(s);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(s);}g_info_mode_btn_y=y;y+=btn;
+  int y=iy+4,pw=iw-8,x=ix+4;gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_PANEL);gfx_setCursor(x+2,y);gfx_print(T(L_SETTINGS));y+=11;
+  {uint16_t c=g_wireless_mode?COL_BLUE:COL_GREEN;gfx_fillRoundRect(x,y,pw,bh,6,c);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,c);String s=String("MODE: ")+(g_wireless_mode?T(L_WIRELESS):T(L_STANDALONE));int tw=gfx_textWidth(s);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(s);}g_info_mode_btn_y=y;y+=btn;
   gfx_hline(x+2,y,pw-4,COL_SEP);y+=4;
   {gfx_fillRoundRect(x,y,pw,bh,6,COL_AMBER);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,COL_AMBER);String s=String("FONT: ")+fontName(g_font);int tw=gfx_textWidth(s);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(s);}g_info_font_btn_y=y;y+=btn;
   {const char*rn=g_portrait?"PORTRAIT":"LANDSCAPE";gfx_fillRoundRect(x,y,pw,bh,6,COL_BLUE);gfx_setTextSize(isz);gfx_setTextColor(TFT_WHITE,COL_BLUE);String s=String("ROTATE: ")+rn;int tw=gfx_textWidth(s);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(s);}g_info_rot_btn_y=y;y+=btn;
@@ -1582,7 +1659,7 @@ static void drawInfoPanel(){
   gfx_setCursor(x+2,y);gfx_print("Games: "+String(g_games.size())+"  Wr:"+String(g_sv_total_writes));y+=lh;
   if(g_wireless_mode){
     if(espnowIsPaired()){bool on=espnowXiaoOnline();gfx_setTextColor(on?COL_GREEN:COL_ORANGE,COL_PANEL);gfx_setCursor(x+2,y);gfx_print(on?"DONGLE: ONLINE":"DONGLE: OFFLINE");y+=lh;}
-    else{gfx_setTextColor(COL_ORANGE,COL_PANEL);gfx_setCursor(x+2,y);gfx_print("Not paired");y+=lh;}
+    else{gfx_setTextColor(COL_ORANGE,COL_PANEL);gfx_setCursor(x+2,y);gfx_print(T(L_NOT_PAIRED));y+=lh;}
     {gfx_fillRoundRect(x,y,pw,bh,6,espnowIsPaired()?COL_GREEN:COL_AMBER);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,espnowIsPaired()?COL_GREEN:COL_AMBER);const char*pl=espnowIsPaired()?"SWITCH DONGLE":"SCAN DONGLES";int tw=gfx_textWidth(pl);gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(pl);}g_info_pair_now_btn_y=y;y+=btn;
     // v4.8.1: HIVEMIND cast toggle — ON = FLING fans out to every MuCa dongle,
     // OFF = paired dongle only (group stays intact, no renames). MuCa owners only.
@@ -1593,19 +1670,19 @@ static void drawInfoPanel(){
       g_info_hive_btn_y=y;y+=btn;
     } else g_info_hive_btn_y=0;
   } else {g_info_pair_now_btn_y=0;g_info_hive_btn_y=0;}
-  {gfx_fillRoundRect(x,y,pw,bh,6,COL_BLUE);gfx_setTextSize(isz);gfx_setTextColor(TFT_WHITE,COL_BLUE);int tw=gfx_textWidth("RESCAN SD");gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print("RESCAN SD");}g_info_rescan_btn_y=y;y+=btn;
+  {gfx_fillRoundRect(x,y,pw,bh,6,COL_BLUE);gfx_setTextSize(isz);gfx_setTextColor(TFT_WHITE,COL_BLUE);int tw=gfx_textWidth("RESCAN SD");gfx_setCursor(x+(pw-tw)/2,y+ty);gfx_print(T(L_RESCAN_SD));}g_info_rescan_btn_y=y;y+=btn;
   // Last row split in two: SOFT RESET (rarely used) shares the row with LOAD DIAG.
   {int gap=4,hw=(pw-gap)/2,dx=x+hw+gap;gfx_setTextSize(isz);
     gfx_fillRoundRect(x,y,hw,bh,6,0x8000);gfx_setTextColor(TFT_WHITE,0x8000);
-    {int tw=gfx_textWidth("SOFT RESET");gfx_setCursor(x+(hw-tw)/2,y+ty);gfx_print("SOFT RESET");}
-    {bool diagOn=(g_loaded&&g_loaded_name=="AMIGA TEST KIT");uint16_t dc=diagOn?(uint16_t)0xE8C4:COL_ACCENT;const char*dl=diagOn?"EJECT DIAG":"LOAD DIAG";   // v4.9.8: eject the mounted test kit
+    {int tw=gfx_textWidth("SOFT RESET");gfx_setCursor(x+(hw-tw)/2,y+ty);gfx_print(T(L_SOFT_RESET));}
+    {bool diagOn=(g_loaded&&g_loaded_name=="AMIGA TEST KIT");uint16_t dc=diagOn?(uint16_t)0xE8C4:COL_ACCENT;const char*dl=diagOn?T(L_EJECT_DIAG):T(L_LOAD_DIAG);   // v4.9.8: eject the mounted test kit
      gfx_fillRoundRect(dx,y,hw,bh,6,dc);gfx_setTextColor(diagOn?TFT_BLACK:TFT_WHITE,dc);
      int tw=gfx_textWidth(dl);gfx_setCursor(dx+(hw-tw)/2,y+ty);gfx_print(dl);}
   }g_info_reset_btn_y=y;y+=btn;
   // v5.1/v5.3: SD ACCESS shares its row with FW UPDATE — both are SD-card / USB maintenance ops.
   {int gap2=4,hw2=(pw-gap2)/2,dx2=x+hw2+gap2;gfx_setTextSize(isz);
-    uint16_t sc=0x05FF;gfx_fillRoundRect(x,y,hw2,bh,6,sc);gfx_setTextColor(TFT_BLACK,sc);{int tw=gfx_textWidth("SD ACCESS");gfx_setCursor(x+(hw2-tw)/2,y+ty);gfx_print("SD ACCESS");}
-    gfx_fillRoundRect(dx2,y,hw2,bh,6,COL_AMBER);gfx_setTextColor(TFT_BLACK,COL_AMBER);{int tw=gfx_textWidth("FW UPDATE");gfx_setCursor(dx2+(hw2-tw)/2,y+ty);gfx_print("FW UPDATE");}
+    uint16_t sc=0x05FF;gfx_fillRoundRect(x,y,hw2,bh,6,sc);gfx_setTextColor(TFT_BLACK,sc);{int tw=gfx_textWidth("SD ACCESS");gfx_setCursor(x+(hw2-tw)/2,y+ty);gfx_print(T(L_SD_ACCESS));}
+    gfx_fillRoundRect(dx2,y,hw2,bh,6,COL_AMBER);gfx_setTextColor(TFT_BLACK,COL_AMBER);{int tw=gfx_textWidth("FW UPDATE");gfx_setCursor(dx2+(hw2-tw)/2,y+ty);gfx_print(T(L_FW_UPDATE));}
   }g_info_sdacc_btn_y=y;
 }
 
@@ -1660,9 +1737,9 @@ static void drawNowPlayingBar(){
   if(!NOW_ON)return;
   int y=NOW_Y;
   if(g_loaded&&g_loaded_name.length()){gfx_fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_NOW);gfx_drawRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_GREEN);
-    gfx_fillCircle(LIST_X+8,y+NOW_PLAY_H/2,3,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(COL_GREEN,COL_NOW);gfx_setCursor(LIST_X+16,y+3);gfx_print("NOW PLAYING");
+    gfx_fillCircle(LIST_X+8,y+NOW_PLAY_H/2,3,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(COL_GREEN,COL_NOW);gfx_setCursor(LIST_X+16,y+3);gfx_print(T(L_NOW_PLAYING));
     gfx_setTextColor(TFT_WHITE,COL_NOW);gfx_setCursor(LIST_X+16,y+12);String n=g_loaded_name;while(gfx_textWidth(n)>LIST_W-24&&n.length()>3)n=n.substring(0,n.length()-1);gfx_print(n);}
-  else{gfx_fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_BG);gfx_setTextSize(1);gfx_setTextColor(COL_MID,COL_BG);gfx_setCursor(LIST_X+8,y+NOW_PLAY_H/2-4);gfx_print(String(g_games.size())+" games - tap INSERT");}
+  else{gfx_fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_BG);gfx_setTextSize(1);gfx_setTextColor(COL_MID,COL_BG);gfx_setCursor(LIST_X+8,y+NOW_PLAY_H/2-4);gfx_print(String(g_games.size())+T(L_GAMES_TAP));}
 }
 
 // Split active letters into the two halves: page 0 = #/A-M, page 1 = N-Z
@@ -1728,7 +1805,7 @@ static void drawBottomBar(){
   // v4.8.5: the carousel is a first-class mode — REEL is ALWAYS present; its glyph is
   // the coverflow pictograph so it reads as "flip to the reel".
   const int nb=5;int bw=VW/nb;
-  struct{const char*icon;const char*label;uint16_t col;}btns[5]={{"<","PREV",COL_ORANGE},{">","NEXT",COL_BLUE},{"#","THEME",COL_AMBER},{"","REEL",COL_GREEN},{"i","INFO",COL_MID}};
+  struct{const char*icon;const char*label;uint16_t col;}btns[5]={{"<",T(L_PREV),COL_ORANGE},{">",T(L_NEXT),COL_BLUE},{"#",T(L_THEME),COL_AMBER},{"",T(L_REEL),COL_GREEN},{"i",T(L_INFO),COL_MID}};
   for(int i=0;i<nb;i++){
     int bx=i*bw;if(i>0)gfx_vline(bx,y+3,BOTTOM_H-6,COL_SEP);
     int cx=bx+bw/2,cy2=y+10;gfx_fillCircle(cx,cy2,8,(uint16_t)(btns[i].col>>2));gfx_drawCircle(cx,cy2,8,btns[i].col);
@@ -1773,7 +1850,7 @@ static uint32_t car_tick_ctr=0;
 
 static int carN(){return (int)g_car_list.size();}
 static int carWrap(int i){int n=carN();if(n<=0)return 0;i%=n;if(i<0)i+=n;return i;}
-static const char* carSrcName(){return g_car_src==1?"FAV":g_car_src==2?"MOST":"ALL";}
+static const char* carSrcName(){return g_car_src==1?T(L_FAV):g_car_src==2?T(L_MOST):T(L_ALL);}
 
 static void carBuildList(){
   g_car_list.clear();
@@ -1915,14 +1992,14 @@ static void buildThumbs(){
       lastDraw=nowMs;
       gfx_fillScreen(0x1082);
       gfx_setTextSize(2);gfx_setTextColor(0xFC60,0x1082);
-      {const char*s="BUILDING COVER CACHE";int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH/2-50);gfx_print(s);}
+      {const char*s=T(L_BUILDING);int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH/2-50);gfx_print(s);}
       gfx_setTextSize(1);gfx_setTextColor(0x9BD6,0x1082);
       {String m=String(i+1)+" / "+String(n);int tw=gfx_textWidth(m);gfx_setCursor((gW-tw)/2,gH/2-22);gfx_print(m);}
       int bw2=gW-120,bx=60,by=gH/2;
       gfx_drawRect(bx,by,bw2,12,0x4A8A);
       gfx_fillRect(bx+2,by+2,(int)((long)(bw2-4)*(i+1)/n),8,0x07E0);
       gfx_setTextColor(0x4A8A,0x1082);
-      {const char*s="one-off: reel thumbnails (first launch / rescan)";int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH/2+26);gfx_print(s);}
+      {const char*s=T(L_ONEOFF);int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH/2+26);gfx_print(s);}
       gfx_flush();
     }
     if((i&7)==0)yield();
@@ -1969,7 +2046,7 @@ static void drawCarousel(){
   int ccx=VW/2, ccy=STATUS_H+12+CAR_TILE/2;              // center cover: y 32..182
   if(n==0){
     gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);
-    String m=(g_car_src==1)?"NO FAVOURITES YET":"NO GAMES";
+    String m=(g_car_src==1)?T(L_NO_FAVS):T(L_NO_GAMES);
     gfx_setCursor((VW-gfx_textWidth(m))/2,110);gfx_print(m);
     if(g_car_src==1){gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
       String h="star games: tap the letter circle in the list";
@@ -2045,7 +2122,7 @@ static void drawCarousel(){
      gfx_fillRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,8,bf);
      gfx_drawRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,8,bb);
      gfx_setTextSize(2);gfx_setTextColor(TFT_WHITE,bf);
-     const char*lbl=isLd?"EJECT":"INSERT";int tw=gfx_textWidth(lbl);
+     const char*lbl=isLd?T(L_EJECT):T(L_INSERT);int tw=gfx_textWidth(lbl);
      gfx_setCursor(g_car_ins_x+(g_car_ins_w-tw)/2,g_car_ins_y+(g_car_ins_h-16)/2);gfx_print(lbl);}
   }
   // carousel bottom bar: [LIST] | [source ALL/FAV/MOST] | [ROLL]
@@ -2055,7 +2132,7 @@ static void drawCarousel(){
   // LIST
   gfx_fillCircle(bw/2,y+10,8,(uint16_t)(COL_ORANGE>>2));gfx_drawCircle(bw/2,y+10,8,COL_ORANGE);
   drawListIcon(bw/2,y+10,COL_ORANGE);
-  gfx_setTextColor(COL_DIM,COL_BAR);gfx_setCursor((bw-gfx_textWidth("LIST"))/2,y+22);gfx_print("LIST");
+  gfx_setTextColor(COL_DIM,COL_BAR);gfx_setCursor((bw-gfx_textWidth("LIST"))/2,y+22);gfx_print(T(L_LIST));
   // SOURCE (cycles ALL/FAV/MOST)
   gfx_fillCircle(bw+bw/2,y+10,8,(uint16_t)(COL_AMBER>>2));gfx_drawCircle(bw+bw/2,y+10,8,COL_AMBER);
   gfx_setTextColor(COL_AMBER,(uint16_t)(COL_AMBER>>2));gfx_setCursor(bw+bw/2-3,y+6);gfx_print("*");
@@ -2069,7 +2146,7 @@ static void drawCarousel(){
    gfx_fillCircle(dx,dy2,1,TFT_BLACK);
    gfx_fillCircle(dx-o,dy2-o,1,TFT_BLACK);gfx_fillCircle(dx+o,dy2+o,1,TFT_BLACK);
    gfx_fillCircle(dx+o,dy2-o,1,TFT_BLACK);gfx_fillCircle(dx-o,dy2+o,1,TFT_BLACK);
-   gfx_setTextColor(COL_DIM,COL_BAR);gfx_setCursor(2*bw+(bw-gfx_textWidth("ROLL"))/2,y+22);gfx_print("ROLL");}
+   gfx_setTextColor(COL_DIM,COL_BAR);gfx_setCursor(2*bw+(bw-gfx_textWidth("ROLL"))/2,y+22);gfx_print(T(L_ROLL));}
   if(g_car_dieShow&&carN()>0)carDrawDie();   // dice overlay rides on top of everything
 }
 
@@ -2326,11 +2403,11 @@ static bool doLoadSelected(const String&adfPath){
   // by that instead of blanket-blocking.) Standalone load of HD is unaffected.
   if(g_wireless_mode && isHDImage(adfPath)){
     gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
-    gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_PANEL);gfx_setCursor(6,STATUS_H+16);gfx_print("HD - NO WIRELESS");
+    gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_PANEL);gfx_setCursor(6,STATUS_H+16);gfx_print(T(L_HD_NO_WIRELESS));
     gfx_setTextColor(COL_LIT,COL_PANEL);
-    gfx_setCursor(6,STATUS_H+30);gfx_print("No wireless device");
-    gfx_setCursor(6,STATUS_H+42);gfx_print("available for HD.");
-    gfx_setCursor(6,STATUS_H+56);gfx_print("Use the cable / standalone.");
+    gfx_setCursor(6,STATUS_H+30);gfx_print(T(L_NO_WIRELESS_DEV));
+    gfx_setCursor(6,STATUS_H+42);gfx_print(T(L_AVAIL_HD));
+    gfx_setCursor(6,STATUS_H+56);gfx_print(T(L_USE_CABLE));
     gfx_flush();delay(2200);drawFullUI();gfx_flush();return false;
   }
   // v4.8.0 interlocks: pending saves die when the RAM disk is rebuilt — drain first
@@ -2342,25 +2419,25 @@ static bool doLoadSelected(const String&adfPath){
   if(g_saves_mode==1&&savExistsFor(adfPath))loadPath=savPathFor(adfPath);
   gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
   gfx_setTextSize(1);gfx_setTextColor(TFT_CYAN,COL_PANEL);String tn=basenameNoExt(filenameOnly(adfPath));if(tn.length()>16)tn=tn.substring(0,16);
-  gfx_setCursor(6,STATUS_H+16);gfx_print(tn);gfx_setTextColor(COL_LIT,COL_PANEL);gfx_setCursor(6,STATUS_H+28);gfx_print("Loading...");
+  gfx_setCursor(6,STATUS_H+16);gfx_print(tn);gfx_setTextColor(COL_LIT,COL_PANEL);gfx_setCursor(6,STATUS_H+28);gfx_print(T(L_LOADING));
   gfx_flush();
   // Clean swap: if a disk is already mounted, cleanly eject first so the host re-reads the new media.
   // FORCESWAP=ON skips this and swaps the bytes in place (faster, but the host may not notice).
   if(g_loaded && !g_forceswap) hardDetach();
-  File f=SD_MMC.open(loadPath.c_str(),FILE_READ);if(!f){gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print("FAILED");gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
+  File f=SD_MMC.open(loadPath.c_str(),FILE_READ);if(!f){gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_FAILED));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
   // Use VFS to get real file size (SD_MMC f.size() returns 0 for subdirectory files)
   String vfsLoad="/sdcard"+loadPath;
   struct stat stLoad;
-  if(stat(vfsLoad.c_str(),&stLoad)!=0||stLoad.st_size==0) {f.close();gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print("SIZE ERR");gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
+  if(stat(vfsLoad.c_str(),&stLoad)!=0||stLoad.st_size==0) {f.close();gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_SIZE_ERR));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
   uint32_t fsz=(uint32_t)stLoad.st_size;
   if(fsz>MAX_FILE_BYTES){
     f.close();
     gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
     gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_PANEL);
-    gfx_setCursor(6,STATUS_H+16);gfx_print("TOO BIG");
+    gfx_setCursor(6,STATUS_H+16);gfx_print(T(L_TOO_BIG));
     gfx_setTextColor(COL_LIT,COL_PANEL);
     gfx_setCursor(6,STATUS_H+30);gfx_print(String(fsz/1024)+"KB > "+String(MAX_FILE_BYTES/1024)+"KB");
-    gfx_setCursor(6,STATUS_H+44);gfx_print("Max is DD floppy");
+    gfx_setCursor(6,STATUS_H+44);gfx_print(T(L_MAX_DD));
     gfx_flush();delay(1800);drawFullUI();gfx_flush();return false;
   }
   if(g_mode==MODE_GEN){String gon=filenameOnly(adfPath);build_volume(gon.c_str(),fsz);}   // v5.2: keep the real name+ext so FlashFloppy detects the format
@@ -2411,7 +2488,7 @@ static void doLoadDiag(){
   g_info_showing=false;
   gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
   gfx_setTextSize(1);gfx_setTextColor(TFT_CYAN,COL_PANEL);gfx_setCursor(6,STATUS_H+16);gfx_print("AMIGA TEST KIT");
-  gfx_setTextColor(COL_LIT,COL_PANEL);gfx_setCursor(6,STATUS_H+28);gfx_print("Loading diag...");gfx_flush();
+  gfx_setTextColor(COL_LIT,COL_PANEL);gfx_setCursor(6,STATUS_H+28);gfx_print(T(L_LOADING_DIAG));gfx_flush();
   if(g_loaded && !g_forceswap) hardDetach();
   build_volume("DISK.ADF",DIAG_ADF_SIZE);                 // force an .ADF image regardless of MODE
   diagInflate(DIAG_RLE,DIAG_RLE_LEN,g_disk+DATA_LBA*512);
@@ -2472,7 +2549,7 @@ static void ssBlit(int x,int y){ if(!g_ss_buf)return;
       fb_setPixel(vx,vy,g_ss_buf[r*g_ss_w+c]);}}}
 static void scanScreensaver(){                               // arm iff /screensaver/ exists
   g_ss_paths.clear(); g_ss_have=false; g_ss_claude=false;
-  File dir=SD_MMC.open("/screensaver"); if(!dir)return;
+  File dir=SD_MMC.open("/screensaver"); if(!dir){ g_ss_claude=true; g_ss_have=true; return; }   // v5.5.1: no folder -> default bouncing sprites (that flip to contributor names)
   if(!dir.isDirectory()){dir.close();return;}
   File e;
   while((e=dir.openNextFile())){
@@ -2490,6 +2567,7 @@ static void scanScreensaver(){                               // arm iff /screens
   g_ss_claude=g_ss_paths.empty();
   g_ss_have=!g_ss_paths.empty()||g_ss_claude;
   if(g_cracktro==7)g_ss_have=true;   // 5.4.0: Denise theme arms the saver even with no /screensaver folder
+  if(g_cracktro==8)g_ss_have=true;   // v5.5.2: Wrangler theme (CRACKTRO=WRANGLER) arms it too
 }
 // Procedurally draw the Claude starburst into the bounce buffer (no JPEG needed):
 // 12 tapered coral rays around a solid hub. It's math, not a bitmap — so it
@@ -2601,15 +2679,26 @@ static bool ssMakeName(bool vincent){
     g_ss_buf[y*w+x]=(pgm_read_byte(&bits[y*rb+(x>>3)])&(0x80>>(x&7)))?CREAM:TFT_BLACK;
   g_ss_w=w; g_ss_h=h; return true;
 }
+// ── v5.5.1: contributor NAMES — extra "forms" the bouncing sprite shapeshifts into
+//    on a wall hit (alongside the starburst / ghost / ice-cream). The sprites stay;
+//    ~40% of bounces flip to a random name instead, then it keeps bouncing. EDIT FREELY.
+static const char* const NAMES[]={ "Vincent", "BlindGuy", "Retronaut", "Mez", "Wrangler" };
+static const int N_NAMES=(int)(sizeof(NAMES)/sizeof(NAMES[0]));
 static void runScreensaver(){                                // blocking bounce loop; any touch exits
   int idx=0;
   bool deniseMode=(g_cracktro==7);                          // 5.4.0: hidden Denise theme
   bool vincent=false;
-  bool claudeMode=(!deniseMode)&&g_ss_paths.empty();
+  bool wranglerMode=(g_cracktro==8);                        // v5.5.2: bounce the @wrangler_amiga wordmark
+  bool claudeMode=(!deniseMode)&&(!wranglerMode)&&g_ss_paths.empty();
   int ssForm=0;                                              // v4.8.1 ghost + v4.9.6 lolly: cycles on every wall hit
+  bool showName=false; const char* curName=NAMES[0]; int nameSz=3;   // v5.5.1: bounce can flip to a contributor name
   float ph=0;
   if(deniseMode){
     if(!ssMakeName(false)){g_ss_have=false;return;}
+  } else if(wranglerMode){
+    curName="@wrangler_amiga"; nameSz=3; gfx_setTextSize(nameSz);
+    while(nameSz>1&&gfx_textWidth(curName)>gW-8){nameSz--;gfx_setTextSize(nameSz);}
+    g_ss_w=gfx_textWidth(curName); g_ss_h=8*nameSz;
   } else if(claudeMode){
     // Empty /screensaver/ folder: bounce the (slowly spinning) Claude starburst
     if(!g_ss_claude||!ssMakeClaude(0)){g_ss_have=false;return;}
@@ -2619,7 +2708,7 @@ static void runScreensaver(){                                // blocking bounce 
     if(!ok){ssFree();g_ss_have=false;return;}   // no decodable image -> disarm, back to UI
   }
   int x,y,vx,vy;
-  if(deniseMode){                                           // 5.4.0: random start pos + direction (no two-corner lock)
+  if(deniseMode||wranglerMode){                             // 5.4.0/5.5.2: random start pos + direction (no two-corner lock)
     x=(int)(esp_random()%(uint32_t)(gW-g_ss_w>0?gW-g_ss_w:1));
     y=(int)(esp_random()%(uint32_t)(gH-g_ss_h>0?gH-g_ss_h:1));
     vx=1+(int)(esp_random()%3); if(esp_random()&1)vx=-vx;
@@ -2636,12 +2725,12 @@ static void runScreensaver(){                                // blocking bounce 
       if(y<=0){y=0;vy=-vy;hit=true;} else if(y>=gH-g_ss_h){y=gH-g_ss_h;vy=-vy;hit=true;}
       if(deniseMode&&hit){ vincent=!vincent; ssMakeName(vincent);   // 5.4.0: swap Denise <-> Vincent on each wall hit
         if(x>gW-g_ss_w)x=gW-g_ss_w; if(y>gH-g_ss_h)y=gH-g_ss_h; if(x<0)x=0; if(y<0)y=0; }
-      else if(hit&&!claudeMode&&g_ss_paths.size()>1){ int ni=(idx+1)%(int)g_ss_paths.size();
+      else if(hit&&!claudeMode&&!wranglerMode&&g_ss_paths.size()>1){ int ni=(idx+1)%(int)g_ss_paths.size();
         if(ssDecode(g_ss_paths[ni]))idx=ni; else ssDecode(g_ss_paths[idx]);   // skip undecodable, keep a valid buffer
         if(x>gW-g_ss_w)x=gW-g_ss_w; if(y>gH-g_ss_h)y=gH-g_ss_h; if(x<0)x=0; if(y<0)y=0; }
-      if(claudeMode&&hit)ssForm=(ssForm+1)%3;          // v4.8.1 ghost + v4.9.6 lolly: shapeshift on every wall bounce
-      if(claudeMode){ ph+=0.02f; if(ssForm==1)ssMakeGhost(ph); else if(ssForm==2)ssMakeLolly(ph); else ssMakeClaude(ph); }   // re-render each frame
-      gfx_fillScreen(TFT_BLACK); ssBlit(x,y); gfx_flush();
+      if(claudeMode&&hit){ if((esp_random()%5)<2){ showName=true; curName=NAMES[(int)(esp_random()%(uint32_t)N_NAMES)]; nameSz=3; gfx_setTextSize(nameSz); while(nameSz>1&&gfx_textWidth(curName)>gW-8){nameSz--;gfx_setTextSize(nameSz);} g_ss_w=gfx_textWidth(curName); g_ss_h=8*nameSz; if(x>gW-g_ss_w)x=gW-g_ss_w; if(y>gH-g_ss_h)y=gH-g_ss_h; if(x<0)x=0; if(y<0)y=0; } else { showName=false; ssForm=(int)(esp_random()%3); if(x>gW-96)x=gW-96; if(y>gH-96)y=gH-96; if(x<0)x=0; if(y<0)y=0; } }   // v5.5.1: ~40% of bounces flip to a name
+      if(claudeMode&&!showName){ ph+=0.02f; if(ssForm==1)ssMakeGhost(ph); else if(ssForm==2)ssMakeLolly(ph); else ssMakeClaude(ph); }   // re-render each frame
+      gfx_fillScreen(TFT_BLACK); if((claudeMode&&showName)||wranglerMode){ gfx_setTextSize(nameSz); gfx_setTextColor(CRK_RGB(244,238,225),TFT_BLACK); gfx_setCursor(x,y); gfx_print(curName); } else ssBlit(x,y); gfx_flush();
     } else delay(5);
   }
   ssFree();
@@ -2699,7 +2788,7 @@ static bool doSearch(){
     if(dirty){dirty=false;
       gfx_fillScreen(COL_BG);
       bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
-      gfx_fillRect(0,0,VW,22,COL_BAR);gfx_setTextSize(1);gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);gfx_setCursor(6,7);gfx_print("SEARCH");
+      gfx_fillRect(0,0,VW,22,COL_BAR);gfx_setTextSize(1);gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);gfx_setCursor(6,7);gfx_print(T(L_SEARCH));
       String cnt=q.length()?(String(totalMatch)+(totalMatch==1?" match":" matches")):"type to find a game";
       gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR);gfx_setCursor(VW-gfx_textWidth(cnt)-6,7);gfx_print(cnt);
       gfx_fillRoundRect(8,26,VW-16,30,6,COL_PANEL);gfx_drawRoundRect(8,26,VW-16,30,6,COL_AMBER);
@@ -2798,7 +2887,7 @@ static void doManual(const String& path){
         gfx_fillRect(VW-4,areaTop,2,trkH,COL_PANEL); gfx_fillRect(VW-4,thY,2,thH,COL_AMBER); }
       bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
       gfx_fillRect(0,0,VW,topH,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);
-      gfx_setCursor(6,7); gfx_print("MANUAL");
+      gfx_setCursor(6,7); gfx_print(T(L_MANUAL));
       { String nm=g_games.empty()?String(""):g_games[g_sel].name; while(gfx_textWidth(nm)>VW-120&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
         gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR); gfx_setCursor(VW-gfx_textWidth(nm)-6,7); gfx_print(nm); }
       int by=VH-botH; gfx_fillRect(0,by,VW,botH,COL_BAR); gfx_hline(0,by,VW,COL_SEP); int bw=VW/3;
@@ -2842,7 +2931,7 @@ static bool onScreenKeyboard(const String&macLabel,const String&initial,String&o
       // Theme-aware inks: on light bars/panels (PAPER) amber/white/dim gray are
       // unreadable — fall back to dark ink via inkFor().
       bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
-      gfx_fillRect(0,0,VW,22,COL_BAR);gfx_setTextSize(1);gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);gfx_setCursor(6,7);gfx_print("NAME DONGLE");
+      gfx_fillRect(0,0,VW,22,COL_BAR);gfx_setTextSize(1);gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);gfx_setCursor(6,7);gfx_print(T(L_NAME_DONGLE));
       gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR);gfx_setCursor(VW-gfx_textWidth(macLabel)-6,7);gfx_print(macLabel);
       gfx_fillRoundRect(8,28,VW-16,34,6,COL_PANEL);gfx_drawRoundRect(8,28,VW-16,34,6,COL_AMBER);
       gfx_setTextSize(2);gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL);
@@ -2907,11 +2996,11 @@ static void doScanDongles(){
   int n=espnowScanCount();
   if(n==0){
     gfx_fillScreen(COL_BG);
-    gfx_setTextSize(1);gfx_setTextColor(COL_ORANGE,COL_BG);gfx_setCursor(8,8);gfx_print("No dongles found");
-    gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,30);gfx_print("Check dongle is powered");
-    gfx_setCursor(8,42);gfx_print("and in WIRELESS range.");
+    gfx_setTextSize(1);gfx_setTextColor(COL_ORANGE,COL_BG);gfx_setCursor(8,8);gfx_print(T(L_NO_DONGLES));
+    gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,30);gfx_print(T(L_CHECK_DONGLE));
+    gfx_setCursor(8,42);gfx_print(T(L_IN_RANGE));
     gfx_fillRoundRect(VW/2-50,VH-44,100,32,8,COL_BAR);gfx_drawRoundRect(VW/2-50,VH-44,100,32,8,COL_DIM);
-    gfx_setTextColor(COL_LIT,COL_BAR);{const char*s="BACK";gfx_setCursor(VW/2-gfx_textWidth(s)/2,VH-34);}gfx_print("BACK");
+    gfx_setTextColor(COL_LIT,COL_BAR);{const char*s="BACK";gfx_setCursor(VW/2-gfx_textWidth(s)/2,VH-34);}gfx_print(T(L_BACK));
     gfx_flush();
     uint32_t w=millis();while(millis()-w<8000){if(Touch_ReadFrame()){uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<400)delay(10);break;}delay(20);}
     g_info_showing=false;drawFullUI();gfx_flush();return;
@@ -2934,7 +3023,7 @@ static void doScanDongles(){
         gfx_fillRoundRect(8,y,VW-16,rowH-4,6,bg);gfx_drawRoundRect(8,y,VW-16,rowH-4,6,isSel?COL_AMBER:COL_ACCENT);
         gfx_setTextSize(1);gfx_setTextColor(isSel?inkFor(bg):((inkFor(bg)==TFT_BLACK)?TFT_BLACK:COL_AMBER),bg);gfx_setCursor(18,y+7);gfx_print(nm.length()?nm:("Dongle "+String(i+1)));
         gfx_setTextColor(isSel?inkFor(bg):COL_MID,bg);gfx_setCursor(18,y+20);gfx_print("OMEGA-"+suffix);
-        if(isActive){gfx_setTextColor(COL_GREEN,bg);gfx_setCursor(VW-70,y+13);gfx_print("ACTIVE");}
+        if(isActive){gfx_setTextColor(COL_GREEN,bg);gfx_setCursor(VW-70,y+13);gfx_print(T(L_ACTIVE));}
       }
       if(n>maxRows){int trackY=listTop,trackH=maxRows*rowH-4,thumbH=trackH*maxRows/n;if(thumbH<10)thumbH=10;
         int thumbY=trackY+(trackH-thumbH)*scanScroll/maxScroll;
@@ -2954,7 +3043,7 @@ static void doScanDongles(){
       down=false;
       if(!moved){
         if(downY>=btnBarY){int bw=(VW-4*4)/3,i=(downX-4)/(bw+4);
-          if(i==0){espnowScanSelect(sel);gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_GREEN,COL_BG);{const char*s="PAIRED";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);}gfx_print("PAIRED");gfx_flush();delay(700);break;}
+          if(i==0){espnowScanSelect(sel);gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_GREEN,COL_BG);{const char*s="PAIRED";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);}gfx_print(T(L_PAIRED));gfx_flush();delay(700);break;}
           else if(i==1){String mac=espnowScanGetMac(sel);String label="OMEGA-"+mac.substring(12),nm=getDongleName(mac),out;if(onScreenKeyboard(label,nm,out)){setDongleName(mac,out);}uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<500)delay(10);down=false;dirty=true;}
           else break; // BACK
         } else if(downY>=listTop&&downY<listTop+maxRows*rowH){int slot=(downY-listTop)/rowH,idx=scanScroll+slot; if(idx>=0&&idx<n&&idx!=sel){sel=idx;dirty=true;}}
@@ -3078,7 +3167,7 @@ static void doFirmwareUpdate(){
   {char l[64];snprintf(l,sizeof l,"Now running: %s",FW_VERSION);fwupMsg(88,l,COL_DIM,COL_BG,1);}
   if(!idOK)fwupMsg(106,"! flash only a GTi-JC .bin here",COL_ORANGE,COL_BG,1);
   int bw=124,bbh=42,gap=22,by=VH-64,cx=VW/2-bw-gap/2,ox=VW/2+gap/2;
-  gfx_fillRoundRect(cx,by,bw,bbh,8,COL_BAR);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setTextSize(2);gfx_setCursor(cx+(bw-gfx_textWidth("CANCEL"))/2,by+13);gfx_print("CANCEL");
+  gfx_fillRoundRect(cx,by,bw,bbh,8,COL_BAR);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setTextSize(2);gfx_setCursor(cx+(bw-gfx_textWidth("CANCEL"))/2,by+13);gfx_print(T(L_CANCEL));
   {uint16_t okc=idOK?COL_GREEN:COL_ORANGE;const char*okl=idOK?"FLASH":"FLASH ANYWAY";int osz=idOK?2:1;
    gfx_fillRoundRect(ox,by,bw,bbh,8,okc);gfx_setTextColor(TFT_BLACK,okc);gfx_setTextSize(osz);gfx_setCursor(ox+(bw-gfx_textWidth(okl))/2,by+(idOK?13:17));gfx_print(okl);}
   gfx_flush();
@@ -3142,7 +3231,7 @@ void setup(){
     buildActiveLetters();
     if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
     scanScreensaver();
-  } else {gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,200);gfx_print("SD MOUNT FAILED");gfx_flush();delay(2000);relayout();}   // no card: still init layout so INFO/LOAD DIAG work
+  } else {gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,200);gfx_print(T(L_SD_MOUNT_FAIL));gfx_flush();delay(2000);relayout();}   // no card: still init layout so INFO/LOAD DIAG work
   if(g_wireless_mode&&!sdAccessReq){espnowBegin();g_espnow_started=true;}   // v5.1: don't arm the radio when booting into SD access — no stray FATFS writes while the PC holds the card
   drawCracktro(g_cracktro);
   USB.onEvent(usbEventCB);
@@ -3212,19 +3301,19 @@ static String doUserDisks(){
       gfx_fillRoundRect(4,STATUS_H+2,36,14,7,COL_BG);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(10,STATUS_H+6);gfx_print("ADF");
       gfx_fillRoundRect(44,STATUS_H+2,36,14,7,COL_BG);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(50,STATUS_H+6);gfx_print("DSK");
       gfx_fillRoundRect(84,STATUS_H+2,66,14,7,COL_AMBER);gfx_setTextColor(TFT_BLACK,COL_AMBER);gfx_setCursor(92,STATUS_H+6);gfx_print("USR-DSK");
-      gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);gfx_setCursor(8,STATUS_H+MODE_BAR_H+8);gfx_print("USER DISKS");
-      gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,STATUS_H+MODE_BAR_H+26);gfx_print("pre-formatted save disks - tap to insert");
-      int cy=listTop; gfx_fillRoundRect(8,cy,VW-16,rowH-4,6,COL_GREEN);gfx_setTextColor(TFT_BLACK,COL_GREEN);gfx_setCursor(16,cy+(rowH-12)/2);gfx_print("+  CREATE NEW DISK");
+      gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);gfx_setCursor(8,STATUS_H+MODE_BAR_H+8);gfx_print(T(L_USER_DISKS));
+      gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,STATUS_H+MODE_BAR_H+26);gfx_print(T(L_PREFMT));
+      int cy=listTop; gfx_fillRoundRect(8,cy,VW-16,rowH-4,6,COL_GREEN);gfx_setTextColor(TFT_BLACK,COL_GREEN);gfx_setCursor(16,cy+(rowH-12)/2);gfx_print(T(L_CREATE_DISK));
       int y=listTop+rowH;
       for(int i=scroll;i<(int)disks.size()&&y<VH-6;i++){
         String nm=disks[i];int s=nm.lastIndexOf('/');if(s>=0)nm=nm.substring(s+1);int dot=nm.lastIndexOf('.');if(dot>0)nm=nm.substring(0,dot);
         gfx_fillRoundRect(8,y,VW-16,rowH-4,6,COL_PANEL);gfx_setTextColor(COL_LIT,COL_PANEL);
         while(gfx_textWidth(nm)>VW-88&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
         gfx_setCursor(16,y+(rowH-12)/2);gfx_print(nm);
-        gfx_fillRoundRect(VW-68,y+3,60,rowH-10,5,COL_BAR);gfx_setTextColor(COL_AMBER,COL_BAR);gfx_setCursor(VW-60,y+(rowH-12)/2);gfx_print("RENAME");
+        gfx_fillRoundRect(VW-68,y+3,60,rowH-10,5,COL_BAR);gfx_setTextColor(COL_AMBER,COL_BAR);gfx_setCursor(VW-60,y+(rowH-12)/2);gfx_print(T(L_RENAME));
         y+=rowH;
       }
-      if(disks.empty()){gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(16,listTop+rowH+8);gfx_print("(none yet - tap CREATE NEW DISK)");}
+      if(disks.empty()){gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(16,listTop+rowH+8);gfx_print(T(L_NONE_YET));}
       gfx_flush();
     }
     uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
@@ -3269,12 +3358,12 @@ static void handleTap(uint16_t px,uint16_t py){
     int pw2=g_info_w-8,gap2=4,hw2=(pw2-gap2)/2,lx=g_info_x+4,dx2=lx+hw2+gap2,isz=g_portrait?2:1,ty2=(g_info_bh-8*isz)/2;
     if(px>=(uint16_t)dx2){   // v5.3: right half = FW UPDATE
       gfx_fillRoundRect(dx2,g_info_sdacc_btn_y,hw2,g_info_bh,6,TFT_WHITE);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,TFT_WHITE);
-      {int tw=gfx_textWidth("FW UPDATE");gfx_setCursor(dx2+(hw2-tw)/2,g_info_sdacc_btn_y+ty2);gfx_print("FW UPDATE");}gfx_flush();delay(120);
+      {int tw=gfx_textWidth("FW UPDATE");gfx_setCursor(dx2+(hw2-tw)/2,g_info_sdacc_btn_y+ty2);gfx_print(T(L_FW_UPDATE));}gfx_flush();delay(120);
       doFirmwareUpdate();   // blocking; returns here on cancel/fail (old firmware kept), reboots on success
       g_info_showing=false;drawFullUI();gfx_flush();return;}
     // left half = SD ACCESS
     gfx_fillRoundRect(lx,g_info_sdacc_btn_y,hw2,g_info_bh,6,TFT_WHITE);gfx_setTextSize(isz);gfx_setTextColor(TFT_BLACK,TFT_WHITE);
-    {int tw=gfx_textWidth("SD ACCESS");gfx_setCursor(lx+(hw2-tw)/2,g_info_sdacc_btn_y+ty2);gfx_print("SD ACCESS");}gfx_flush();delay(150);
+    {int tw=gfx_textWidth("SD ACCESS");gfx_setCursor(lx+(hw2-tw)/2,g_info_sdacc_btn_y+ty2);gfx_print(T(L_SD_ACCESS));}gfx_flush();delay(150);
     gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(0x05FF,COL_BG);const char*m="ENTERING SD ACCESS...";gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();
     g_sdaccess_magic=SDACCESS_MAGIC;delay(350);ESP.restart();}
   // ── INFO / SETTINGS panel touches (only within the panel; taps below it fall through to the list) ──
@@ -3299,7 +3388,7 @@ static void handleTap(uint16_t px,uint16_t py){
     if(g_info_reset_btn_y&&py>=(uint16_t)g_info_reset_btn_y&&py<(uint16_t)(g_info_reset_btn_y+g_info_bh)){
       int pw=g_info_w-8,gap=4,hw=(pw-gap)/2,dx=g_info_x+4+hw+gap;
       if(px>=(uint16_t)dx){ if(g_loaded&&g_loaded_name=="AMIGA TEST KIT"){g_info_showing=false;doUnload();drawFullUI();gfx_flush();} else doLoadDiag(); return; }   // right half = LOAD / EJECT DIAG
-      gfx_fillRoundRect(g_info_x+4,g_info_reset_btn_y,hw,g_info_bh,6,0xE8C4);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0xE8C4);gfx_setCursor(g_info_x+10,g_info_reset_btn_y+(g_info_bh-8)/2);gfx_print("RESET...");gfx_flush();delay(700);ESP.restart();}
+      gfx_fillRoundRect(g_info_x+4,g_info_reset_btn_y,hw,g_info_bh,6,0xE8C4);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0xE8C4);gfx_setCursor(g_info_x+10,g_info_reset_btn_y+(g_info_bh-8)/2);gfx_print(T(L_RESETTING));gfx_flush();delay(700);ESP.restart();}
     // v5.1.3: SD ACCESS is handled ABOVE this block (before the py<g_info_bottom guard),
     // because the button can render past the panel's computed bottom edge.
     return;
@@ -3380,7 +3469,7 @@ static void handleTap(uint16_t px,uint16_t py){
 void loop(){
   if(g_espnow_link_just_established){g_espnow_link_just_established=false;
     gfx_fillRect(0,0,VW,STATUS_H,0x07E0);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0x07E0);
-    gfx_setCursor(VW/2-57,6);gfx_print("** DONGLE LINKED **");gfx_flush();delay(2000);drawStatusBar();gfx_flush();}
+    gfx_setCursor(VW/2-57,6);gfx_print(T(L_DONGLE_LINKED));gfx_flush();delay(2000);drawStatusBar();gfx_flush();}
 
   static uint32_t last=0;if(millis()-last<16){delay(1);return;}last=millis();
   bool frame=Touch_ReadFrame();uint16_t px=0,py=0;bool touch=frame&&getTouchXY(&px,&py);
