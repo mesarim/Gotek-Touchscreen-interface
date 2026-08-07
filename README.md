@@ -346,3 +346,4 @@ The GTi firmware is free and open-source — flash it, fork it, keep it. If it's
 ## Licence
 
 MIT — see [`LICENSE`](LICENSE).
+
