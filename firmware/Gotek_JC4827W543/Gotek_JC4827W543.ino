@@ -32,7 +32,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.6.0-JC4827"
+#define FW_VERSION "5.6.1-JC4827"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -1573,7 +1573,7 @@ static void drawCoverPanel(){
   if(lastNfoSel!=g_sel){lastNfoSel=g_sel;cachedNfoBlurb="";String nfoP,nT,nB;
     if(findNFOFor(g_files[game.first_file_idx],nfoP)){File nf=SD_MMC.open(nfoP,FILE_READ);if(nf){String txt;while(nf.available()&&txt.length()<512)txt+=(char)nf.read();nf.close();parseNFO(txt,nT,nB);
       if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=nT;cachedNfoBlurb=nB;}}
-    cachedHasSav=(g_saves_mode==1)&&savExistsFor(g_files[game.first_file_idx]);cachedHD=isHDImage(g_files[game.first_file_idx]);cachedManual="";{String mp;if(manualFor(g_files[game.first_file_idx],mp))cachedManual=mp;}}   // v4.8.0 badge + v4.9 HD flag + v4.9.2 .rtfm (checked once per selection)
+    cachedHasSav=(g_saves_mode==1)&&savExistsFor(g_files[game.first_file_idx]);cachedHD=(g_mode==MODE_ADF)&&isHDImage(g_files[game.first_file_idx]);cachedManual="";{String mp;if(manualFor(g_files[game.first_file_idx],mp))cachedManual=mp;}}   // v4.8.0 badge + v4.9 HD flag + v4.9.2 .rtfm (checked once per selection)
   // Cover art
   gfx_fillRoundRect(COVER_ART_X,COVER_ART_Y,COVER_ART_W,COVER_ART_H,5,COL_BAR);
   gfx_drawRoundRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,6,COL_ACCENT);
@@ -1601,7 +1601,7 @@ static void drawCoverPanel(){
     ty=drawWrapped(rx,ty,game.name,rw,10,3,COVER_ART_Y+COVER_ART_H,COL_LIT,COL_PANEL);
     if(cachedNfoBlurb.length()>0)drawWrapped(rx,ty+3,cachedNfoBlurb,rw,9,6,COVER_ART_Y+COVER_ART_H+2,COL_DIM,COL_PANEL);
     if(game.disk_count>1)drawDiskStepper(8,COVER_Y+COVER_H-70,VW-16,26,game.disk_count);   // full-width disk row above INSERT
-    else{gfx_setTextSize(1);gfx_setTextColor(cachedHD?COL_ORANGE:COL_DIM,COL_PANEL);gfx_setCursor(12,COVER_Y+COVER_H-58);gfx_print(cachedHD?"HD 1.76MB - needs A3000/A4000":"Single disk  -  ADF 880KB");}
+    else{gfx_setTextSize(1);gfx_setTextColor(cachedHD?COL_ORANGE:COL_DIM,COL_PANEL);gfx_setCursor(12,COVER_Y+COVER_H-58);gfx_print(cachedHD?"HD 1.76MB - needs A3000/A4000":g_mode==MODE_ADF?"Single disk  -  ADF 880KB":g_mode==MODE_DSK?"Single disk  -  DSK":"Single disk");}
   }
   // INSERT/EJECT
   gfx_fillRoundRect(INS_X,INS_Y,INS_W,INS_H,8,isL?(uint16_t)0x4000:(uint16_t)0x0340);
@@ -1649,8 +1649,8 @@ static void drawInfoPanel(){
   }
   add(T(L_RESCAN_SD), COL_BLUE, TFT_WHITE, IA_RESCAN);
   add(T(L_SOFT_RESET), (uint16_t)0x8000, TFT_WHITE, IA_RESET);
-  {bool diagOn=(g_loaded&&g_loaded_name=="AMIGA TEST KIT");
-   add(diagOn?T(L_EJECT_DIAG):T(L_LOAD_DIAG), diagOn?(uint16_t)0xE8C4:COL_ACCENT, diagOn?TFT_BLACK:TFT_WHITE, IA_DIAG);}
+  {bool diagOn=(g_loaded&&g_loaded_name=="AMIGA TEST KIT");   // v5.6.1: ATK is Amiga-only — hide LOAD DIAG in DSK/GEN (keep EJECT DIAG if somehow still loaded)
+   if(g_mode==MODE_ADF||diagOn) add(diagOn?T(L_EJECT_DIAG):T(L_LOAD_DIAG), diagOn?(uint16_t)0xE8C4:COL_ACCENT, diagOn?TFT_BLACK:TFT_WHITE, IA_DIAG);}
   add(T(L_SD_ACCESS), (uint16_t)0x05FF, TFT_BLACK, IA_SDACCESS);
   add(T(L_FW_UPDATE), COL_AMBER, TFT_BLACK, IA_FWUPDATE);
   int ix=0,iy=STATUS_H,iw=VW,ih=VH-STATUS_H-BOTTOM_H;
@@ -2399,7 +2399,7 @@ static bool doLoadSelected(const String&adfPath){
   // does HD STANDALONE (cable); wireless stays DD-only until an HD dongle exists.
   // (When one does, the pairing handshake will advertise capacity and this gates
   // by that instead of blanket-blocking.) Standalone load of HD is unaffected.
-  if(g_wireless_mode && isHDImage(adfPath)){
+  if(g_wireless_mode && g_mode==MODE_ADF && isHDImage(adfPath)){
     gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
     gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_PANEL);gfx_setCursor(6,STATUS_H+16);gfx_print(T(L_HD_NO_WIRELESS));
     gfx_setTextColor(COL_LIT,COL_PANEL);

@@ -476,9 +476,13 @@
       <div class="selected-indicator"></div>
       <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC3248 3.5-inch touchscreen" loading="lazy">
       <div class="device-name">Guition JC3248</div>
-      <div class="device-chip">ESP32-S3 · 3.5" 480×320 &middot; A.5.0.0</div>
-      <div class="device-desc">The complete interface: cover art (JPEG/PNG), six themes, carousel/reel, type-to-search, TOSEC multi-disk grouping, save-game persistence, HD (1.76MB) over the cable, in-game <b>.rtfm</b> manuals, and create-your-own user-disks. Optional wireless via a Super Mini dongle.</div>
+      <div class="device-chip">ESP32-S3 · 3.5" 480×320 &middot; 5.5.5 &middot; SD Access + GEN + SD firmware-update</div>
+      <div class="device-desc">The complete interface: cover art (JPEG/PNG), six themes, carousel/reel, type-to-search, TOSEC multi-disk grouping, save-game persistence, HD (1.76MB) over the cable, in-game <b>.rtfm</b> manuals, and create-your-own user-disks. Now also <b>SD Access</b> (add games over USB &mdash; no case-opening), <b>GEN mode</b> (a generic library that mounts any disk image, for non-Amiga machines), and cable-free <b>SD firmware-update</b>. Optional wireless via a Super Mini dongle.</div>
       <div><span class="device-badge badge-current">Recommended</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
+      <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
+        <b>Already on 5.3.0 or later?</b> Update over the SD card &mdash; no re-flash:
+        <a href="firmware/jc3248/GTi-JC35-5.5.5-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-JC35-5.5.5-update.bin</a> &mdash; drop it on the SD card root (5.5.3+ auto-detects it; older builds: rename to <b>GTi_update.bin</b>), then on the GTi tap <b>INFO &#9656; FW&nbsp;UPDATE</b>. (Coming from the old A.5.0.0 build? Web-flash above once first &mdash; that&rsquo;s the one-time USB step onto the OTA layout.)
+      </div>
     </div>
 
     <div class="device-card" data-manifest="firmware/waveshare28/manifest.json" onclick="selectDevice(this)">
@@ -528,7 +532,7 @@
     <b>SAVES=OFF/COPY/OVERWRITE</b> in CONFIG.TXT (default COPY). The JC BETA now also serves <b>high-density (HD, 1.76MB)</b> disk images over the cable &mdash; HD disks get an HD badge and a &ldquo;no A500&rdquo; marker (HD needs an A3000/A4000-class Amiga). To test wireless saves,
     flash <i>both</i> the JC BETA and the Super Mini BETA below. Bench-verified, not yet
     field-proven — please report results (good or broken) via GitHub issues.
-    The save-game era graduated to the stable <b>A.5.0.0</b> build above, proven on a real Amiga. The <b>JC3248 BETA</b> is back for the next experiment &mdash; <b>SD Access</b> (mount the screen's own SD card on your PC over USB to add games without opening the case) &mdash; alongside the wireless dongle betas.
+    The save era &mdash; and everything after it (SD Access, GEN mode, cable-free SD firmware-update) &mdash; has graduated to the stable <b>5.5.5</b> build above, proven on a real Amiga. The <b>JC3248 BETA</b> is back for the next experiment &mdash; <b>Library Categories</b> (browse large collections by folder: OS / Apps / Games, or by machine) &mdash; alongside the wireless dongle betas.
   </div>
 
   <div class="device-grid">
@@ -538,7 +542,7 @@
       <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC3248 3.5-inch touchscreen" loading="lazy">
       <div class="device-name">Guition JC3248 &mdash; BETA</div>
       <div class="device-chip">ESP32-S3 &middot; 3.5" 480×320 &middot; 5.6.0-beta &middot; SD Access + GEN + Saves + Reel + Languages + Screensaver + Full-screen Settings + Categories</div>
-      <div class="device-desc">Everything in the stable <b>A.5.0.0</b> build, plus <b>SD Access</b> (mount the SD on your PC to add games &mdash; no case-opening), <b>GEN mode</b> &mdash; a generic library (<code>/GENERIC/</code>) that mounts <i>any</i> disk image and lets FlashFloppy handle the format, a step toward the GTi front-ending <b>any Gotek machine</b> (Akai, Atari ST, PC, synths&hellip;) &mdash; and <b>NEW: SD firmware-update</b>, self-flash a new build from the SD card (no cable) with a verified image and dual-slot safety. <b>One-time note:</b> this build moves to a dual-OTA partition layout, so flashing it now is the last USB session your unit needs &mdash; every update after is drop-a-file-on-the-card. Bench-tested; testers very welcome via GitHub.</div>
+      <div class="device-desc">Everything in the stable <b>5.5.5</b> build, plus <b>NEW: Library Categories</b> &mdash; browse a large collection by folder (<code>OS / Apps / Games</code>, or by machine) instead of one long list. The GTi auto-detects a folder as a category when it holds sub-folders rather than disk images; optional deeper <b>nesting</b> too. Both are <b>off by default</b> &mdash; switch on <code>CATEGORIES=ON</code> (and optionally <code>NESTING=ON</code>) in CONFIG.TXT &mdash; so nothing changes until you opt in. Bench-tested; testers very welcome via GitHub.</div>
       <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
       <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
         <b>Already on 5.3.0 or later?</b> Update over the SD card &mdash; no re-flash:
@@ -1074,7 +1078,7 @@ relayout();bootCracktro();requestAnimationFrame(frame);
 
   // Device versions — update these when you build new firmware
   const deviceInfo = {
-    'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware A.5.0.0' },
+    'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware 5.5.5' },
     'firmware/jc3248-beta/manifest.json':{ name: 'Guition JC3248 BETA', version: 'Firmware 5.6.0-beta (Languages · Screensaver · Library Categories)' },
     'firmware/jc4827-beta/manifest.json':{ name: 'Guition JC4827W543 4.3" BETA', version: 'Firmware 5.6.0-beta (4.3" NV3041A · Library Categories)' },
     'firmware/waveshare7/manifest.json': { name: 'Waveshare 7" BETA',  version: 'Firmware v4.8.1-7IN BETA (SD Access · Search · GEN · Saves · Reel)' },
