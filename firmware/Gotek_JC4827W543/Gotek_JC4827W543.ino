@@ -32,7 +32,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.5.5-JC4827"
+#define FW_VERSION "5.6.0-JC4827"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -453,8 +453,14 @@ static bool isGenImage(const String&u){
 }
 static std::set<String> g_coverset;   // 5.3.7: lowercased cover-image paths (jpg/png) harvested during the scan walk, so buildThumbs resolves each cover from RAM instead of probing the card. Covers ONLY — .nfo/.rtfm are read on demand when you open a game, never in bulk, so they were dead weight here.
 static inline bool isCoverExtU(const String&u){return u.endsWith(".JPG")||u.endsWith(".JPEG")||u.endsWith(".PNG");}
+// ── v5.6.0 Library Categories (CONFIG.TXT gated; folders auto-classified by content) ──
+static bool   g_categories=false;   // CATEGORIES=ON : show the category browse (a folder with no disk images but subfolders = a category)
+static bool   g_nesting=false;      // NESTING=ON : allow category recursion beyond one level
+static String g_libpath="";         // current category path under the mode root ("" = at the root)
+static std::vector<String> g_cats;  // category sub-folder names at the current level (filled by the scan)
+static void reloadLevel();          // fwd: fresh (uncached) rescan of mode root + g_libpath
 static std::vector<String> scanImagesAnimated(){
-  std::vector<String>out;g_coverset.clear();String dir=g_mode==MODE_ADF?"/ADF":g_mode==MODE_DSK?"/DSK":"/GENERIC",ext=g_mode==MODE_ADF?".ADF":".DSK";
+  std::vector<String>out;g_coverset.clear();g_cats.clear();String dir=g_mode==MODE_ADF?"/ADF":g_mode==MODE_DSK?"/DSK":"/GENERIC";if(g_categories&&g_libpath.length())dir+=g_libpath;String ext=g_mode==MODE_ADF?".ADF":".DSK";
   // Init ball position
   ball_x=gW/2;ball_y=gH/2-30;ball_dx=3;ball_dy=2;
   // Draw initial scan screen
@@ -473,6 +479,7 @@ static std::vector<String> scanImagesAnimated(){
        // skip the SAMPLE example folder AND all dot-folders (.thumbs cache,
        // plus macOS SD litter like .Trashes / .Spotlight-V100 — free immunity)
        if(leaf=="SAMPLE"||leaf.startsWith(".")){gd.close();continue;}}
+      size_t _imgs0=out.size();   // v5.6.0: if this child dir yields NO disk images, it's a category folder
       File e;while((e=gd.openNextFile())){String fn=e.name();int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
       if(isCoverExtU(u)){String ap=en+"/"+fn;if(!ap.startsWith("/"))ap="/"+ap;ap.toLowerCase();g_coverset.insert(ap);}   // 5.3.7: harvest the cover image while we're already reading this dir entry
       // v4.8.0: .sav.adf files attach to their master (INSERT prefers them) — never list
@@ -481,7 +488,9 @@ static std::vector<String> scanImagesAnimated(){
         if(u.endsWith(".TMP")){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;SD_MMC.remove(fp);}
         e.close();continue;}
       if(g_mode==MODE_GEN?isGenImage(u):(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ"))){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;out.push_back(fp);count++;
-        if(millis()-lastDraw>80){drawScanFrame(count);lastDraw=millis();}}e.close();}}
+        if(millis()-lastDraw>80){drawScanFrame(count);lastDraw=millis();}}e.close();}
+      if(g_categories&&out.size()==_imgs0&&(g_libpath.length()==0||g_nesting)){String _cn=en;int _cs=_cn.lastIndexOf('/');if(_cs>=0)_cn=_cn.substring(_cs+1);g_cats.push_back(_cn);}   // v5.6.0: image-less child = category
+    }
     else{String fn=en;int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
       if(isCoverExtU(u)){String ap=en;ap.toLowerCase();g_coverset.insert(ap);}   // 5.3.7: harvest root-level cover image
       if(u.indexOf(".SAV.")>=0){
@@ -882,7 +891,7 @@ static void buildGameList(){
     g_games.push_back(e);
   }
   std::sort(g_games.begin(),g_games.end(),[](const GameEntry&a,const GameEntry&b){String al=a.name,bl=b.name;al.toLowerCase();bl.toLowerCase();return al<bl;});
-  writeGameCache();
+  if(g_libpath.length()==0)writeGameCache();   // v5.6.0: only cache the top level; category sub-levels scan fresh each time
 }
 // ── Per-game stats: favourites + play counts, keyed by name, survives RESCAN ──
 static String statsPath(){return "/.gtistats";}
@@ -1123,6 +1132,13 @@ static void generateDefaultConfig(){
   f.println("#   40 = ~1.7x faster reads if your card can hold it (auto-falls back to 20 if it can't mount).");
   f.println("SDSPEED=20");
   f.println("");
+  f.println("# CATEGORIES: OFF = one flat library (classic). ON = browse by category —");
+  f.println("#   any top-level folder that holds NO disk images (only subfolders) becomes a category.");
+  f.println("CATEGORIES=OFF");
+  f.println("");
+  f.println("# NESTING: OFF = categories are one level deep. ON = allow sub-categories (folders within category folders).");
+  f.println("NESTING=OFF");
+  f.println("");
   f.println("# Wireless dongle MAC (auto-filled when you pair via INFO screen)");
   f.println("# XIAO_MAC=");
   f.close();
@@ -1151,6 +1167,8 @@ static void selfHealConfig(){
     {"FORCESWAP","# FORCESWAP: ON = swap disk contents without the USB eject/re-attach cycle\nFORCESWAP=OFF\n"},
     {"SAVES",    "\n# SAVES: save-game persistence. OFF = classic (lost on eject),\n# COPY = kept as GameName.sav.adf beside the master, OVERWRITE = patch the master.\nSAVES=COPY\n"},
     {"SDSPEED",  "\n# SDSPEED: SD card clock. 20 = safe default, 40 = ~1.7x faster reads if your card holds it (auto-falls back to 20).\nSDSPEED=20\n"},
+    {"CATEGORIES","\n# CATEGORIES: OFF = flat library. ON = browse by category (a top-level folder with no disk images, only subfolders, is a category).\nCATEGORIES=OFF\n"},
+    {"NESTING",  "# NESTING: OFF = one category level. ON = allow sub-categories (folders within category folders).\nNESTING=OFF\n"},
   };
   const int NK=sizeof(KEYS)/sizeof(KEYS[0]);
   bool present[NK]; for(int i=0;i<NK;i++)present[i]=false;
@@ -1184,7 +1202,9 @@ static void loadConfig(){
     else if(k=="CRACKTRO"){String cu=v;cu.trim();cu.toUpperCase(); if(cu=="DENISE")g_cracktro=7; else if(cu=="WRANGLER")g_cracktro=8; else{int c=v.toInt(); if(c>=0&&c<=6)g_cracktro=c;}}
     else if(k=="SAVES"){v.toUpperCase(); g_saves_mode=(v=="OVERWRITE")?2:(v=="OFF"||v=="0")?0:1;}
     else if(k=="SDSPEED"){int hz=v.toInt(); g_sd_freq=(hz>=40||hz>=40000)?40000:20000;}
-    else if(k=="HIVEMIND"){g_hivemind=(v=="OFF"||v=="0")?0:1;}}
+    else if(k=="HIVEMIND"){g_hivemind=(v=="OFF"||v=="0")?0:1;}
+    else if(k=="CATEGORIES"){String cv=v;cv.toUpperCase();g_categories=(cv=="ON"||cv=="1"||cv=="TRUE");}
+    else if(k=="NESTING"){String nv=v;nv.toUpperCase();g_nesting=(nv=="ON"||nv=="1"||nv=="TRUE");}}
   f.close();
 }
 
@@ -1604,7 +1624,7 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE };
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
 static InfoItem g_ii[16]; static int g_ii_n=0;
 struct InfoRect { int x,y,w,h; uint8_t act; };
@@ -1621,6 +1641,7 @@ static void drawInfoPanel(){
   add(String("LANG: ")+LANG_NAMES[g_lang], (uint16_t)0x79D6, TFT_WHITE, IA_LANG);
   add(String("ROTATE: ")+(g_portrait?"PORTRAIT":"LANDSCAPE"), COL_BLUE, TFT_WHITE, IA_ROTATE);
   add(String("COMPACT: ")+(g_compact?"ON":"OFF"), g_compact?COL_GREEN:COL_BAR, g_compact?TFT_BLACK:COL_LIT, IA_COMPACT);
+  add(String("LIBRARY: ")+(g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN"), COL_ACCENT, TFT_BLACK, IA_LIBMODE);   // v5.6.0: disk-format mode moved here from the mode bar
   if(g_wireless_mode){
     add(espnowIsPaired()?String("SWITCH DONGLE"):String("SCAN DONGLES"), espnowIsPaired()?COL_GREEN:COL_AMBER, TFT_BLACK, IA_DONGLE);
     uint8_t mm[64][6]; int mcN=enumMuCaDongles(mm,g_dongle_cap);
@@ -1662,10 +1683,14 @@ static void drawInfoPanel(){
 static void drawModeBar(){
   int mbR=LIST_X+LIST_W+AZ_W;
   gfx_fillRect(LIST_X,STATUS_H,LIST_W+AZ_W,MODE_BAR_H,COL_BAR);gfx_setTextSize(1);
+  if(g_categories){   // v5.6.0: mode moved to INFO; this slot becomes the Categories button
+    gfx_fillRoundRect(LIST_X+4,STATUS_H+2,104,14,7,COL_AMBER);gfx_setTextColor(TFT_BLACK,COL_AMBER);gfx_setCursor(LIST_X+10,STATUS_H+6);gfx_print(g_libpath.length()?"< CATEGORY":"CATEGORIES");
+  } else {
   bool isA=g_mode==MODE_ADF,isD=g_mode==MODE_DSK,isG=g_mode==MODE_GEN;   // v5.2: three library modes
   gfx_fillRoundRect(LIST_X+4,STATUS_H+2,32,14,7,isA?COL_ACCENT:COL_BG);gfx_setTextColor(isA?COL_AMBER:COL_DIM,isA?COL_ACCENT:COL_BG);gfx_setCursor(LIST_X+9,STATUS_H+6);gfx_print("ADF");
   gfx_fillRoundRect(LIST_X+40,STATUS_H+2,32,14,7,isD?COL_ACCENT:COL_BG);gfx_setTextColor(isD?COL_AMBER:COL_DIM,isD?COL_ACCENT:COL_BG);gfx_setCursor(LIST_X+45,STATUS_H+6);gfx_print("DSK");
   gfx_fillRoundRect(LIST_X+76,STATUS_H+2,32,14,7,isG?COL_ACCENT:COL_BG);gfx_setTextColor(isG?COL_AMBER:COL_DIM,isG?COL_ACCENT:COL_BG);gfx_setCursor(LIST_X+81,STATUS_H+6);gfx_print("GEN");   // v5.2 generic/any-machine
+  }
   gfx_fillRoundRect(LIST_X+112,STATUS_H+2,62,14,7,COL_BLUE);gfx_setTextColor(TFT_WHITE,COL_BLUE);gfx_setCursor(LIST_X+118,STATUS_H+6);gfx_print("USR-DSK");   // v4.9.7 user-disk manager
   gfx_setTextColor(COL_MID,COL_BAR);String gt=String(g_games.size())+" games";gfx_setCursor(mbR-gfx_textWidth(gt)-6,STATUS_H+6);gfx_print(gt);
 }
@@ -3340,11 +3365,63 @@ static String doUserDisks(){
 }
 
 // v5.2: switch the browser to a library mode (ADF / DSK / GEN) — reload list, rebuild games, redraw.
-static void switchLib(int m){   // int, not DiskMode: Arduino auto-generates this prototype ABOVE the enum decl, so an enum param won't compile
-  g_mode=(DiskMode)m;g_files.clear();listImages(SD_MMC,g_files);
-  if(!readGameCache()){buildGameList();buildThumbs();}
-  buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;
+// v5.6.0: fresh (uncached) reload of the current library level = mode root + g_libpath.
+static void reloadLevel(){
+  g_files=scanImagesAnimated();            // fills g_files (titles) + g_cats (sub-categories) + g_coverset
+  buildGameList();buildThumbs();applyStats();   // cache write guarded to top level; applyStats restores fav/plays
+  buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;g_disk_sel=0;g_disk_page=0;
   if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
+}
+
+// v5.6.0: category folder browser (drill-down). Shows the sub-folders (categories) at the
+// current level; tapping one descends (updates g_libpath + rescans). Returns when a level
+// has no further categories (a leaf level of titles) or the user taps the bar to close.
+static void doCategoryBrowse(){
+  const int rowH=30, listTop=STATUS_H+MODE_BAR_H+34;
+  bool dirty=true, pressed=false; int rel=0, scroll=0;
+  {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<500)delay(10);}
+  while(true){
+    if(g_cats.empty()) return;             // nothing to browse here -> back to the game list of this level
+    if(dirty){dirty=false;
+      gfx_fillScreen(COL_BG); drawStatusBar();
+      gfx_fillRect(0,STATUS_H,VW,MODE_BAR_H,COL_BAR); gfx_setTextSize(1);
+      gfx_setTextColor(COL_AMBER,COL_BAR);gfx_setCursor(6,STATUS_H+6);gfx_print("CATEGORIES");
+      {String p=g_libpath.length()?g_libpath:"/";gfx_setTextColor(COL_MID,COL_BAR);gfx_setCursor(VW-6-gfx_textWidth(p),STATUS_H+6);gfx_print(p);}
+      gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);gfx_setCursor(8,STATUS_H+MODE_BAR_H+8);gfx_print("CATEGORIES");
+      int y=listTop;
+      if(g_libpath.length()){gfx_fillRoundRect(8,y,VW-16,rowH-4,6,COL_BLUE);gfx_setTextColor(TFT_WHITE,COL_BLUE);gfx_setCursor(16,y+(rowH-12)/2);gfx_print("< ..");y+=rowH;}
+      for(int i=scroll;i<(int)g_cats.size()&&y<VH-6;i++){
+        gfx_fillRoundRect(8,y,VW-16,rowH-4,6,COL_PANEL);gfx_setTextColor(COL_LIT,COL_PANEL);
+        String nm=g_cats[i];while(gfx_textWidth(nm)>VW-28&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
+        gfx_setCursor(16,y+(rowH-12)/2);gfx_print(nm);y+=rowH;
+      }
+      gfx_flush();
+    }
+    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){ rel=0;
+      if(!pressed){ pressed=true; bool handled=false;
+        if(ty>=STATUS_H&&ty<STATUS_H+MODE_BAR_H) return;          // tap the bar closes to the game list
+        int y=listTop;
+        if(g_libpath.length()){
+          if(ty>=y&&ty<y+rowH-4){int s=g_libpath.lastIndexOf('/');g_libpath=(s>0)?g_libpath.substring(0,s):"";reloadLevel();scroll=0;dirty=true;handled=true;}
+          y+=rowH;
+        }
+        if(!handled){
+          for(int i=scroll;i<(int)g_cats.size()&&y<VH-6;i++){
+            if(ty>=y&&ty<y+rowH-4){g_libpath+="/"+g_cats[i];reloadLevel();scroll=0;if(g_cats.empty())return;dirty=true;break;}
+            y+=rowH;
+          }
+        }
+      }
+    } else { if(pressed&&++rel>=3)pressed=false; }
+    delay(12);
+  }
+}
+
+static void switchLib(int m){   // int, not DiskMode: Arduino auto-generates this prototype ABOVE the enum decl, so an enum param won't compile
+  g_mode=(DiskMode)m;g_libpath="";
+  if(g_categories){reloadLevel();}
+  else{g_files.clear();listImages(SD_MMC,g_files);if(!readGameCache()){buildGameList();buildThumbs();}buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));}
   drawFullUI();gfx_flush();
 }
 static void drawInfoBottomBar(){
@@ -3377,6 +3454,7 @@ static void infoAction(uint8_t act){
     case IA_DIAG: if(g_loaded&&g_loaded_name=="AMIGA TEST KIT"){g_info_showing=false;doUnload();drawFullUI();gfx_flush();}else doLoadDiag();break;
     case IA_SDACCESS: {gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0x05FF,COL_BG);const char*m="ENTERING SD ACCESS...";gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();g_sdaccess_magic=SDACCESS_MAGIC;delay(350);ESP.restart();}break;
     case IA_FWUPDATE: doFirmwareUpdate();g_info_showing=false;drawFullUI();gfx_flush();break;
+    case IA_LIBMODE: switchLib((g_mode+1)%3); if(g_info_showing)drawInfoFull(); break;   // v5.6.0: cycle ADF->DSK->GEN, stay in INFO
     default: break;
   }
 }
@@ -3433,9 +3511,12 @@ static void handleTap(uint16_t px,uint16_t py){
 
   // ── Mode bar ──
   if(py>=STATUS_H&&py<STATUS_H+MODE_BAR_H&&px>=LIST_X){
+    if(g_categories){ if(px<LIST_X+110){ g_libpath=""; reloadLevel(); doCategoryBrowse(); drawFullUI(); gfx_flush(); return; } }   // v5.6.0: Categories button = jump to top + browse
+    else{
     if(px<LIST_X+38){ if(g_mode!=MODE_ADF)switchLib(MODE_ADF); return; }
     if(px<LIST_X+74){ if(g_mode!=MODE_DSK)switchLib(MODE_DSK); return; }
     if(px<LIST_X+110){ if(g_mode!=MODE_GEN)switchLib(MODE_GEN); return; }   // v5.2 GEN library
+    }
     if(px<LIST_X+174){String p=doUserDisks(); if(p.length()){ if(doLoadSelected(p)){g_loaded_game_idx=-1;String nm=p;int s=nm.lastIndexOf('/');if(s>=0)nm=nm.substring(s+1);int d=nm.lastIndexOf('.');if(d>0)nm=nm.substring(0,d);g_loaded_name=nm;} } drawFullUI();gfx_flush();return;}}   // v4.9.7 USR-DSK
 
   // ── File list ──
