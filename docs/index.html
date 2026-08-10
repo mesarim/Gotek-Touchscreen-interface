@@ -530,7 +530,7 @@
     <b>GameName.sav.adf</b> beside the untouched master — standalone <i>and</i> wireless
     ("FLING in reverse"). INSERT automatically boots the save when one exists (green floppy
     badge on the cover); delete the .sav file to factory-reset a game. Configure with
-    <b>SAVES=OFF/COPY/OVERWRITE</b> in CONFIG.TXT (default COPY). The JC BETA now also serves <b>high-density (HD, 1.76MB)</b> disk images over the cable &mdash; HD disks get an HD badge and a &ldquo;no A500&rdquo; marker (HD needs an A3000/A4000-class Amiga). To test wireless saves,
+    <b>SAVES=OFF/COPY/OVERWRITE</b> in CONFIG.TXT (default COPY). The <b>5.6.1</b> JC BETA now serves <b>high-density (HD, 1.76MB)</b> disk images both over the cable <i>and wirelessly</i> to an <b>HD-capable XIAO dongle</b> (below) &mdash; HD disks get an HD badge and a &ldquo;no A500&rdquo; marker (HD needs an A3000/A4000-class Amiga). To test wireless saves,
     flash <i>both</i> the JC BETA and the Super Mini BETA below. Bench-verified, not yet
     field-proven — please report results (good or broken) via GitHub issues.
     The save era &mdash; and everything after it (SD Access, GEN mode, cable-free SD firmware-update) &mdash; has graduated to the stable <b>5.5.5</b> build above, proven on a real Amiga. The <b>JC3248 BETA</b> is back for the next experiment &mdash; <b>Library Categories</b> (browse large collections by folder: OS / Apps / Games, or by machine) &mdash; alongside the wireless dongle betas.
@@ -542,12 +542,12 @@
       <div class="selected-indicator"></div>
       <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC3248 3.5-inch touchscreen" loading="lazy">
       <div class="device-name">Guition JC3248 &mdash; BETA</div>
-      <div class="device-chip">ESP32-S3 &middot; 3.5" 480×320 &middot; 5.6.0-beta &middot; SD Access + GEN + Saves + Reel + Languages + Screensaver + Full-screen Settings + Categories</div>
-      <div class="device-desc">Everything in the stable <b>5.5.5</b> build, plus <b>NEW: Library Categories</b> &mdash; browse a large collection by folder (<code>OS / Apps / Games</code>, or by machine) instead of one long list. The GTi auto-detects a folder as a category when it holds sub-folders rather than disk images; optional deeper <b>nesting</b> too. Both are <b>off by default</b> &mdash; switch on <code>CATEGORIES=ON</code> (and optionally <code>NESTING=ON</code>) in CONFIG.TXT &mdash; so nothing changes until you opt in. Bench-tested; testers very welcome via GitHub.</div>
+      <div class="device-chip">ESP32-S3 &middot; 3.5" 480×320 &middot; 5.6.1-beta &middot; SD Access + GEN + Saves + Reel + Languages + Screensaver + Full-screen Settings + Categories</div>
+      <div class="device-desc"><b>NEW in 5.6.1: HD (1.76MB) disks over wireless</b> &mdash; pair an <b>HD-capable XIAO dongle</b> (below) and the GTi flings high-density images to it wirelessly, not just over the cable. Plus <b>Library Categories</b> &mdash; browse a large collection by folder (<code>OS / Apps / Games</code>, or by machine) instead of one long list; opt in with <code>CATEGORIES=ON</code> (and optionally <code>NESTING=ON</code>) in CONFIG.TXT. Bench-tested; HD-over-wireless is fresh &mdash; testers very welcome via GitHub.</div>
       <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
       <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
         <b>Already on 5.3.0 or later?</b> Update over the SD card &mdash; no re-flash:
-        <a href="firmware/jc3248-beta/GTi-JC35-5.6.0-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-JC35-5.6.0-update.bin</a> &mdash; drop it on the SD card root (5.5.3+ auto-detects it; older builds: rename to <b>GTi_update.bin</b>), then on the GTi tap <b>INFO &#9656; FW&nbsp;UPDATE</b>. (First move onto 5.3.0 with the web-flash above &mdash; that&rsquo;s the one-time USB step.)
+        <a href="firmware/jc3248-beta/GTi-JC35-5.6.1-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-JC35-5.6.1-update.bin</a> &mdash; drop it on the SD card root (5.5.3+ auto-detects it; older builds: rename to <b>GTi_update.bin</b>), then on the GTi tap <b>INFO &#9656; FW&nbsp;UPDATE</b>. (First move onto 5.3.0 with the web-flash above &mdash; that&rsquo;s the one-time USB step.)
       </div>
     </div>
 
@@ -555,12 +555,12 @@
       <div class="selected-indicator"></div>
       <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC4827W543 4.3-inch touchscreen" loading="lazy">
       <div class="device-name">Guition JC4827W543 4.3&Prime; &mdash; BETA</div>
-      <div class="device-chip">ESP32-S3 &middot; 4.3" 480×272 &middot; 5.6.0-beta &middot; NV3041A QSPI + Languages + Screensaver + Full-screen Settings + Categories</div>
-      <div class="device-desc"><b>NEW: the bigger 4.3-inch GTi.</b> Everything the JC3248 beta does &mdash; the full interface, cover art, GEN mode, <b>SD Access</b> and cable-free <b>SD firmware-update</b> &mdash; on a roomier 4.3&Prime; QSPI screen (still smooth-rotating, no RGB jank). Capacitive touch, dual-role (standalone <i>and</i> wireless). <b>Bench-verified on a real Amiga</b>; freshly ported, so testers especially welcome via GitHub. Uses a 4&nbsp;MB / OTA layout, so SD firmware-updates work out of the box.</div>
+      <div class="device-chip">ESP32-S3 &middot; 4.3" 480×272 &middot; 5.6.1-beta &middot; NV3041A QSPI + Languages + Screensaver + Full-screen Settings + Categories</div>
+      <div class="device-desc"><b>NEW: the bigger 4.3-inch GTi.</b> Everything the JC3248 beta does &mdash; the full interface, cover art, GEN mode, <b>SD Access</b> and cable-free <b>SD firmware-update</b> &mdash; on a roomier 4.3&Prime; QSPI screen (still smooth-rotating, no RGB jank). Capacitive touch, dual-role (standalone <i>and</i> wireless). <b>New in 5.6.1: HD (1.76MB) disks over wireless</b> with an HD-capable XIAO dongle (below). <b>Bench-verified on a real Amiga</b>; freshly ported, so testers especially welcome via GitHub. Uses a 4&nbsp;MB / OTA layout, so SD firmware-updates work out of the box.</div>
       <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
       <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
         <b>Already on 5.3.x?</b> Update over the SD card &mdash; no re-flash:
-        <a href="firmware/jc4827-beta/GTi-JC43-5.6.0-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-JC43-5.6.0-update.bin</a> &mdash; drop it on the SD card root (5.5.3+ auto-detects it; older builds: rename to <b>GTi_update.bin</b>), then tap <b>INFO &#9656; FW&nbsp;UPDATE</b>.
+        <a href="firmware/jc4827-beta/GTi-JC43-5.6.1-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-JC43-5.6.1-update.bin</a> &mdash; drop it on the SD card root (5.5.3+ auto-detects it; older builds: rename to <b>GTi_update.bin</b>), then tap <b>INFO &#9656; FW&nbsp;UPDATE</b>.
       </div>
     </div>
 
@@ -601,8 +601,8 @@
     <div class="device-card" data-manifest="firmware/xiao-beta/manifest.json" onclick="selectDevice(this)">
       <div class="selected-indicator"></div>
       <div class="device-name">XIAO Dongle &mdash; BETA</div>
-      <div class="device-chip">Seeed XIAO ESP32-S3 &middot; v3.5.0-beta &middot; DD only &middot; UNTESTED</div>
-      <div class="device-desc">The XIAO wireless dongle brought up to the current save-era protocol (saves + eject) so it pairs with the v4.9 JC BETA. Double-density only. <b>Compiled but not yet bench-verified</b> &mdash; flash at your own risk and please report back. Plug in the external WiFi antenna before powering on.</div>
+      <div class="device-chip">Seeed XIAO ESP32-S3 &middot; v3.6.0-beta &middot; HD-capable (2MB ramdisk) &middot; UNTESTED</div>
+      <div class="device-desc"><b>Now HD-capable (v3.6.0).</b> The XIAO wireless dongle with a 2MB ramdisk, so the <b>5.6.1</b> JC BETA can fling <b>high-density (1.76MB)</b> images to it wirelessly &mdash; the Super Mini (2MB PSRAM) stays double-density. Also carries the save-era protocol (saves + eject). <b>Compiled but not yet bench-verified</b> &mdash; flash at your own risk and please report back. Plug in the external WiFi antenna before powering on.</div>
       <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge" style="background:#3a2a10;color:#ffcc66;border:1px solid #5a4a1a;">UNTESTED</span> <span class="device-badge badge-dongle">USB Dongle</span></div>
     </div>
 
@@ -1088,8 +1088,8 @@ relayout();bootCracktro();requestAnimationFrame(frame);
   // Device versions — update these when you build new firmware
   const deviceInfo = {
     'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware 5.5.5' },
-    'firmware/jc3248-beta/manifest.json':{ name: 'Guition JC3248 BETA', version: 'Firmware 5.6.0-beta (Languages · Screensaver · Library Categories)' },
-    'firmware/jc4827-beta/manifest.json':{ name: 'Guition JC4827W543 4.3" BETA', version: 'Firmware 5.6.0-beta (4.3" NV3041A · Library Categories)' },
+    'firmware/jc3248-beta/manifest.json':{ name: 'Guition JC3248 BETA', version: 'Firmware 5.6.1-beta (Languages · Screensaver · Library Categories)' },
+    'firmware/jc4827-beta/manifest.json':{ name: 'Guition JC4827W543 4.3" BETA', version: 'Firmware 5.6.1-beta (4.3" NV3041A · Library Categories)' },
     'firmware/waveshare7/manifest.json': { name: 'Waveshare 7" BETA',  version: 'Firmware v4.8.1-7IN BETA (SD Access · Search · GEN · Saves · Reel)' },
     'firmware/waveshare7b-beta/manifest.json': { name: 'Waveshare 7B BETA', version: 'Firmware v4.8.1-7B BETA (1024×600 · first-tester)' },
     'firmware/waveshare28/manifest.json':{ name: 'Waveshare 2.8"', version: 'Firmware v3.4.7' },

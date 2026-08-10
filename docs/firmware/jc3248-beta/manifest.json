@@ -1,6 +1,6 @@
 {
-  "name": "Gotek Touchscreen Interface — JC3248 3.5\" BETA (5.6.0 — Library Categories)",
-  "version": "5.6.0-beta",
+  "name": "Gotek Touchscreen Interface — JC3248 3.5\" BETA (5.6.1 — HD wireless)",
+  "version": "5.6.1-beta",
   "new_install_prompt_erase": true,
   "builds": [ { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_JC3248.ino.merged.bin", "offset": 0 } ] } ]
 }

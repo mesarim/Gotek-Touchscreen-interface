@@ -1,13 +1,6 @@
 {
-  "name": "Gotek Touchscreen Interface — XIAO Dongle BETA (UNTESTED)",
-  "version": "3.5.0-beta",
+  "name": "Gotek Touchscreen Interface — XIAO Dongle BETA (v3.6.0 — HD-capable)",
+  "version": "3.6.0-beta",
   "new_install_prompt_erase": true,
-  "builds": [
-    {
-      "chipFamily": "ESP32-S3",
-      "parts": [
-        { "path": "Gotek_XIAO.ino.merged.bin", "offset": 0 }
-      ]
-    }
-  ]
+  "builds": [ { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_XIAO.ino.merged.bin", "offset": 0 } ] } ]
 }
