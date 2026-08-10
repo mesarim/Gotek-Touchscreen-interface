@@ -1,4 +1,7 @@
-// ESP32-S3 (Waveshare 7" RGB Touch LCD) — USB MSC RAM Disk + ADF/DSK Browser + GT911 touch
+// ESP32-S3 (Waveshare 7B / ESP32-S3-Touch-LCD-7B, 1024x600 RGB) — USB MSC RAM Disk + ADF/DSK Browser + GT911 touch
+// >> Rebased from the working 7" v4.8.1-7IN (same esp_lcd + KGfx architecture). 7B deltas: 1024x600,
+//    CONFIRMED RGB timing, esp_lcd data-pin order (LSB-first, reversed per channel vs the LovyanGFX ref),
+//    and the CH32V003 IO_EXTENSION backlight (PWM reg 0x05, inverted). Covers/UI are the 7"'s proven path.
 // Board: ESP32S3 Dev Module
 // USB Mode     : USB-OTG (TinyUSB)
 // USB CDC      : *** DISABLED *** (REQUIRED for FlashFloppy/Gotek compatibility)
@@ -49,15 +52,8 @@
 #include "esp_system.h"
 #include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 
-// ============================================================================
-// GTi — Waveshare 7B (1024x600) TEST BED.
-// Derived from the 7" (Gotek_7inch.ino) base. IDENTICAL code + pinout; the ONLY
-// differences are resolution (1024x600) and the RGB panel timing below.
-// Blind port — no 7B on the bench: the timing is a best-guess (see the panel cfg).
-// *** Keep in sync with the 7" base when features change there. ***
-// ============================================================================
 // ---------- Version ----------
-#define FW_VERSION  "v4.8.1-7B"
+#define FW_VERSION  "v4.8.14-7B-FACTORY-TIMING"
 
 // ---------- ESP-NOW server (peer-to-peer, no WiFi AP needed) ----------
 #include "espnow_server.h"
@@ -83,21 +79,29 @@ extern "C" {
 #define EXP_ALL_ON   0xDF   // everything high EXCEPT USB_SEL (bit5)
 #define EXP_TPRST_LO 0xDD   // same, with TP_RST (bit1) pulled low for the GT911 reset
 
-// Write the expander output register on BOTH possible chips (CH422G 0x38 /
-// TCA9554 0x20:reg1) — only the one actually fitted will care.
+// 7B: the chip at 0x24 is a CH32V003 "IO_EXTENSION", not a plain expander.
+// Digital outputs live in register 0x03. Same BIT layout as the 7" CH422G:
+// bit1=TP_RST, bit2=backlight-enable, bit3=LCD_RST, bit4=SD_CS, bit5=USB_SEL
+// (0=USB,1=CAN — must stay 0). So EXP_ALL_ON/EXP_TPRST_LO carry over unchanged.
 static void expanderOut(uint8_t val){
-  Wire.beginTransmission(0x38); Wire.write(val); Wire.endTransmission();
-  Wire.beginTransmission(EXPANDER_I2C_ADDR); Wire.write(0x01); Wire.write(val); Wire.endTransmission();
+  Wire.beginTransmission(0x24); Wire.write(0x03); Wire.write(val); Wire.endTransmission();
 }
 
 static void initExpander() {
   Wire.begin(EXPANDER_I2C_SDA, EXPANDER_I2C_SCL, 400000);
-  // CH422G (this board rev): 0x24 = system/config, 0x38 = output register.
-  Wire.beginTransmission(0x24); Wire.write(0x01); Wire.endTransmission();  // outputs enabled
-  // TCA9554 fallback (older revs): all pins -> outputs
-  Wire.beginTransmission(EXPANDER_I2C_ADDR);
-  Wire.write(0x03); Wire.write(0x00);
-  Wire.endTransmission();
+  // 7B CH32V003 IO_EXTENSION @ 0x24:  reg 0x02 = pin mode, 0x03 = output, 0x05 = backlight PWM.
+  Wire.beginTransmission(0x24); Wire.write(0x02); Wire.write(0xFF); Wire.endTransmission();  // all IO -> output
+
+  // ── LCD hardware reset (IO3 = bit3): pulse low->high before esp_lcd inits ──
+  expanderOut((uint8_t)(EXP_ALL_ON & ~(1 << 3)));  // LCD_RST low; TP/backlight high; USB_SEL low
+  delay(20);
+  expanderOut(EXP_ALL_ON);                          // LCD_RST released
+  delay(60);
+
+  // ── Backlight: PWM register 0x05, INVERTED (low value = bright). ~20 = near-max.
+  //    (The 7" drove backlight via an expander bit; the 7B needs this PWM write or
+  //     the panel stays stone dark.)
+  Wire.beginTransmission(0x24); Wire.write(0x05); Wire.write(20); Wire.endTransmission();
 
   // ── GT911 deterministic reset ─────────────────────────────────────────────
   // The GT911 latches its I2C address AT RESET from the INT pin: LOW -> 0x5D,
@@ -265,6 +269,11 @@ static void kWaitVsync(){
   while(k_vsync_count==s && (millis()-t0)<50){ delayMicroseconds(200); }  // gentle wait — don't hammer the bus
 }
 
+// ── PERF INSTRUMENTATION (temporary diagnostic build) ─────────────────────────
+// display() records the copy + flip cost here; UiFrame prints compose+copy+flip.
+static volatile uint32_t g_perf_copy_us = 0;
+static volatile uint32_t g_perf_flip_us = 0;
+
 class KGfx {
 public:
   esp_lcd_panel_handle_t panel=NULL;
@@ -280,33 +289,68 @@ public:
   uint8_t gtAddr=0x5D;   // set by touchProbe()
   // clip window (used by the scrolling list so partial rows don't bleed out)
   int clx0=0, cly0=0, clx1=KLCD_W, cly1=KLCD_H;
+  // ── DIRTY-RECT tracking (partial flush) ─────────────────────────────────────
+  // Every draw expands this frame's dirty box; display() copies ONLY the dirty
+  // region to the back framebuffer instead of the whole 1.2MB. Start both this
+  // and prev = FULL so the first flushes initialise both buffers.
+  int dx0=0, dy0=0, dx1=KLCD_W, dy1=KLCD_H;      // this frame (inclusive-exclusive)
+  int pdx0=0, pdy0=0, pdx1=KLCD_W, pdy1=KLCD_H;  // previous frame (for 2-buffer coherence)
+  inline void markDirty(int x0,int y0,int x1,int y1){
+    if(x0<0)x0=0; if(y0<0)y0=0; if(x1>KLCD_W)x1=KLCD_W; if(y1>KLCD_H)y1=KLCD_H;
+    if(x1<=x0||y1<=y0) return;
+    if(x0<dx0)dx0=x0; if(y0<dy0)dy0=y0; if(x1>dx1)dx1=x1; if(y1>dy1)dy1=y1;
+  }
+  void markDirtyReset(){ dx0=KLCD_W; dy0=KLCD_H; dx1=0; dy1=0; }   // empty box
+  // AUX dirty box — a SECOND detached small region (the tumbling die) so it does
+  // not balloon the main bounding box when the rest of the frame is one small band.
+  int ax0=KLCD_W, ay0=KLCD_H, ax1=0, ay1=0;
+  int pax0=KLCD_W, pay0=KLCD_H, pax1=0, pay1=0;   // prev aux (empty)
+  inline void markAux(int x0,int y0,int x1,int y1){
+    if(x0<0)x0=0; if(y0<0)y0=0; if(x1>KLCD_W)x1=KLCD_W; if(y1>KLCD_H)y1=KLCD_H;
+    if(x1<=x0||y1<=y0) return;
+    if(x0<ax0)ax0=x0; if(y0<ay0)ay0=y0; if(x1>ax1)ax1=x1; if(y1>ay1)ay1=y1;
+  }
 
   bool init(){
     esp_lcd_rgb_panel_config_t cfg = {};
     cfg.clk_src = LCD_CLK_SRC_DEFAULT;
-    cfg.timings.pclk_hz            = 30000000;   // 7B 1024x600 BLIND best-guess — drifts/wraps? lower to 24/21M; flickers/no-lock? raise toward 37M
+    // 7B 1024x600 timing.  ★ v4.8.14: WAVESHARE FACTORY TIMING (copied verbatim from
+    // their 16_LVGL_V9_DEMO/rgb_lcd_port — the stock firmware that runs this exact
+    // panel ROCK-STEADY at 30 MHz / ~33 Hz in Michael's hands). The old flicker
+    // (12 MHz) and the 20 MHz instability+shadows were NOT a hardware limit — they
+    // were TIGHT PORCHES. Factory H-blanking = 362 vs our old 128; the wide blanking
+    // gives the RGB DMA time to settle/refill between lines, so 30 MHz holds clean
+    // AND high-contrast edges stop smearing (kills the paper-white shadows).
+    // Frame = 1386 x 661 @ 30 MHz = 32.7 Hz. Bounce/pins/callbacks unchanged (proven).
+    cfg.timings.pclk_hz            = 30000000;   // factory value
     cfg.timings.h_res              = KLCD_W;
     cfg.timings.v_res              = KLCD_H;
-    cfg.timings.hsync_pulse_width  = 48;
-    cfg.timings.hsync_back_porch   = 128;   // 7B (was 88 on the 800x480)
-    cfg.timings.hsync_front_porch  = 40;
-    cfg.timings.vsync_pulse_width  = 3;
-    cfg.timings.vsync_back_porch   = 45;    // 7B (was 32 on the 800x480)
-    cfg.timings.vsync_front_porch  = 13;
+    cfg.timings.hsync_pulse_width  = 162;   // ★ factory (was 48)
+    cfg.timings.hsync_back_porch   = 152;   // ★ factory (was 40) — the big one
+    cfg.timings.hsync_front_porch  = 48;    // ★ factory (was 40)
+    cfg.timings.vsync_pulse_width  = 45;    // ★ factory (was 20)
+    cfg.timings.vsync_back_porch   = 13;    // ★ factory (was 4)
+    cfg.timings.vsync_front_porch  = 3;     // ★ factory (was 4)
     cfg.timings.flags.pclk_active_neg = 1;
     cfg.data_width            = 16;
     cfg.bits_per_pixel        = 16;
     cfg.num_fbs               = 2;                // double buffer -> VSYNC page-flip
-    cfg.bounce_buffer_size_px = KLCD_W * 30;      // 7B: more lines (higher pclk = tighter refill window):
-                                                  // SD/JPEG/WiFi PSRAM bursts starved the
-                                                  // LCD DMA at 10 -> image drift/wrap
+    cfg.bounce_buffer_size_px = KLCD_W * 30;      // 30 lines (~60KB SRAM). Bigger window for
+                                                  // the higher pclk; must divide h*v (600/30=20 ok).
+                                                  // SD/JPEG/WiFi PSRAM bursts starve the LCD DMA
+                                                  // if too small -> image drift/wrap.
     cfg.psram_trans_align     = 64;
     cfg.hsync_gpio_num = 46;
     cfg.vsync_gpio_num = 3;
     cfg.de_gpio_num    = 5;
     cfg.pclk_gpio_num  = 7;
     cfg.disp_gpio_num  = -1;
-    int dpins[16] = {14,38,18,17,10, 39,0,45,48,47,21, 1,2,42,41,40};
+    // CONFIRMED 7B esp_lcd order (LSB-first per channel: B0..B4, G0..G5, R0..R4).
+    // Derived from the Mark-Bridges LovyanGFX array (which is MSB-first per channel)
+    // by reversing each colour group — green & red then match the working 7" exactly;
+    // only blue differs (the one channel the 7B wires differently). Using the
+    // un-reversed LovyanGFX order here is what produced the earlier inverted colours.
+    int dpins[16] = {15,14,38,17,10, 39,0,45,48,47,21, 1,2,42,41,40};
     for(int i=0;i<16;i++) cfg.data_gpio_nums[i] = dpins[i];
     cfg.flags.fb_in_psram = 1;
     if(esp_lcd_new_rgb_panel(&cfg,&panel)!=ESP_OK) return false;
@@ -329,7 +373,12 @@ public:
   void setRotation(int r){ flip180=(r==2||r==3); }
   int  width()  const { return KLCD_W; }
   int  height() const { return KLCD_H; }
-  void setBrightness(uint8_t){ /* backlight is expander-driven, always on */ }
+  void setBrightness(uint8_t v){
+    // 7B backlight = IO_EXTENSION PWM reg 0x05, INVERTED (low=bright). Map so a
+    // higher v is brighter; clamp the bright end to ~5 (0 is unreliable full-on).
+    uint8_t pwm = (v >= 250) ? 5 : (uint8_t)(255 - v);
+    Wire.beginTransmission(0x24); Wire.write(0x05); Wire.write(pwm); Wire.endTransmission();
+  }
 
   void setClip(int x0,int y0,int x1,int y1){
     clx0=max(0,x0); cly0=max(0,y0); clx1=min(KLCD_W,x1); cly1=min(KLCD_H,y1);
@@ -338,12 +387,14 @@ public:
   inline void px(int x,int y,uint16_t c){
     if(x<clx0||x>=clx1||y<cly0||y>=cly1||!cb) return;
     cb[y*KLCD_W+x]=c;
+    markDirty(x,y,x+1,y+1);
   }
-  void fillScreen(uint16_t c){ if(!cb)return; for(int i=0;i<KLCD_W*KLCD_H;i++) cb[i]=c; }
+  void fillScreen(uint16_t c){ if(!cb)return; for(int i=0;i<KLCD_W*KLCD_H;i++) cb[i]=c; markDirty(0,0,KLCD_W,KLCD_H); }
   void fillRect(int x,int y,int w,int h,uint16_t c){
     if(!cb)return;
     int x0=max(clx0,x),y0=max(cly0,y),x1=min(clx1,x+w),y1=min(cly1,y+h);
     for(int yy=y0;yy<y1;yy++){ uint16_t* r=cb+yy*KLCD_W; for(int xx=x0;xx<x1;xx++) r[xx]=c; }
+    markDirty(x0,y0,x1,y1);
   }
   void drawRect(int x,int y,int w,int h,uint16_t c){
     fillRect(x,y,w,1,c); fillRect(x,y+h-1,w,1,c); fillRect(x,y,1,h,c); fillRect(x+w-1,y,1,h,c);
@@ -430,6 +481,7 @@ public:
       if(dx+cw>clx1) cw=clx1-dx;
       if(cw>0) memcpy(cb+dy*KLCD_W+dx, img+yy*w+sx, (size_t)cw*2);
     }
+    markDirty(max(clx0,x), max(cly0,y), min(clx1,x+w), min(cly1,y+h));
   }
   // -- touch: raw GT911 -------------------------------------------------------
   void touchProbe(){
@@ -480,18 +532,42 @@ public:
   void display(){
     if(!ok) return;
     uint16_t* dst = backIdx ? fb1 : fb0;
+    uint32_t _tc0=micros();
     if(!flip180){
-      memcpy(dst, cb, (size_t)KLCD_W*KLCD_H*2);
+      // Copy ONLY the dirty region — this frame's box UNION the previous frame's.
+      // The union guarantees each change lands in BOTH framebuffers over two
+      // flips, so a page-flip always presents a complete, coherent image
+      // (no stale halves) while copying a fraction of the old 1.2MB.
+      int ux0=min(dx0,pdx0), uy0=min(dy0,pdy0), ux1=max(dx1,pdx1), uy1=max(dy1,pdy1);
+      if(ux1>ux0 && uy1>uy0){
+        size_t rowbytes=(size_t)(ux1-ux0)*2;
+        for(int yy=uy0; yy<uy1; yy++)
+          memcpy(dst+yy*KLCD_W+ux0, cb+yy*KLCD_W+ux0, rowbytes);
+      }
+      // AUX region (detached small box, e.g. the die) — separate coherent copy
+      int ax0u=min(ax0,pax0), ay0u=min(ay0,pay0), ax1u=max(ax1,pax1), ay1u=max(ay1,pay1);
+      if(ax1u>ax0u && ay1u>ay0u){
+        size_t arb=(size_t)(ax1u-ax0u)*2;
+        for(int yy=ay0u; yy<ay1u; yy++)
+          memcpy(dst+yy*KLCD_W+ax0u, cb+yy*KLCD_W+ax0u, arb);
+      }
     } else {
-      // 180° flip during the copy (ROTATE=180: screen mounted upside-down)
+      // 180° flip during the copy (ROTATE=180: screen mounted upside-down) — full copy
       for(int y=0;y<KLCD_H;y++){
         const uint16_t* s=cb+y*KLCD_W;
         uint16_t* d=dst+(KLCD_H-1-y)*KLCD_W+(KLCD_W-1);
         for(int x=0;x<KLCD_W;x++) *d-- = *s++;
       }
     }
-    esp_lcd_panel_draw_bitmap(panel,0,0,KLCD_W,KLCD_H,dst);  // driver FB ptr -> true page-flip
+    uint32_t _tc1=micros();
+    esp_lcd_panel_draw_bitmap(panel,0,0,KLCD_W,KLCD_H,dst);  // flip (back fb == cb via 2-frame coherence)
     kWaitVsync();                                            // wait for the flip to LATCH
+    uint32_t _tc2=micros();
+    g_perf_copy_us=_tc1-_tc0; g_perf_flip_us=_tc2-_tc1;      // PERF: copy + flip cost
+    pdx0=dx0; pdy0=dy0; pdx1=dx1; pdy1=dy1;                  // roll dirty: prev <- this
+    markDirtyReset();                                        // this <- empty
+    pax0=ax0; pay0=ay0; pax1=ax1; pay1=ay1;                  // roll aux
+    ax0=KLCD_W; ay0=KLCD_H; ax1=0; ay1=0;                    // aux <- empty
     backIdx^=1;
   }
   void init_ok_or_halt(){
@@ -903,7 +979,26 @@ static int   ui_depth = 0;                 // nesting depth so only the outermos
 static inline void uiFlush(){ tft.display(); }
 // RAII guard: wrap each top-level redraw. Nested draws share the frame; the
 // outermost one flushes on scope exit -> one atomic tear-free flip per redraw.
-struct UiFrame { UiFrame(){ ui_depth++; } ~UiFrame(){ if(--ui_depth==0) uiFlush(); } };
+// PERF build: the outermost frame times compose (drawing) and prints the split
+// (compose vs 1.2MB copy vs draw_bitmap+VSYNC), throttled to 5x/sec.
+struct UiFrame {
+  uint32_t _t0;
+  UiFrame(){ if(ui_depth==0) _t0=micros(); ui_depth++; }
+  ~UiFrame(){
+    if(--ui_depth==0){
+      uint32_t compose_us=micros()-_t0;
+      uiFlush();   // sets g_perf_copy_us / g_perf_flip_us
+      static uint32_t _lastP=0;
+      if(millis()-_lastP>200){ _lastP=millis();
+        uint32_t total_us=compose_us+g_perf_copy_us+g_perf_flip_us;
+        Serial.printf("[PERF] compose=%lums  copy=%lums  flip=%lums  TOTAL=%lums (~%lu fps)\n",
+          (unsigned long)(compose_us/1000), (unsigned long)(g_perf_copy_us/1000),
+          (unsigned long)(g_perf_flip_us/1000), (unsigned long)(total_us/1000),
+          (unsigned long)(total_us? 1000000UL/total_us : 0));
+      }
+    }
+  }
+};
 
 static uint16_t crk_hsl(float h,float s,float l){
   h=fmodf(fmodf(h,360.0f)+360.0f,360.0f); s*=0.01f; l*=0.01f;
@@ -2299,7 +2394,7 @@ static void redrawListArea(){ UiFrame _uf; drawFileList(); drawNowPlayingBar(); 
 // ============================================================================
 // BOTTOM BAR
 // ============================================================================
-// v4.8.0-7B: little pictograph glyphs for the list<->reel flip (drawn in the ~10px button circle)
+// v4.8.0-7IN: little pictograph glyphs for the list<->reel flip (drawn in the ~10px button circle)
 static void drawListIcon(int cx,int cy,uint16_t col){
   for(int r=-1;r<=1;r++) UG->fillRect(cx-6,cy+r*5-1,12,2,col);   // three stacked rows
 }
@@ -2312,7 +2407,7 @@ static void drawBottomBar(){ UiFrame _uf;
   int y=LCD_HEIGHT-BOTTOM_H;
   drawGradientBg(0, y, LCD_WIDTH, BOTTOM_H, COL_BAR, COL_PANEL);
   UG->drawFastHLine(0, y, LCD_WIDTH, COL_SEP);
-  const int nb=5; int bw=LCD_WIDTH/nb;   // v4.8.0-7B: REEL is a first-class 5th button
+  const int nb=5; int bw=LCD_WIDTH/nb;   // v4.8.0-7IN: REEL is a first-class 5th button
 
   struct BtnDef { const char* icon; const char* label; uint16_t col; };
   BtnDef btns[5] = {
@@ -2782,7 +2877,7 @@ static bool doSearch(){
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// CAROUSEL — "fake coverflow" reel (v4.8.0-7B: ported from the JC 5.4.x engine)
+// CAROUSEL — "fake coverflow" reel (v4.8.0-7IN: ported from the JC 5.4.x engine)
 // ALL-source only on the 7" for now (GameEntry has no fav/plays fields yet — the
 // middle bottom-bar slot is reserved for FAV/MOST once those land). Center cover
 // full-size, neighbours scaled+squashed+dimmed, looping reel. Center tap = dead
@@ -2798,6 +2893,7 @@ static float g_car_pos0=0,g_car_vel=0,g_car_ivel=0;
 static uint32_t g_car_lastMs=0;
 #define CAR_PX_PER_STEP 160.0f
 static bool  g_car_spin=false, g_car_dieShow=false, g_car_die23=false;
+static bool  g_car_tilesOnly=false;   // motion frame: repaint only the tile band (chrome/title persist)
 static float g_car_spinTarget=0;
 static uint8_t g_car_die=1, g_car_dieTick=0;
 static uint32_t g_car_die_rest_ms=0;
@@ -2988,10 +3084,17 @@ static void carDrawDie(){
 
 static void drawCarousel(){ UiFrame _uf;   // KGfx UiFrame -> one VSYNC flush per reel frame
   int W=LCD_WIDTH,H=LCD_HEIGHT;
-  drawStatusBar();
-  UG->fillRect(0,STATUS_H,W,H-STATUS_H-BOTTOM_H,COL_BG);
-  int n=carN();
   int ccx=W/2, ccy=STATUS_H+16+CAR_TILE/2;
+  if(!g_car_tilesOnly){
+    drawStatusBar();
+    UG->fillRect(0,STATUS_H,W,H-STATUS_H-BOTTOM_H,COL_BG);      // full chrome repaint
+  } else {
+    // MOTION frame: clear ONLY the tile band. Chrome (bars/INSERT), title and
+    // blurb persist untouched from the last full paint -> tiny dirty rect.
+    int bandTop=ccy-CAR_TILE/2-6; if(bandTop<STATUS_H)bandTop=STATUS_H;
+    UG->fillRect(0,bandTop,W,CAR_TILE+12,COL_BG);
+  }
+  int n=carN();
   if(n==0){
     UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextColor(COL_LIT,COL_BG);
     String m="NO GAMES";
@@ -3035,6 +3138,7 @@ static void drawCarousel(){ UiFrame _uf;   // KGfx UiFrame -> one VSYNC flush pe
         UG->setTextSize(1);
       }
     }
+    if(!g_car_tilesOnly){
     // center title
     int gi=g_car_list[carWrap(ci)];
     GameEntry&game=g_games[gi];
@@ -3073,7 +3177,9 @@ static void drawCarousel(){ UiFrame _uf;   // KGfx UiFrame -> one VSYNC flush pe
      UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextColor(TFT_BLACK,bf);
      const char*lbl=isLd?"EJECT":"INSERT";int tw=UG->textWidth(lbl);
      UG->setCursor(g_car_ins_x+(g_car_ins_w-tw)/2,g_car_ins_y+(g_car_ins_h-16)/2);UG->print(lbl);}
+    }  // end if(!g_car_tilesOnly)
   }
+  if(!g_car_tilesOnly){
   // carousel bottom bar: [LIST] | [ALL] | [ROLL]
   int y=H-BOTTOM_H;UG->fillRect(0,y,W,BOTTOM_H,COL_BAR);UG->drawFastHLine(0,y,W,COL_SEP);
   int third=W/3;
@@ -3097,8 +3203,22 @@ static void drawCarousel(){ UiFrame _uf;   // KGfx UiFrame -> one VSYNC flush pe
    UG->fillCircle(dx-o,dy2-o,1,TFT_BLACK);UG->fillCircle(dx+o,dy2+o,1,TFT_BLACK);
    UG->fillCircle(dx+o,dy2-o,1,TFT_BLACK);UG->fillCircle(dx-o,dy2+o,1,TFT_BLACK);
    UG->setTextColor(COL_DIM,COL_BAR);UG->setCursor(2*third+(third-UG->textWidth("ROLL"))/2,y+30);UG->print("ROLL");}
-  if(g_car_dieShow&&carN()>0)carDrawDie();   // dice overlay rides on top
+  }  // end if(!g_car_tilesOnly) bottom bar
+  if(g_car_dieShow&&carN()>0){
+    if(g_car_tilesOnly){
+      // keep the die OUT of the main tile-band box -> its own small aux dirty box,
+      // so a spin frame copies (tile band) + (die) instead of one giant union.
+      int s0=tft.dx0,s1=tft.dy0,s2=tft.dx1,s3=tft.dy1;
+      carDrawDie();
+      int third=LCD_WIDTH/3,S=30,dxp=2*third+(third-S)/2,dyp=LCD_HEIGHT-BOTTOM_H-S-16;
+      tft.markAux(dxp-2,dyp-2,dxp+S+3,dyp+S+3);
+      tft.dx0=s0;tft.dy0=s1;tft.dx1=s2;tft.dy1=s3;   // restore main box (die excluded)
+    } else carDrawDie();
+  }
 }
+// Motion-frame helper: repaint only the tile band (+ die), leaving chrome/title
+// untouched -> partial-flush copies a fraction of the frame. Used by spin/coast/drag.
+static void carDrawMotion(){ g_car_tilesOnly=true; drawCarousel(); g_car_tilesOnly=false; }
 
 static void carEnter(){
   if(!g_car_built){buildThumbs();g_car_built=true;}      // one predictable build pass, first entry
@@ -3179,7 +3299,7 @@ static void carTick(bool touch,uint16_t px,uint16_t py,uint32_t now){
         g_car_pos=g_car_pos0-((float)((int)px-g_car_x0))/CAR_PX_PER_STEP;
         uint32_t dt=now-g_car_lastMs;
         if(dt>0){g_car_vel=((float)((int)px-g_car_lastX))/(float)dt;g_car_lastX=px;g_car_lastMs=now;}
-        drawCarousel();
+        carDrawMotion();
       }
     }
     return;
@@ -3202,7 +3322,7 @@ static void carTick(bool touch,uint16_t px,uint16_t py,uint32_t now){
       g_car_die=1+(uint8_t)(esp_random()%6);
       g_car_die_rest_ms=now;                             // arm the auto-hide timer
     }
-    drawCarousel();
+    if(g_car_spin) carDrawMotion(); else drawCarousel();   // settle frame paints full (title/chrome)
     return;
   }
   // auto-hide the rested die a few seconds after the roll settles
@@ -3217,7 +3337,7 @@ static void carTick(bool touch,uint16_t px,uint16_t py,uint32_t now){
       if(fabsf(dd)<0.01f){g_car_pos=(float)carWrap((int)target);g_car_coast=false;}
       else g_car_pos+=dd*0.35f;
     }
-    drawCarousel();                                      // final settled draw decodes covers
+    if(g_car_coast) carDrawMotion(); else drawCarousel();   // settle frame paints full
     return;
   }
   // Idle prefetch: while the reel rests, quietly warm the neighbours (one per ~150 ms).
@@ -3769,4 +3889,4 @@ static void handleTap(uint16_t px,uint16_t py){
     }
     return;
   }
-}
+}
