@@ -1,7 +1,7 @@
 // ESP32-S3 (Guition JC3248W535C) — USB MSC RAM Disk + ADF/DSK Browser
 // Full port of Waveshare 7" firmware v3.4.7 (Mez UI) onto Dimi's hardware layer
 // Board: ESP32S3 Dev Module | USB-OTG (TinyUSB) | CDC DISABLED | OPI PSRAM
-// JC4827W543 4.3in variant | Flash: 4MB QIO | PSRAM: OPI (Octal 8MB) | Partition: Minimal SPIFFS (1.9MB APP with OTA) for SD-update | 240MHz
+// JC4827W543 4.3in variant (N4R8) | Flash 4MB QIO 80MHz | PSRAM OPI (Octal 8MB) | Partition: Minimal SPIFFS (1.9MB APP with OTA) — already max for a 4MB chip | 240MHz
 
 #include <Arduino.h>
 #include "USB.h"
@@ -2394,12 +2394,14 @@ static void svFetchWireless(){
 }
 
 static bool doLoadSelected(const String&adfPath){
-  // v4.9: HD can't be flung — no wireless dongle can hold a 1.76MB image (the
-  // Super Mini's 2MB PSRAM can't, and the current XIAO build is DD too). The JC
-  // does HD STANDALONE (cable); wireless stays DD-only until an HD dongle exists.
-  // (When one does, the pairing handshake will advertise capacity and this gates
-  // by that instead of blanket-blocking.) Standalone load of HD is unaffected.
-  if(g_wireless_mode && g_mode==MODE_ADF && isHDImage(adfPath)){
+  // v4.9 / v5.x: HD (1.76MB) over wireless is now gated by the dongle's advertised
+  // capability (pad[1] of the pairing reply). An HD-capable XIAO (2MB ramdisk,
+  // g_espnow_dongle_board==1) may receive it; the Super Mini and old DD-only
+  // dongles (board 0) still can't hold it, so they stay blocked. Multicast/
+  // Hivemind stays blocked too (a mixed fleet may include a DD dongle).
+  // Standalone HD load (cable) is unaffected either way.
+  bool hdDongleReady = espnowIsPaired() && g_espnow_dongle_board==1 && !g_hivemind;
+  if(g_wireless_mode && g_mode==MODE_ADF && isHDImage(adfPath) && !hdDongleReady){
     gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
     gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_PANEL);gfx_setCursor(6,STATUS_H+16);gfx_print(T(L_HD_NO_WIRELESS));
     gfx_setTextColor(COL_LIT,COL_PANEL);

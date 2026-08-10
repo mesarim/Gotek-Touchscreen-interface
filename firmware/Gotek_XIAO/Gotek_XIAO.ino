@@ -31,7 +31,7 @@
 #include "esp_wifi.h"
 #include <LittleFS.h>
 
-#define FW_VERSION     "v3.5.0-xiao"   // XIAO build of the proven v3.4.0 protocol (saves + TCP EJECT 0x03/0x04). DD only. Wire-compatible with the Super Mini.
+#define FW_VERSION     "v3.6.0-xiao"   // v3.6.0: HD-capable — 2MB ramdisk (2-sector clusters, like the JC) + pad[1]=1 HD marker so the GTi may fling 1.76MB. Wire-compatible with the Super Mini (which stays DD).
 #define ESPNOW_CHANNEL 6
 #define LED_RED        1   // GP1 — status/attention
 #define LED_BLUE       2   // GP2 — activity
@@ -74,9 +74,10 @@ struct PktDirty  { uint8_t type; uint32_t load_id; uint16_t dirty_count;
 
 // FAT12 geometry
 #define SECTOR_SIZE      512
-#define TOTAL_SECTORS    2048
+#define TOTAL_SECTORS    4096          // v3.6.0: 2MB RAM disk so HD (1.76MB) images fit
 #define RESERVED_SECTORS 1
 #define SECTORS_PER_FAT  6
+#define SECTORS_PER_CLUSTER 2          // v3.6.0: 1KB clusters -> ~2042 clusters, stays FAT12 (limit 4084), keeps DATA_LBA=11
 #define NUM_FATS         1
 #define ROOT_ENTRIES     64
 #define ROOT_DIR_SECTORS 4
@@ -87,7 +88,7 @@ struct PktDirty  { uint8_t type; uint32_t load_id; uint16_t dirty_count;
 static uint8_t* g_disk = nullptr;
 
 // ── Save writeback state ────────────────────────────────────────────────────
-#define IMG_MAX_SECTORS (TOTAL_SECTORS - DATA_LBA)      // 2037
+#define IMG_MAX_SECTORS (TOTAL_SECTORS - DATA_LBA)      // 4085 (v3.6.0: 2MB disk)
 static uint8_t  g_dirty[(IMG_MAX_SECTORS+7)/8];         // live map (filled by onWrite)
 static uint8_t  g_snap [(IMG_MAX_SECTORS+7)/8];         // snapshot streamed to the GTi
 static volatile uint16_t g_dirty_count   = 0;
@@ -184,7 +185,7 @@ static void build_volume(const char* outName, uint32_t fsz) {
   memset(g_disk,0,TOTAL_SECTORS*SECTOR_SIZE);
   uint8_t* bs=g_disk;
   bs[0]=0xEB;bs[1]=0x3C;bs[2]=0x90;memcpy(&bs[3],"MSDOS5.0",8);
-  wr16(bs,11,SECTOR_SIZE);bs[13]=1;wr16(bs,14,RESERVED_SECTORS);bs[16]=NUM_FATS;
+  wr16(bs,11,SECTOR_SIZE);bs[13]=SECTORS_PER_CLUSTER;wr16(bs,14,RESERVED_SECTORS);bs[16]=NUM_FATS;
   wr16(bs,17,ROOT_ENTRIES);wr16(bs,19,TOTAL_SECTORS);bs[21]=0xF8;
   wr16(bs,22,SECTORS_PER_FAT);wr16(bs,24,32);wr16(bs,26,64);
   bs[36]=0x80;bs[38]=0x29;wr32(bs,39,0x12345678);
@@ -192,7 +193,7 @@ static void build_volume(const char* outName, uint32_t fsz) {
   bs[510]=0x55;bs[511]=0xAA;
   uint8_t* fat=g_disk+RESERVED_SECTORS*SECTOR_SIZE;
   fat[0]=0xF8;fat[1]=0xFF;fat[2]=0xFF;
-  uint32_t need=(fsz+511)/512;
+  uint32_t clb=(uint32_t)SECTORS_PER_CLUSTER*512; uint32_t need=(fsz+clb-1)/clb;
   for(uint32_t i=0;i<need;i++){
     uint16_t c=(uint16_t)(2+i); fat12_set(fat,c,(i==(need-1))?0x0FFF:(c+1));
   }
@@ -276,6 +277,7 @@ static void handleESPNOW(const uint8_t* data, int len) {
     WiFi.softAPmacAddress(reply.mac);  // use AP MAC
     strncpy(reply.ip, AP_IP, 15);
     reply.pad[0] = SAVE_PROTO_VER;
+    reply.pad[1] = 1;                  // v3.6.0: 1 = HD-capable (2MB ramdisk) — GTi may fling 1.76MB HD
     XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
     if (dst) dst->send_pkt((uint8_t*)&reply, sizeof(reply));
 
@@ -578,6 +580,7 @@ void setup() {
     WiFi.softAPmacAddress(hello.mac);
     strncpy(hello.ip, AP_IP, 15);
     hello.pad[0] = SAVE_PROTO_VER;
+    hello.pad[1] = 1;                  // v3.6.0: HD-capable marker
     if (_bcastPeer) _bcastPeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     if (_wavePeer)  _wavePeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     dots++;
@@ -604,6 +607,7 @@ void setup() {
       WiFi.softAPmacAddress(confirm.mac);
       strncpy(confirm.ip, AP_IP, 15);
       confirm.pad[0] = SAVE_PROTO_VER;
+      confirm.pad[1] = 1;              // v3.6.0: HD-capable marker
       _wavePeer->send_pkt((uint8_t*)&confirm, sizeof(confirm));
       break;
     }

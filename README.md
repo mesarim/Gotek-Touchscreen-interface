@@ -9,6 +9,8 @@ floppy — wrapped in a demoscene-flavoured UI (cracktro splash, copper bars, sc
 
 Built by **Mez** and **Dimmy** (Dimitri Hilverda) — **OMEGAWARE**.
 
+💬 **Community & support:** join the [OMEGAWARE Discord](https://discord.gg/7gY4PKUnnf) for help, beta/HD testing, and build chat.
+
 ---
 
 **Current release: A.5.0.0** — the save-game era, proven on a real Amiga and now the recommended stable build.
@@ -341,7 +343,7 @@ build), ESP32 Arduino core.
 
 ## Support
 
-The GTi firmware is free and open-source — flash it, fork it, keep it. If it's useful to you, you can drop Mez a tip at **[ko-fi.com/mesarim](https://ko-fi.com/mesarim)** ☕ (no pressure; the code stays free). The full roll-call lives on the [contributors page](docs/contributors.html).
+The GTi firmware is free and open-source — flash it, fork it, keep it. Questions, bug reports and beta testing happen on the **[OMEGAWARE Discord](https://discord.gg/7gY4PKUnnf)**. If it's useful to you, you can drop Mez a tip at **[ko-fi.com/mesarim](https://ko-fi.com/mesarim)** ☕ (no pressure; the code stays free). The full roll-call lives on the [contributors page](docs/contributors.html).
 
 ## Licence
 

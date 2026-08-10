@@ -28,6 +28,7 @@ bool espnowXiaoOnline() {
 
 // ── Save writeback state (v4.8.0) ──
 volatile uint8_t  g_espnow_dongle_caps  = 0;
+volatile uint8_t  g_espnow_dongle_board = 0;
 volatile uint32_t g_espnow_load_id      = 0;
 volatile bool     g_espnow_dirty        = false;
 volatile uint32_t g_espnow_dirty_loadid = 0;
@@ -104,7 +105,8 @@ static void handleIncoming(const uint8_t* data, int len) {
     g_espnow_paired = true;
     g_espnow_link_just_established = true;
     g_espnow_xiao_last_seen = millis();
-    g_espnow_dongle_caps = p->pad[0];   // v3.2.0+ dongles advertise the save protocol here
+    g_espnow_dongle_caps  = p->pad[0];   // v3.2.0+ dongles advertise the save protocol here
+    g_espnow_dongle_board = p->pad[1];   // v5.x: 1 = HD-capable dongle (XIAO 8MB); 0 = DD-only / old dongle
 
     // Register XIAO as direct peer
     if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
