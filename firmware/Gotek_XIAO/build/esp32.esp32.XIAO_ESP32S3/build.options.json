@@ -1,0 +1,10 @@
+{
+  "additionalFiles": "..\\..",
+  "builtInLibrariesFolders": "C:\\Users\\mesar\\AppData\\Local\\Arduino15\\libraries",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "",
+  "fqbn": "esp32:esp32:XIAO_ESP32S3:UploadSpeed=921600,USBMode=default,CDCOnBoot=cdc,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio,FlashSize=8M,PartitionScheme=tinyuf2_noota,DebugLevel=none,PSRAM=opi,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default",
+  "hardwareFolders": "C:\\Users\\mesar\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.11,C:\\Users\\mesar\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.11",
+  "otherLibrariesFolders": "c:\\Users\\mesar\\OneDrive\\Documents\\Arduino\\libraries",
+  "sketchLocation": "D:\\GitClone\\Gotek-Touchscreen-interface\\firmware\\Gotek_XIAO"
+}

@@ -1,6 +1,10 @@
-# Name,   Type, SubType, Offset,  Size, Flags
-nvs,      data, nvs,     0x9000,  0x5000,
-otadata,  data, ota,     0xe000,  0x2000,
-app0,     app,  ota_0,   0x10000, 0x1F0000,
-app1,     app,  ota_1,   0x200000,0x1F0000,
-coredump, data, coredump,0x3F0000,0x10000,
+# ESP32-S3 Guition JC3248W535C (N16R8 — 16MB flash / 8MB OPI PSRAM)
+# Maximised dual-OTA layout: two ~6.9MB app slots (SD firmware-update writes the
+# inactive slot) + a 2.8MB SPIFFS. Uses the full 16MB. PSRAM is unaffected.
+# Sketch-local partitions.csv overrides the IDE Partition Scheme menu.
+# Name,     Type, SubType,  Offset,    Size,      Flags
+nvs,        data, nvs,      0x9000,    0x5000,
+otadata,    data, ota,      0xe000,    0x2000,
+app0,       app,  ota_0,    0x10000,   0x6A0000,
+app1,       app,  ota_1,    0x6B0000,  0x6A0000,
+spiffs,     data, spiffs,   0xD50000,  0x2B0000,
