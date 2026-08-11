@@ -50,7 +50,7 @@
 #include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 
 // ---------- Version ----------
-#define FW_VERSION  "v4.8.1-7IN"
+#define FW_VERSION  "v4.10.1-7IN"
 
 // ---------- ESP-NOW server (peer-to-peer, no WiFi AP needed) ----------
 #include "espnow_server.h"
@@ -141,7 +141,7 @@ static float g_font_mult = 1.0f;   // multiplier applied to every glyph
 #define KLCD_H 480
 // GT911 address is probed at boot (0x5D after our deterministic reset; 0x14 fallback)
 
-// 6x8 bitmap font, ASCII 32..126 (also used by the cracktro as crk_font).
+// 6x8 bitmap font, ASCII 32..126.
 static const uint8_t crk_font[95][6] PROGMEM = {
   {0x00,0x00,0x00,0x00,0x00,0x00},
   {0x00,0x00,0x4F,0x00,0x00,0x00},
@@ -724,10 +724,16 @@ static bool isGenImage(const String& u){
   if(u.endsWith(".INDEX")||u.endsWith(".GAMECACHE"))return false;
   return true;
 }
+// ── v4.9.1-7IN Library Categories (CONFIG.TXT gated; folders auto-classified by content) ──
+static bool   g_categories=false;   // CATEGORIES=ON : browse image-less folders as categories
+static bool   g_nesting=false;      // NESTING=ON : allow category recursion beyond one level
+static String g_libpath="";         // current category path under the mode root ("" = root)
+static std::vector<String> g_cats;  // category sub-folder names at the current level
 static bool listImages(fs::FS& fs, std::vector<String>& out) {
   out.clear();
   String modeDir = (g_mode == MODE_ADF) ? "/ADF" : (g_mode == MODE_DSK) ? "/DSK" : "/GENERIC";
   String ext1    = (g_mode == MODE_ADF) ? ".ADF" : ".DSK";
+  if(g_categories){ g_cats.clear(); if(g_libpath.length()) modeDir += g_libpath; }   // v4.9.1-7IN
 
   // Primary scan: /ADF/<GameFolder>/<file>.adf  or  /ADF/<file>.adf
   File root = SD_MMC.open(modeDir.c_str());
@@ -742,6 +748,7 @@ static bool listImages(fs::FS& fs, std::vector<String>& out) {
         { String leaf=entryName; int sl2=leaf.lastIndexOf('/'); if(sl2>=0) leaf=leaf.substring(sl2+1); leaf.toUpperCase();
           if(leaf=="SAMPLE" || leaf.startsWith(".")){ gameDir.close(); continue; } }
         // Subfolder: /ADF/GameName/GameName.adf
+        size_t _imgs0=out.size();   // v4.9.1-7IN: a child dir that yields NO disk images = a category
         File entry;
         while ((entry = gameDir.openNextFile())) {
           String fname = entry.name();
@@ -754,6 +761,9 @@ static bool listImages(fs::FS& fs, std::vector<String>& out) {
             out.push_back(fullPath);
           }
           entry.close();
+        }
+        if(g_categories && out.size()==_imgs0 && (g_libpath.length()==0 || g_nesting)){   // v4.9.1-7IN category
+          String _cn=entryName; int _cs=_cn.lastIndexOf('/'); if(_cs>=0)_cn=_cn.substring(_cs+1); g_cats.push_back(_cn);
         }
       } else {
         // Flat: /ADF/GameName.adf
@@ -772,7 +782,7 @@ static bool listImages(fs::FS& fs, std::vector<String>& out) {
 
   // Fallback: also scan root for any .ADF/.DSK files (legacy / flat SD layout)
   // Only add if no file with the same basename already exists from subfolder scan
-  File rootDir = (g_mode==MODE_GEN) ? File() : SD_MMC.open("/");   // GEN scans /GENERIC only
+  File rootDir = (g_mode==MODE_GEN || (g_categories && g_libpath.length())) ? File() : SD_MMC.open("/");   // GEN scans /GENERIC only; skip root fallback inside a category
   if (rootDir) {
     File entry;
     while ((entry = rootDir.openNextFile())) {
@@ -865,31 +875,16 @@ static bool getTouchXY(uint16_t* x,uint16_t* y){
 
 static bool  g_info_showing    = false;
 static int   g_info_pair_btn_y = 0;
+static int   g_info_lang_btn_y = 0;   // v4.10.1-7IN INFO-panel language button Y
 static void  doPairNow();  // defined after layout constants
 
-#define NUM_STARS 120
-static int16_t star_x[NUM_STARS], star_y[NUM_STARS], star_speed[NUM_STARS];
-static bool g_loop_cracktro  = false;  // set by LOOP=1 in CONFIG.TXT
 static bool g_wireless_mode  = false;  // set by MODE=WIRELESS in CONFIG.TXT
 static int  g_rot            = 0;      // CONFIG.TXT ROTATE= : LovyanGFX rotation. 0=landscape, 2=180 flip. (90/270 portrait = stage 2)
 
-static void initStars() {
-  for(int i=0;i<NUM_STARS;i++){
-    star_x[i]=random(0,gW); star_y[i]=random(0,gH); star_speed[i]=random(1,4);
-  }
-}
-
-
-// (crk_font 6x8 table moved up into the K display engine — shared with KGfx text)
-#define CRK_RGB(r,g,b) ((uint16_t)((((r)&0xF8)<<8)|(((g)&0xFC)<<3)|((b)>>3)))
-#define CRK_SB 45
-static const char* CRK_SCROLL="        OMEGAWARE PRESENTS ... THE GTi ... THE FLOPPY FLINGER THINGER ... CODED BY MEZ & DIMMY ... A LITTLE TRIBUTE TO THE AMIGA CRACKTRO LEGENDS ... GREETINGS TO EVERYONE KEEPING THE SCENE ALIVE ... NOW GO LOAD A GAME ...        ";
-static int g_cracktro = 0;   // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or 0 = random each boot
 // ── K rendering targets ─────────────────────────────────────────────────────
-// Everything (UI and cracktro) draws into the ONE KGfx compose buffer; a flush
+// Everything (the whole UI) draws into the ONE KGfx compose buffer; a flush
 // copies it to the hidden driver framebuffer and page-flips at VSYNC. The old
 // LovyanGFX sprite machinery is gone — the flip IS the double buffer now.
-static KGfx* crkG = &tft;                  // cracktro draw target
 static KGfx* UG   = &tft;                  // UI draw target
 static int   ui_depth = 0;                 // nesting depth so only the outermost redraw pushes
 
@@ -898,142 +893,6 @@ static inline void uiFlush(){ tft.display(); }
 // outermost one flushes on scope exit -> one atomic tear-free flip per redraw.
 struct UiFrame { UiFrame(){ ui_depth++; } ~UiFrame(){ if(--ui_depth==0) uiFlush(); } };
 
-static uint16_t crk_hsl(float h,float s,float l){
-  h=fmodf(fmodf(h,360.0f)+360.0f,360.0f); s*=0.01f; l*=0.01f;
-  float c=(1.0f-fabsf(2.0f*l-1.0f))*s;
-  float x=c*(1.0f-fabsf(fmodf(h/60.0f,2.0f)-1.0f));
-  float m=l-c*0.5f,r,g,b; int seg=((int)(h/60.0f))%6;
-  switch(seg){case 0:r=c;g=x;b=0;break;case 1:r=x;g=c;b=0;break;case 2:r=0;g=c;b=x;break;
-    case 3:r=0;g=x;b=c;break;case 4:r=x;g=0;b=c;break;default:r=c;g=0;b=x;break;}
-  return CRK_RGB((uint8_t)((r+m)*255.0f),(uint8_t)((g+m)*255.0f),(uint8_t)((b+m)*255.0f));
-}
-static inline uint16_t crk_hue(float h){return crk_hsl(h,100.0f,55.0f);}
-static uint16_t crk_lerp(int r1,int g1,int b1,int r2,int g2,int b2,float k){
-  if(k<0)k=0; if(k>1)k=1;
-  return CRK_RGB((uint8_t)(r1+(r2-r1)*k),(uint8_t)(g1+(g2-g1)*k),(uint8_t)(b1+(b2-b1)*k));
-}
-static void crk_line(int x0,int y0,int x1,int y1,uint16_t c){
-  int dx=abs(x1-x0),dy=-abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1,err=dx+dy;
-  for(int gd=0;gd<6000;gd++){crkG->drawPixel(x0,y0,c);if(x0==x1&&y0==y1)break;
-    int e2=2*err;if(e2>=dy){err+=dy;x0+=sx;}if(e2<=dx){err+=dx;y0+=sy;}}
-}
-// transparent pixel glyphs (foreground only), scaled 6x8 font
-static void crk_char(char ch,int x,int y,int sz,uint16_t col){
-  if(ch<32||ch>126)return; const uint8_t*d=crk_font[ch-32];
-  for(int k=0;k<6;k++){uint8_t bits=pgm_read_byte(&d[k]);
-    for(int r=0;r<8;r++) if(bits&(1<<r)) crkG->fillRect(x+k*sz,y+r*sz,sz,sz,col);}
-}
-static int  crk_txtW(const char*s,int sz){return (int)strlen(s)*6*sz;}
-static void crk_txt(int x,int y,const char*s,int sz,uint16_t col){for(int i=0;s[i];i++)crk_char(s[i],x+i*6*sz,y,sz,col);}
-static void crk_txtC(int cx,int y,const char*s,int sz,uint16_t col){crk_txt(cx-crk_txtW(s,sz)/2,y,s,sz,col);}
-static void crk_txtSh(int cx,int y,const char*s,int sz,uint16_t col){int x=cx-crk_txtW(s,sz)/2;crk_txt(x+2,y+2,s,sz,CRK_RGB(5,6,12));crk_txt(x,y,s,sz,col);}
-static void crk_stars(){
-  for(int i=0;i<NUM_STARS;i++){star_x[i]-=star_speed[i]; if(star_x[i]<0){star_x[i]=gW-1; star_y[i]=random(0,gH-CRK_SB);}
-    uint16_t c=star_speed[i]==3?TFT_WHITE:star_speed[i]==2?CRK_RGB(159,180,214):CRK_RGB(66,80,110);
-    int z=star_speed[i]>2?3:2; crkG->fillRect(star_x[i],star_y[i],z,z,c);}
-}
-static void crk_bar(int cy,int h,float hue){
-  for(int i=-h/2;i<h/2;i++){float l=62.0f-fabsf((float)i)/(h/2.0f)*56.0f; crkG->fillRect(0,cy+i,gW,1,crk_hsl(hue,100.0f,l));}
-}
-static void crk_scroller(float t,uint16_t col,float amp,bool rainbow){
-  const int sz=3,cw=18; int slen=strlen(CRK_SCROLL);
-  long cs=(long)(t*0.16f); int sc=(int)(cs/cw),pxo=(int)(cs%cw);
-  crkG->fillRect(0,gH-CRK_SB,gW,CRK_SB,CRK_RGB(5,7,15));
-  for(int c=0;c<gW/cw+3;c++){char ch=CRK_SCROLL[(((sc+c)%slen)+slen)%slen]; int x=-pxo+c*cw;
-    int y=gH-CRK_SB+8+(int)(sinf(x*0.02f+t*0.004f)*amp);
-    crk_char(ch,x,y,sz, rainbow?crk_hue(x*0.9f+t*0.2f):col);}
-}
-
-// 1: COPPER CLASSIC
-static void crkCopper(float t){
-  crkG->fillScreen(CRK_RGB(4,6,13)); crk_stars();
-  for(int b=0;b<3;b++){int cy=(int)(225+b*52+sinf(t*0.0022f+b*1.4f)*40); crk_bar(cy,45,t*0.06f+b*70);}
-  crk_txtC(gW/2,50,"OMEGAWARE",7,crk_hue(t*0.12f));
-  crk_txtC(gW/2,130,"* MEZ & DIMMY *",3,CRK_RGB(174,187,208));
-  crk_scroller(t,CRK_RGB(255,224,0),18,false);
-}
-// 2: STARFIELD
-static void crkStar(float t){
-  crkG->fillScreen(CRK_RGB(2,3,10)); crk_stars(); crk_stars();
-  int bx=(int)(gW/2+sinf(t*0.0016f)*250), by=(int)(180+sinf(t*0.0025f)*80);
-  crk_txtSh(bx,by,"OMEGAWARE",5,crk_hsl(t*0.1f,100.0f,60.0f));
-  crk_txtC(bx,by+52,"INTO THE VOID",2,CRK_RGB(127,208,255));
-  crk_scroller(t,0,15,true);
-}
-// 3: RAINBOW RASTER
-static void crkRaster(float t){
-  { int st=(gH>600)?2:1; for(int y=0;y<gH-CRK_SB;y+=st) crkG->fillRect(0,y,gW,st,crk_hsl(y*0.9f+t*0.16f,100.0f,50.0f)); }
-  crkG->fillRect(80,160,gW-160,140,CRK_RGB(6,8,18)); crkG->drawRect(80,160,gW-160,140,TFT_WHITE);
-  crk_txtC(gW/2,190,"OMEGAWARE",7,TFT_WHITE);
-  crk_txtC(gW/2,262,"CRACKED - TRAINED - LOADED",2,CRK_RGB(255,233,168));
-  crk_scroller(t,TFT_WHITE,15,false);
-}
-// 4: PLASMA
-static void crkPlasma(float t){
-  const int bs=(gH>600)?16:10;
-  for(int y=0;y<gH-CRK_SB;y+=bs)for(int x=0;x<gW;x+=bs){
-    float v=sinf(x*0.02f+t*0.003f)+sinf(y*0.03f+t*0.0042f)+sinf((x+y)*0.017f+t*0.002f);
-    crkG->fillRect(x,y,bs,bs,crk_hsl(v*60.0f+t*0.12f,90.0f,56.0f));}
-  crk_txtSh(gW/2,85,"OMEGAWARE",7,TFT_WHITE);
-  crk_txtC(gW/2,165,"MELT YOUR EYES",3,CRK_RGB(10,10,20));
-  crk_scroller(t,TFT_WHITE,18,false);
-}
-// 5: BOING BALL
-static void crkBoing(float t){
-  crkG->fillScreen(CRK_RGB(12,12,22));
-  uint16_t grd=CRK_RGB(70,36,96);
-  for(int x=0;x<=gW;x+=52) crkG->fillRect(x,90,1,gH-CRK_SB-90,grd);
-  for(int y=90;y<=gH-CRK_SB;y+=42) crkG->fillRect(0,y,gW,1,grd);
-  int bx=(int)(gW/2+sinf(t*0.0016f)*250), gy=gH-CRK_SB-30, by=(int)(gy-fabsf(sinf(t*0.004f))*180), r=70;
-  for(int yy=-8;yy<=8;yy++){int w=(int)(r*0.9f*sqrtf(1.0f-(yy/8.0f)*(yy/8.0f))); crkG->fillRect(bx-w,gy+8+yy,2*w+1,1,CRK_RGB(8,8,14));}
-  float cell=r/3.2f, ph=fmodf(t*0.06f,cell*2);
-  for(int yy=-r;yy<=r;yy++){int hw=(int)sqrtf((float)(r*r-yy*yy));
-    for(int xx=-hw;xx<=hw;xx++){int cc=(((int)floorf((xx+ph)/cell))+((int)floorf((float)yy/cell)))&1;
-      crkG->drawPixel(bx+xx,by+yy, cc?CRK_RGB(255,38,38):CRK_RGB(242,242,242));}}
-  crkG->drawCircle(bx,by,r,CRK_RGB(122,0,0));
-  crk_txtC(gW/2,40,"OMEGAWARE",5,CRK_RGB(255,59,59));
-  crk_scroller(t,CRK_RGB(255,102,102),13,false);
-}
-// 6: SYNTHWAVE
-static void crkSynth(float t){
-  { int st=(gH>600)?2:1; for(int y=0;y<gH;y+=st){float f=(float)y/gH; uint16_t col;
-    if(f<0.52f) col=crk_lerp(24,11,51,90,26,110,f/0.52f);
-    else        col=crk_lerp(11,10,26,4,4,12,(f-0.53f)/0.47f);
-    crkG->fillRect(0,y,gW,st,col);} }
-  for(int i=0;i<40;i++) crkG->drawPixel((i*53+7)%gW,(i*29)%230,TFT_WHITE);
-  int sunx=gW/2,suny=250,sr=88;
-  for(int yy=-sr;yy<=0;yy++){int w=(int)sqrtf((float)(sr*sr-yy*yy)); crkG->fillRect(sunx-w,suny+yy,2*w,1,CRK_RGB(255,91,138));}
-  for(int i=0;i<7;i++){int yy=178+i*12; crkG->fillRect(sunx-90,yy,180,4+i,CRK_RGB(24,11,51));}
-  uint16_t grc=CRK_RGB(0,229,255); int hz=264;
-  for(int i=0;i<9;i++){int yy=hz+(int)(i*i*3.6f); if(yy<gH) crkG->fillRect(0,yy,gW,1,grc);}
-  for(int x=-8;x<=16;x++){int p2=gW/2+x*90; int x0=gW/2+(int)((p2-gW/2)*0.18f); crk_line(x0,hz,p2,gH,grc);}
-  crk_txtSh(gW/2,60,"OMEGAWARE",5,CRK_RGB(49,232,255));
-  crk_txtC(gW/2,112,"RETRO FUTURE",2,CRK_RGB(255,122,176));
-  crk_scroller(t,CRK_RGB(255,79,160),13,false);
-}
-
-// Boot cracktro runner. style 1..6 forces a style, 0 = random each boot.
-// Renders each frame into an off-screen PSRAM sprite, then blits it whole — the
-// per-pixel work happens off-panel so the RGB display never shows a half-drawn frame (no flicker).
-static void drawCracktro(int style){
-  int s=(style>=1&&style<=6)?(style-1):(int)(esp_random()%6);
-  initStars();
-  unsigned long startMs=millis();
-  UG->fillScreen(TFT_BLACK); tft.display();
-  // K: no sprite needed — every frame renders into the compose buffer, then
-  // display() page-flips it at VSYNC. Atomic by construction.
-  while(true){
-    if(Touch_ReadFrame()){unsigned long t0=millis();while(Touch_ReadFrame()&&millis()-t0<500)delay(10);break;}
-    if(!g_loop_cracktro && millis()-startMs>=6000) break;
-    float t=(float)(millis()-startMs);
-    switch(s){case 0:crkCopper(t);break;case 1:crkStar(t);break;case 2:crkRaster(t);break;
-      case 3:crkPlasma(t);break;case 4:crkBoing(t);break;default:crkSynth(t);break;}
-    if(((int)(t/450.0f))%2) crk_txtC(gW/2,gH-CRK_SB-26,"TAP TO CONTINUE",2,CRK_RGB(150,168,200));
-    tft.display();
-    delay(2);
-  }
-  UG->fillScreen(TFT_BLACK); tft.display();
-}
 
 // ============================================================================
 // ── Layout geometry — now runtime variables (not #defines) so relayout() can
@@ -1228,13 +1087,15 @@ static void ensureConfig(){
         "# Edit this file to customise behaviour.\n"
         "#\n"
         "THEME=0\n"
-        "LOOP=0\n"
-        "# Boot cracktro style: 0=random each boot, 1=COPPER 2=STARFIELD\n"
-        "# 3=RAINBOW 4=PLASMA 5=BOING 6=SYNTHWAVE\n"
-        "CRACKTRO=0\n"
         "# Screen rotation (reboot to apply): 0=landscape, 180=flipped (mount upside-down). 90/270 portrait coming soon.\n"
         "ROTATE=0\n"
         "MODE=STANDALONE\n"
+        "# CATEGORIES: OFF=flat library (classic). ON=browse by folder category (a folder with no disk images, only subfolders, is a category).\n"
+        "CATEGORIES=OFF\n"
+        "# NESTING: OFF=one category level. ON=allow sub-categories (folders within category folders).\n"
+        "NESTING=OFF\n"
+        "# Language: EN FR IT ES DE\n"
+        "LANG=EN\n"
         "LASTMODE=ADF\n"
         "# Save-games: OFF = lost on eject (classic), COPY = kept as GameName.sav.adf\n"
         "# beside the master (recommended), OVERWRITE = patch the master in place.\n"
@@ -1331,29 +1192,90 @@ static void ensureConfig(){
   if(!SD_MMC.exists("/GENERIC")) SD_MMC.mkdir("/GENERIC");   // v5.2 GEN: generic / any-machine library
 }
 
-// After a firmware update adds a new key, an existing CONFIG.TXT won't have it.
-// Append CRACKTRO= (with legend) if missing, so upgraders get an editable line
-// without their other settings being touched. Only writes when it's actually absent.
-static void selfHealConfig(){
-  File fr = SD_MMC.open("/CONFIG.TXT", FILE_READ);
-  if(!fr) return;
-  bool hasCracktro=false; String all="";
-  while(fr.available()){ String line=fr.readStringUntil('\n'); all+=line+"\n";
-    String t=line; t.trim(); if(t.startsWith("CRACKTRO=")) hasCracktro=true; }
-  fr.close();
-  if(hasCracktro) return;
-  File fw = SD_MMC.open("/CONFIG.TXT", FILE_WRITE);
-  if(fw){ fw.print(all);
-    fw.print("# Boot cracktro style: 0=random each boot, 1=COPPER 2=STARFIELD\n"
-             "# 3=RAINBOW 4=PLASMA 5=BOING 6=SYNTHWAVE\n"
-             "CRACKTRO=0\n");
-    fw.close(); }
-}
 
 static void applyFont(int f){   // v4.6.5-7IN
   g_font=(f<0)?0:(f>2)?2:f;
   g_font_mult=(g_font==0)?0.85f:(g_font==2)?1.35f:1.0f;
 }
+// ============================================================================
+// v4.10.0-7IN: LANGUAGES (i18n) — ported from the JC boards. 5 languages EN/FR/IT/ES/DE.
+// ============================================================================
+enum { LANG_EN=0, LANG_FR, LANG_IT, LANG_ES, LANG_DE, LANG_N };
+static int g_lang=0;
+static const char* const LANG_NAMES[LANG_N]={"EN","FR","IT","ES","DE"};
+enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_STR_N };
+static const char* const LSTR[L_STR_N][LANG_N]={
+  /*L_PREV          */ {"PREV","PREC","PREC","ANT","VORH"},
+  /*L_NEXT          */ {"NEXT","SUIV","SUCC","SIG","WEIT"},
+  /*L_THEME         */ {"THEME","THEME","TEMA","TEMA","THEMA"},
+  /*L_REEL          */ {"REEL","REEL","REEL","REEL","REEL"},
+  /*L_INFO          */ {"INFO","INFO","INFO","INFO","INFO"},
+  /*L_LIST          */ {"LIST","LISTE","LISTA","LISTA","LISTE"},
+  /*L_ROLL          */ {"ROLL","DES","DADI","DADO","WUERF"},
+  /*L_INSERT        */ {"INSERT","INSERER","INSERISCI","INSERTAR","EINLEGEN"},
+  /*L_EJECT         */ {"EJECT","EJECTER","ESPELLI","EXPULSAR","AUSWERF"},
+  /*L_SEARCH        */ {"SEARCH","RECHERCHE","CERCA","BUSCAR","SUCHE"},
+  /*L_SETTINGS      */ {"SETTINGS","REGLAGES","IMPOSTAZIONI","AJUSTES","OPTIONEN"},
+  /*L_NOW_PLAYING   */ {"NOW PLAYING","EN LECTURE","IN USO","EN USO","LAEUFT"},
+  /*L_NO_GAMES      */ {"NO GAMES","AUCUN JEU","NESSUN GIOCO","SIN JUEGOS","KEINE SPIELE"},
+  /*L_NO_FAVS       */ {"NO FAVOURITES YET","AUCUN FAVORI","NESSUN PREFERITO","SIN FAVORITOS","KEINE FAVORITEN"},
+  /*L_ALL           */ {"ALL","TOUT","TUTTI","TODO","ALLE"},
+  /*L_FAV           */ {"FAV","FAV","PREF","FAV","FAV"},
+  /*L_MOST          */ {"MOST","TOP","TOP","TOP","TOP"},
+  /*L_BUILDING      */ {"BUILDING COVER CACHE","CREATION DU CACHE","CREAZIONE CACHE","CREANDO CACHE","CACHE ERSTELLEN"},
+  /*L_ONEOFF        */ {"one-off: reel thumbnails (first launch / rescan)","unique: vignettes du reel (1er lancement)","una tantum: miniature reel (primo avvio)","una vez: miniaturas del reel (1er inicio)","einmalig: reel-vorschau (erststart)"},
+  /*L_LOADING       */ {"Loading...","Chargement...","Caricamento...","Cargando...","Laedt..."},
+  /*L_LOADING_DIAG  */ {"Loading diag...","Chargement diag...","Caricamento diag...","Cargando diag...","Diag laedt..."},
+  /*L_RESCAN_SD     */ {"RESCAN SD","RELIRE SD","RILEGGI SD","RELEER SD","SD NEU"},
+  /*L_SD_ACCESS     */ {"SD ACCESS","ACCES SD","ACCESSO SD","ACCESO SD","SD ZUGRIFF"},
+  /*L_FW_UPDATE     */ {"FW UPDATE","MAJ FW","AGG. FW","ACT. FW","FW UPDATE"},
+  /*L_SOFT_RESET    */ {"SOFT RESET","REINIT","RIAVVIA","REINICIAR","NEUSTART"},
+  /*L_RESETTING     */ {"RESET...","REINIT...","RIAVVIO...","REINICIO...","NEUSTART..."},
+  /*L_STANDALONE    */ {"STANDALONE","AUTONOME","AUTONOMO","AUTONOMO","STANDALONE"},
+  /*L_WIRELESS      */ {"WIRELESS","SANS FIL","WIRELESS","INALAMB.","FUNK"},
+  /*L_USER_DISKS    */ {"USER DISKS","DISQUES","DISCHI","DISCOS","DISKETTEN"},
+  /*L_RENAME        */ {"RENAME","RENOMMER","RINOMINA","RENOMBRAR","UMBENENN"},
+  /*L_BACK          */ {"BACK","RETOUR","INDIETRO","ATRAS","ZURUECK"},
+  /*L_CANCEL        */ {"CANCEL","ANNULER","ANNULLA","CANCELAR","ABBRECH"},
+  /*L_ACTIVE        */ {"ACTIVE","ACTIF","ATTIVO","ACTIVO","AKTIV"},
+  /*L_MANUAL        */ {"MANUAL","MANUEL","MANUALE","MANUAL","MANUELL"},
+  /*L_PAIRED        */ {"PAIRED","APPAIRE","ABBINATO","VINCULADO","GEKOPPELT"},
+  /*L_NOT_PAIRED    */ {"Not paired","Non appaire","Non abbinato","No vinculado","Nicht gekoppelt"},
+  /*L_NAME_DONGLE   */ {"NAME DONGLE","NOMMER DONGLE","NOMINA DONGLE","NOMBRAR DONGLE","DONGLE NAME"},
+  /*L_DONGLE_LINKED */ {"** DONGLE LINKED **","** DONGLE CONNECTE **","** DONGLE COLLEGATO **","** DONGLE CONECTADO **","** DONGLE VERBUNDEN **"},
+  /*L_CREATE_DISK   */ {"+  CREATE NEW DISK","+  NOUVEAU DISQUE","+  NUOVO DISCO","+  NUEVO DISCO","+  NEUE DISKETTE"},
+  /*L_NONE_YET      */ {"(none yet - tap CREATE NEW DISK)","(aucun - touchez NOUVEAU DISQUE)","(nessuno - tocca NUOVO DISCO)","(ninguno - toca NUEVO DISCO)","(keine - NEUE DISKETTE tippen)"},
+  /*L_PREFMT        */ {"pre-formatted save disks - tap to insert","disques de sauvegarde pre-formates - toucher","dischi di salvataggio pre-formattati - tocca","discos de guardado pre-formateados - toca","vorformatierte speicherdisks - tippen"},
+  /*L_CHECK_DONGLE  */ {"Check dongle is powered","Verifiez l'alim. du dongle","Verifica alim. dongle","Comprueba alim. del dongle","Dongle-Strom pruefen"},
+  /*L_NO_DONGLES    */ {"No dongles found","Aucun dongle trouve","Nessun dongle trovato","No se hallaron dongles","Keine Dongles gefunden"},
+  /*L_NO_WIRELESS_DEV*/ {"No wireless device","Aucun periph. sans fil","Nessun disp. wireless","Sin disp. inalambrico","Kein Funkgeraet"},
+  /*L_USE_CABLE     */ {"Use the cable / standalone.","Utilisez le cable / autonome.","Usa il cavo / autonomo.","Usa el cable / autonomo.","Kabel / Standalone nutzen."},
+  /*L_IN_RANGE      */ {"and in WIRELESS range.","et a portee sans fil.","e nel raggio wireless.","y en rango inalambrico.","und in Funkreichweite."},
+  /*L_AVAIL_HD      */ {"available for HD.","disponible pour HD.","disponibile per HD.","disponible para HD.","verfuegbar fuer HD."},
+  /*L_HD_NO_WIRELESS*/ {"HD - NO WIRELESS","HD - SANS FIL NON","HD - NO WIRELESS","HD - SIN INALAMB.","HD - KEIN FUNK"},
+  /*L_MAX_DD        */ {"Max is DD floppy","Max = disquette DD","Max = floppy DD","Max = disquete DD","Max = DD-Diskette"},
+  /*L_TOO_BIG       */ {"TOO BIG","TROP GROS","TROPPO GRANDE","MUY GRANDE","ZU GROSS"},
+  /*L_SIZE_ERR      */ {"SIZE ERR","ERR TAILLE","ERR DIMENS.","ERR TAMANO","GROESSENFEHL"},
+  /*L_FAILED        */ {"FAILED","ECHEC","FALLITO","FALLIDO","FEHLER"},
+  /*L_SD_MOUNT_FAIL */ {"SD MOUNT FAILED","ECHEC MONTAGE SD","MONTAGGIO SD FALLITO","FALLO MONTAJE SD","SD-MOUNT FEHLER"},
+  /*L_LOAD_DIAG     */ {"LOAD DIAG","CHARGER DIAG","CARICA DIAG","CARGAR DIAG","DIAG LADEN"},
+  /*L_EJECT_DIAG    */ {"EJECT DIAG","EJECTER DIAG","ESPELLI DIAG","EXPULSAR DIAG","DIAG AUSWERF"},
+  /*L_GAMES_TAP     */ {" games - tap INSERT"," jeux - toucher INSERER"," giochi - tocca INSERISCI"," juegos - toca INSERTAR"," Spiele - INSERT tippen"},
+};
+static inline const char* T(int id){ return LSTR[id][g_lang]; }
+// Write LANG=<code> to CONFIG.TXT (EN/FR/IT/ES/DE), applied live (read-modify-write like saveRotate).
+static void saveLang(){
+  String lines=""; bool written=false;
+  File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
+  if(fr){ while(fr.available()){ String line=fr.readStringUntil('\n'); line.trim();
+      if(line.startsWith("LANG=")){ lines+="LANG="+String(LANG_NAMES[g_lang])+"\n"; written=true; }
+      else lines+=line+"\n"; }
+    fr.close(); }
+  if(!written) lines+="LANG="+String(LANG_NAMES[g_lang])+"\n";
+  File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);
+  if(fw){ fw.print(lines); fw.close(); }
+}
+
 static void loadTheme(){
   File f = SD_MMC.open("/CONFIG.TXT", FILE_READ);
   if(!f){ applyTheme(0); return; }
@@ -1364,13 +1286,14 @@ static void loadTheme(){
     String key = line.substring(0,eq); key.trim();
     String val = line.substring(eq+1); val.trim();
     if(key == "THEME") applyTheme(val.toInt());
-    else if(key == "LOOP") g_loop_cracktro = (val == "1" || val == "true");
     else if(key == "MODE") g_wireless_mode = (val == "WIRELESS");
-    else if(key == "CRACKTRO"){ int c=val.toInt(); if(c>=0&&c<=6) g_cracktro=c; }
     else if(key == "FONT"){ String v=val; v.toUpperCase(); applyFont(v=="SMALL"?0:(v=="LARGE"?2:1)); }
     else if(key == "ROTATE"){ int d=((val.toInt()/90)%4+4)%4; if(d==1||d==3) d=(d==1)?0:2; g_rot=d; }
     else if(key == "SAVES"){ String v=val; v.toUpperCase(); g_saves_mode=(v=="OVERWRITE")?2:((v=="OFF"||v=="0")?0:1); }
     else if(key == "CAROUSEL"){ String v=val; v.toUpperCase(); g_car_bootmode=(v=="1"||v=="ON"||v=="TRUE")?1:0; }
+    else if(key == "CATEGORIES"){ String v=val; v.toUpperCase(); g_categories=(v=="ON"||v=="1"||v=="TRUE"); }
+    else if(key == "NESTING"){ String v=val; v.toUpperCase(); g_nesting=(v=="ON"||v=="1"||v=="TRUE"); }
+    else if(key == "LANG"){ String lu=val; lu.toUpperCase(); for(int i=0;i<LANG_N;i++) if(lu==LANG_NAMES[i]){ g_lang=i; break; } }
     // LANDSCAPE-LOCKED: this RGB panel has no HW portrait; 90/270 is a slow SW transpose (~1-2fps),
     // so portrait is snapped to the nearest landscape (90->0, 270->180). Only 0/180 are allowed.
   }
@@ -1389,6 +1312,8 @@ struct GameEntry {
   std::vector<int> disk_indices; // all disk indices in order
   bool nfo_checked=false; // lazy: have we looked for an NFO title yet?
   String blurb;           // runtime cache of NFO blurb (not persisted to .gamecache)
+  bool     fav=false;     // v4.9.0-7IN favourite flag (persisted in /.gtistats, keyed by name)
+  uint16_t plays=0;       // v4.9.0-7IN play counter (persisted in /.gtistats)
 };
 
 // ============================================================================
@@ -1557,7 +1482,42 @@ static void buildGameList(){
     g_games.push_back(entry);
   }
   std::sort(g_games.begin(),g_games.end(),[](const GameEntry&a,const GameEntry&b){String al=a.name,bl=b.name;al.toLowerCase();bl.toLowerCase();return al<bl;});
-  writeGameCache();
+  if(g_libpath.length()==0) writeGameCache();   // v4.9.1-7IN: only cache the top level; category sub-levels scan fresh
+}
+
+// ── Per-game stats: favourites + play counts, keyed by name, survives RESCAN ──
+// v4.9.0-7IN: ported from JC v5.6.2. Lives in /.gtistats (mode-independent);
+// re-attached by applyStats() after g_games is (re)built. Not in .gamecache.
+static const uint16_t COL_STAR=0xFEE0;
+static String statsPath(){return "/.gtistats";}
+static void applyStats(){
+  File f=SD_MMC.open(statsPath().c_str(),FILE_READ);if(!f)return;
+  while(f.available()){String line=f.readStringUntil('\n');line.trim();if(!line.length())continue;
+    int p1=line.indexOf('|');if(p1<0)continue;int p2=line.indexOf('|',p1+1);if(p2<0)continue;
+    int fv=line.substring(0,p1).toInt();int pl=line.substring(p1+1,p2).toInt();String nm=line.substring(p2+1);
+    for(auto&g:g_games){if(g.name==nm){g.fav=(fv!=0);g.plays=(uint16_t)pl;break;}}}
+  f.close();
+}
+static void saveStats(){
+  std::vector<String>names;std::vector<int>favs,plays;
+  File f=SD_MMC.open(statsPath().c_str(),FILE_READ);
+  if(f){while(f.available()){String line=f.readStringUntil('\n');line.trim();if(!line.length())continue;
+    int p1=line.indexOf('|');if(p1<0)continue;int p2=line.indexOf('|',p1+1);if(p2<0)continue;
+    names.push_back(line.substring(p2+1));favs.push_back(line.substring(0,p1).toInt());plays.push_back(line.substring(p1+1,p2).toInt());}f.close();}
+  for(auto&g:g_games){if(!g.fav&&g.plays==0)continue;int idx=-1;for(size_t i=0;i<names.size();i++)if(names[i]==g.name){idx=(int)i;break;}
+    if(idx<0){names.push_back(g.name);favs.push_back(g.fav?1:0);plays.push_back(g.plays);}else{favs[idx]=g.fav?1:0;plays[idx]=g.plays;}}
+  File w=SD_MMC.open(statsPath().c_str(),FILE_WRITE);if(!w)return;
+  for(size_t i=0;i<names.size();i++){if(favs[i]==0&&plays[i]==0)continue;w.print(favs[i]);w.print("|");w.print(plays[i]);w.print("|");w.println(names[i]);}
+  w.close();
+}
+// v4.9.0-7IN: 5-point gold star (KGfx scanline) — favourite badge
+static void fillStar(int cx,int cy,float rO,uint16_t col){
+  float rI=rO*0.42f;float pts[10][2];
+  for(int i=0;i<10;i++){float a=-1.57080f+i*0.628319f;float rr=(i&1)?rI:rO;pts[i][0]=cx+cosf(a)*rr;pts[i][1]=cy+sinf(a)*rr;}
+  int y0=(int)(cy-rO-1),y1=(int)(cy+rO+1),x0=(int)(cx-rO-1),x1=(int)(cx+rO+1);
+  for(int y=y0;y<=y1;y++)for(int x=x0;x<=x1;x++){bool in=false;
+    for(int i=0,j=9;i<10;j=i++){if(((pts[i][1]>y)!=(pts[j][1]>y))&&((float)x<(pts[j][0]-pts[i][0])*(y-pts[i][1])/(pts[j][1]-pts[i][1])+pts[i][0]))in=!in;}
+    if(in)UG->drawPixel(x,y,col);}
 }
 
 // ============================================================================
@@ -1642,6 +1602,7 @@ static void doRescan(){
   listImages(SD_MMC,g_files);
   buildGameList();           // no cache now → full rebuild, writes fresh cache
   buildActiveLetters();
+  applyStats();   // v4.9.0-7IN restore fav/plays
   g_sel=0; g_scroll=0; g_disk_sel=0; g_scrollPx=0; g_inertia_on=false;
   drawFullUI();
 }
@@ -1915,7 +1876,36 @@ static void drawPngFit(const String&path,int boxX,int boxY,int maxW,int maxH){
   }
   free(jpeg_tmp_buf); jpeg_tmp_buf=NULL;
 }
+// ════════════════════════════════════════════════════════════════════════════
+// v4.8.2-7IN: .rtfm MANUAL reader (ported from JC v5.6.2, KGfx API)
+// Kept behaviourally identical to the JC so a manual reads the same on every board.
+// ════════════════════════════════════════════════════════════════════════════
+static String g_manual_path=""; static int g_manual_bx=0,g_manual_by=0,g_manual_bw=0,g_manual_bh=0;  // book button rect (landscape)
+static String g_rtfmLastPath=""; static float g_rtfmLastScroll=0;   // remember last read position (per game, session)
+static int    g_manual_sel=-1;  static String g_manual_cache="";     // per-selection .rtfm lookup cache (no SD I/O per redraw)
+
+// per-game manual (.rtfm) lookup — mirrors findJPGFor. Plain-text "how to play"
+// file beside the game; opened full-screen by the book button on the cover panel.
+static bool manualFor(const String& p, String& out){
+  String b=basenameNoExt(filenameOnly(p)), d=parentDir(p), gb=getGameBaseName(p);
+  const char* exts[]={".rtfm",".RTFM"};
+  for(auto e:exts){ String c=d+"/"+b+e; if(SD_MMC.exists(c.c_str())){ out=c; return true; } }
+  if(gb!=b){ for(auto e:exts){ String c=d+"/"+gb+e; if(SD_MMC.exists(c.c_str())){ out=c; return true; } } }
+  String folderName=d; int ls=folderName.lastIndexOf('/'); if(ls>0)folderName=folderName.substring(ls+1);
+  if(folderName.length()&&folderName!=b&&folderName!=gb){
+    for(auto e:exts){ String c=d+"/"+folderName+e; if(SD_MMC.exists(c.c_str())){ out=c; return true; } } }
+  return false;
+}
+static void drawBookIcon7(int cx,int cy,uint16_t col){   // open-book glyph (KGfx primitives)
+  UG->drawRect(cx-11,cy-8,22,17,col);
+  UG->drawFastVLine(cx,cy-8,17,col);                     // spine
+  UG->drawFastHLine(cx-8,cy-4,6,col); UG->drawFastHLine(cx+3,cy-4,6,col);   // page-text, both leaves
+  UG->drawFastHLine(cx-8,cy,  6,col); UG->drawFastHLine(cx+3,cy,  6,col);
+  UG->drawFastHLine(cx-8,cy+4,6,col); UG->drawFastHLine(cx+3,cy+4,6,col);
+}
+
 static void drawCoverPanel(){ UiFrame _uf;
+  g_manual_bw=0;   // cleared each draw; set below only if this game has a .rtfm (landscape)
   // Flat fill cover panel background (portrait = full-width top block; landscape = left column)
   if(g_portrait_mode) UG->fillRect(0, STATUS_H+MODE_BAR_H, LCD_WIDTH, COVER_H, COL_PANEL);
   else                UG->fillRect(0, STATUS_H, COVER_W, LCD_HEIGHT-STATUS_H-BOTTOM_H, COL_PANEL);
@@ -1978,6 +1968,17 @@ static void drawCoverPanel(){ UiFrame _uf;
     UG->print(ibuf);
   }
 
+  // ── v4.8.2: book button (landscape only) — bottom-left of the cover art when a .rtfm exists ──
+  if(!g_portrait_mode){
+    if(g_manual_sel!=g_sel){ g_manual_sel=g_sel; g_manual_cache=""; String mp; if(manualFor(g_files[game.first_file_idx],mp)) g_manual_cache=mp; }
+    if(g_manual_cache.length()){
+      g_manual_bw=48; g_manual_bh=36; g_manual_bx=artX+4; g_manual_by=artY+artH-g_manual_bh-4; g_manual_path=g_manual_cache;
+      UG->fillRoundRect(g_manual_bx,g_manual_by,g_manual_bw,g_manual_bh,5,COL_ACCENT);
+      UG->drawRoundRect(g_manual_bx,g_manual_by,g_manual_bw,g_manual_bh,5,COL_AMBER);
+      drawBookIcon7(g_manual_bx+g_manual_bw/2,g_manual_by+g_manual_bh/2,COL_LIT);
+    }
+  }
+
   // ── PORTRAIT: title/blurb to the RIGHT of the art, INSERT full-width at block bottom ──
   if(g_portrait_mode){
     int rx=artX+artW+12, rw=LCD_WIDTH-rx-12, ry=artY+4;
@@ -2005,7 +2006,7 @@ static void drawCoverPanel(){ UiFrame _uf;
     uint16_t bf=isLd?(uint16_t)0x4000:(uint16_t)0x0340, bb=isLd?(uint16_t)0xE8C4:COL_GREEN;
     UG->fillRoundRect(pbx,pbtnY,pbw,pbh,10,bf); UG->drawRoundRect(pbx,pbtnY,pbw,pbh,10,bb);
     UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(TFT_WHITE,bf);
-    const char* pl=isLd?"EJECT":"INSERT"; int ptw=UG->textWidth(pl);
+    const char* pl=isLd?T(L_EJECT):T(L_INSERT); int ptw=UG->textWidth(pl);
     UG->setCursor(pbx+(pbw-ptw)/2, pbtnY+(pbh-13)/2); UG->print(pl);
     // Multi-disk selector — one centred row just above INSERT
     if(game.disk_count>1){
@@ -2160,11 +2161,23 @@ static void drawModeBar(){ UiFrame _uf;
   UG->setTextColor(COL_MID,COL_BAR);
   UG->setCursor(LIST_X+152,by+5);
   UG->print(String(g_games.size())+" games");
+  if(g_categories){   // v4.9.1-7IN category browse button (only when enabled)
+    int cw=96, cxb=LIST_X+230;
+    UG->fillRoundRect(cxb,by,cw,bh,9,COL_GREEN); UG->setTextColor(TFT_BLACK,COL_GREEN);
+    const char* cl=g_libpath.length()?"< CATEGORY":"CATEGORIES";
+    UG->setCursor(cxb+(cw-UG->textWidth(cl))/2,by+5); UG->print(cl);
+  }
+  // USR-DSK pill (v4.9.0-7IN) — pre-formatted user save disks
+  { int uw=62, ux=LCD_WIDTH-98-uw;
+    UG->fillRoundRect(ux,by,uw,bh,9,COL_BLUE);
+    UG->setTextColor(TFT_WHITE,COL_BLUE);
+    UG->setCursor(ux+(uw-UG->textWidth("USR-DSK"))/2,by+5); UG->print("USR-DSK");
+  }
   // SEARCH pill (right) — type-to-find; big high-contrast target for low-vision use
   { int sw=88, sx=LCD_WIDTH-4-sw;
     UG->fillRoundRect(sx,by,sw,bh,9,COL_AMBER);
     UG->setTextColor(inkFor(COL_AMBER),COL_AMBER);
-    UG->setCursor(sx+(sw-UG->textWidth("SEARCH"))/2,by+5); UG->print("SEARCH");
+    UG->setCursor(sx+(sw-UG->textWidth(T(L_SEARCH)))/2,by+5); UG->print(T(L_SEARCH));
   }
 }
 
@@ -2214,8 +2227,11 @@ static void drawFileList(){ UiFrame _uf;
     uint16_t accentCol = isLoaded ? COL_GREEN : (isSel ? COL_AMBER : COL_ACCENT);
     UG->fillRoundRect(LIST_X+4, cardY+3, 4, cardH-6, 2, accentCol);
 
-    // Initial circle
+    // Initial circle (or gold star when favourited)
     int cx=LIST_X+24, cy=y+LIST_ITEM_H/2;
+    if(game.fav){
+      fillStar(cx, cy, 13.0f, COL_STAR);
+    } else {
     uint16_t circCol=isSel?COL_AMBER:(isLoaded?COL_GREEN:COL_CIRC);
     UG->fillCircle(cx, cy, 13, circCol);
     UG->setFont(&lgfx::fonts::DejaVu12);
@@ -2224,6 +2240,7 @@ static void drawFileList(){ UiFrame _uf;
     char ibuf[2]={initial,0};
     int iw=UG->textWidth(ibuf);
     UG->setCursor(cx-iw/2, cy-7); UG->print(ibuf);
+    }
 
     // Game name
     int textX=LIST_X+46;
@@ -2268,7 +2285,7 @@ static void drawNowPlayingBar(){ UiFrame _uf;
     UG->fillCircle(LIST_X+10,y+NOW_PLAY_H/2,4,COL_GREEN);
     UG->setFont(&lgfx::fonts::DejaVu9);
     UG->setTextColor(COL_GREEN,COL_NOW);
-    UG->setCursor(LIST_X+20,y+5); UG->print("NOW PLAYING");
+    UG->setCursor(LIST_X+20,y+5); UG->print(T(L_NOW_PLAYING));
     UG->setFont(&lgfx::fonts::DejaVu12);
     UG->setTextColor(TFT_WHITE,COL_NOW);
     UG->setCursor(LIST_X+20,y+17);
@@ -2309,11 +2326,11 @@ static void drawBottomBar(){ UiFrame _uf;
 
   struct BtnDef { const char* icon; const char* label; uint16_t col; };
   BtnDef btns[5] = {
-    { "<", "PREV", COL_ORANGE },
-    { ">", "NEXT", COL_BLUE },
-    { "#", "THEME", COL_AMBER },
-    { "", "REEL", COL_GREEN },
-    { "i", "INFO", COL_MID },
+    { "<", T(L_PREV), COL_ORANGE },
+    { ">", T(L_NEXT), COL_BLUE },
+    { "#", T(L_THEME), COL_AMBER },
+    { "", T(L_REEL), COL_GREEN },
+    { "i", T(L_INFO), COL_MID },
   };
 
   for(int i=0;i<nb;i++){
@@ -2446,7 +2463,7 @@ static bool doLoadSelected(const String& adfPath){
   UG->setCursor(8,STATUS_H+20); UG->print(title);
   UG->setFont(&lgfx::fonts::DejaVu9);
   UG->setTextColor(COL_LIT,COL_PANEL);
-  UG->setCursor(8,STATUS_H+38); UG->print("Loading...");
+  UG->setCursor(8,STATUS_H+38); UG->print(T(L_LOADING));
   uiFlush();   // portrait: show the loading overlay (progress bar below repaints at the end)
 
   File f=openNamedImage(loadPath);
@@ -2491,6 +2508,7 @@ static bool doLoadSelected(const String& adfPath){
   g_loaded=true;
   g_loaded_name=basenameNoExt(filenameOnly(adfPath));
   g_loaded_game_idx=g_sel;
+  if(g_sel>=0&&g_sel<(int)g_games.size()){ if(g_games[g_sel].plays<65535)g_games[g_sel].plays++; saveStats(); }   // v4.9.0-7IN most-played
   g_loaded_disk_idx=g_disk_sel;
   g_loaded_path=loadPath;
   g_sv_img_size=(g_mode==MODE_GEN)?0:fsz;   // GEN has no Amiga save-writeback (0 = no dirty tracking)
@@ -2692,6 +2710,155 @@ static void doFirmwareUpdate(){
 }
 
 
+// ════════════════════════════════════════════════════════════════════════════
+// v4.8.2-7IN: .rtfm MANUAL reader — full-screen scrolling text viewer
+// Section markers ([LABEL]) -> accent headings + JUMP TO SECTION menu; remembers
+// last read position per game; big accessible SIZE / TOP / SECTIONS / CLOSE bar.
+// Behaviour mirrors JC v5.6.2 exactly; only the draw API (KGfx) and layout differ.
+// ════════════════════════════════════════════════════════════════════════════
+static bool rtfmIsSection(const String& s, String& label){          // a line that is exactly [text] => a heading
+  int a=0,b=(int)s.length()-1;
+  while(a<=b && (s[a]==' '||s[a]=='\t'))a++;
+  while(b>=a && (s[b]==' '||s[b]=='\t'))b--;
+  if(b-a>=1 && s[a]=='[' && s[b]==']'){ label=s.substring(a+1,b); label.trim(); return label.length()>0; }
+  return false;
+}
+// reader body font from g_font (0/1/2 = S/M/L). Sets the current font; returns line height.
+static int rtfmBodyFont(){
+  if(g_font>=2){ UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(2); return 42; }
+  if(g_font==1){ UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(1); return 24; }
+  UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextSize(1); return 18;
+}
+static int rtfmSectionMenu(const std::vector<String>& sec){         // full-screen jump picker; returns index or -1
+  int n=(int)sec.size(); if(n<=0)return -1;
+  const int rowH=52, listTop=40, botY=LCD_HEIGHT-64;
+  int maxRows=(botY-listTop)/rowH; if(maxRows<1)maxRows=1;
+  int scroll=0, maxSc=(n>maxRows)?(n-maxRows):0;
+  bool down=false, moved=false; int dY=0, dScroll=0, lastY=0; bool dirty=true;
+  {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<400)delay(10);}
+  while(true){
+    if(dirty){ dirty=false;
+      UG->fillScreen(COL_BG);
+      bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
+      UG->fillRect(0,0,LCD_WIDTH,30,COL_BAR); UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextSize(1); UG->setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);
+      UG->setCursor(8,8); UG->print("JUMP TO SECTION");
+      for(int r=0;r<maxRows && r+scroll<n;r++){ int i=r+scroll; int y=listTop+r*rowH;
+        UG->fillRoundRect(8,y+3,LCD_WIDTH-16,rowH-6,8,COL_PANEL); UG->drawRoundRect(8,y+3,LCD_WIDTH-16,rowH-6,8,COL_ACCENT);
+        UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(1); UG->setTextColor(inkFor(COL_PANEL),COL_PANEL);
+        String s=sec[i]; while(UG->textWidth(s)>LCD_WIDTH-40&&s.length()>1)s=s.substring(0,s.length()-1);
+        UG->setCursor(20,y+(rowH-18)/2); UG->print(s); }
+      int cbw=200,cbh=48,cbx=(LCD_WIDTH-cbw)/2,cby=LCD_HEIGHT-cbh-8;
+      UG->fillRoundRect(cbx,cby,cbw,cbh,10,(uint16_t)0x8000); UG->drawRoundRect(cbx,cby,cbw,cbh,10,COL_AMBER);
+      UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(1); UG->setTextColor(TFT_WHITE,(uint16_t)0x8000);
+      { const char* c=T(L_CANCEL); UG->setCursor(LCD_WIDTH/2-UG->textWidth(c)/2,cby+(cbh-16)/2); UG->print(c); }
+      uiFlush();
+    }
+    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty); (void)tx;
+    if(have){ if(!down){down=true;moved=false;dY=ty;dScroll=scroll;lastY=ty;}
+      else { if(abs((int)ty-dY)>DRAG_THRESH)moved=true;
+        if(moved&&maxSc>0){ scroll=dScroll-((int)ty-dY)/rowH; if(scroll<0)scroll=0; if(scroll>maxSc)scroll=maxSc; dirty=true; } }
+      lastY=ty;
+    } else if(down){ down=false;
+      if(!moved){ if(lastY>=LCD_HEIGHT-64) return -1;
+        int r=((int)lastY-listTop)/rowH; int i=r+scroll;
+        if((int)lastY>=listTop && r>=0 && r<maxRows && i<n) return i; }
+    }
+    delay(12);
+  }
+}
+static void doManual(const String& path){
+  String raw="";
+  { File f=SD_MMC.open(path,FILE_READ);
+    if(f){ static const char* LAT="AAAAAAECEEEEIIIIDNOOOOOxOUUUUYPsaaaaaaeceeeeiiiidnooooo/ouuuuypy";
+      while(f.available()&&raw.length()<16000){ int c=f.read(); if(c<0)break; c&=0xFF;
+        if(c=='\r')continue;
+        if(c=='\t'){raw+="  ";continue;}
+        if(c=='\n'||(c>=32&&c<127)){raw+=(char)c;continue;}
+        if(c==0xE2){int a=f.read(),b=f.read();(void)a;                 // UTF-8 general punctuation
+          if(b==0x93||b==0x94)raw+='-'; else if(b==0x98||b==0x99)raw+='\''; else if(b==0x9C||b==0x9D)raw+='"'; else if(b==0xA6)raw+="..."; continue;}
+        if(c==0xC2){int a=f.read(); if(a==0xA9)raw+="(c)"; else if(a==0xAE)raw+="(r)"; else if(a==0xB0)raw+="deg"; continue;}
+        if(c==0xC3){int a=f.read(); int i=a-0x80; if(i>=0&&i<64)raw+=LAT[i]; continue;}   // Latin-1 accents -> base letter
+        // any other high/control byte: dropped
+      } f.close(); }
+  }
+  if(!raw.length())raw="(no manual text)";
+  const int margin=14, topH=30, botH=56;
+  const int areaTop=topH+4, areaBot=LCD_HEIGHT-botH-4, maxW=LCD_WIDTH-2*margin;
+  int lineH=rtfmBodyFont();
+  std::vector<String> lines; std::vector<uint8_t> head; std::vector<int> secLine; std::vector<String> secName;   // head[i]=heading; sec* = jump index
+  auto rewrap=[&](){ lines.clear(); head.clear(); secLine.clear(); secName.clear(); lineH=rtfmBodyFont();
+    String para="";
+    for(int i=0;i<=(int)raw.length();i++){ char c=i<(int)raw.length()?raw[i]:'\n';
+      if(c=='\n'){ String lab;
+        if(rtfmIsSection(para,lab)){ secLine.push_back((int)lines.size()); secName.push_back(lab); lines.push_back(String("[")+lab+"]"); head.push_back(1); }
+        else { String line="",word="";
+          for(int j=0;j<=(int)para.length();j++){ char d=j<(int)para.length()?para[j]:' ';
+            if(d==' '||j==(int)para.length()){ String cand=line.length()?line+" "+word:word;
+              if(UG->textWidth(cand)>maxW&&line.length()){lines.push_back(line);head.push_back(0);line=word;} else line=cand; word=""; }
+            else word+=d; }
+          lines.push_back(line); head.push_back(0); }
+        para=""; }
+      else para+=c; } };
+  rewrap();
+  float scroll=0, vel=0; int y0=0; float s0=0; bool pressed=false, moved=false; int lastY=0, lastX=0, rel=0; bool dirty=true;
+  auto maxScroll=[&](){ int t=(int)lines.size()*lineH-(areaBot-areaTop); return t<0?0.f:(float)t; };
+  if(path==g_rtfmLastPath){ scroll=g_rtfmLastScroll; float ms=maxScroll(); if(scroll<0)scroll=0; if(scroll>ms)scroll=ms; }   // restore last read position
+  {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<600)delay(10);}   // drain the entering tap
+  while(true){
+    int nbtn = secName.size()? 4 : 3;   // SIZE, TOP, [SECTIONS], CLOSE
+    int bw = LCD_WIDTH/nbtn;
+    if(dirty||vel!=0){ dirty=false;
+      UG->fillScreen(COL_BG);
+      rtfmBodyFont();                              // reassert body font (top bar / buttons change it each frame)
+      int first=(int)(scroll/lineH); if(first<0)first=0;
+      int yy=areaTop-((int)scroll-first*lineH);
+      for(int i=first;i<(int)lines.size()&&yy<areaBot;i++){ UG->setTextColor(head[i]?COL_ACCENT:COL_LIT,COL_BG); UG->setCursor(margin,yy); UG->print(lines[i]); yy+=lineH; }
+      float ms=maxScroll();
+      if(ms>0){ int trkH=areaBot-areaTop; int thH=max(24,(int)((float)trkH*trkH/((float)lines.size()*lineH))); int thY=areaTop+(int)((float)(trkH-thH)*(scroll/ms));
+        UG->fillRect(LCD_WIDTH-5,areaTop,3,trkH,COL_PANEL); UG->fillRect(LCD_WIDTH-5,thY,3,thH,COL_AMBER); }
+      bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
+      UG->fillRect(0,0,LCD_WIDTH,topH,COL_BAR); UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextSize(1); UG->setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);
+      UG->setCursor(8,8); UG->print(T(L_MANUAL));
+      { int pct=ms>0?(int)(scroll*100/ms):100; String s=String(pct)+"%"; UG->setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR); UG->setCursor(LCD_WIDTH/2-UG->textWidth(s)/2,8); UG->print(s); }
+      { String nm=g_games.empty()?String(""):g_games[g_sel].name; while(UG->textWidth(nm)>LCD_WIDTH/2-24&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
+        UG->setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR); UG->setCursor(LCD_WIDTH-UG->textWidth(nm)-8,8); UG->print(nm); }
+      int by=LCD_HEIGHT-botH; UG->fillRect(0,by,LCD_WIDTH,botH,COL_BAR); UG->drawFastHLine(0,by,LCD_WIDTH,COL_SEP);
+      auto btn=[&](int idx,const char* lab,uint16_t bg,uint16_t brd,uint16_t ink){ int x=idx*bw;
+        UG->fillRoundRect(x+6,by+7,bw-12,botH-14,8,bg); UG->drawRoundRect(x+6,by+7,bw-12,botH-14,8,brd);
+        UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(1); UG->setTextColor(ink,bg); UG->setCursor(x+(bw-UG->textWidth(lab))/2,by+(botH-16)/2); UG->print(lab); };
+      const char* szl=(g_font>=2)?"SIZE:L":(g_font==1)?"SIZE:M":"SIZE:S";
+      btn(0,szl,COL_BAR,COL_ACCENT,COL_LIT);
+      btn(1,"TOP",COL_BAR,COL_ACCENT,COL_LIT);
+      if(secName.size()) btn(2,"SECTIONS",COL_BAR,COL_AMBER,COL_LIT);
+      btn(nbtn-1,"CLOSE",(uint16_t)0x8000,COL_AMBER,TFT_WHITE);
+      uiFlush();
+    }
+    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){ rel=0;
+      if(!pressed){ pressed=true; moved=false; y0=ty; s0=scroll; lastY=ty; lastX=tx; vel=0; }
+      else { if(abs((int)ty-y0)>DRAG_THRESH)moved=true;
+        if(moved){ scroll=s0-(float)((int)ty-y0); float ms=maxScroll(); if(scroll<0)scroll=0; if(scroll>ms)scroll=ms; vel=(float)((int)ty-lastY); dirty=true; } }
+      lastX=tx; lastY=ty;
+    } else {
+      if(pressed&&++rel>=3){ pressed=false;
+        if(!moved){ int by=LCD_HEIGHT-botH;
+          if(lastY>=by){ int idx=lastX/bw; if(idx>=nbtn)idx=nbtn-1;
+            if(idx==0){ applyFont((g_font+1)%3); rewrap(); float ms=maxScroll(); if(scroll>ms)scroll=ms; dirty=true; }   // SIZE (no persist on 7IN)
+            else if(idx==1){ scroll=0; vel=0; dirty=true; }                                            // TOP
+            else if(secName.size()&&idx==2){ int pick=rtfmSectionMenu(secName);                        // SECTIONS jump
+              if(pick>=0&&pick<(int)secLine.size()){ scroll=(float)secLine[pick]*lineH; float ms=maxScroll(); if(scroll<0)scroll=0; if(scroll>ms)scroll=ms; vel=0; }
+              { int q=0; uint32_t t0=millis(); while(q<8 && millis()-t0<1200){ if(Touch_ReadFrame())q=0; else q++; delay(8); } } pressed=false; moved=false; rel=0; dirty=true; }   // fix: drain the section-pick tap so it is not read as a body-tap (which closes the reader)
+            else { g_rtfmLastPath=path; g_rtfmLastScroll=scroll; return; }                             // CLOSE
+          }
+          else { g_rtfmLastPath=path; g_rtfmLastScroll=scroll; return; }                               // tap body closes (forgiving)
+        }
+      }
+    }
+    if(!pressed && vel!=0){ scroll-=vel; vel*=0.90f; if(fabs(vel)<0.4f)vel=0; float ms=maxScroll(); if(scroll<0){scroll=0;vel=0;} if(scroll>ms){scroll=ms;vel=0;} dirty=true; }
+    delay(12);
+  }
+}
+
 // ── Type-to-search (blocking). Live substring filter over the game list; tap a
 //    result row to jump the list straight to it. Returns true if a game was chosen
 //    (g_sel + scroll set), false on CLOSE. Big keys + big text for low-vision use.
@@ -2716,7 +2883,7 @@ static bool doSearch(){
       UG->fillScreen(COL_BG);
       UG->fillRect(0,0,LCD_WIDTH,30,COL_BAR);
       UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(inkFor(COL_BAR),COL_BAR);
-      UG->setCursor(8,7); UG->print("SEARCH");
+      UG->setCursor(8,7); UG->print(T(L_SEARCH));
       { String cnt=q.length()?(String(totalMatch)+(totalMatch==1?" match":" matches")):String("type to find a game");
         UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(inkFor(COL_BAR),COL_BAR);
         UG->setCursor(LCD_WIDTH-UG->textWidth(cnt)-8,9); UG->print(cnt); }
@@ -2806,10 +2973,23 @@ static uint32_t car_tick_ctr=0;
 
 static int carN(){return (int)g_car_list.size();}
 static int carWrap(int i){int n=carN();if(n<=0)return 0;i%=n;if(i<0)i+=n;return i;}
-static void carBuildList(){                      // ALL source only (A-Z order)
+static int g_car_src=0;   // v4.9.0-7IN 0=ALL 1=FAV 2=MOST
+static const char* carSrcName(){return g_car_src==1?T(L_FAV):g_car_src==2?T(L_MOST):T(L_ALL);}
+static void carBuildList(){                      // v4.9.0-7IN ALL / FAV / MOST
   g_car_list.clear();
   int n=(int)g_games.size();
-  for(int i=0;i<n;i++)g_car_list.push_back(i);
+  if(g_car_src==1){for(int i=0;i<n;i++)if(g_games[i].fav)g_car_list.push_back(i);}
+  else if(g_car_src==2){for(int i=0;i<n;i++)g_car_list.push_back(i);
+    std::sort(g_car_list.begin(),g_car_list.end(),[](int a,int b){
+      if(g_games[a].plays!=g_games[b].plays)return g_games[a].plays>g_games[b].plays;
+      String al=g_games[a].name,bl=g_games[b].name;al.toLowerCase();bl.toLowerCase();return al<bl;});}
+  else{for(int i=0;i<n;i++)g_car_list.push_back(i);}
+}
+static void carCycleSrc(){                        // v4.9.0-7IN cycle ALL->FAV->MOST, recentre
+  g_car_src=(g_car_src+1)%3; carBuildList();
+  int start=0;for(int i=0;i<carN();i++)if(g_car_list[i]==g_sel){start=i;break;}
+  g_car_pos=(float)start;
+  drawCarousel();
 }
 
 // Decode a game's cover into a CAR_TILE x CAR_TILE tile (aspect-fit, COL_BAR letterbox).
@@ -2987,8 +3167,11 @@ static void drawCarousel(){ UiFrame _uf;   // KGfx UiFrame -> one VSYNC flush pe
   int ccx=W/2, ccy=STATUS_H+16+CAR_TILE/2;
   if(n==0){
     UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextColor(COL_LIT,COL_BG);
-    String m="NO GAMES";
+    String m=(g_car_src==1)?String(T(L_NO_FAVS)):String(T(L_NO_GAMES));
     UG->setCursor((W-UG->textWidth(m))/2,ccy);UG->print(m);
+    if(g_car_src==1){UG->setFont(&lgfx::fonts::DejaVu9);UG->setTextColor(COL_DIM,COL_BG);
+      String h="star games: tap the letter circle in the list";
+      UG->setCursor((W-UG->textWidth(h))/2,ccy+24);UG->print(h);}
   }else{
     int ci=(int)lroundf(g_car_pos);
     float frac=g_car_pos-(float)ci;                      // -0.5..0.5
@@ -3018,6 +3201,7 @@ static void drawCarousel(){ UiFrame _uf;   // KGfx UiFrame -> one VSYNC flush pe
       uint16_t bord=(ar<0.5f)?(isLd?COL_GREEN:COL_AMBER):COL_ACCENT;
       UG->drawRect(x-w/2-1,ccy-h/2-1,w+2,h+2,bord);
       if(isLd)UG->drawRect(x-w/2-2,ccy-h/2-2,w+4,h+4,COL_GREEN);
+      if(ar<0.5f&&gm.fav)fillStar(x+w/2-12,ccy-h/2+12,8.0f,COL_STAR);
       // no-art placeholder letter
       if(gm.jpg_path=="?"){
         UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextSize((w>=CAR_TILE*3/4)?2:1);
@@ -3064,7 +3248,7 @@ static void drawCarousel(){ UiFrame _uf;   // KGfx UiFrame -> one VSYNC flush pe
      UG->fillRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,8,bf);
      UG->drawRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,8,isLd?COL_AMBER:COL_GREEN);
      UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextColor(TFT_BLACK,bf);
-     const char*lbl=isLd?"EJECT":"INSERT";int tw=UG->textWidth(lbl);
+     const char*lbl=isLd?T(L_EJECT):T(L_INSERT);int tw=UG->textWidth(lbl);
      UG->setCursor(g_car_ins_x+(g_car_ins_w-tw)/2,g_car_ins_y+(g_car_ins_h-16)/2);UG->print(lbl);}
   }
   // carousel bottom bar: [LIST] | [ALL] | [ROLL]
@@ -3075,12 +3259,12 @@ static void drawCarousel(){ UiFrame _uf;   // KGfx UiFrame -> one VSYNC flush pe
   UG->fillCircle(third/2,y+14,10,(uint16_t)(COL_ORANGE>>2));UG->drawCircle(third/2,y+14,10,COL_ORANGE);
   drawListIcon(third/2,y+14,COL_ORANGE);
   UG->setFont(&lgfx::fonts::DejaVu9);UG->setTextColor(COL_DIM,COL_BAR);
-  UG->setCursor((third-UG->textWidth("LIST"))/2,y+30);UG->print("LIST");
+  UG->setCursor((third-UG->textWidth(T(L_LIST)))/2,y+30);UG->print(T(L_LIST));
   // SOURCE (ALL — reserved for FAV/MOST later)
   UG->fillCircle(third+third/2,y+14,10,(uint16_t)(COL_AMBER>>2));UG->drawCircle(third+third/2,y+14,10,COL_AMBER);
   UG->setTextColor(COL_AMBER,(uint16_t)(COL_AMBER>>2));UG->setCursor(third+third/2-3,y+9);UG->print("*");
   UG->setTextColor(COL_AMBER,COL_BAR);
-  UG->setCursor(third+(third-UG->textWidth("ALL"))/2,y+30);UG->print("ALL");
+  {const char* sl=carSrcName(); UG->setCursor(third+(third-UG->textWidth(sl))/2,y+30);UG->print(sl);}
   // ROLL — icon is a tiny die
   {int dx=2*third+third/2,dy2=y+14,ds=18;
    UG->fillRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,0xFFFF);
@@ -3089,7 +3273,7 @@ static void drawCarousel(){ UiFrame _uf;   // KGfx UiFrame -> one VSYNC flush pe
    UG->fillCircle(dx,dy2,1,TFT_BLACK);
    UG->fillCircle(dx-o,dy2-o,1,TFT_BLACK);UG->fillCircle(dx+o,dy2+o,1,TFT_BLACK);
    UG->fillCircle(dx+o,dy2-o,1,TFT_BLACK);UG->fillCircle(dx-o,dy2+o,1,TFT_BLACK);
-   UG->setTextColor(COL_DIM,COL_BAR);UG->setCursor(2*third+(third-UG->textWidth("ROLL"))/2,y+30);UG->print("ROLL");}
+   UG->setTextColor(COL_DIM,COL_BAR);UG->setCursor(2*third+(third-UG->textWidth(T(L_ROLL)))/2,y+30);UG->print(T(L_ROLL));}
   if(g_car_dieShow&&carN()>0)carDrawDie();   // dice overlay rides on top
 }
 
@@ -3128,7 +3312,7 @@ static void carHandleTap(uint16_t px,uint16_t py){
   if(py>=(uint16_t)(H-BOTTOM_H)){
     int third=W/3;
     if(px<(uint16_t)third)carExit();
-    else if(px<(uint16_t)(2*third)){/* middle (ALL) — reserved for FAV/MOST */}
+    else if(px<(uint16_t)(2*third)){carCycleSrc();}
     else carRollDice();
     return;
   }
@@ -3257,10 +3441,10 @@ void setup(){
   if(!sdok){ delay(200); sdok=SD_MMC.begin("/sdcard",true); }
   if(sdok){
     ensureConfig();      // create CONFIG.TXT with defaults if missing or empty
-    selfHealConfig();    // append CRACKTRO= to an older CONFIG.TXT that predates it
     listImages(SD_MMC,g_files);
     if(!readGameCache()) buildGameList();
     buildActiveLetters();
+    applyStats();   // v4.9.0-7IN restore fav/plays
     g_sel=0; g_scroll=0; g_disk_sel=0;
   } else {
     uiERR("SD mount failed");
@@ -3273,11 +3457,10 @@ void setup(){
   // Battery ADC init AFTER SD_MMC — SD_MMC may have touched IO20
   batInit();
 
-  loadTheme();         // must be before cracktro so LOOP=, THEME=, CRACKTRO=, ROTATE= are loaded
+  loadTheme();         // load THEME=, MODE=, ROTATE=, SAVES=, CAROUSEL= etc.
   tft.setRotation(g_rot);                   // apply ROTATE= (K: 180 = flip during flush + touch remap)
   gW = tft.width(); gH = tft.height();
   relayout();
-  drawCracktro(g_cracktro);   // 6-style boot cracktro (CRACKTRO= config). K engine — no LovyanGFX version pin needed.
 
   USB.onEvent(usbEventCallback);
   if(sdAccessReq){ runSDAccessBoot(sdok); }   // SD-access boot mode — never returns (reboots to normal)
@@ -3380,12 +3563,194 @@ void loop(void){
 }
 
 // ── Tap dispatcher — a completed tap (down + up, no drag) lands here ─────────
+static const uint8_t UD_BOOT[12]={68,79,83,0,0,0,0,0,0,0,3,112};   // "DOS\0", chksum, rootblock ptr=880
+static const uint8_t UD_ROOT[512]={0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,72,0,0,0,0,114,92,102,229,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,255,255,255,255,0,0,3,113,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,69,78,0,0,5,62,0,0,11,34,4,83,65,86,69,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,69,78,0,0,5,62,0,0,11,34,0,0,69,78,0,0,5,62,0,0,11,34,68,79,83,0,0,0,0,0,0,0,0,0,0,0,0,1};
+static const uint8_t UD_BITMAP[512]={0,0,192,127,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,63,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255};
+static void scanUserDisks(std::vector<String>&out){
+  out.clear(); File d=SD_MMC.open("/USER-DISKS"); if(!d||!d.isDirectory())return;
+  File f; while((f=d.openNextFile())){ if(!f.isDirectory()){ String nm=f.name();int s=nm.lastIndexOf('/');if(s>=0)nm=nm.substring(s+1);
+    String low=nm;low.toLowerCase(); if(low.endsWith(".adf")&&!low.endsWith(".sav.adf")) out.push_back(String("/USER-DISKS/")+nm); } f.close(); }
+  d.close();
+}
+static bool createUserDisk(){
+  SD_MMC.mkdir("/USER-DISKS");
+  int n=1; char path[48];
+  for(;n<1000;n++){ snprintf(path,sizeof(path),"/USER-DISKS/USER%02d.adf",n); if(!SD_MMC.exists(path))break; }
+  uint8_t root[512]; memcpy(root,UD_ROOT,512);                       // patch volume name USERnn + checksum
+  char vol[12]; int vl=snprintf(vol,sizeof(vol),"USER%02d",n); if(vl>30)vl=30;
+  root[432]=(uint8_t)vl; memset(root+433,0,30); memcpy(root+433,vol,vl);
+  root[20]=root[21]=root[22]=root[23]=0;
+  uint32_t sum=0; for(int i=0;i<128;i++)sum+=((uint32_t)root[i*4]<<24)|((uint32_t)root[i*4+1]<<16)|((uint32_t)root[i*4+2]<<8)|root[i*4+3];
+  uint32_t ck=(uint32_t)(0-sum); root[20]=ck>>24;root[21]=ck>>16;root[22]=ck>>8;root[23]=(uint8_t)ck;
+  File f=SD_MMC.open(path,FILE_WRITE); if(!f)return false;
+  static const uint8_t zb[512]={0}; uint8_t b0[512]; memset(b0,0,512); memcpy(b0,UD_BOOT,12);
+  for(int b=0;b<1760;b++){ if(b==0)f.write(b0,512); else if(b==880)f.write(root,512); else if(b==881)f.write(UD_BITMAP,512); else f.write(zb,512); }
+  f.close(); return true;
+}
+// blocking QWERTY text entry (KGfx). true on SAVE (out set), false on CANCEL.
+static bool textKeyboard(const char* title,const String& initial,String& out){
+  out=initial;
+  static const char* KROWS[4]={"1234567890","QWERTYUIOP","ASDFGHJKL-","ZXCVBNM'."};
+  const int gap=6, kh=46;
+  const int kbBlock=5*kh+4*gap; const int kbTop=LCD_HEIGHT-8-kbBlock;
+  bool dirty=true, pressed=false; int rel=0;
+  {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<400)delay(10);}
+  while(true){
+    if(dirty){dirty=false;
+      UG->fillScreen(COL_BG);
+      bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
+      UG->fillRect(0,0,LCD_WIDTH,30,COL_BAR); UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);
+      UG->setCursor(8,8); UG->print(title);
+      UG->fillRoundRect(8,38,LCD_WIDTH-16,40,6,COL_PANEL); UG->drawRoundRect(8,38,LCD_WIDTH-16,40,6,COL_AMBER);
+      UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(inkFor(COL_PANEL),COL_PANEL);
+      String shown=out; while(UG->textWidth(shown)>LCD_WIDTH-60&&shown.length()>0)shown=shown.substring(1);
+      UG->setCursor(18,50); UG->print(shown); UG->print("_");
+      int ky=kbTop;
+      for(int r=0;r<4;r++){int nn=strlen(KROWS[r]);int kw=(LCD_WIDTH-gap)/10-gap;int kx=gap+((10-nn)*(kw+gap))/2;
+        for(int i=0;i<nn;i++){char ch=KROWS[r][i]; UG->fillRoundRect(kx,ky,kw,kh,6,COL_BAR);
+          UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(inkFor(COL_BAR),COL_BAR);
+          char lb[2]={ch,0}; UG->setCursor(kx+(kw-UG->textWidth(lb))/2,ky+(kh-16)/2); UG->print(lb); kx+=kw+gap;}
+        ky+=kh+gap;}
+      int cw=(LCD_WIDTH-5*gap)/4,cx=gap; const char* CTL[4]={"DEL","SPACE","CANCEL","SAVE"}; uint16_t cc[4]={(uint16_t)0x8000,COL_BAR,COL_BAR,COL_GREEN};
+      for(int i=0;i<4;i++){ UG->fillRoundRect(cx,ky,cw,kh,8,cc[i]); UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(i==0?TFT_WHITE:inkFor(cc[i]),cc[i]);
+        UG->setCursor(cx+(cw-UG->textWidth(CTL[i]))/2,ky+(kh-12)/2); UG->print(CTL[i]); cx+=cw+gap;}
+      uiFlush();
+    }
+    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){ rel=0;
+      if(!pressed){ pressed=true; bool handled=false; int ky=kbTop;
+        for(int r=0;r<4&&!handled;r++){int nn=strlen(KROWS[r]);int kw=(LCD_WIDTH-gap)/10-gap;int kx0=gap+((10-nn)*(kw+gap))/2;
+          if((int)ty>=ky&&(int)ty<ky+kh){int i=((int)tx-kx0)/(kw+gap);int within=((int)tx-kx0)-i*(kw+gap);
+            if((int)tx>=kx0&&i>=0&&i<nn&&within<kw){if(out.length()<24)out+=KROWS[r][i];dirty=true;handled=true;}}
+          ky+=kh+gap;}
+        if(!handled&&(int)ty>=ky&&(int)ty<ky+kh){int cw=(LCD_WIDTH-5*gap)/4;int i=((int)tx-gap)/(cw+gap);int cxi=gap+i*(cw+gap);
+          if(i>=0&&i<4&&(int)tx>=cxi&&(int)tx<cxi+cw){
+            if(i==0){if(out.length())out.remove(out.length()-1);dirty=true;}
+            else if(i==1){if(out.length()<24)out+=' ';dirty=true;}
+            else if(i==2){return false;}
+            else if(i==3){out.trim();return true;}}}
+      }
+    } else { if(pressed&&++rel>=3)pressed=false; }
+    delay(12);
+  }
+}
+// Blocking full-screen manager. Returns a path to LOAD (empty = just closed).
+static String doUserDisks(){
+  std::vector<String> disks; scanUserDisks(disks);
+  const int rowH=44, listTop=STATUS_H+MODE_BAR_H+52;
+  bool dirty=true, pressed=false; int rel=0, scroll=0;
+  {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<400)delay(10);}
+  while(true){
+    if(dirty){dirty=false;
+      UG->fillScreen(COL_BG); drawStatusBar();
+      UG->fillRect(0,STATUS_H,LCD_WIDTH,MODE_BAR_H,COL_BAR);
+      UG->fillRoundRect(LIST_X+4,STATUS_H+3,80,MODE_BAR_H-6,9,COL_AMBER);
+      UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(TFT_BLACK,COL_AMBER);
+      UG->setCursor(LIST_X+12,STATUS_H+8); UG->print("USR-DSK");
+      UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(COL_LIT,COL_BG); UG->setCursor(8,STATUS_H+MODE_BAR_H+8); UG->print(T(L_USER_DISKS));
+      UG->setFont(&lgfx::fonts::DejaVu9); UG->setTextColor(COL_DIM,COL_BG); UG->setCursor(8,STATUS_H+MODE_BAR_H+34); UG->print("pre-formatted save disks - tap to insert, RENAME to rename");
+      int cy=listTop; UG->fillRoundRect(8,cy,LCD_WIDTH-16,rowH-6,8,COL_GREEN); UG->setTextColor(TFT_BLACK,COL_GREEN);
+      UG->setFont(&lgfx::fonts::DejaVu18); UG->setCursor(18,cy+(rowH-22)/2); UG->print(T(L_CREATE_DISK));
+      int y=listTop+rowH;
+      for(int i=scroll;i<(int)disks.size()&&y<LCD_HEIGHT-6;i++){
+        String nm=disks[i];int s=nm.lastIndexOf('/');if(s>=0)nm=nm.substring(s+1);int dot=nm.lastIndexOf('.');if(dot>0)nm=nm.substring(0,dot);
+        UG->fillRoundRect(8,y,LCD_WIDTH-16,rowH-6,8,COL_PANEL); UG->setTextColor(COL_LIT,COL_PANEL);
+        UG->setFont(&lgfx::fonts::DejaVu18);
+        while(UG->textWidth(nm)>LCD_WIDTH-140&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
+        UG->setCursor(18,y+(rowH-22)/2); UG->print(nm);
+        UG->fillRoundRect(LCD_WIDTH-104,y+4,88,rowH-14,6,COL_BAR); UG->setTextColor(COL_AMBER,COL_BAR);
+        UG->setFont(&lgfx::fonts::DejaVu12); UG->setCursor(LCD_WIDTH-104+(88-UG->textWidth(T(L_RENAME)))/2,y+(rowH-16)/2); UG->print(T(L_RENAME));
+        y+=rowH;
+      }
+      if(disks.empty()){UG->setFont(&lgfx::fonts::DejaVu12);UG->setTextColor(COL_DIM,COL_BG);UG->setCursor(16,listTop+rowH+10);UG->print(T(L_NONE_YET));}
+      uiFlush();
+    }
+    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){ rel=0;
+      if(!pressed){ pressed=true;
+        if(ty>=STATUS_H&&ty<STATUS_H+MODE_BAR_H){ return String(""); }         // tap the bar closes
+        if(ty>=(uint16_t)listTop&&ty<(uint16_t)(listTop+rowH-6)){ createUserDisk(); scanUserDisks(disks); dirty=true; }
+        else{ int y=listTop+rowH;
+          for(int i=scroll;i<(int)disks.size()&&y<LCD_HEIGHT-6;i++){
+            if(ty>=(uint16_t)y&&ty<(uint16_t)(y+rowH-6)){
+              if(tx>=(uint16_t)(LCD_WIDTH-104)){                                // RENAME chip
+                String nm=disks[i];int s=nm.lastIndexOf('/');if(s>=0)nm=nm.substring(s+1);int dot=nm.lastIndexOf('.');String base=(dot>0)?nm.substring(0,dot):nm;
+                String out; if(textKeyboard("RENAME DISK",base,out)){ out.trim(); if(out.length()){ String np="/USER-DISKS/"+out+".adf"; if(!SD_MMC.exists(np.c_str()))SD_MMC.rename(disks[i].c_str(),np.c_str()); } scanUserDisks(disks); }
+                {uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<400)delay(10);} dirty=true;
+              } else return disks[i];                                          // tap row = load this disk
+              break;
+            }
+            y+=rowH;
+          }
+        }
+      }
+    } else { if(pressed&&++rel>=3)pressed=false; }
+    delay(12);
+  }
+}
+
+// v4.9.1-7IN: fresh (uncached) reload of the current level = mode root + g_libpath.
+static void reloadLevel(){
+  listImages(SD_MMC,g_files);                 // fills g_files (titles) + g_cats (sub-categories)
+  buildGameList(); applyStats();              // buildGameList caches only the top level
+  buildActiveLetters(); g_sel=0; g_scroll=0; g_disk_sel=0; g_scrollPx=0; g_inertia_on=false;
+}
+// v4.9.1-7IN: category folder browser (drill-down). Tap a row to descend; "< .." ascends;
+// tap the bar to close to the game list. Returns when a level has no further categories.
+static void doCategoryBrowse(){
+  const int rowH=44, listTop=STATUS_H+MODE_BAR_H+52;
+  bool dirty=true, pressed=false; int rel=0, scroll=0;
+  {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<400)delay(10);}
+  while(true){
+    if(g_cats.empty()) return;                // leaf level (only titles) -> back to the list
+    if(dirty){dirty=false;
+      UG->fillScreen(COL_BG); drawStatusBar();
+      UG->fillRect(0,STATUS_H,LCD_WIDTH,MODE_BAR_H,COL_BAR);
+      UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(COL_AMBER,COL_BAR); UG->setCursor(8,STATUS_H+6); UG->print("CATEGORIES");
+      {String p=g_libpath.length()?g_libpath:String("/"); UG->setTextColor(COL_MID,COL_BAR); UG->setCursor(LCD_WIDTH-8-UG->textWidth(p),STATUS_H+6); UG->print(p);}
+      UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(COL_LIT,COL_BG); UG->setCursor(8,STATUS_H+MODE_BAR_H+8); UG->print("CATEGORIES");
+      int y=listTop;
+      if(g_libpath.length()){ UG->fillRoundRect(8,y,LCD_WIDTH-16,rowH-6,8,COL_BLUE); UG->setTextColor(TFT_WHITE,COL_BLUE); UG->setFont(&lgfx::fonts::DejaVu18); UG->setCursor(18,y+(rowH-22)/2); UG->print("< .."); y+=rowH; }
+      for(int i=scroll;i<(int)g_cats.size()&&y<LCD_HEIGHT-6;i++){
+        UG->fillRoundRect(8,y,LCD_WIDTH-16,rowH-6,8,COL_PANEL); UG->setTextColor(COL_LIT,COL_PANEL); UG->setFont(&lgfx::fonts::DejaVu18);
+        String nm=g_cats[i]; while(UG->textWidth(nm)>LCD_WIDTH-40&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
+        UG->setCursor(18,y+(rowH-22)/2); UG->print(nm); y+=rowH;
+      }
+      uiFlush();
+    }
+    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){ rel=0;
+      if(!pressed){ pressed=true; bool handled=false;
+        if(ty>=STATUS_H&&ty<STATUS_H+MODE_BAR_H) return;                 // tap the bar closes
+        int y=listTop;
+        if(g_libpath.length()){
+          if(ty>=(uint16_t)y&&ty<(uint16_t)(y+rowH-6)){int sp=g_libpath.lastIndexOf('/');g_libpath=(sp>0)?g_libpath.substring(0,sp):String("");reloadLevel();scroll=0;dirty=true;handled=true;}
+          y+=rowH;
+        }
+        if(!handled){
+          for(int i=scroll;i<(int)g_cats.size()&&y<LCD_HEIGHT-6;i++){
+            if(ty>=(uint16_t)y&&ty<(uint16_t)(y+rowH-6)){g_libpath+="/"+g_cats[i];reloadLevel();scroll=0;if(g_cats.empty())return;dirty=true;break;}
+            y+=rowH;
+          }
+        }
+      }
+    } else { if(pressed&&++rel>=3)pressed=false; }
+    delay(12);
+  }
+}
+
 static void handleTap(uint16_t px,uint16_t py){
   // ── A-Z bar ────────────────────────────────────────────────────────────────
   if(px>=AZ_X&&py>=LIST_TOP&&py<LIST_BOTTOM){
     if(handleAlphabetTouch(px,py)) drawListAndCover();
     return;
   }
+
+  // ── v4.8.2: book button on the cover — opens the .rtfm manual full-screen ──
+  if(!g_info_showing && !g_portrait_mode && g_manual_bw && g_manual_path.length() &&
+     px>=(uint16_t)g_manual_bx && px<(uint16_t)(g_manual_bx+g_manual_bw) &&
+     py>=(uint16_t)g_manual_by && py<(uint16_t)(g_manual_by+g_manual_bh)){
+    doManual(g_manual_path); drawFullUI(); return; }
 
   // ── Cover panel: INFO button touches ─────────────────────────────────────
   if(g_info_showing && px < COVER_W) {
@@ -3403,6 +3768,10 @@ static void handleTap(uint16_t px,uint16_t py){
     if(py >= (uint16_t)wiY && py < (uint16_t)(wiY+48) && px >= 6 && px < COVER_W-6) {
       if(!g_wireless_mode) setWirelessMode(true);
       return;
+    }
+    // LANG button — cycle EN/FR/IT/ES/DE and apply live (v4.10.1-7IN)
+    if(g_info_lang_btn_y>0 && py >= (uint16_t)g_info_lang_btn_y && py < (uint16_t)(g_info_lang_btn_y+30) && px >= 6 && px < COVER_W-6) {
+      g_lang=(g_lang+1)%LANG_N; saveLang(); g_info_showing=false; drawFullUI(); return;
     }
     // RESCAN SD (left half) + ROTATE (right half)
     int rescanBtnY = LCD_HEIGHT - BOTTOM_H - 114;
@@ -3532,23 +3901,34 @@ static void handleTap(uint16_t px,uint16_t py){
   if(py>=STATUS_H&&py<STATUS_H+MODE_BAR_H&&px>=LIST_X){
     if(px>=LIST_X+6&&px<LIST_X+44&&g_mode!=MODE_ADF){
       g_mode=MODE_ADF;
+      g_libpath="";   // v4.9.1-7IN: mode switch drops to category root
       if(!listImages(SD_MMC,g_files)) g_files.clear();
-      if(!readGameCache())buildGameList(); buildActiveLetters(); g_sel=0; g_scroll=0; g_disk_sel=0;
+      if(!readGameCache())buildGameList(); buildActiveLetters(); applyStats(); g_sel=0; g_scroll=0; g_disk_sel=0;
       g_scrollPx=0; g_inertia_on=false;
       drawFullUI(); return;
     }
     if(px>=LIST_X+50&&px<LIST_X+88&&g_mode!=MODE_DSK){
       g_mode=MODE_DSK;
+      g_libpath="";   // v4.9.1-7IN: mode switch drops to category root
       if(!listImages(SD_MMC,g_files)) g_files.clear();
-      if(!readGameCache())buildGameList(); buildActiveLetters(); g_sel=0; g_scroll=0; g_disk_sel=0;
+      if(!readGameCache())buildGameList(); buildActiveLetters(); applyStats(); g_sel=0; g_scroll=0; g_disk_sel=0;
       g_scrollPx=0; g_inertia_on=false;
       drawFullUI(); return;
     }
     if(px>=LIST_X+96&&px<LIST_X+140&&g_mode!=MODE_GEN){
       g_mode=MODE_GEN;
+      g_libpath="";   // v4.9.1-7IN: mode switch drops to category root
       if(!listImages(SD_MMC,g_files)) g_files.clear();
-      if(!readGameCache())buildGameList(); buildActiveLetters(); g_sel=0; g_scroll=0; g_disk_sel=0;
+      if(!readGameCache())buildGameList(); buildActiveLetters(); applyStats(); g_sel=0; g_scroll=0; g_disk_sel=0;
       g_scrollPx=0; g_inertia_on=false;
+      drawFullUI(); return;
+    }
+    if(g_categories && px>=(uint16_t)(LIST_X+230) && px<(uint16_t)(LIST_X+326)){   // CATEGORIES browse
+      g_info_showing=false; g_libpath=""; reloadLevel(); doCategoryBrowse(); drawFullUI(); return;
+    }
+    if(px>=(uint16_t)(LCD_WIDTH-160)&&px<(uint16_t)(LCD_WIDTH-98)){   // USR-DSK -> user-disk manager
+      g_info_showing=false; String p=doUserDisks();
+      if(p.length()){ if(doLoadSelected(p)){ g_loaded_game_idx=-1; String nm=p; int s=nm.lastIndexOf('/'); if(s>=0)nm=nm.substring(s+1); int d=nm.lastIndexOf('.'); if(d>0)nm=nm.substring(0,d); g_loaded_name=nm; } }
       drawFullUI(); return;
     }
     if(px>=(uint16_t)(LCD_WIDTH-92)&&px<(uint16_t)(LCD_WIDTH-4)){   // SEARCH pill -> type-to-find
@@ -3561,6 +3941,9 @@ static void handleTap(uint16_t px,uint16_t py){
     g_info_showing=false;
     int gi=(int)((g_scrollPx+(float)(py-LIST_TOP))/LIST_ITEM_H);   // pixel-accurate row hit
     if(gi>=0&&gi<(int)g_games.size()){
+      if(px<(uint16_t)(LIST_X+44)){   // v4.9.0-7IN: tap the letter circle = toggle favourite
+        g_games[gi].fav=!g_games[gi].fav; saveStats(); drawListAndCover(); return;
+      }
       // Tap = SELECT only (v4.5.3: double-tap-to-insert removed — loading is
       // done exclusively via the INSERT button, so browsing can't mount a disk)
       if(gi!=g_sel){
@@ -3660,6 +4043,13 @@ static void handleTap(uint16_t px,uint16_t py){
       UG->setTextColor(COL_LIT, COL_PANEL);
       UG->setCursor(8,y); UG->print("Heap: "+String(ESP.getFreeHeap()/1024)+"KB  PSRAM: "+String(ESP.getFreePsram()/1024)+"KB"); y+=12;
       UG->setCursor(8,y); UG->print("Games: "+String(g_games.size())+"  FW: " FW_VERSION); y+=14;
+
+      // --- LANGUAGE selector (v4.10.1-7IN): tap to cycle EN/FR/IT/ES/DE, saved to CONFIG.TXT ---
+      UG->fillRoundRect(6, y, pw, 30, 8, (uint16_t)0x79D6);
+      UG->drawRoundRect(6, y, pw, 30, 8, COL_ACCENT);
+      UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(TFT_WHITE, (uint16_t)0x79D6);
+      { String ll=String("LANG: ")+LANG_NAMES[g_lang]; int tw=UG->textWidth(ll); UG->setCursor(6+(pw-tw)/2, y+8); UG->print(ll); }
+      g_info_lang_btn_y = y; y += 36;
 
       // --- WIRELESS STATUS (only in wireless mode) ---
       if (g_wireless_mode) {

@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.6.1-JC3248"
+#define FW_VERSION "5.6.4-JC3248"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -833,8 +833,7 @@ static int g_car_bootmode=0;  // CONFIG.TXT CAROUSEL= : default boot VIEW — 0/
 static bool g_tapload=false;    // ON = tapping the already-selected row loads it (old double-tap behaviour)
 static bool g_hotswap=false;    // ON = tapping another disk while loaded swaps to it instantly
 static bool g_forceswap=false;  // ON = swap disk bytes in place without the USB eject/re-attach cycle
-static int g_info_rescan_btn_y=0,g_info_reset_btn_y=0,g_info_pair_now_btn_y=0,g_info_font_btn_y=0,g_info_hive_btn_y=0,g_info_sdacc_btn_y=0;
-static int g_info_x=0,g_info_w=150,g_info_rot_btn_y=0,g_info_comp_btn_y=0,g_info_mode_btn_y=0,g_info_bottom=0,g_info_bh=22;
+static int g_info_x=0,g_info_w=150,g_info_bottom=0;
 static String g_manual_path=""; static int g_manual_bx=0,g_manual_by=0,g_manual_bw=0,g_manual_bh=0;  // v4.9.2 .rtfm book button rect
 struct GameEntry{String name;int first_file_idx;int disk_count;String jpg_path;std::vector<int>disk_indices;bool fav=false;uint16_t plays=0;};
 static std::vector<String>g_files;static std::vector<GameEntry>g_games;
@@ -2876,6 +2875,51 @@ static bool doSearch(){
 //    Text size FOLLOWS the game menu (g_font: SMALL/NORMAL/LARGE); the SIZE button cycles it
 //    live. Drag to scroll with flick inertia. The loader strips/transliterates non-ASCII so a
 //    messy file still renders clean on the 6x8 font. Capped ~16 KB (manuals are short by design).
+// ── .rtfm v2 helpers (5.6.x): [SECTION] markers -> accent headings + a jump picker.
+//    Backwards-compatible: markers are inert plain text to older firmware. See the .rtfm v2 contract.
+static String g_rtfmLastPath=""; static float g_rtfmLastScroll=0;   // remember last read position (per game, session)
+static bool rtfmIsSection(const String& s, String& label){          // a line that is exactly [text] => a heading
+  int a=0,b=(int)s.length()-1;
+  while(a<=b && (s[a]==' '||s[a]=='\t'))a++;
+  while(b>=a && (s[b]==' '||s[b]=='\t'))b--;
+  if(b-a>=1 && s[a]=='[' && s[b]==']'){ label=s.substring(a+1,b); label.trim(); return label.length()>0; }
+  return false;
+}
+static int rtfmSectionMenu(const std::vector<String>& sec){         // full-screen jump picker; returns index or -1
+  int n=(int)sec.size(); if(n<=0)return -1;
+  const int rowH=36, listTop=26, botY=VH-40;
+  int maxRows=(botY-listTop)/rowH; if(maxRows<1)maxRows=1;
+  int scroll=0, maxSc=(n>maxRows)?(n-maxRows):0;
+  bool down=false, moved=false; int dY=0, dScroll=0, lastY=0; bool dirty=true;
+  {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<400)delay(10);}
+  while(true){
+    if(dirty){ dirty=false;
+      gfx_fillScreen(COL_BG);
+      bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
+      gfx_fillRect(0,0,VW,22,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);
+      gfx_setCursor(6,7); gfx_print("JUMP TO SECTION");
+      for(int r=0;r<maxRows && r+scroll<n;r++){ int i=r+scroll; int y=listTop+r*rowH;
+        gfx_fillRoundRect(6,y+2,VW-12,rowH-4,6,COL_PANEL); gfx_drawRoundRect(6,y+2,VW-12,rowH-4,6,COL_ACCENT);
+        gfx_setTextSize(2); gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL);
+        String s=sec[i]; while(gfx_textWidth(s)>VW-28&&s.length()>1)s=s.substring(0,s.length()-1);
+        gfx_setCursor(14,y+(rowH-16)/2); gfx_print(s); }
+      gfx_fillRoundRect(VW/2-60,VH-36,120,30,8,0x8000); gfx_drawRoundRect(VW/2-60,VH-36,120,30,8,COL_AMBER);
+      gfx_setTextSize(1); gfx_setTextColor(TFT_WHITE,0x8000); { const char* c="CANCEL"; gfx_setCursor(VW/2-gfx_textWidth(c)/2,VH-36+11); gfx_print(c); }
+      gfx_flush();
+    }
+    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty); (void)tx;
+    if(have){ if(!down){down=true;moved=false;dY=ty;dScroll=scroll;lastY=ty;}
+      else { if(abs((int)ty-dY)>DRAG_THRESH)moved=true;
+        if(moved&&maxSc>0){ scroll=dScroll-((int)ty-dY)/rowH; if(scroll<0)scroll=0; if(scroll>maxSc)scroll=maxSc; dirty=true; } }
+      lastY=ty;
+    } else if(down){ down=false;
+      if(!moved){ if(lastY>=VH-40) return -1;
+        int r=((int)lastY-listTop)/rowH; int i=r+scroll;
+        if((int)lastY>=listTop && r>=0 && r<maxRows && i<n) return i; }
+    }
+    delay(12);
+  }
+}
 static void doManual(const String& path){
   String raw="";
   { File f=SD_MMC.open(path,FILE_READ);
@@ -2892,45 +2936,54 @@ static void doManual(const String& path){
       } f.close(); }
   }
   if(!raw.length())raw="(no manual text)";
-  const int margin=8, topH=22, botH=28;
+  const int margin=8, topH=22, botH=30;
   const int areaTop=topH+3, areaBot=VH-botH-2, maxW=VW-2*margin;
   int sz=g_name_sz, lineH=8*sz+(sz>=2?5:3);
-  std::vector<String> lines;
-  auto rewrap=[&](){ lines.clear(); sz=g_name_sz; lineH=8*sz+(sz>=2?5:3); gfx_setTextSize(sz);
+  std::vector<String> lines; std::vector<uint8_t> head; std::vector<int> secLine; std::vector<String> secName;   // v2: head[i]=heading; sec* = jump index
+  auto rewrap=[&](){ lines.clear(); head.clear(); secLine.clear(); secName.clear(); sz=g_name_sz; lineH=8*sz+(sz>=2?5:3); gfx_setTextSize(sz);
     String para="";
     for(int i=0;i<=(int)raw.length();i++){ char c=i<(int)raw.length()?raw[i]:'\n';
-      if(c=='\n'){ String line="",word="";
-        for(int j=0;j<=(int)para.length();j++){ char d=j<(int)para.length()?para[j]:' ';
-          if(d==' '||j==(int)para.length()){ String cand=line.length()?line+" "+word:word;
-            if(gfx_textWidth(cand)>maxW&&line.length()){lines.push_back(line);line=word;} else line=cand; word=""; }
-          else word+=d; }
-        lines.push_back(line); para=""; }
+      if(c=='\n'){ String lab;
+        if(rtfmIsSection(para,lab)){ secLine.push_back((int)lines.size()); secName.push_back(lab); lines.push_back(String("[")+lab+"]"); head.push_back(1); }
+        else { String line="",word="";
+          for(int j=0;j<=(int)para.length();j++){ char d=j<(int)para.length()?para[j]:' ';
+            if(d==' '||j==(int)para.length()){ String cand=line.length()?line+" "+word:word;
+              if(gfx_textWidth(cand)>maxW&&line.length()){lines.push_back(line);head.push_back(0);line=word;} else line=cand; word=""; }
+            else word+=d; }
+          lines.push_back(line); head.push_back(0); }
+        para=""; }
       else para+=c; } };
   rewrap();
   float scroll=0, vel=0; int y0=0; float s0=0; bool pressed=false, moved=false; int lastY=0, lastX=0, rel=0; bool dirty=true;
   auto maxScroll=[&](){ int t=(int)lines.size()*lineH-(areaBot-areaTop); return t<0?0.f:(float)t; };
+  if(path==g_rtfmLastPath){ scroll=g_rtfmLastScroll; float ms=maxScroll(); if(scroll<0)scroll=0; if(scroll>ms)scroll=ms; }   // v2: restore last read position
   {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<600)delay(10);}   // drain the entering tap
   while(true){
+    int nbtn = secName.size()? 4 : 3;   // v2 buttons: SIZE, TOP, [SECTIONS], CLOSE
+    int bw = VW/nbtn;
     if(dirty||vel!=0){ dirty=false;
       gfx_fillScreen(COL_BG);
-      gfx_setTextSize(sz); gfx_setTextColor(COL_LIT,COL_BG);
+      gfx_setTextSize(sz);
       int first=(int)(scroll/lineH); if(first<0)first=0;
       int yy=areaTop-((int)scroll-first*lineH);
-      for(int i=first;i<(int)lines.size()&&yy<areaBot;i++){ gfx_setCursor(margin,yy); gfx_print(lines[i]); yy+=lineH; }
+      for(int i=first;i<(int)lines.size()&&yy<areaBot;i++){ gfx_setTextColor(head[i]?COL_ACCENT:COL_LIT,COL_BG); gfx_setCursor(margin,yy); gfx_print(lines[i]); yy+=lineH; }
       float ms=maxScroll();
       if(ms>0){ int trkH=areaBot-areaTop; int thH=max(18,(int)((float)trkH*trkH/((float)lines.size()*lineH))); int thY=areaTop+(int)((float)(trkH-thH)*(scroll/ms));
         gfx_fillRect(VW-4,areaTop,2,trkH,COL_PANEL); gfx_fillRect(VW-4,thY,2,thH,COL_AMBER); }
       bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
       gfx_fillRect(0,0,VW,topH,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);
       gfx_setCursor(6,7); gfx_print(T(L_MANUAL));
-      { String nm=g_games.empty()?String(""):g_games[g_sel].name; while(gfx_textWidth(nm)>VW-120&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
+      { int pct=ms>0?(int)(scroll*100/ms):100; String s=String(pct)+"%"; gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR); gfx_setCursor(VW/2-gfx_textWidth(s)/2,7); gfx_print(s); }   // v2: % moved to top bar
+      { String nm=g_games.empty()?String(""):g_games[g_sel].name; while(gfx_textWidth(nm)>VW/2-24&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
         gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR); gfx_setCursor(VW-gfx_textWidth(nm)-6,7); gfx_print(nm); }
-      int by=VH-botH; gfx_fillRect(0,by,VW,botH,COL_BAR); gfx_hline(0,by,VW,COL_SEP); int bw=VW/3;
-      gfx_fillRoundRect(4,by+4,bw-8,botH-8,6,COL_BAR); gfx_drawRoundRect(4,by+4,bw-8,botH-8,6,COL_ACCENT);
-      { String s=String("SIZE: ")+fontName(g_font); gfx_setTextSize(1); gfx_setTextColor(COL_LIT,COL_BAR); gfx_setCursor(4+((bw-8)-gfx_textWidth(s))/2,by+(botH-8)/2); gfx_print(s); }
-      { int pct=ms>0?(int)(scroll*100/ms):100; String s=String(pct)+"%"; gfx_setTextColor(COL_DIM,COL_BAR); gfx_setCursor(VW/2-gfx_textWidth(s)/2,by+(botH-8)/2); gfx_print(s); }
-      gfx_fillRoundRect(2*bw+4,by+4,bw-8,botH-8,6,0x8000); gfx_drawRoundRect(2*bw+4,by+4,bw-8,botH-8,6,COL_AMBER);
-      { const char* s="CLOSE"; gfx_setTextColor(TFT_WHITE,0x8000); gfx_setCursor(2*bw+4+((bw-8)-gfx_textWidth(s))/2,by+(botH-8)/2); gfx_print(s); }
+      int by=VH-botH; gfx_fillRect(0,by,VW,botH,COL_BAR); gfx_hline(0,by,VW,COL_SEP);
+      auto btn=[&](int idx,const String& lab,uint16_t bg,uint16_t brd,uint16_t ink){ int x=idx*bw;
+        gfx_fillRoundRect(x+3,by+4,bw-6,botH-8,6,bg); gfx_drawRoundRect(x+3,by+4,bw-6,botH-8,6,brd);
+        gfx_setTextSize(1); gfx_setTextColor(ink,bg); gfx_setCursor(x+(bw-gfx_textWidth(lab))/2,by+(botH-8)/2); gfx_print(lab); };
+      btn(0,String("SIZE:")+fontName(g_font),COL_BAR,COL_ACCENT,COL_LIT);
+      btn(1,"TOP",COL_BAR,COL_ACCENT,COL_LIT);
+      if(secName.size()) btn(2,"SECTIONS",COL_BAR,COL_AMBER,COL_LIT);
+      btn(nbtn-1,"CLOSE",0x8000,COL_AMBER,TFT_WHITE);
       gfx_flush();
     }
     uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
@@ -2941,10 +2994,16 @@ static void doManual(const String& path){
       lastX=tx; lastY=ty;
     } else {
       if(pressed&&++rel>=3){ pressed=false;
-        if(!moved){ int by=VH-botH, bw=VW/3;
-          if(lastY>=by){ if(lastX<bw){ applyFont((g_font+1)%3); saveConfigKey("FONT",fontName(g_font)); rewrap(); float ms=maxScroll(); if(scroll>ms)scroll=ms; dirty=true; }
-                         else if(lastX>=2*bw){ return; } }           // CLOSE button
-          else return;                                               // tap the body also closes (forgiving)
+        if(!moved){ int by=VH-botH;
+          if(lastY>=by){ int idx=lastX/bw; if(idx>=nbtn)idx=nbtn-1;
+            if(idx==0){ applyFont((g_font+1)%3); saveConfigKey("FONT",fontName(g_font)); rewrap(); float ms=maxScroll(); if(scroll>ms)scroll=ms; dirty=true; }
+            else if(idx==1){ scroll=0; vel=0; dirty=true; }                                            // TOP
+            else if(secName.size()&&idx==2){ int pick=rtfmSectionMenu(secName);                        // SECTIONS jump
+              if(pick>=0&&pick<(int)secLine.size()){ scroll=(float)secLine[pick]*lineH; float ms=maxScroll(); if(scroll<0)scroll=0; if(scroll>ms)scroll=ms; vel=0; }
+              { int q=0; uint32_t t0=millis(); while(q<8 && millis()-t0<1200){ if(Touch_ReadFrame())q=0; else q++; delay(8); } } pressed=false; moved=false; rel=0; dirty=true; }   // fix: drain the section-pick tap so it is not read as a body-tap (which closes the reader)
+            else { g_rtfmLastPath=path; g_rtfmLastScroll=scroll; return; }                             // CLOSE
+          }
+          else { g_rtfmLastPath=path; g_rtfmLastScroll=scroll; return; }                               // tap body closes (forgiving)
         }
       }
     }
