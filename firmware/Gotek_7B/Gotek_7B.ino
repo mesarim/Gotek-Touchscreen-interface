@@ -53,7 +53,7 @@
 #include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 
 // ---------- Version ----------
-#define FW_VERSION  "v4.8.11-7B-PERF3"
+#define FW_VERSION  "v4.8.15-7B-PERF3"
 
 // ---------- ESP-NOW server (peer-to-peer, no WiFi AP needed) ----------
 #include "espnow_server.h"
@@ -946,6 +946,7 @@ static bool getTouchXY(uint16_t* x,uint16_t* y){
 
 static bool  g_info_showing    = false;
 static int   g_info_pair_btn_y = 0;
+static int   g_info_font_btn_y = 0;   // INFO-panel main-font button Y
 static void  doPairNow();  // defined after layout constants
 
 static bool g_wireless_mode  = false;  // set by MODE=WIRELESS in CONFIG.TXT
@@ -1159,6 +1160,19 @@ static void saveRotate(int deg){
   if(fw){ fw.print(lines); fw.close(); }
 }
 
+// Write FONT=SMALL/NORMAL/LARGE to CONFIG.TXT (read-modify-write, like saveRotate).
+static void saveFont(){
+  const char* fn=(g_font==0)?"SMALL":(g_font==2)?"LARGE":"NORMAL";
+  String lines=""; bool written=false;
+  File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
+  if(fr){ while(fr.available()){ String line=fr.readStringUntil('\n'); line.trim();
+      if(line.startsWith("FONT=")){ lines+="FONT="+String(fn)+"\n"; written=true; }
+      else lines+=line+"\n"; }
+    fr.close(); }
+  if(!written) lines+="FONT="+String(fn)+"\n";
+  File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);
+  if(fw){ fw.print(lines); fw.close(); }
+}
 static void ensureConfig(){
   // If CONFIG.TXT is missing or empty, write defaults so the user
   // always has a starting point and WiFi works out of the box.
@@ -1281,7 +1295,7 @@ static void ensureConfig(){
 
 static void applyFont(int f){   // v4.6.5-7IN
   g_font=(f<0)?0:(f>2)?2:f;
-  g_font_mult=(g_font==0)?0.85f:(g_font==2)?1.35f:1.0f;
+  g_font_mult=(g_font==0)?0.85f:(g_font==2)?2.70f:1.0f;   // LARGE doubled (was 1.35)
 }
 static void loadTheme(){
   File f = SD_MMC.open("/CONFIG.TXT", FILE_READ);
@@ -1845,6 +1859,7 @@ static void drawPngFit(const String&path,int boxX,int boxY,int maxW,int maxH){
 // ════════════════════════════════════════════════════════════════════════════
 static String g_manual_path=""; static int g_manual_bx=0,g_manual_by=0,g_manual_bw=0,g_manual_bh=0;  // book button rect (landscape)
 static String g_rtfmLastPath=""; static float g_rtfmLastScroll=0;   // remember last read position (per game, session)
+static int g_rtfm_size=1;   // reader-LOCAL font size (0=S,1=M,2=L). Independent of the UI list font (g_font).
 static int    g_manual_sel=-1;  static String g_manual_cache="";     // per-selection .rtfm lookup cache (no SD I/O per redraw)
 
 // per-game manual (.rtfm) lookup — mirrors findJPGFor. Plain-text "how to play"
@@ -2671,8 +2686,8 @@ static bool rtfmIsSection(const String& s, String& label){          // a line th
 }
 // reader body font from g_font (0/1/2 = S/M/L). Sets the current font; returns line height.
 static int rtfmBodyFont(){
-  if(g_font>=2){ UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(2); return 42; }
-  if(g_font==1){ UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(1); return 24; }
+  if(g_rtfm_size>=2){ UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(2); return 42; }
+  if(g_rtfm_size==1){ UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(1); return 24; }
   UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextSize(1); return 18;
 }
 static int rtfmSectionMenu(const std::vector<String>& sec){         // full-screen jump picker; returns index or -1
@@ -2696,7 +2711,7 @@ static int rtfmSectionMenu(const std::vector<String>& sec){         // full-scre
       int cbw=200,cbh=48,cbx=(LCD_WIDTH-cbw)/2,cby=LCD_HEIGHT-cbh-8;
       UG->fillRoundRect(cbx,cby,cbw,cbh,10,(uint16_t)0x8000); UG->drawRoundRect(cbx,cby,cbw,cbh,10,COL_AMBER);
       UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(1); UG->setTextColor(TFT_WHITE,(uint16_t)0x8000);
-      { const char* c=T(L_CANCEL); UG->setCursor(LCD_WIDTH/2-UG->textWidth(c)/2,cby+(cbh-16)/2); UG->print(c); }
+      { const char* c="CANCEL"; UG->setCursor(LCD_WIDTH/2-UG->textWidth(c)/2,cby+(cbh-16)/2); UG->print(c); }
       uiFlush();
     }
     uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty); (void)tx;
@@ -2764,7 +2779,7 @@ static void doManual(const String& path){
         UG->fillRect(LCD_WIDTH-5,areaTop,3,trkH,COL_PANEL); UG->fillRect(LCD_WIDTH-5,thY,3,thH,COL_AMBER); }
       bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
       UG->fillRect(0,0,LCD_WIDTH,topH,COL_BAR); UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextSize(1); UG->setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);
-      UG->setCursor(8,8); UG->print(T(L_MANUAL));
+      UG->setCursor(8,8); UG->print("MANUAL");
       { int pct=ms>0?(int)(scroll*100/ms):100; String s=String(pct)+"%"; UG->setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR); UG->setCursor(LCD_WIDTH/2-UG->textWidth(s)/2,8); UG->print(s); }
       { String nm=g_games.empty()?String(""):g_games[g_sel].name; while(UG->textWidth(nm)>LCD_WIDTH/2-24&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
         UG->setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR); UG->setCursor(LCD_WIDTH-UG->textWidth(nm)-8,8); UG->print(nm); }
@@ -2772,7 +2787,7 @@ static void doManual(const String& path){
       auto btn=[&](int idx,const char* lab,uint16_t bg,uint16_t brd,uint16_t ink){ int x=idx*bw;
         UG->fillRoundRect(x+6,by+7,bw-12,botH-14,8,bg); UG->drawRoundRect(x+6,by+7,bw-12,botH-14,8,brd);
         UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(1); UG->setTextColor(ink,bg); UG->setCursor(x+(bw-UG->textWidth(lab))/2,by+(botH-16)/2); UG->print(lab); };
-      const char* szl=(g_font>=2)?"SIZE:L":(g_font==1)?"SIZE:M":"SIZE:S";
+      const char* szl=(g_rtfm_size>=2)?"SIZE:L":(g_rtfm_size==1)?"SIZE:M":"SIZE:S";
       btn(0,szl,COL_BAR,COL_ACCENT,COL_LIT);
       btn(1,"TOP",COL_BAR,COL_ACCENT,COL_LIT);
       if(secName.size()) btn(2,"SECTIONS",COL_BAR,COL_AMBER,COL_LIT);
@@ -2789,7 +2804,7 @@ static void doManual(const String& path){
       if(pressed&&++rel>=3){ pressed=false;
         if(!moved){ int by=LCD_HEIGHT-botH;
           if(lastY>=by){ int idx=lastX/bw; if(idx>=nbtn)idx=nbtn-1;
-            if(idx==0){ applyFont((g_font+1)%3); rewrap(); float ms=maxScroll(); if(scroll>ms)scroll=ms; dirty=true; }   // SIZE (no persist on 7IN)
+            if(idx==0){ g_rtfm_size=(g_rtfm_size+1)%3; rewrap(); float ms=maxScroll(); if(scroll>ms)scroll=ms; dirty=true; }   // SIZE (reader-local; does not touch the UI list font)
             else if(idx==1){ scroll=0; vel=0; dirty=true; }                                            // TOP
             else if(secName.size()&&idx==2){ int pick=rtfmSectionMenu(secName);                        // SECTIONS jump
               if(pick>=0&&pick<(int)secLine.size()){ scroll=(float)secLine[pick]*lineH; float ms=maxScroll(); if(scroll<0)scroll=0; if(scroll>ms)scroll=ms; vel=0; }
@@ -3546,6 +3561,10 @@ static void handleTap(uint16_t px,uint16_t py){
       if(!g_wireless_mode) setWirelessMode(true);
       return;
     }
+    // FONT button — cycle SMALL/NORMAL/LARGE main UI font (persisted to CONFIG.TXT)
+    if(g_info_font_btn_y>0 && py >= (uint16_t)g_info_font_btn_y && py < (uint16_t)(g_info_font_btn_y+30) && px >= 6 && px < COVER_W-6) {
+      applyFont((g_font+1)%3); saveFont(); g_info_showing=false; drawFullUI(); return;
+    }
     // RESCAN SD (left half) + ROTATE (right half)
     int rescanBtnY = LCD_HEIGHT - BOTTOM_H - 114;
     if(py >= (uint16_t)rescanBtnY && py < (uint16_t)(rescanBtnY+30) &&
@@ -3802,6 +3821,13 @@ static void handleTap(uint16_t px,uint16_t py){
       UG->setTextColor(COL_LIT, COL_PANEL);
       UG->setCursor(8,y); UG->print("Heap: "+String(ESP.getFreeHeap()/1024)+"KB  PSRAM: "+String(ESP.getFreePsram()/1024)+"KB"); y+=12;
       UG->setCursor(8,y); UG->print("Games: "+String(g_games.size())+"  FW: " FW_VERSION); y+=14;
+
+      // --- FONT selector (main UI font): tap to cycle SMALL/NORMAL/LARGE, saved to CONFIG.TXT ---
+      UG->fillRoundRect(6, y, COVER_W-12, 30, 8, COL_BAR);
+      UG->drawRoundRect(6, y, COVER_W-12, 30, 8, COL_ACCENT);
+      UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(COL_LIT, COL_BAR);
+      { const char* fn=(g_font==0)?"FONT: SMALL":(g_font==2)?"FONT: LARGE":"FONT: NORMAL"; int tw=UG->textWidth(fn); UG->setCursor(6+(COVER_W-12-tw)/2, y+8); UG->print(fn); }
+      g_info_font_btn_y = y; y += 36;
 
       // --- WIRELESS STATUS (only in wireless mode) ---
       if (g_wireless_mode) {
