@@ -26,8 +26,32 @@ bool espnowXiaoOnline() {
   return (millis() - g_espnow_xiao_last_seen) < 30000; // 30s timeout
 }
 
+// ── Save writeback state (v4.8.0) ──
+volatile uint8_t  g_espnow_dongle_caps  = 0;
+volatile uint8_t  g_espnow_dongle_board = 0;
+volatile uint32_t g_espnow_load_id      = 0;
+volatile bool     g_espnow_dirty        = false;
+volatile uint32_t g_espnow_dirty_loadid = 0;
+volatile uint16_t g_espnow_dirty_count  = 0;
+volatile uint32_t g_espnow_dirty_size   = 0;
+// CRC32 (IEEE, bitwise — identical implementation on the dongle side)
+static uint32_t crc32sw(uint32_t crc, const uint8_t* p, size_t n) {
+  crc = ~crc;
+  while (n--) { crc ^= *p++; for (int k = 0; k < 8; k++) crc = (crc >> 1) ^ (0xEDB88320UL & (uint32_t)(-(int32_t)(crc & 1))); }
+  return ~crc;
+}
+
 static uint8_t _xiao_mac[6] = {0};
 static String  _xiao_ip     = "";
+
+// ---------- Multi-dongle scan (Path 1: collect-all, pick one into active slot) ----------
+#define MAX_SCANNED 64   // hard ceiling (array size); runtime cap set from CONFIG.TXT CAP=
+struct ScannedDongle { uint8_t mac[6]; char ip[16]; };
+static ScannedDongle _scanned[MAX_SCANNED];
+static int  _scanned_count = 0;
+static volatile bool _scan_mode = false;
+static int _scanCap = 32;   // runtime cap (CONFIG.TXT CAP=), clamped to MAX_SCANNED
+void espnowSetScanCap(int n){ if(n<1)n=1; if(n>MAX_SCANNED)n=MAX_SCANNED; _scanCap=n; }
 
 // ---------- Packet structs ----------
 #pragma pack(push,1)
@@ -61,11 +85,28 @@ static void handleIncoming(const uint8_t* data, int len) {
 
   if (type == PKT_PAIR_REPLY) {
     const PktHello* p = (const PktHello*)data;
+
+    // Scan mode: collect every distinct dongle, don't commit yet
+    if (_scan_mode) {
+      for (int i=0;i<_scanned_count;i++)
+        if (memcmp(_scanned[i].mac, p->mac, 6)==0) { g_espnow_xiao_last_seen=millis(); return; } // already have it
+      if (_scanned_count < _scanCap) {
+        memcpy(_scanned[_scanned_count].mac, p->mac, 6);
+        strncpy(_scanned[_scanned_count].ip, p->ip, 15);
+        _scanned[_scanned_count].ip[15]=0;
+        _scanned_count++;
+        g_espnow_xiao_last_seen = millis();
+      }
+      return;
+    }
+
     memcpy(_xiao_mac, p->mac, 6);
     _xiao_ip = String(p->ip);
     g_espnow_paired = true;
     g_espnow_link_just_established = true;
     g_espnow_xiao_last_seen = millis();
+    g_espnow_dongle_caps  = p->pad[0];   // v3.2.0+ dongles advertise the save protocol here
+    g_espnow_dongle_board = p->pad[1];   // v5.x: 1 = HD-capable dongle (XIAO 8MB); 0 = DD-only / old dongle
 
     // Register XIAO as direct peer
     if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
@@ -98,6 +139,16 @@ static void handleIncoming(const uint8_t* data, int len) {
   if (type == PKT_XIAO_READY) { g_espnow_xiao_last_seen = millis(); g_espnow_xiao_ready = true; return; }
   if (type == PKT_XIAO_DONE)  { g_espnow_xiao_last_seen = millis(); g_espnow_xiao_done = true; g_espnow_xiao_error = false; return; }
   if (type == PKT_XIAO_ERROR) { g_espnow_xiao_last_seen = millis(); g_espnow_xiao_error = true; g_espnow_xiao_done = false; return; }
+
+  if (type == PKT_XIAO_DIRTY && len >= 16) {   // v4.8.0: dongle has settled unsaved writes
+    g_espnow_xiao_last_seen = millis();        // beacon doubles as a keepalive
+    g_espnow_dirty_loadid = (uint32_t)data[1] | ((uint32_t)data[2]<<8) | ((uint32_t)data[3]<<16) | ((uint32_t)data[4]<<24);
+    g_espnow_dirty_count  = (uint16_t)data[5] | ((uint16_t)data[6]<<8);
+    g_espnow_dirty_size   = (uint32_t)data[7] | ((uint32_t)data[8]<<8) | ((uint32_t)data[9]<<16) | ((uint32_t)data[10]<<24);
+    g_espnow_dirty = (g_espnow_dirty_count > 0);
+    if (!g_espnow_dongle_caps) g_espnow_dongle_caps = 1;   // beacon itself proves capability
+    return;
+  }
 }
 
 static void onNewPeer(const esp_now_recv_info_t* info, const uint8_t* data, int len, void* arg) {
@@ -158,6 +209,80 @@ void espnowBroadcastHello() {
   _bcastPeer->send_pkt((uint8_t*)&pkt, sizeof(pkt));
 }
 
+// ---------- Multi-dongle scan API ----------
+void espnowScanBegin() { _scanned_count = 0; _scan_mode = true; }
+void espnowScanEnd()   { _scan_mode = false; }
+int  espnowScanCount() { return _scanned_count; }
+
+String espnowScanGetMac(int i) {
+  if (i<0 || i>=_scanned_count) return "";
+  char buf[18];
+  snprintf(buf,sizeof(buf),"%02X:%02X:%02X:%02X:%02X:%02X",
+           _scanned[i].mac[0],_scanned[i].mac[1],_scanned[i].mac[2],
+           _scanned[i].mac[3],_scanned[i].mac[4],_scanned[i].mac[5]);
+  return String(buf);
+}
+
+// Commit a scanned dongle as the active target (copies into the proven single slot)
+bool espnowScanSelect(int i) {
+  if (i<0 || i>=_scanned_count) return false;
+  _scan_mode = false;
+  memcpy(_xiao_mac, _scanned[i].mac, 6);
+  _xiao_ip = String(_scanned[i].ip);
+  g_espnow_paired = true;
+  g_espnow_link_just_established = true;
+  g_espnow_xiao_last_seen = millis();
+
+  // Register as direct peer (same as the original pairing path)
+  if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
+  _xiaoPeer = new GotekPeer(_xiao_mac, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
+  if (!_xiaoPeer->add_peer()) { delete _xiaoPeer; _xiaoPeer = nullptr; }
+
+  // Persist active dongle to CONFIG.TXT (same keys as original pairing)
+  char macStr[18];
+  snprintf(macStr,sizeof(macStr),"%02X:%02X:%02X:%02X:%02X:%02X",
+           _xiao_mac[0],_xiao_mac[1],_xiao_mac[2],_xiao_mac[3],_xiao_mac[4],_xiao_mac[5]);
+  String lines=""; bool w1=false,w2=false;
+  File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
+  if(fr){while(fr.available()){String line=fr.readStringUntil('\n');line.trim();
+    if(line.startsWith("XIAO_MAC=")){lines+="XIAO_MAC="+String(macStr)+"\n";w1=true;}
+    else if(line.startsWith("XIAO_IP=")){lines+="XIAO_IP="+_xiao_ip+"\n";w2=true;}
+    else lines+=line+"\n";}fr.close();}
+  if(!w1)lines+="XIAO_MAC="+String(macStr)+"\n";
+  if(!w2)lines+="XIAO_IP="+_xiao_ip+"\n";
+  File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);
+  if(fw){fw.print(lines);fw.close();}
+  Serial.printf("[NOW] Selected dongle %d: %s\n", i, macStr);
+  return true;
+}
+
+// ── Paired-dongle management (v5.7): delete = unpair-over-air + forget locally ──
+// Raw MAC of a scanned dongle (for a targeted unpair).
+void espnowScanMacBytes(int i, uint8_t* out){
+  if(i>=0 && i<_scanned_count) memcpy(out, _scanned[i].mac, 6);
+}
+// Tell ONE dongle (unicast) to drop THIS GTi from its owner list. Sent 3x (ESP-NOW is lossy).
+void espnowSendUnpair(const uint8_t* mac){
+  PktHello pkt = {}; pkt.type = PKT_UNPAIR; WiFi.macAddress(pkt.mac);
+  if (_xiaoPeer && memcmp(_xiao_mac, mac, 6)==0) {
+    for(int k=0;k<3;k++){ _xiaoPeer->send_pkt((uint8_t*)&pkt, sizeof(pkt)); delay(30); }
+    return;
+  }
+  GotekPeer* tp = new GotekPeer(mac, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
+  if (tp->add_peer()) for(int k=0;k<3;k++){ tp->send_pkt((uint8_t*)&pkt, sizeof(pkt)); delay(30); }
+  delete tp;
+}
+// If we're forgetting the currently-active dongle, clear the local pairing + strip CONFIG.TXT.
+void espnowForgetActive(const uint8_t* mac){
+  if (memcmp(_xiao_mac, mac, 6)!=0) return;
+  g_espnow_paired = false; memset(_xiao_mac, 0, 6); _xiao_ip = "";
+  if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
+  String lines=""; File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
+  if(fr){ while(fr.available()){ String line=fr.readStringUntil('\n'); line.trim();
+    if(line.startsWith("XIAO_MAC=")||line.startsWith("XIAO_IP=")) continue; lines+=line+"\n"; } fr.close(); }
+  File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE); if(fw){ fw.print(lines); fw.close(); }
+}
+
 bool   espnowIsPaired()       { return g_espnow_paired; }
 String espnowGetSSIDLabel()   { return "WiFi+NOW"; }
 String espnowGetXiaoMac() {
@@ -177,9 +302,9 @@ bool espnowSendNotify(const String& name, const String& mode, uint32_t size) {
   return true; // proceed straight to sendDisk
 }
 
-bool espnowSendDisk(uint32_t size) {
-  String ip = (_xiao_ip.length() > 0) ? _xiao_ip : String(XIAO_AP_IP);
-  Serial.printf("[TCP] Connecting to XIAO at %s:%d\n", ip.c_str(), XIAO_TCP_PORT);
+static bool sendDiskCore(const uint8_t* mac, const char* ipc, uint32_t size, uint32_t connectTimeoutMs) {
+  String ip = String(ipc);
+  Serial.printf("[TCP] Connecting to XIAO at %s:%d\n", ip.c_str(), DONGLE_TCP_PORT);
 
   // Stop ESP-NOW before switching WiFi mode
   ESP_NOW.end();
@@ -188,10 +313,18 @@ bool espnowSendDisk(uint32_t size) {
   // Switch to pure STA mode to connect to XIAO's AP
   WiFi.mode(WIFI_STA);
   delay(100);
-  WiFi.begin(XIAO_AP_SSID, XIAO_AP_PASS);
+  // Multicast hardening: drop any sticky/auto association to a previous same-SSID dongle,
+  // so WiFi.begin() targets THIS BSSID instead of silently reconnecting to the last one.
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, true);   // keep radio on, erase saved AP so it can't auto-reconnect
+  delay(200);
+  // Target the specific dongle by BSSID (all dongles share SSID "GotekXIAO" on channel 6).
+  // Without the BSSID, with multiple dongles powered on we'd associate to a random one.
+  WiFi.begin(DONGLE_AP_SSID, DONGLE_AP_PASS, ESPNOW_CHANNEL, (uint8_t*)mac);
 
   uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) {
+  while (WiFi.status() != WL_CONNECTED && millis()-t0 < connectTimeoutMs) {
     delay(200);
     Serial.print(".");
   }
@@ -220,7 +353,7 @@ bool espnowSendDisk(uint32_t size) {
 
   // Connect TCP
   WiFiClient client;
-  if (!client.connect(ip.c_str(), XIAO_TCP_PORT)) {
+  if (!client.connect(ip.c_str(), DONGLE_TCP_PORT)) {
     Serial.println("[TCP] TCP connect failed");
     WiFi.disconnect();
     delay(100);
@@ -260,6 +393,18 @@ bool espnowSendDisk(uint32_t size) {
     uint8_t resp = client.read();
     ok = (resp == 0x01);
     Serial.printf("[TCP] XIAO response: 0x%02X (%s)\n", resp, ok?"OK":"ERROR");
+    if (ok) {
+      // v3.2.0 dongles append a 4-byte load_id after the ack (old dongles don't —
+      // short wait, then give up and leave it 0, which disables save mapping)
+      uint32_t tid = millis(); uint8_t lid[4]; int got = 0;
+      while (got < 4 && millis()-tid < 300) {
+        if (client.available()) lid[got++] = client.read(); else delay(5);
+      }
+      g_espnow_load_id = (got == 4)
+        ? ((uint32_t)lid[0] | ((uint32_t)lid[1]<<8) | ((uint32_t)lid[2]<<16) | ((uint32_t)lid[3]<<24))
+        : 0;
+      if (got == 4) Serial.printf("[TCP] load_id=%lu\n", (unsigned long)g_espnow_load_id);
+    }
   } else {
     Serial.println("[TCP] No response from XIAO");
   }
@@ -288,9 +433,128 @@ bool espnowSendDisk(uint32_t size) {
   return ok;
 }
 
+// Single paired dongle — unchanged behaviour (15s connect window, learned IP).
+bool espnowSendDisk(uint32_t size) {
+  return sendDiskCore(_xiao_mac, (_xiao_ip.length() ? _xiao_ip.c_str() : DONGLE_AP_IP), size, 15000);
+}
+// Multicast fan-out — target one MuCa dongle by MAC; every dongle's AP serves 192.168.4.1.
+// Shorter connect window so a powered-off dongle in the group doesn't stall the whole load.
+bool espnowSendDiskTo(const uint8_t* mac, uint32_t size) {
+  return sendDiskCore(mac, DONGLE_AP_IP, size, 6000);
+}
+
 void espnowSendEject() {
   GotekPeer* dst = _xiaoPeer ? _xiaoPeer : _bcastPeer;
   if (!dst) return;
   PktEject pkt = {}; pkt.type = PKT_DISK_EJECT;
   dst->send_pkt((uint8_t*)&pkt, sizeof(pkt));
+}
+
+// ── Save writeback fetch (v4.8.0) — "FLING in reverse" ──────────────────────
+// Same radio dance as sendDiskCore, but sends the command escape and PULLS the
+// dirty sectors. The persist callback runs while the socket is open; only its
+// success sends the 0x01 ack that lets the dongle clear its dirty bits.
+static bool readFull(WiFiClient& c, uint8_t* buf, uint32_t len, uint32_t timeoutMs) {
+  uint32_t got = 0, t0 = millis();
+  while (got < len && millis()-t0 < timeoutMs) {
+    if (!c.connected() && !c.available()) return false;
+    int avail = c.available();
+    if (avail <= 0) { delay(1); continue; }
+    int rd = c.read(buf+got, min((uint32_t)avail, len-got));
+    if (rd > 0) { got += rd; t0 = millis(); }
+  }
+  return got == len;
+}
+static void restoreEspNow() {
+  WiFi.disconnect();
+  delay(200);
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.setChannel(ESPNOW_CHANNEL);
+  while (!WiFi.STA.started()) delay(100);
+  ESP_NOW.begin();
+  ESP_NOW.onNewPeer(onNewPeer, nullptr);
+  if (_bcastPeer) { delete _bcastPeer; _bcastPeer = nullptr; }
+  _bcastPeer = new GotekPeer(ESP_NOW.BROADCAST_ADDR, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
+  if (!_bcastPeer->add_peer()) { delete _bcastPeer; _bcastPeer = nullptr; }
+  if (g_espnow_paired) {
+    if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
+    _xiaoPeer = new GotekPeer(_xiao_mac, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
+    if (!_xiaoPeer->add_peer()) { delete _xiaoPeer; _xiaoPeer = nullptr; }
+  }
+}
+
+bool espnowFetchSave(SavePersistCb persist) {
+  if (!g_espnow_paired || !persist) return false;
+  String ip = _xiao_ip.length() ? _xiao_ip : String(DONGLE_AP_IP);
+  Serial.printf("[SAVE] Fetching dirty sectors from %s\n", ip.c_str());
+
+  ESP_NOW.end();
+  delay(100);
+  WiFi.mode(WIFI_STA);
+  delay(100);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, true);
+  delay(200);
+  WiFi.begin(DONGLE_AP_SSID, DONGLE_AP_PASS, ESPNOW_CHANNEL, (uint8_t*)_xiao_mac);
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) delay(200);
+  if (WiFi.status() != WL_CONNECTED) { Serial.println("[SAVE] WiFi join failed"); restoreEspNow(); return false; }
+
+  WiFiClient client;
+  bool okAll = false;
+  uint8_t* mapBuf = nullptr; uint8_t* packed = nullptr;
+  if (client.connect(ip.c_str(), DONGLE_TCP_PORT)) {
+    uint8_t esc[5] = {0xFF,0xFF,0xFF,0xFF, 0x01};   // command escape + GET_SAVE
+    client.write(esc, 5);
+    uint8_t hdr[14];
+    if (readFull(client, hdr, 14, 5000) && hdr[0]=='S' && hdr[1]=='V' && hdr[2]=='1') {
+      uint32_t loadId  = (uint32_t)hdr[4] | ((uint32_t)hdr[5]<<8) | ((uint32_t)hdr[6]<<16) | ((uint32_t)hdr[7]<<24);
+      uint32_t imgSize = (uint32_t)hdr[8] | ((uint32_t)hdr[9]<<8) | ((uint32_t)hdr[10]<<16) | ((uint32_t)hdr[11]<<24);
+      uint16_t mapLen  = (uint16_t)hdr[12] | ((uint16_t)hdr[13]<<8);
+      if (mapLen > 0 && mapLen <= 256) {
+        mapBuf = (uint8_t*)malloc(mapLen);
+        if (mapBuf && readFull(client, mapBuf, mapLen, 5000)) {
+          uint32_t nSec = 0;
+          for (uint32_t i = 0; i < (uint32_t)mapLen*8; i++)
+            if ((mapBuf[i>>3]>>(i&7))&1) nSec++;
+          Serial.printf("[SAVE] load=%lu img=%lu dirty=%lu\n",
+                        (unsigned long)loadId,(unsigned long)imgSize,(unsigned long)nSec);
+          bool dataOk = true;
+          if (nSec > 0) {
+            packed = (uint8_t*)ps_malloc(nSec*512);
+            if (!packed) packed = (uint8_t*)malloc(nSec*512);
+            dataOk = packed && readFull(client, packed, nSec*512, 30000);
+          }
+          uint8_t crcb[4];
+          if (dataOk && readFull(client, crcb, 4, 5000)) {
+            uint32_t crcRx = (uint32_t)crcb[0] | ((uint32_t)crcb[1]<<8) | ((uint32_t)crcb[2]<<16) | ((uint32_t)crcb[3]<<24);
+            uint32_t crc = crc32sw(0, mapBuf, mapLen);
+            if (nSec > 0) crc = crc32sw(crc, packed, nSec*512);
+            if (crc == crcRx) {
+              // Persist to SD *before* acking — the ack is the dongle's permission to forget
+              bool saved = persist(loadId, imgSize, mapBuf, mapLen, packed, nSec);
+              uint8_t ack = saved ? 0x01 : 0x00;
+              client.write(&ack, 1);
+              client.flush();
+              delay(100);
+              okAll = saved;
+              Serial.printf("[SAVE] %s\n", saved ? "persisted + acked" : "persist FAILED — no ack");
+            } else {
+              Serial.println("[SAVE] CRC mismatch — no ack, dongle retains");
+              uint8_t ack = 0x00; client.write(&ack, 1); client.flush();
+            }
+          } else Serial.println("[SAVE] short read — no ack, dongle retains");
+        }
+      }
+    } else Serial.println("[SAVE] bad header");
+    client.stop();
+  } else Serial.println("[SAVE] TCP connect failed");
+  if (mapBuf) free(mapBuf);
+  if (packed) free(packed);
+
+  restoreEspNow();
+  Serial.println("[NOW] ESP-NOW restored after save fetch");
+  if (okAll) g_espnow_dirty = false;   // serviced; a fresh beacon re-raises if more arrives
+  return okAll;
 }

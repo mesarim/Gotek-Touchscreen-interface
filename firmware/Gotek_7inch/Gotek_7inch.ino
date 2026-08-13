@@ -50,7 +50,7 @@
 #include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 
 // ---------- Version ----------
-#define FW_VERSION  "v4.10.4-7IN"
+#define FW_VERSION  "v4.12.2-7IN"
 
 // ---------- ESP-NOW server (peer-to-peer, no WiFi AP needed) ----------
 #include "espnow_server.h"
@@ -878,8 +878,11 @@ static int   g_info_pair_btn_y = 0;
 static int   g_info_font_btn_y = 0;   // INFO-panel main-font button Y
 static int   g_info_lang_btn_y = 0;   // v4.10.1-7IN INFO-panel language button Y
 static void  doPairNow();  // defined after layout constants
+static void  doScanDongles();   // v4.12: full-screen dongle scan + picker (JC method)
 
 static bool g_wireless_mode  = false;  // set by MODE=WIRELESS in CONFIG.TXT
+static bool g_espnow_started  = false;  // guard: espnowBegin() inits once (scan + pair share it)
+static inline void ensureEspNow(){ if(!g_espnow_started){ espnowBegin(); g_espnow_started=true; } }
 static int  g_rot            = 0;      // CONFIG.TXT ROTATE= : LovyanGFX rotation. 0=landscape, 2=180 flip. (90/270 portrait = stage 2)
 
 // ── K rendering targets ─────────────────────────────────────────────────────
@@ -1621,35 +1624,7 @@ static void doRescan(){
   drawFullUI();
 }
 
-static void doPairNow() {
-  UG->fillRoundRect(8, g_info_pair_btn_y, COVER_W-16, 28, 6, COL_AMBER);
-  UG->setFont(&lgfx::fonts::DejaVu12);
-  UG->setTextColor(TFT_BLACK, COL_AMBER);
-  UG->setCursor(18, g_info_pair_btn_y+8);
-  UG->print("PAIRING...");
-
-  uint32_t t0 = millis();
-  int count = 0;
-  while (!g_espnow_paired && millis() - t0 < 15000) {
-    espnowBroadcastHello();
-    delay(300);
-    count++;
-    UG->setFont(&lgfx::fonts::DejaVu9);
-    UG->setTextColor(COL_LIT, COL_PANEL);
-    UG->setCursor(8, g_info_pair_btn_y - 14);
-    UG->print("tx: " + String(count) + "   ");
-  }
-
-  uint16_t btnCol = g_espnow_paired ? COL_GREEN : 0xE8C4;
-  UG->fillRoundRect(8, g_info_pair_btn_y, COVER_W-16, 28, 6, btnCol);
-  UG->setFont(&lgfx::fonts::DejaVu12);
-  UG->setTextColor(TFT_BLACK, btnCol);
-  UG->setCursor(18, g_info_pair_btn_y+8);
-  UG->print(g_espnow_paired ? "PAIRED OK!" : "PAIR FAILED");
-  delay(1500);
-  drawFullUI();
-  g_info_showing = false;
-}
+static void doPairNow(){ doScanDongles(); }   // v4.12: pairing now goes through the scan+picker
 
 static void drawStatusBar(){ UiFrame _uf;
   UG->fillRect(0,0,LCD_WIDTH,STATUS_H,COL_BAR);
@@ -2337,46 +2312,45 @@ static void drawBottomBar(){ UiFrame _uf;
   int y=LCD_HEIGHT-BOTTOM_H;
   drawGradientBg(0, y, LCD_WIDTH, BOTTOM_H, COL_BAR, COL_PANEL);
   UG->drawFastHLine(0, y, LCD_WIDTH, COL_SEP);
-  const int nb=5; int bw=LCD_WIDTH/nb;   // v4.8.0-7IN: REEL is a first-class 5th button
+  const int nb=5; int bw=LCD_WIDTH/nb;   // v4.11.0-7IN: enlarged word-labelled rounded-rect nav keys (was small circle glyphs)
 
-  struct BtnDef { const char* icon; const char* label; uint16_t col; };
-  BtnDef btns[5] = {
-    { "<", T(L_PREV), COL_ORANGE },
-    { ">", T(L_NEXT), COL_BLUE },
-    { "#", T(L_THEME), COL_AMBER },
-    { "", T(L_REEL), COL_GREEN },
-    { "i", T(L_INFO), COL_MID },
-  };
-
+  const uint16_t bcol[5]={COL_ORANGE,COL_BLUE,COL_AMBER,COL_GREEN,COL_MID};
+  const int pad=6, rad=10;
   for(int i=0;i<nb;i++){
-    int bx = i*bw;
-    if(i>0) UG->drawFastVLine(bx, y+4, BOTTOM_H-8, COL_SEP);
-
-    // Icon circle — positioned higher to leave room for labels
-    int cx = bx + bw/2, cy = y + 13;
-    UG->fillCircle(cx, cy, 10, (uint16_t)(btns[i].col >> 2));
-    UG->drawCircle(cx, cy, 10, btns[i].col);
-    if(i==3){ drawCarouselIcon(cx, cy, btns[i].col); }           // REEL -> coverflow glyph
-    else {
-      UG->setFont(&lgfx::fonts::DejaVu12);
-      UG->setTextColor(btns[i].col, (uint16_t)(btns[i].col >> 2));
-      int tw = UG->textWidth(btns[i].icon);
-      UG->setCursor(cx-tw/2, cy-7); UG->print(btns[i].icon);
+    int bx=i*bw;
+    int rx=bx+pad, ry=y+5, rw=bw-2*pad, rh=BOTTOM_H-20;
+    uint16_t col=bcol[i], dim=(uint16_t)((col>>2)&0x39E7);   // hue-preserving quarter-bright fill (mask stops RGB565 channel bleed)
+    // Enlarged rounded-rect key (2px bright border for a defined, tappable target)
+    UG->fillRoundRect(rx, ry, rw, rh, rad, dim);
+    UG->drawRoundRect(rx, ry, rw, rh, rad, col);
+    UG->drawRoundRect(rx+1, ry+1, rw-2, rh-2, rad-1, col);
+    // Word label — arrows on PREV/NEXT, reel pictograph beside REEL
+    String lbl;
+    switch(i){
+      case 0: lbl=String("< ")+T(L_PREV); break;
+      case 1: lbl=String(T(L_NEXT))+" >"; break;
+      case 2: lbl=T(L_THEME); break;
+      case 3: lbl=T(L_REEL); break;
+      default: lbl=T(L_INFO); break;
     }
-
-    // Label
-    UG->setFont(&lgfx::fonts::DejaVu9);
-    UG->setTextColor(COL_DIM, COL_PANEL);
-    int tw = UG->textWidth(btns[i].label);
-    UG->setCursor(bx+(bw-tw)/2, y+26); UG->print(btns[i].label);
+    UG->setFont(&lgfx::fonts::DejaVu12);
+    UG->setTextColor(col, dim);
+    int tw=UG->textWidth(lbl);
+    if(i==3){
+      drawCarouselIcon(rx+16, ry+rh/2, col);                 // keep the coverflow glyph on REEL
+      int wax=rx+30, waw=rw-30-4;
+      UG->setCursor(wax+(waw-tw)/2, ry+(rh-12)/2); UG->print(lbl);
+    } else {
+      UG->setCursor(rx+(rw-tw)/2, ry+(rh-12)/2); UG->print(lbl);
+    }
   }
 
-  // Theme name (under the THEME button, slot 2)
+  // Theme name (caption under the THEME key, slot 2)
   UG->setFont(&lgfx::fonts::DejaVu9);
   UG->setTextColor((uint16_t)(COL_AMBER>>1), COL_PANEL);
   String tn=THEMES[g_theme_idx].name;
   int tw=UG->textWidth(tn);
-  UG->setCursor(2*bw+(bw-tw)/2, y+38); UG->print(tn);
+  UG->setCursor(2*bw+(bw-tw)/2, y+BOTTOM_H-11); UG->print(tn);
 }
 
 // ============================================================================
@@ -3266,29 +3240,35 @@ static void drawCarousel(){ UiFrame _uf;   // KGfx UiFrame -> one VSYNC flush pe
      const char*lbl=isLd?T(L_EJECT):T(L_INSERT);int tw=UG->textWidth(lbl);
      UG->setCursor(g_car_ins_x+(g_car_ins_w-tw)/2,g_car_ins_y+(g_car_ins_h-16)/2);UG->print(lbl);}
   }
-  // carousel bottom bar: [LIST] | [ALL] | [ROLL]
+  // carousel bottom bar (v4.12.1): enlarged rounded-rect keys [LIST] [source] [ROLL] — matches the nav bar
   int y=H-BOTTOM_H;UG->fillRect(0,y,W,BOTTOM_H,COL_BAR);UG->drawFastHLine(0,y,W,COL_SEP);
   int third=W/3;
-  UG->drawFastVLine(third,y+4,BOTTOM_H-8,COL_SEP);UG->drawFastVLine(2*third,y+4,BOTTOM_H-8,COL_SEP);
-  // LIST
-  UG->fillCircle(third/2,y+14,10,(uint16_t)(COL_ORANGE>>2));UG->drawCircle(third/2,y+14,10,COL_ORANGE);
-  drawListIcon(third/2,y+14,COL_ORANGE);
-  UG->setFont(&lgfx::fonts::DejaVu9);UG->setTextColor(COL_DIM,COL_BAR);
-  UG->setCursor((third-UG->textWidth(T(L_LIST)))/2,y+30);UG->print(T(L_LIST));
-  // SOURCE (ALL — reserved for FAV/MOST later)
-  UG->fillCircle(third+third/2,y+14,10,(uint16_t)(COL_AMBER>>2));UG->drawCircle(third+third/2,y+14,10,COL_AMBER);
-  UG->setTextColor(COL_AMBER,(uint16_t)(COL_AMBER>>2));UG->setCursor(third+third/2-3,y+9);UG->print("*");
-  UG->setTextColor(COL_AMBER,COL_BAR);
-  {const char* sl=carSrcName(); UG->setCursor(third+(third-UG->textWidth(sl))/2,y+30);UG->print(sl);}
-  // ROLL — icon is a tiny die
-  {int dx=2*third+third/2,dy2=y+14,ds=18;
-   UG->fillRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,0xFFFF);
-   UG->drawRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,COL_GREEN);
-   int o=5;
-   UG->fillCircle(dx,dy2,1,TFT_BLACK);
-   UG->fillCircle(dx-o,dy2-o,1,TFT_BLACK);UG->fillCircle(dx+o,dy2+o,1,TFT_BLACK);
-   UG->fillCircle(dx+o,dy2-o,1,TFT_BLACK);UG->fillCircle(dx-o,dy2+o,1,TFT_BLACK);
-   UG->setTextColor(COL_DIM,COL_BAR);UG->setCursor(2*third+(third-UG->textWidth(T(L_ROLL)))/2,y+30);UG->print(T(L_ROLL));}
+  const int cpad=6,crad=10; int crw=third-2*cpad,crh=BOTTOM_H-20,cry=y+5;
+  // LIST — list glyph + word
+  { int rx=0*third+cpad; uint16_t col=COL_ORANGE,dim=(uint16_t)((col>>2)&0x39E7);
+    UG->fillRoundRect(rx,cry,crw,crh,crad,dim);UG->drawRoundRect(rx,cry,crw,crh,crad,col);UG->drawRoundRect(rx+1,cry+1,crw-2,crh-2,crad-1,col);
+    drawListIcon(rx+16,cry+crh/2,col);
+    UG->setFont(&lgfx::fonts::DejaVu12);UG->setTextColor(col,dim);
+    int wax=rx+30,waw=crw-30-4,tw=UG->textWidth(T(L_LIST));
+    UG->setCursor(wax+(waw-tw)/2,cry+(crh-12)/2);UG->print(T(L_LIST)); }
+  // SOURCE — current reel source (ALL/FAV/MOST)
+  { int rx=1*third+cpad; uint16_t col=COL_AMBER,dim=(uint16_t)((col>>2)&0x39E7);
+    UG->fillRoundRect(rx,cry,crw,crh,crad,dim);UG->drawRoundRect(rx,cry,crw,crh,crad,col);UG->drawRoundRect(rx+1,cry+1,crw-2,crh-2,crad-1,col);
+    UG->setFont(&lgfx::fonts::DejaVu12);UG->setTextColor(col,dim);
+    const char* sl=carSrcName(); int tw=UG->textWidth(sl);
+    UG->setCursor(rx+(crw-tw)/2,cry+(crh-12)/2);UG->print(sl); }
+  // ROLL — die glyph + word
+  { int rx=2*third+cpad; uint16_t col=COL_GREEN,dim=(uint16_t)((col>>2)&0x39E7);
+    UG->fillRoundRect(rx,cry,crw,crh,crad,dim);UG->drawRoundRect(rx,cry,crw,crh,crad,col);UG->drawRoundRect(rx+1,cry+1,crw-2,crh-2,crad-1,col);
+    int dx=rx+16,dy2=cry+crh/2,ds=18;
+    UG->fillRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,0xFFFF);UG->drawRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,col);
+    int o=5;
+    UG->fillCircle(dx,dy2,1,TFT_BLACK);
+    UG->fillCircle(dx-o,dy2-o,1,TFT_BLACK);UG->fillCircle(dx+o,dy2+o,1,TFT_BLACK);
+    UG->fillCircle(dx+o,dy2-o,1,TFT_BLACK);UG->fillCircle(dx-o,dy2+o,1,TFT_BLACK);
+    UG->setFont(&lgfx::fonts::DejaVu12);UG->setTextColor(col,dim);
+    int wax=rx+30,waw=crw-30-4,tw=UG->textWidth(T(L_ROLL));
+    UG->setCursor(wax+(waw-tw)/2,cry+(crh-12)/2);UG->print(T(L_ROLL)); }
   if(g_car_dieShow&&carN()>0)carDrawDie();   // dice overlay rides on top
 }
 
@@ -3433,6 +3413,111 @@ static void carTick(bool touch,uint16_t px,uint16_t py,uint32_t now){
   }
 }
 
+// ── Full-screen dongle scan + picker (v4.12: ported from the JC method) ──────
+// Scans ~4s, lists every dongle that answered, tap a row then USE / BACK.
+static void doScanDongles(){
+  ensureEspNow();
+  espnowScanBegin();
+  UG->fillScreen(COL_BG);
+  UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(COL_ORANGE,COL_BG);
+  { const char* s="SCANNING"; UG->setCursor((LCD_WIDTH-UG->textWidth(s))/2,60); UG->print(s); }
+  UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(COL_DIM,COL_BG);
+  { const char* s="Looking for dongles..."; UG->setCursor((LCD_WIDTH-UG->textWidth(s))/2,100); UG->print(s); }
+  uiFlush();
+  uint32_t t0=millis(); int lastCount=-1;
+  while(millis()-t0<4000){
+    espnowBroadcastHello();
+    int c=espnowScanCount();
+    if(c!=lastCount){ lastCount=c;
+      UG->fillRect(0,132,LCD_WIDTH,24,COL_BG);
+      UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(COL_LIT,COL_BG);
+      String m="Found: "+String(c); UG->setCursor((LCD_WIDTH-UG->textWidth(m))/2,134); UG->print(m); uiFlush();
+    }
+    delay(250);
+  }
+  espnowScanEnd();
+  int n=espnowScanCount();
+  if(n==0){
+    UG->fillScreen(COL_BG);
+    UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(COL_ORANGE,COL_BG);
+    UG->setCursor(24,44); UG->print(T(L_NO_DONGLES));
+    UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(COL_DIM,COL_BG);
+    UG->setCursor(24,92); UG->print(T(L_CHECK_DONGLE));
+    UG->setCursor(24,118); UG->print(T(L_IN_RANGE));
+    int bw=180,bh=52,bx=(LCD_WIDTH-bw)/2,by=LCD_HEIGHT-84;
+    UG->fillRoundRect(bx,by,bw,bh,10,COL_BAR); UG->drawRoundRect(bx,by,bw,bh,10,COL_DIM);
+    UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(COL_LIT,COL_BAR);
+    UG->setCursor(bx+(bw-UG->textWidth(T(L_BACK)))/2,by+16); UG->print(T(L_BACK));
+    uiFlush();
+    uint32_t w=millis();
+    while(millis()-w<8000){ if(Touch_ReadFrame()){ uint32_t r=millis(); while(Touch_ReadFrame()&&millis()-r<400)delay(10); break; } delay(20); }
+    g_info_showing=false; drawFullUI(); return;
+  }
+  int rowH=58, listTop=48, btnBarY=LCD_HEIGHT-70;
+  int maxRows=(btnBarY-listTop-6)/rowH; if(maxRows<1)maxRows=1;
+  int maxScroll=(n>maxRows)?(n-maxRows):0, scanScroll=0;
+  int sel=0; for(int i=0;i<n;i++){ if(espnowIsPaired()&&espnowGetXiaoMac()==espnowScanGetMac(i)){sel=i;break;} }
+  if(sel>=maxRows)scanScroll=sel-maxRows+1; if(scanScroll>maxScroll)scanScroll=maxScroll; if(scanScroll<0)scanScroll=0;
+  bool dirty=true, down=false, moved=false; int downX=0,downY=0,downScroll=0;
+  while(true){
+    if(dirty){ dirty=false;
+      UG->fillScreen(COL_BG);
+      UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(COL_ORANGE,COL_BG);
+      UG->setCursor(14,14); UG->print("Dongles ("+String(n)+") - pick one:");
+      for(int r=0;r<maxRows&&(scanScroll+r)<n;r++){ int i=scanScroll+r, y=listTop+r*rowH;
+        String mac=espnowScanGetMac(i), suffix=mac.substring(12);
+        bool isSel=(i==sel), isActive=(espnowIsPaired()&&espnowGetXiaoMac()==mac);
+        uint16_t bg=isSel?COL_SEL:COL_PANEL;
+        UG->fillRoundRect(14,y,LCD_WIDTH-28,rowH-8,8,bg);
+        UG->drawRoundRect(14,y,LCD_WIDTH-28,rowH-8,8,isSel?COL_AMBER:COL_ACCENT);
+        UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(isSel?inkFor(bg):COL_LIT,bg);
+        UG->setCursor(28,y+8); UG->print("Dongle "+String(i+1));
+        UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(isSel?inkFor(bg):COL_MID,bg);
+        UG->setCursor(28,y+32); UG->print("OMEGA-"+suffix);
+        if(isActive){ UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextColor(COL_GREEN,bg);
+          UG->setCursor(LCD_WIDTH-28-UG->textWidth(T(L_ACTIVE)),y+18); UG->print(T(L_ACTIVE)); }
+      }
+      if(n>maxRows){ int trackY=listTop, trackH=maxRows*rowH-8, thumbH=trackH*maxRows/n; if(thumbH<16)thumbH=16;
+        int denom=(maxScroll>0)?maxScroll:1; int thumbY=trackY+(trackH-thumbH)*scanScroll/denom;
+        UG->fillRect(LCD_WIDTH-8,trackY,4,trackH,COL_PANEL); UG->fillRect(LCD_WIDTH-8,thumbY,4,thumbH,COL_AMBER); }
+      int gap=14, bw=(LCD_WIDTH-4*gap)/3; const char* BL[3]={"USE","DEL","BACK"}; uint16_t BC[3]={COL_GREEN,(uint16_t)0x8000,COL_BAR};
+      for(int i=0;i<3;i++){ int bx=gap+i*(bw+gap);
+        UG->fillRoundRect(bx,btnBarY+4,bw,54,10,BC[i]); UG->setTextColor(inkFor(BC[i]),BC[i]);
+        UG->setFont(&lgfx::fonts::DejaVu18); UG->setCursor(bx+(bw-UG->textWidth(BL[i]))/2,btnBarY+22); UG->print(BL[i]); }
+      uiFlush();
+    }
+    uint16_t tx=0,ty=0; bool t=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(t){
+      if(!down){ down=true; downX=tx; downY=ty; downScroll=scanScroll; moved=false; }
+      else{
+        if(maxScroll>0){ int ns=downScroll+((int)downY-(int)ty)/rowH; if(ns<0)ns=0; if(ns>maxScroll)ns=maxScroll; if(ns!=scanScroll){scanScroll=ns;dirty=true;} }
+        if(abs((int)ty-downY)>8||abs((int)tx-downX)>8) moved=true;
+      }
+    } else if(down){
+      down=false;
+      if(!moved){
+        if((int)downY>=btnBarY){ int gap=14, bw=(LCD_WIDTH-4*gap)/3, i=((int)downX-gap)/(bw+gap);
+          if(i==0){ espnowScanSelect(sel);
+            UG->fillScreen(COL_BG); UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(COL_GREEN,COL_BG);
+            { String s=T(L_PAIRED); UG->setCursor((LCD_WIDTH-UG->textWidth(s))/2,LCD_HEIGHT/2-12); UG->print(s); }
+            uiFlush(); delay(800); break; }
+          else if(i==1){   // DEL — forget this dongle: over-air unpair + local forget
+            uint8_t m[6]; espnowScanMacBytes(sel,m); espnowSendUnpair(m); espnowForgetActive(m);
+            UG->fillScreen(COL_BG); UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor((uint16_t)0xE8C4,COL_BG);
+            { const char* s="REMOVED"; UG->setCursor((LCD_WIDTH-UG->textWidth(s))/2,LCD_HEIGHT/2-12); UG->print(s); }
+            uiFlush(); delay(800); break; }
+          else break;   // BACK (i==2)
+        } else if((int)downY>=listTop && (int)downY<listTop+maxRows*rowH){
+          int slot=((int)downY-listTop)/rowH, idx=scanScroll+slot;
+          if(idx>=0&&idx<n&&idx!=sel){ sel=idx; dirty=true; }
+        }
+      }
+    }
+    delay(15);
+  }
+  g_info_showing=false; drawFullUI();
+}
+
 void setup(){
   applyTheme(0);  // default colours before SD is available
   Serial.begin(115200); delay(200);
@@ -3467,7 +3552,7 @@ void setup(){
   }
 
   // ESP-NOW starts after SD so XIAO_MAC can be loaded from CONFIG.TXT
-  if(!sdAccessReq) espnowBegin();   // don't arm the radio during SD access (no stray FATFS writes while the PC holds the card)
+  if(!sdAccessReq) ensureEspNow();   // don't arm the radio during SD access (no stray FATFS writes while the PC holds the card)
 
   // Battery ADC init AFTER SD_MMC — SD_MMC may have touched IO20
   batInit();

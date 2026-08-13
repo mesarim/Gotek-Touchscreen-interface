@@ -630,6 +630,14 @@
       <li>Wait for flashing to complete — typically 30–60 seconds.</li>
       <li><strong>After flashing:</strong> insert a blank FAT32 SD card and power on. The device will auto-generate <code>CONFIG.TXT</code> and create the <code>/ADF</code> and <code>/DSK</code> folders.</li>
     </ol>
+    <div class="warn-box" style="margin-top:0.5rem;">
+      <strong>⚠ Board not showing up when you click Install?</strong> If nothing appears in the serial/COM-port picker, your board is almost certainly using a <strong>CH340 / CH341</strong> USB-to-serial chip and your computer hasn't loaded its driver &mdash; so no port exists for the flasher to talk to. Install the driver once, unplug and replug the board, then try again:
+      <ul style="margin:.4rem 0 .3rem 1.1rem;padding:0;">
+        <li><strong>Windows:</strong> <a href="https://www.wch-ic.com/downloads/CH341SER_ZIP.html" target="_blank" rel="noopener" style="color:var(--blue);">CH341SER driver (WCH, official)</a> &mdash; run the installer, click <em>Install</em>, then reboot if asked.</li>
+        <li><strong>macOS:</strong> <a href="https://www.wch-ic.com/downloads/CH34XSER_MAC_ZIP.html" target="_blank" rel="noopener" style="color:var(--blue);">CH34xSER_MAC (WCH, official)</a> &mdash; recent macOS often has this built in; install it only if the port still won&rsquo;t appear. (<a href="https://learn.adafruit.com/how-to-install-drivers-for-wch-usb-to-serial-chips-ch9102f-ch9102" target="_blank" rel="noopener" style="color:var(--blue);">illustrated guide</a>)</li>
+      </ul>
+      <strong>Already running a GTi build?</strong> The <strong>SD-card update</strong> (the per-device link on each card) uses no USB and needs no driver &mdash; that path keeps working regardless.
+    </div>
     <div class="warn-box">
       <strong>⚠ XIAO only:</strong> Make sure the external WiFi antenna is plugged in before powering on. Without it, wireless range will be very poor.
     </div>
@@ -658,6 +666,29 @@
     </ol>
   </div>
 
+
+  <div class="section-label">Pairing a wireless dongle</div>
+
+  <div class="instructions">
+    <p style="margin-bottom:0.6rem;">Pairing links the touchscreen to a Super&nbsp;Mini / XIAO dongle so it can load disks over WiFi. The steps depend on the dongle firmware.</p>
+    <p style="margin:0.6rem 0 0.2rem;"><strong style="color:var(--green);">Release / stable dongle &mdash; auto-pair</strong></p>
+    <ol>
+      <li>Flash the dongle and plug it into the Gotek's USB; power the Gotek on.</li>
+      <li>On the GTi, open <strong>INFO</strong> and set <strong>MODE = WIRELESS</strong>.</li>
+      <li><strong>INFO &rarr; SCAN DONGLES</strong>, tap your dongle, tap <strong>USE</strong>. Done &mdash; no button needed.</li>
+    </ol>
+    <p style="margin:0.8rem 0 0.2rem;"><strong style="color:var(--copper2);">Beta dongle &mdash; &ldquo;owner-lock&rdquo; (Super&nbsp;Mini v3.5+, XIAO v3.6.1+)</strong></p>
+    <p style="margin:0 0 0.3rem;">The dongle only obeys GTis you enrol, so it can't be paired or stolen over the air.</p>
+    <ol>
+      <li><strong>Pair:</strong> hold the dongle's <code>BOOT</code> for <strong>~5&nbsp;s</strong> and release (opens a 30-second window), then <strong>INFO &rarr; SCAN DONGLES &rarr; USE</strong> on the GTi. Up to 4 GTis per dongle.</li>
+      <li><strong>Forget:</strong> on the GTi, <strong>SCAN DONGLES &rarr; select &rarr; DEL</strong> (unpairs over the air + forgets locally); or hold the dongle's <code>BOOT</code> for <strong>~15&nbsp;s</strong> to wipe all owners (fires automatically at 15&nbsp;s, no release).</li>
+      <li><strong>Rename:</strong> JC screens &mdash; <strong>SCAN DONGLES &rarr; RENAME</strong>.</li>
+    </ol>
+    <div class="warn-box" style="margin-top:0.5rem;">
+      <strong>No lights?</strong> Most dongle boards have no status LEDs and no screen &mdash; go by the timings above, not the colours. If a beta dongle doesn't appear in <strong>SCAN DONGLES</strong>, it's locked to another GTi: BOOT-hold it ~5&nbsp;s to open enrolment, then scan again.
+    </div>
+    <p style="margin-top:0.5rem;font-size:0.8rem;opacity:.85;">Full guide &amp; troubleshooting: <a href="https://github.com/mesarim/Gotek-Touchscreen-interface/wiki/Pairing" target="_blank" rel="noopener" style="color:var(--blue);">Pairing wiki page</a>.</p>
+  </div>
 
   <div class="section-label">Try the interface &mdash; live preview</div>
 

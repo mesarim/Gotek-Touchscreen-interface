@@ -10,6 +10,7 @@
 #define PKT_XIAO_DONE    0x12  // XIAO → Waveshare: disk loaded to Gotek
 #define PKT_XIAO_ERROR   0x13  // XIAO → Waveshare: error
 #define PKT_XIAO_DIRTY   0x15  // XIAO → Waveshare: settled unsaved writes exist (v4.8.0 saves)
+#define PKT_UNPAIR       0x16  // Waveshare → dongle: forget me (drop this GTi from the owner list)
 
 // Shared ramdisk — defined in main .ino
 extern uint8_t* g_disk;
@@ -63,6 +64,9 @@ int    espnowScanCount();
 String espnowScanGetMac(int i);
 bool   espnowScanSelect(int i);
 void   espnowSetScanCap(int n);   // runtime cap on discovered dongles (CONFIG.TXT CAP=)
+void   espnowScanMacBytes(int i, uint8_t* out);   // raw 6-byte MAC of a scanned dongle
+void   espnowSendUnpair(const uint8_t* mac);       // tell a dongle to forget this GTi (unicast)
+void   espnowForgetActive(const uint8_t* mac);     // clear local pairing if mac is the active dongle
 
 // Transfer — sends via WiFi TCP, uses ESP-NOW only for DONE/ERROR reply
 bool   espnowSendNotify(const String& name, const String& mode, uint32_t size);

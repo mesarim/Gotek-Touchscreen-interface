@@ -31,7 +31,7 @@
 #include "esp_wifi.h"
 #include <LittleFS.h>
 
-#define FW_VERSION     "v3.6.0-xiao"   // v3.6.0: HD-capable — 2MB ramdisk (2-sector clusters, like the JC) + pad[1]=1 HD marker so the GTi may fling 1.76MB. Wire-compatible with the Super Mini (which stays DD).
+#define FW_VERSION     "v3.6.1-xiao"   // v3.6.0: HD-capable — 2MB ramdisk (2-sector clusters, like the JC) + pad[1]=1 HD marker so the GTi may fling 1.76MB. Wire-compatible with the Super Mini (which stays DD).
 #define ESPNOW_CHANNEL 6
 #define LED_RED        1   // GP1 — status/attention
 #define LED_BLUE       2   // GP2 — activity
@@ -46,6 +46,7 @@
 #define PKT_PAIR_HELLO  0x05
 #define PKT_PAIR_REPLY  0x14
 #define PKT_DISK_EJECT  0x02
+#define PKT_UNPAIR      0x16   // v3.6.1: GTi -> dongle: forget me (clear pairing)
 #define PKT_XIAO_READY  0x10
 #define PKT_XIAO_DONE   0x12
 #define PKT_XIAO_ERROR  0x13
@@ -287,6 +288,17 @@ static void handleESPNOW(const uint8_t* data, int len) {
       if (f) { f.printf("WAVE_MAC=%s\n", macToStr(_wave_mac).c_str()); f.close(); }
     }
     oledStatus("Gotek OMEGA " FW_VERSION, "Paired!", macToStr(_wave_mac), "AP: " AP_SSID);
+    return;
+  }
+
+  if (type == PKT_UNPAIR) {                       // v3.6.1: paired GTi asked to be forgotten
+    const PktHello* p = (const PktHello*)data;
+    if (_paired && memcmp(_wave_mac, p->mac, 6)==0) {
+      _paired=false; memset(_wave_mac,0,6);
+      if (_wavePeer) { delete _wavePeer; _wavePeer=nullptr; }
+      if (LittleFS.begin(true)) LittleFS.remove("/XIAO_CONFIG.TXT");
+      oledStatus("Gotek OMEGA " FW_VERSION, "Unpaired", "", "Ready to pair");
+    }
     return;
   }
 

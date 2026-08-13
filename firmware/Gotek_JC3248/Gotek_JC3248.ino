@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.6.4-JC3248"
+#define FW_VERSION "5.7.1-JC3248"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -1662,6 +1662,13 @@ struct InfoRect { int x,y,w,h; uint8_t act; };
 static InfoRect g_ir[16]; static int g_ir_n=0;
 static int g_info_page=0, g_info_pages=1;
 static void drawInfoFull();   // paginated settings + INFO bottom bar + flush
+// v5.6.7: readable ink for a key's colour on the dim fill — dark key colours
+// (COL_BAR OFF-states, the dark-red RESET) get promoted to light grey so they
+// don't vanish; bright colours keep their hue.
+static inline uint16_t keyInk(uint16_t c){
+  int r=(c>>11)&31, g=(c>>5)&63, b=c&31;
+  return ((r*2+g*3+b) < 60) ? COL_LIT : c;
+}
 static void drawInfoPanel(){
   // v5.5.4: full-screen, single-column, paginated. Build the item list (dynamic
   // labels + conditional rows), then draw only the current page's buttons and
@@ -1703,10 +1710,13 @@ static void drawInfoPanel(){
   for(int i2=startI;i2<endI;i2++){
     int idx=i2-startI, col=idx%cols, row=idx/cols;
     int bx=ix+pad+col*(colW+colGap), by=areaTop+row*(bh+gap);
-    gfx_fillRoundRect(bx,by,colW,bh,8,g_ii[i2].bg);
+    uint16_t kc=g_ii[i2].bg, kdim=(uint16_t)((kc>>2)&0x39E7), kink=keyInk(kc);   // v5.6.7: dim-fill + bright border key (matches nav/reel bars)
+    gfx_fillRoundRect(bx,by,colW,bh,8,kdim);
+    gfx_drawRoundRect(bx,by,colW,bh,8,kink);
+    gfx_drawRoundRect(bx+1,by+1,colW-2,bh-2,7,kink);
     int sz=2; gfx_setTextSize(sz); int tw=gfx_textWidth(g_ii[i2].lbl);
     if(tw>colW-8){ sz=1; gfx_setTextSize(sz); tw=gfx_textWidth(g_ii[i2].lbl); }   // shrink an over-long label to fit the half-width cell
-    gfx_setTextColor(g_ii[i2].fg,g_ii[i2].bg);
+    gfx_setTextColor(kink,kdim);
     gfx_setCursor(bx+(colW-tw)/2,by+(bh-8*sz)/2);gfx_print(g_ii[i2].lbl);
     if(g_ir_n<16){g_ir[g_ir_n].x=bx;g_ir[g_ir_n].y=by;g_ir[g_ir_n].w=colW;g_ir[g_ir_n].h=bh;g_ir[g_ir_n].act=g_ii[i2].act;g_ir_n++;}
   }
@@ -1834,17 +1844,30 @@ static void drawCarouselIcon(int cx,int cy,uint16_t col){
 }
 static void drawBottomBar(){
   int y=VH-BOTTOM_H;gfx_fillRect(0,y,VW,BOTTOM_H,COL_BAR);gfx_hline(0,y,VW,COL_SEP);
-  // v4.8.5: the carousel is a first-class mode — REEL is ALWAYS present; its glyph is
-  // the coverflow pictograph so it reads as "flip to the reel".
+  // v5.6.5: enlarged word-labelled rounded-rect nav keys (was tiny circle glyphs).
+  // REEL keeps the coverflow pictograph beside its word.
   const int nb=5;int bw=VW/nb;
-  struct{const char*icon;const char*label;uint16_t col;}btns[5]={{"<",T(L_PREV),COL_ORANGE},{">",T(L_NEXT),COL_BLUE},{"#",T(L_THEME),COL_AMBER},{"",T(L_REEL),COL_GREEN},{"i",T(L_INFO),COL_MID}};
+  const uint16_t bcol[5]={COL_ORANGE,COL_BLUE,COL_AMBER,COL_GREEN,COL_MID};
+  String blbl[5]={String("< ")+T(L_PREV),String(T(L_NEXT))+" >",String(T(L_THEME)),String(T(L_REEL)),String(T(L_INFO))};
+  const int pad=4,rad=8; int rw=bw-2*pad,rh=BOTTOM_H-16,ry=y+4;
+  // uniform lettering: size 2 if the widest word fits the slot, else size 1 (narrow portrait)
+  int ts=2; for(int i=0;i<nb;i++){gfx_setTextSize(2); if(gfx_textWidth(blbl[i])>rw-8){ts=1;break;}}
   for(int i=0;i<nb;i++){
-    int bx=i*bw;if(i>0)gfx_vline(bx,y+3,BOTTOM_H-6,COL_SEP);
-    int cx=bx+bw/2,cy2=y+10;gfx_fillCircle(cx,cy2,8,(uint16_t)(btns[i].col>>2));gfx_drawCircle(cx,cy2,8,btns[i].col);
-    if(i==3) drawCarouselIcon(cx,cy2,btns[i].col);           // REEL -> coverflow glyph
-    else{gfx_setTextSize(1);gfx_setTextColor(btns[i].col,(uint16_t)(btns[i].col>>2));int tw=gfx_textWidth(btns[i].icon);gfx_setCursor(cx-tw/2,cy2-4);gfx_print(btns[i].icon);}
-    gfx_setTextColor(COL_DIM,COL_BAR);int tw=gfx_textWidth(btns[i].label);gfx_setCursor(bx+(bw-tw)/2,y+22);gfx_print(btns[i].label);}
-  gfx_setTextColor((uint16_t)(COL_AMBER>>1),COL_BAR);String tn=THEMES[g_theme_idx].name;int tw=gfx_textWidth(tn);gfx_setCursor(2*bw+(bw-tw)/2,y+33);gfx_print(tn);
+    int bx=i*bw,rx=bx+pad; uint16_t col=bcol[i],dim=(uint16_t)((col>>2)&0x39E7);   // hue-preserving quarter-bright fill
+    gfx_fillRoundRect(rx,ry,rw,rh,rad,dim);
+    gfx_drawRoundRect(rx,ry,rw,rh,rad,col);
+    gfx_setTextSize(ts);gfx_setTextColor(col,dim);
+    int tw=gfx_textWidth(blbl[i]),th=8*ts;
+    if(i==3){
+      drawCarouselIcon(rx+13,ry+rh/2,col);                   // REEL -> coverflow glyph + word
+      int wax=rx+24,waw=rw-24-3;
+      gfx_setCursor(wax+(waw-tw)/2,ry+(rh-th)/2);gfx_print(blbl[i]);
+    } else {
+      gfx_setCursor(rx+(rw-tw)/2,ry+(rh-th)/2);gfx_print(blbl[i]);
+    }
+  }
+  gfx_setTextSize(1);gfx_setTextColor((uint16_t)(COL_AMBER>>1),COL_BAR);
+  String tn=THEMES[g_theme_idx].name;int tw=gfx_textWidth(tn);gfx_setCursor(2*bw+(bw-tw)/2,y+BOTTOM_H-8);gfx_print(tn);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2157,28 +2180,35 @@ static void drawCarousel(){
      const char*lbl=isLd?T(L_EJECT):T(L_INSERT);int tw=gfx_textWidth(lbl);
      gfx_setCursor(g_car_ins_x+(g_car_ins_w-tw)/2,g_car_ins_y+(g_car_ins_h-16)/2);gfx_print(lbl);}
   }
-  // carousel bottom bar: [LIST] | [source ALL/FAV/MOST] | [ROLL]
+  // carousel bottom bar (v5.6.6): enlarged rounded-rect keys [LIST] [source] [ROLL] — matches the main nav bar
   int y=VH-BOTTOM_H;gfx_fillRect(0,y,VW,BOTTOM_H,COL_BAR);gfx_hline(0,y,VW,COL_SEP);
   int bw=VW/3;
-  gfx_vline(bw,y+3,BOTTOM_H-6,COL_SEP);gfx_vline(2*bw,y+3,BOTTOM_H-6,COL_SEP);
-  // LIST
-  gfx_fillCircle(bw/2,y+10,8,(uint16_t)(COL_ORANGE>>2));gfx_drawCircle(bw/2,y+10,8,COL_ORANGE);
-  drawListIcon(bw/2,y+10,COL_ORANGE);
-  gfx_setTextColor(COL_DIM,COL_BAR);gfx_setCursor((bw-gfx_textWidth("LIST"))/2,y+22);gfx_print(T(L_LIST));
-  // SOURCE (cycles ALL/FAV/MOST)
-  gfx_fillCircle(bw+bw/2,y+10,8,(uint16_t)(COL_AMBER>>2));gfx_drawCircle(bw+bw/2,y+10,8,COL_AMBER);
-  gfx_setTextColor(COL_AMBER,(uint16_t)(COL_AMBER>>2));gfx_setCursor(bw+bw/2-3,y+6);gfx_print("*");
-  gfx_setTextColor(COL_AMBER,COL_BAR);
-  String sl=carSrcName();gfx_setCursor(bw+(bw-gfx_textWidth(sl))/2,y+22);gfx_print(sl);
-  // ROLL — icon is a tiny die (of course it is)
-  {int dx=2*bw+bw/2,dy2=y+10,ds=16;
-   gfx_fillRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,0xFFFF);
-   gfx_drawRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,COL_GREEN);
-   int o=4;
-   gfx_fillCircle(dx,dy2,1,TFT_BLACK);
-   gfx_fillCircle(dx-o,dy2-o,1,TFT_BLACK);gfx_fillCircle(dx+o,dy2+o,1,TFT_BLACK);
-   gfx_fillCircle(dx+o,dy2-o,1,TFT_BLACK);gfx_fillCircle(dx-o,dy2+o,1,TFT_BLACK);
-   gfx_setTextColor(COL_DIM,COL_BAR);gfx_setCursor(2*bw+(bw-gfx_textWidth("ROLL"))/2,y+22);gfx_print(T(L_ROLL));}
+  const int cpad=4,crad=8; int crw=bw-2*cpad,crh=BOTTOM_H-16,cry=y+4;
+  // LIST — coverflow-list glyph + word
+  { int rx=0*bw+cpad; uint16_t col=COL_ORANGE,dim=(uint16_t)((col>>2)&0x39E7);
+    gfx_fillRoundRect(rx,cry,crw,crh,crad,dim);gfx_drawRoundRect(rx,cry,crw,crh,crad,col);
+    drawListIcon(rx+13,cry+crh/2,col);
+    gfx_setTextSize(2);gfx_setTextColor(col,dim);
+    int wax=rx+24,waw=crw-24-3,tw=gfx_textWidth(T(L_LIST));
+    gfx_setCursor(wax+(waw-tw)/2,cry+(crh-16)/2);gfx_print(T(L_LIST)); }
+  // SOURCE — cycles ALL/FAV/MOST (word is the current source)
+  { int rx=1*bw+cpad; uint16_t col=COL_AMBER,dim=(uint16_t)((col>>2)&0x39E7);
+    gfx_fillRoundRect(rx,cry,crw,crh,crad,dim);gfx_drawRoundRect(rx,cry,crw,crh,crad,col);
+    gfx_setTextSize(2);gfx_setTextColor(col,dim);
+    String sl=carSrcName();int tw=gfx_textWidth(sl);
+    gfx_setCursor(rx+(crw-tw)/2,cry+(crh-16)/2);gfx_print(sl); }
+  // ROLL — die glyph + word
+  { int rx=2*bw+cpad; uint16_t col=COL_GREEN,dim=(uint16_t)((col>>2)&0x39E7);
+    gfx_fillRoundRect(rx,cry,crw,crh,crad,dim);gfx_drawRoundRect(rx,cry,crw,crh,crad,col);
+    int dx=rx+13,dy2=cry+crh/2,ds=16;
+    gfx_fillRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,0xFFFF);gfx_drawRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,col);
+    int o=4;
+    gfx_fillCircle(dx,dy2,1,TFT_BLACK);
+    gfx_fillCircle(dx-o,dy2-o,1,TFT_BLACK);gfx_fillCircle(dx+o,dy2+o,1,TFT_BLACK);
+    gfx_fillCircle(dx+o,dy2-o,1,TFT_BLACK);gfx_fillCircle(dx-o,dy2+o,1,TFT_BLACK);
+    gfx_setTextSize(2);gfx_setTextColor(col,dim);
+    int wax=rx+24,waw=crw-24-3,tw=gfx_textWidth(T(L_ROLL));
+    gfx_setCursor(wax+(waw-tw)/2,cry+(crh-16)/2);gfx_print(T(L_ROLL)); }
   if(g_car_dieShow&&carN()>0)carDrawDie();   // dice overlay rides on top of everything
 }
 
@@ -3097,7 +3127,7 @@ static void doScanDongles(){
     gfx_setTextColor(COL_LIT,COL_BAR);{const char*s="BACK";gfx_setCursor(VW/2-gfx_textWidth(s)/2,VH-34);}gfx_print(T(L_BACK));
     gfx_flush();
     uint32_t w=millis();while(millis()-w<8000){if(Touch_ReadFrame()){uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<400)delay(10);break;}delay(20);}
-    g_info_showing=false;drawFullUI();gfx_flush();return;
+    g_info_showing=true;return;   // v5.6.9: back to the INFO tab, not the games list (caller redraws drawInfoFull)
   }
   // Results: tap a row to highlight, then USE (pair) / RENAME (keyboard) / BACK. Long lists scroll (drag).
   int rowH=40, listTop=26, btnBarY=VH-40;
@@ -3122,8 +3152,8 @@ static void doScanDongles(){
       if(n>maxRows){int trackY=listTop,trackH=maxRows*rowH-4,thumbH=trackH*maxRows/n;if(thumbH<10)thumbH=10;
         int thumbY=trackY+(trackH-thumbH)*scanScroll/maxScroll;
         gfx_fillRect(VW-4,trackY,3,trackH,COL_PANEL);gfx_fillRect(VW-4,thumbY,3,thumbH,COL_AMBER);}
-      int bw=(VW-4*4)/3,bx=4;const char* BL[3]={"USE","RENAME","BACK"};uint16_t BC[3]={COL_GREEN,COL_ACCENT,COL_BAR};
-      for(int i=0;i<3;i++){gfx_fillRoundRect(bx,btnBarY+2,bw,34,6,BC[i]);gfx_setTextColor(inkFor(BC[i]),BC[i]);gfx_setTextSize(1);gfx_setCursor(bx+(bw-gfx_textWidth(BL[i]))/2,btnBarY+14);gfx_print(BL[i]);bx+=bw+4;}
+      int bw=(VW-5*4)/4,bx=4;const char* BL[4]={"USE","RENAME","DEL","BACK"};uint16_t BC[4]={COL_GREEN,COL_ACCENT,(uint16_t)0x8000,COL_BAR};
+      for(int i=0;i<4;i++){gfx_fillRoundRect(bx,btnBarY+2,bw,34,6,BC[i]);gfx_setTextColor(inkFor(BC[i]),BC[i]);gfx_setTextSize(1);gfx_setCursor(bx+(bw-gfx_textWidth(BL[i]))/2,btnBarY+14);gfx_print(BL[i]);bx+=bw+4;}
       gfx_flush();
     }
     bool t=Touch_ReadFrame(); uint16_t tx=0,ty=0; if(t)t=getTouchXY(&tx,&ty);
@@ -3136,16 +3166,20 @@ static void doScanDongles(){
     } else if(down){
       down=false;
       if(!moved){
-        if(downY>=btnBarY){int bw=(VW-4*4)/3,i=(downX-4)/(bw+4);
+        if(downY>=btnBarY){int bw=(VW-5*4)/4,i=(downX-4)/(bw+4);
           if(i==0){espnowScanSelect(sel);gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_GREEN,COL_BG);{const char*s="PAIRED";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);}gfx_print(T(L_PAIRED));gfx_flush();delay(700);break;}
           else if(i==1){String mac=espnowScanGetMac(sel);String label="OMEGA-"+mac.substring(12),nm=getDongleName(mac),out;if(onScreenKeyboard(label,nm,out)){setDongleName(mac,out);}uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<500)delay(10);down=false;dirty=true;}
-          else break; // BACK
+          else if(i==2){   // DEL — forget this dongle: tell it to drop us (over-air) + clear its name & active link
+            uint8_t m[6]; espnowScanMacBytes(sel,m);
+            espnowSendUnpair(m); espnowForgetActive(m); setDongleName(espnowScanGetMac(sel),"");
+            gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0xE8C4,COL_BG);{const char*s="REMOVED";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);}gfx_print("REMOVED");gfx_flush();delay(800);break;}
+          else break; // BACK (i==3)
         } else if(downY>=listTop&&downY<listTop+maxRows*rowH){int slot=(downY-listTop)/rowH,idx=scanScroll+slot; if(idx>=0&&idx<n&&idx!=sel){sel=idx;dirty=true;}}
       }
     }
     delay(15);
   }
-  g_info_showing=false;drawFullUI();gfx_flush();
+  g_info_showing=true;   // v5.6.9: stay on the INFO tab after pairing (caller redraws drawInfoFull)
 }
 
 // Legacy single-pair (kept for compatibility, now routes to scan)
@@ -3527,11 +3561,16 @@ static void drawInfoBottomBar(){
   struct{const char*l;uint16_t col;bool on;}bb[5]={
     {"< PAGE",COL_ORANGE,g_info_page>0},{"PAGE >",COL_BLUE,g_info_page<g_info_pages-1},
     {"THEME",COL_AMBER,true},{"",COL_BAR,false},{"CLOSE",COL_GREEN,true}};
+  const int pad=4,rad=8; int rw=bw-2*pad,rh=BOTTOM_H-16,ry=y+4;   // v5.6.8: enlarged rounded-rect keys (matches the nav bar)
   for(int i=0;i<5;i++){
-    int bx=i*bw; if(i)gfx_vline(bx,y+3,BOTTOM_H-6,COL_SEP);
     if(!bb[i].l[0])continue;
-    gfx_setTextSize(1);gfx_setTextColor(bb[i].on?bb[i].col:COL_DIM,COL_BAR);
-    int tw=gfx_textWidth(bb[i].l);gfx_setCursor(bx+(bw-tw)/2,y+BOTTOM_H/2-4);gfx_print(bb[i].l);
+    int rx=i*bw+pad;
+    uint16_t col=bb[i].on?bb[i].col:COL_DIM, dim=(uint16_t)((col>>2)&0x39E7), ink=keyInk(col);
+    gfx_fillRoundRect(rx,ry,rw,rh,rad,dim);gfx_drawRoundRect(rx,ry,rw,rh,rad,ink);
+    int sz=2; gfx_setTextSize(sz); int tw=gfx_textWidth(bb[i].l);
+    if(tw>rw-6){ sz=1; gfx_setTextSize(sz); tw=gfx_textWidth(bb[i].l); }
+    gfx_setTextColor(ink,dim);
+    gfx_setCursor(rx+(rw-tw)/2,ry+(rh-8*sz)/2);gfx_print(bb[i].l);
   }
 }
 static void drawInfoFull(){

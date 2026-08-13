@@ -256,6 +256,33 @@ bool espnowScanSelect(int i) {
   return true;
 }
 
+// ── Paired-dongle management (v5.7): delete = unpair-over-air + forget locally ──
+// Raw MAC of a scanned dongle (for a targeted unpair).
+void espnowScanMacBytes(int i, uint8_t* out){
+  if(i>=0 && i<_scanned_count) memcpy(out, _scanned[i].mac, 6);
+}
+// Tell ONE dongle (unicast) to drop THIS GTi from its owner list. Sent 3x (ESP-NOW is lossy).
+void espnowSendUnpair(const uint8_t* mac){
+  PktHello pkt = {}; pkt.type = PKT_UNPAIR; WiFi.macAddress(pkt.mac);
+  if (_xiaoPeer && memcmp(_xiao_mac, mac, 6)==0) {
+    for(int k=0;k<3;k++){ _xiaoPeer->send_pkt((uint8_t*)&pkt, sizeof(pkt)); delay(30); }
+    return;
+  }
+  GotekPeer* tp = new GotekPeer(mac, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
+  if (tp->add_peer()) for(int k=0;k<3;k++){ tp->send_pkt((uint8_t*)&pkt, sizeof(pkt)); delay(30); }
+  delete tp;
+}
+// If we're forgetting the currently-active dongle, clear the local pairing + strip CONFIG.TXT.
+void espnowForgetActive(const uint8_t* mac){
+  if (memcmp(_xiao_mac, mac, 6)!=0) return;
+  g_espnow_paired = false; memset(_xiao_mac, 0, 6); _xiao_ip = "";
+  if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
+  String lines=""; File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
+  if(fr){ while(fr.available()){ String line=fr.readStringUntil('\n'); line.trim();
+    if(line.startsWith("XIAO_MAC=")||line.startsWith("XIAO_IP=")) continue; lines+=line+"\n"; } fr.close(); }
+  File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE); if(fw){ fw.print(lines); fw.close(); }
+}
+
 bool   espnowIsPaired()       { return g_espnow_paired; }
 String espnowGetSSIDLabel()   { return "WiFi+NOW"; }
 String espnowGetXiaoMac() {

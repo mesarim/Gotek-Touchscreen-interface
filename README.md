@@ -158,6 +158,30 @@ change it, change it in both places or wireless won't connect.
 
 ---
 
+## Wireless pairing
+
+Pairing links the touchscreen to a dongle so it can load disks over WiFi. How it works depends
+on the dongle firmware — full guide and troubleshooting on the
+**[Pairing wiki page](../../wiki/Pairing)**.
+
+**Release / stable dongle — auto-pair.** Flash the dongle, plug it into the Gotek's USB, set
+**MODE = WIRELESS** on the GTi, then **INFO → SCAN DONGLES → USE**. No button needed — the dongle
+accepts the first GTi that enrols it.
+
+**Beta dongle — "owner-lock"** (Super Mini v3.5+, XIAO v3.6.1+). The dongle only obeys GTis you
+enrol, so it can't be paired or stolen over the air:
+
+- **Pair:** hold the dongle's **BOOT ~5 s** (opens a 30 s window), then **SCAN DONGLES → USE** on
+  the GTi. Up to 4 GTis per dongle — repeat to add another.
+- **Forget:** on the GTi, **SCAN DONGLES → select → DEL** (unpairs over the air + forgets locally);
+  or hold the dongle's **BOOT ~15 s** to wipe all owners (auto-fires at 15 s, no release needed).
+- **Rename:** JC screens — **SCAN DONGLES → RENAME**.
+
+> Most dongle boards have no LEDs and no screen — go by the timings, not the lights. If a beta
+> dongle doesn't appear in SCAN, it's locked to another GTi: BOOT-hold ~5 s to open enrolment.
+
+---
+
 ## Waveshare 2.8" — legacy / out of date
 
 The original build for the Waveshare ESP32-S3-Touch-LCD-2.8. It is **superseded by the JC3248
