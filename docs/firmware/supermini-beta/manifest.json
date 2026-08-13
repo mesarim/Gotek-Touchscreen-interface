@@ -1,13 +1,6 @@
 {
-  "name": "Gotek SuperMini wireless dongle BETA (save protocol)",
-  "version": "3.4.0-beta",
+  "name": "Gotek SuperMini wireless dongle BETA (v3.5.2 — owner-lock + remote unpair)",
+  "version": "3.5.2-beta",
   "new_install_prompt_erase": true,
-  "builds": [
-    {
-      "chipFamily": "ESP32-S3",
-      "parts": [
-        { "path": "Gotek_SuperMini.ino.merged.bin", "offset": 0 }
-      ]
-    }
-  ]
+  "builds": [ { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_SuperMini.ino.merged.bin", "offset": 0 } ] } ]
 }

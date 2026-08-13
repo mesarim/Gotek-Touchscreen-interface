@@ -1,6 +1,6 @@
 {
-  "name": "Gotek Touchscreen Interface — Waveshare 7B BETA (v4.8.15 — 1024x600, RTFM manual reader + on-screen font sizing)",
-  "version": "4.8.15-7B-beta",
+  "name": "Gotek Touchscreen Interface — Waveshare 7B BETA (v4.8.19 — 1024x600, dongle scan/pair menu, bigger buttons)",
+  "version": "4.8.19-7B-beta",
   "new_install_prompt_erase": true,
   "builds": [ { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_7B.ino.merged.bin", "offset": 0 } ] } ]
 }
