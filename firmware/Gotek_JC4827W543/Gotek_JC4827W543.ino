@@ -32,7 +32,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.7.1-JC4827"
+#define FW_VERSION "5.7.2-JC4827"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -780,6 +780,17 @@ static uint16_t* g_ss_buf=NULL; static int g_ss_w=0, g_ss_h=0;
 #define SS_IDLE_MS  600000UL   // 10 min idle (browsing / nothing loaded)
 #define SS_LOAD_MS  120000UL   // 2 min idle once a game is loaded (showcase)
 static uint32_t g_ss_idle_ms=SS_IDLE_MS, g_ss_load_ms=SS_LOAD_MS;   // hidden SS_IDLE=/SS_LOAD= override (seconds)
+// ── v5.7.2: screensaver SLIDESHOW — full-screen photo mode with transitions (Paul Dean CR).
+//    SSMODE=SLIDES (default) shows real images fit-to-screen with fade/dissolve/slide;
+//    SSMODE=BOUNCE forces the classic DVD-logo bounce. Slide pool = /screensaver/*.jpg
+//    PLUS the cover art of every FAVOURITED game (SSFAV=ON). If the pool is empty
+//    (no folder images, no favourites) it falls through to the sprite bounce as before.
+static bool g_ss_slides=true;         // SSMODE: true=slideshow, false=classic bounce
+static int  g_ss_fx=0;                // SSFX: 0=SHUFFLE 1=FADE 2=DISSOLVE 3=SLIDE 4=CUT
+static bool g_ss_fav=true;            // SSFAV: fold favourited game covers into the slide pool
+static uint32_t g_ss_time_ms=6000UL;  // SSTIME: seconds each slide holds (2..120)
+static uint16_t* g_slA=NULL;          // slideshow double-buffer: outgoing frame (raw physical fb layout)
+static uint16_t* g_slB=NULL;          // slideshow double-buffer: incoming frame
 static int g_dongle_cap=32;   // CONFIG.TXT CAP= : max wireless dongles to discover/cast (1..64)
 static int g_hivemind=1;      // v4.8.1 (undocumented HIVEMIND=): 1 = FLING fans out to all MuCa dongles (classic), 0 = paired dongle only
 static int g_cracktro=0;      // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or 0 = pick one at random each boot
@@ -1138,6 +1149,18 @@ static void generateDefaultConfig(){
   f.println("# NESTING: OFF = categories are one level deep. ON = allow sub-categories (folders within category folders).");
   f.println("NESTING=OFF");
   f.println("");
+  f.println("# SCREENSAVER: idle slideshow. ON = show it after a few minutes idle, OFF = never.");
+  f.println("SCREENSAVER=ON");
+  f.println("# SSMODE: SLIDES = full-screen photo slideshow (default), BOUNCE = classic bouncing logo.");
+  f.println("SSMODE=SLIDES");
+  f.println("# SSFX: transition between slides - SHUFFLE (random), FADE, DISSOLVE, SLIDE, or CUT.");
+  f.println("SSFX=SHUFFLE");
+  f.println("# SSTIME: seconds each slide is shown (2-120).");
+  f.println("SSTIME=6");
+  f.println("# SSFAV: ON = also slideshow the cover art of your favourited games;");
+  f.println("#        OFF = only images you drop in the /screensaver/ folder.");
+  f.println("SSFAV=ON");
+  f.println("");
   f.println("# Wireless dongle MAC (auto-filled when you pair via INFO screen)");
   f.println("# XIAO_MAC=");
   f.close();
@@ -1147,7 +1170,8 @@ static void generateDefaultConfig(){
 // have it (generateDefaultConfig never overwrites). Append any documented key the
 // file is missing — with its comment + default — so upgraders get an editable line
 // without their other settings being touched. Only writes when something is missing;
-// hidden keys (SCREENSAVER/SS_*) are intentionally excluded so they stay undocumented.
+// the fine-tuning SS_IDLE/SS_LOAD timers stay hidden, but the slideshow keys
+// (SCREENSAVER/SSMODE/SSFX/SSTIME/SSFAV) are documented so upgraders discover them.
 static void selfHealConfig(){
   if(!SD_MMC.exists("/CONFIG.TXT"))return;   // fresh cards already get the full template
   struct CfgKey{const char*key;const char*block;};
@@ -1168,6 +1192,11 @@ static void selfHealConfig(){
     {"SDSPEED",  "\n# SDSPEED: SD card clock. 20 = safe default, 40 = ~1.7x faster reads if your card holds it (auto-falls back to 20).\nSDSPEED=20\n"},
     {"CATEGORIES","\n# CATEGORIES: OFF = flat library. ON = browse by category (a top-level folder with no disk images, only subfolders, is a category).\nCATEGORIES=OFF\n"},
     {"NESTING",  "# NESTING: OFF = one category level. ON = allow sub-categories (folders within category folders).\nNESTING=OFF\n"},
+    {"SCREENSAVER","\n# SCREENSAVER: idle slideshow. ON = show it after a few minutes idle, OFF = never.\nSCREENSAVER=ON\n"},
+    {"SSMODE",   "# SSMODE: SLIDES = full-screen photo slideshow (default), BOUNCE = classic bouncing logo.\nSSMODE=SLIDES\n"},
+    {"SSFX",     "# SSFX: transition between slides - SHUFFLE (random), FADE, DISSOLVE, SLIDE, or CUT.\nSSFX=SHUFFLE\n"},
+    {"SSTIME",   "# SSTIME: seconds each slide is shown (2-120).\nSSTIME=6\n"},
+    {"SSFAV",    "# SSFAV: ON = also slideshow favourited game covers; OFF = only /screensaver/ images.\nSSFAV=ON\n"},
   };
   const int NK=sizeof(KEYS)/sizeof(KEYS[0]);
   bool present[NK]; for(int i=0;i<NK;i++)present[i]=false;
@@ -1197,6 +1226,12 @@ static void loadConfig(){
     else if(k=="SCREENSAVER"){g_ss_enabled=(v!="OFF"&&v!="0");}
     else if(k=="SS_IDLE"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_idle_ms=s*1000UL;}
     else if(k=="SS_LOAD"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_load_ms=s*1000UL;}
+    else if(k=="SSMODE"){String u=v;u.toUpperCase();g_ss_slides=!(u=="BOUNCE"||u=="0"||u=="SPRITES");}   // v5.7.2 slideshow
+    else if(k=="SSFX"){String u=v;u.toUpperCase();
+      if(u=="FADE")g_ss_fx=1; else if(u=="DISSOLVE"||u=="DISS")g_ss_fx=2;
+      else if(u=="SLIDE"||u=="PUSH")g_ss_fx=3; else if(u=="CUT"||u=="NONE")g_ss_fx=4; else g_ss_fx=0; }  // default SHUFFLE
+    else if(k=="SSTIME"){uint32_t s=(uint32_t)v.toInt(); if(s<2)s=2; if(s>120)s=120; g_ss_time_ms=s*1000UL;}
+    else if(k=="SSFAV"){g_ss_fav=(v!="OFF"&&v!="0");}
     else if(k=="CAP"){int c=v.toInt(); if(c>=1&&c<=64)g_dongle_cap=c;}
     else if(k=="CRACKTRO"){String cu=v;cu.trim();cu.toUpperCase(); if(cu=="DENISE")g_cracktro=7; else if(cu=="WRANGLER")g_cracktro=8; else{int c=v.toInt(); if(c>=0&&c<=6)g_cracktro=c;}}
     else if(k=="SAVES"){v.toUpperCase(); g_saves_mode=(v=="OVERWRITE")?2:(v=="OFF"||v=="0")?0:1;}
@@ -2713,7 +2748,137 @@ static bool ssMakeName(bool vincent){
 //    ~40% of bounces flip to a random name instead, then it keeps bouncing. EDIT FREELY.
 static const char* const NAMES[]={ "Vincent", "BlindGuy", "Retronaut", "Mez", "Wrangler" };
 static const int N_NAMES=(int)(sizeof(NAMES)/sizeof(NAMES[0]));
+
+// ════════════════════════════════════════════════════════════════════════════
+// v5.7.2: SCREENSAVER SLIDESHOW (Paul Dean CR) — full-screen photo mode.
+//   Pool = /screensaver/*.jpg  +  cover art of every FAVOURITED game (SSFAV=ON),
+//   shuffled. Each slide fit-to-screen (letterboxed) via gfx_drawJpgFile. Between
+//   slides: fade / dissolve / slide-push (SSFX; SHUFFLE picks one at random).
+//   Two full-screen PSRAM snapshots drive the blend; if they can't be allocated we
+//   fall back to a hard CUT so the slideshow still runs on tight-PSRAM boards.
+// ════════════════════════════════════════════════════════════════════════════
+#define SSFX_FADE 1
+#define SSFX_DISS 2
+#define SSFX_SLIDE 3
+#define SSFX_CUT  4
+static bool ssSlideAlloc(){
+  size_t px=(size_t)LCD_WIDTH*LCD_HEIGHT;
+  if(!g_slA)g_slA=(uint16_t*)ps_malloc(px*2);
+  if(!g_slB)g_slB=(uint16_t*)ps_malloc(px*2);
+  return g_slA&&g_slB;
+}
+static void ssSlideFree(){ if(g_slA){free(g_slA);g_slA=NULL;} if(g_slB){free(g_slB);g_slB=NULL;} }
+// blend two TRUE rgb565 values, t in 0..32
+static inline uint16_t ssLerp565(uint16_t a,uint16_t b,int t){
+  int ar=(a>>11)&0x1F, ag=(a>>5)&0x3F, ab=a&0x1F;
+  int br=(b>>11)&0x1F, bg=(b>>5)&0x3F, bb=b&0x1F;
+  int r=ar+((br-ar)*t)/32, g=ag+((bg-ag)*t)/32, bl=ab+((bb-ab)*t)/32;
+  return (uint16_t)((r<<11)|(g<<5)|bl);
+}
+// render one image fit-to-screen into the live framebuffer (no flush); optionally snapshot it
+static void ssSlideRender(const String&path,uint16_t*snap){
+  gfx_fillScreen(TFT_BLACK);
+  gfx_drawJpgFile(path,0,0,gW,gH);
+  if(snap)memcpy(snap,framebuffer,(size_t)LCD_WIDTH*LCD_HEIGHT*2);
+}
+// hold on the current frame for ms; return true if a touch asks us to wake
+static bool ssSlideHold(uint32_t ms){
+  uint32_t t0=millis();
+  while(millis()-t0<ms){ if(Touch_ReadFrame())return true; delay(12); }
+  return false;
+}
+// transition g_slA (outgoing) -> g_slB (incoming), both raw physical fb words. true=touched
+static bool ssSlideFx(int fx){
+  const int N=LCD_WIDTH*LCD_HEIGHT;
+  if(fx==SSFX_CUT){ memcpy(framebuffer,g_slB,(size_t)N*2); gfx_flush(); return false; }
+  if(fx==SSFX_FADE){
+    const int STEPS=16;
+    for(int s=1;s<=STEPS;s++){ if(Touch_ReadFrame())return true;
+      int t=s*32/STEPS;
+      for(int i=0;i<N;i++){ uint16_t a=swap16(g_slA[i]),b=swap16(g_slB[i]);
+        framebuffer[i]=swap16(ssLerp565(a,b,t)); if((i&4095)==0)yield(); }
+      gfx_flush(); }
+    return false;
+  }
+  if(fx==SSFX_DISS){
+    const int STEPS=14;
+    for(int s=1;s<=STEPS;s++){ if(Touch_ReadFrame())return true;
+      uint32_t thr=(uint32_t)s*256/STEPS;
+      for(int i=0;i<N;i++){ uint32_t h=((uint32_t)i*2654435761u)>>24;   // stable per-pixel 0..255
+        framebuffer[i]=(h<thr)?g_slB[i]:g_slA[i]; if((i&4095)==0)yield(); }
+      gfx_flush(); }
+    return false;
+  }
+  // SSFX_SLIDE — push along the physical X axis (outgoing exits, incoming enters)
+  { const int STEPS=16;
+    for(int s=1;s<=STEPS;s++){ if(Touch_ReadFrame())return true;
+      int off=s*LCD_WIDTH/STEPS; if(off>LCD_WIDTH)off=LCD_WIDTH;
+      for(int py=0;py<LCD_HEIGHT;py++){
+        uint16_t*fr=&framebuffer[py*LCD_WIDTH];
+        uint16_t*ra=&g_slA[py*LCD_WIDTH];
+        uint16_t*rb=&g_slB[py*LCD_WIDTH];
+        for(int px=0;px<LCD_WIDTH;px++){ int sa=px+off;
+          fr[px]=(sa<LCD_WIDTH)?ra[sa]:rb[sa-LCD_WIDTH]; }
+        if((py&31)==0)yield();
+      }
+      gfx_flush(); }
+    return false;
+  }
+  return false;
+}
+// build the shuffled slide pool: folder images + favourited game covers
+static std::vector<String> ssBuildSlidePool(){
+  std::vector<String> pool;
+  for(auto&p:g_ss_paths) pool.push_back(p);
+  if(g_ss_fav){
+    for(auto&g:g_games){ if(!g.fav)continue;
+      String jp=g.jpg_path;
+      if(!jp.length()||jp=="?"){ String r; if(g.first_file_idx>=0&&g.first_file_idx<(int)g_files.size()&&findJPGFor(g_files[g.first_file_idx],r))jp=r; else jp=""; }
+      if(jp.length()&&jp!="?") pool.push_back(jp);
+    }
+  }
+  for(int i=(int)pool.size()-1;i>0;i--){ int j=(int)(esp_random()%(uint32_t)(i+1)); String t=pool[i];pool[i]=pool[j];pool[j]=t; }
+  return pool;
+}
+// the slideshow loop; returns to caller (which restores the UI). Any touch exits.
+static void runSlideshow(std::vector<String>&pool){
+  bool dbl=ssSlideAlloc();
+  int idx=0;
+  ssSlideRender(pool[0], dbl?g_slA:NULL);
+  gfx_flush();
+  if(ssSlideHold(g_ss_time_ms)){ ssSlideFree(); return; }
+  while(true){
+    if(pool.size()<=1){ if(ssSlideHold(g_ss_time_ms))break; else continue; }
+    int ni=(idx+1)%(int)pool.size();
+    if(dbl){
+      ssSlideRender(pool[ni], g_slB);                 // decode incoming into g_slB (screen still shows outgoing)
+      int fx = g_ss_fx? g_ss_fx : (SSFX_FADE+(int)(esp_random()%3));   // SHUFFLE -> fade/dissolve/slide
+      bool touched=ssSlideFx(fx);
+      memcpy(g_slA,g_slB,(size_t)LCD_WIDTH*LCD_HEIGHT*2);   // incoming becomes the new outgoing
+      if(touched)break;
+    } else {
+      ssSlideRender(pool[ni], NULL); gfx_flush();      // tight PSRAM: hard cut
+    }
+    idx=ni;
+    if(ssSlideHold(g_ss_time_ms))break;
+  }
+  ssSlideFree();
+}
+
 static void runScreensaver(){                                // blocking bounce loop; any touch exits
+  // v5.7.2: slideshow mode — real images (folder + favourited covers) with transitions.
+  // Only engages when there's genuine content; otherwise falls through to the sprite bounce.
+  if(g_ss_slides && g_cracktro!=7 && g_cracktro!=8){
+    std::vector<String> pool=ssBuildSlidePool();
+    if(!pool.empty()){
+      gfx_fillScreen(TFT_BLACK); gfx_flush();
+      runSlideshow(pool);
+      { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); }   // drain the wake touch
+      g_touch_active=false; g_touch_release=0; g_last_touch_ms=millis();
+      if(g_car_active){drawCarousel();gfx_flush();} else {drawFullUI(); gfx_flush();}
+      return;
+    }
+  }
   int idx=0;
   bool deniseMode=(g_cracktro==7);                          // 5.4.0: hidden Denise theme
   bool vincent=false;
@@ -2776,6 +2941,11 @@ static void doRescan(){
   // Delete all cache files
   SD_MMC.remove("/ADF/.index");SD_MMC.remove("/DSK/.index");
   SD_MMC.remove("/ADF/.gamecache");SD_MMC.remove("/DSK/.gamecache");
+  // v5.7.2: re-read CONFIG.TXT so edits made on the card (theme, screensaver options,
+  // categories, font, language, rotation, ...) take effect on a RESCAN without a reboot.
+  // Runs before the library rebuild so CATEGORIES/NESTING changes apply. Transfer MODE is
+  // deliberately preserved — flipping standalone/wireless wants a clean boot, not a rescan.
+  { bool wl=g_wireless_mode; selfHealConfig(); loadConfig(); g_wireless_mode=wl; relayout(); }
   // Rescan with animation
   g_files.clear();g_games.clear();
   listImages(SD_MMC,g_files);buildGameList();buildThumbs();applyStats();buildActiveLetters();scanScreensaver();

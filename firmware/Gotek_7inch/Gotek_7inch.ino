@@ -50,7 +50,9 @@
 #include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 
 // ---------- Version ----------
-#define FW_VERSION  "v4.12.2-7IN"
+#define FW_VERSION  "v4.13.0-7IN"
+// NOTE: 7A (-7IN) and 7B (-7B) versions converged at 4.13.0 — same interface, so
+// matching functionality now carries a matching number (they had drifted to 4.12.x vs 4.8.x).
 
 // ---------- ESP-NOW server (peer-to-peer, no WiFi AP needed) ----------
 #include "espnow_server.h"
@@ -1615,6 +1617,11 @@ static void doRescan(){
   g_info_showing=false;
   SD_MMC.remove("/ADF/.index");   SD_MMC.remove("/DSK/.index");
   SD_MMC.remove("/ADF/.gamecache");SD_MMC.remove("/DSK/.gamecache");
+  // v4.13.0-7IN: re-read CONFIG.TXT on a RESCAN so card edits (theme, categories, font,
+  // language, rotation, ...) apply without a reboot. Runs before the rebuild so
+  // CATEGORIES/NESTING take effect. Transfer MODE is preserved — flipping
+  // standalone/wireless wants a clean boot, not a rescan.
+  { bool wl=g_wireless_mode; loadTheme(); g_wireless_mode=wl; relayout(); }
   g_files.clear(); g_games.clear();
   listImages(SD_MMC,g_files);
   buildGameList();           // no cache now → full rebuild, writes fresh cache
