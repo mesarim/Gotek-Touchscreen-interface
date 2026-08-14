@@ -1,6 +1,6 @@
 {
-  "name": "Gotek Touchscreen Interface — JC3248 3.5\" BETA (5.7.3 test — screensaver slideshow + trial UI)",
-  "version": "5.7.3-beta",
+  "name": "Gotek Touchscreen Interface — JC3248 3.5\" BETA (5.7.5 test — screensaver slideshow + trial UI)",
+  "version": "5.7.5-beta",
   "new_install_prompt_erase": true,
   "builds": [ { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_JC3248.ino.merged.bin", "offset": 0 } ] } ]
 }
