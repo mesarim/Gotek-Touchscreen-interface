@@ -32,7 +32,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.7.2-JC4827"
+#define FW_VERSION "5.7.3-JC4827-TEST"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -1032,7 +1032,7 @@ static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_NEXT          */ {"NEXT","SUIV","SUCC","SIG","WEIT"},
   /*L_THEME         */ {"THEME","THEME","TEMA","TEMA","THEMA"},
   /*L_REEL          */ {"REEL","REEL","REEL","REEL","REEL"},
-  /*L_INFO          */ {"INFO","INFO","INFO","INFO","INFO"},
+  /*L_INFO          */ {"CONFIG","CONFIG","CONFIG","CONFIG","CONFIG"},
   /*L_LIST          */ {"LIST","LISTE","LISTA","LISTA","LISTE"},
   /*L_ROLL          */ {"ROLL","DES","DADI","DADO","WUERF"},
   /*L_INSERT        */ {"INSERT","INSERER","INSERISCI","INSERTAR","EINLEGEN"},
@@ -1658,7 +1658,7 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE };
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
 static InfoItem g_ii[16]; static int g_ii_n=0;
 struct InfoRect { int x,y,w,h; uint8_t act; };
@@ -1679,6 +1679,7 @@ static void drawInfoPanel(){
     g_ii[g_ii_n].bg=bg; g_ii[g_ii_n].fg=fg; g_ii[g_ii_n].act=act; g_ii_n++; };
   add(String("MODE: ")+(g_wireless_mode?T(L_WIRELESS):T(L_STANDALONE)), g_wireless_mode?COL_BLUE:COL_GREEN, TFT_BLACK, IA_MODE);
   add(String("FONT: ")+fontName(g_font), COL_AMBER, TFT_BLACK, IA_FONT);
+  add(String("THEME: ")+THEMES[g_theme_idx].name, COL_ACCENT, TFT_WHITE, IA_THEME);   // Vince test: moved off the bottom bar
   add(String("LANG: ")+LANG_NAMES[g_lang], (uint16_t)0x79D6, TFT_WHITE, IA_LANG);
   add(String("ROTATE: ")+(g_portrait?"PORTRAIT":"LANDSCAPE"), COL_BLUE, TFT_WHITE, IA_ROTATE);
   add(String("COMPACT: ")+(g_compact?"ON":"OFF"), g_compact?COL_GREEN:COL_BAR, g_compact?TFT_BLACK:COL_LIT, IA_COMPACT);
@@ -1843,31 +1844,28 @@ static void drawCarouselIcon(int cx,int cy,uint16_t col){
   gfx_fillRect(cx-2,cy-6,5,13,col);     // center cover, front & tall
 }
 static void drawBottomBar(){
-  int y=VH-BOTTOM_H;gfx_fillRect(0,y,VW,BOTTOM_H,COL_BAR);gfx_hline(0,y,VW,COL_SEP);
-  // v5.6.5: enlarged word-labelled rounded-rect nav keys (was tiny circle glyphs).
-  // REEL keeps the coverflow pictograph beside its word.
-  const int nb=5;int bw=VW/nb;
-  const uint16_t bcol[5]={COL_ORANGE,COL_BLUE,COL_AMBER,COL_GREEN,COL_MID};
-  String blbl[5]={String("< ")+T(L_PREV),String(T(L_NEXT))+" >",String(T(L_THEME)),String(T(L_REEL)),String(T(L_INFO))};
+  int y=VH-BOTTOM_H;gfx_fillRect(0,y,VW,BOTTOM_H,TFT_BLACK);gfx_hline(0,y,VW,COL_SEP);
+  // Vince test build: white-on-black nav keys; THEME moved into CONFIG; INFO->CONFIG.
+  // 4 slots now (was 5): PREV, NEXT, REEL, CONFIG.
+  const int nb=4;int bw=VW/nb;
+  String blbl[4]={String("< ")+T(L_PREV),String(T(L_NEXT))+" >",String(T(L_REEL)),String(T(L_INFO))};
   const int pad=4,rad=8; int rw=bw-2*pad,rh=BOTTOM_H-16,ry=y+4;
   // uniform lettering: size 2 if the widest word fits the slot, else size 1 (narrow portrait)
   int ts=2; for(int i=0;i<nb;i++){gfx_setTextSize(2); if(gfx_textWidth(blbl[i])>rw-8){ts=1;break;}}
   for(int i=0;i<nb;i++){
-    int bx=i*bw,rx=bx+pad; uint16_t col=bcol[i],dim=(uint16_t)((col>>2)&0x39E7);   // hue-preserving quarter-bright fill
-    gfx_fillRoundRect(rx,ry,rw,rh,rad,dim);
-    gfx_drawRoundRect(rx,ry,rw,rh,rad,col);
-    gfx_setTextSize(ts);gfx_setTextColor(col,dim);
+    int bx=i*bw,rx=bx+pad;
+    gfx_fillRoundRect(rx,ry,rw,rh,rad,TFT_BLACK);            // black key background
+    gfx_drawRoundRect(rx,ry,rw,rh,rad,TFT_WHITE);           // white outline
+    gfx_setTextSize(ts);gfx_setTextColor(TFT_WHITE,TFT_BLACK);
     int tw=gfx_textWidth(blbl[i]),th=8*ts;
-    if(i==3){
-      drawCarouselIcon(rx+13,ry+rh/2,col);                   // REEL -> coverflow glyph + word
+    if(i==2){
+      drawCarouselIcon(rx+13,ry+rh/2,TFT_WHITE);             // REEL -> coverflow glyph + word (white)
       int wax=rx+24,waw=rw-24-3;
       gfx_setCursor(wax+(waw-tw)/2,ry+(rh-th)/2);gfx_print(blbl[i]);
     } else {
       gfx_setCursor(rx+(rw-tw)/2,ry+(rh-th)/2);gfx_print(blbl[i]);
     }
   }
-  gfx_setTextSize(1);gfx_setTextColor((uint16_t)(COL_AMBER>>1),COL_BAR);
-  String tn=THEMES[g_theme_idx].name;int tw=gfx_textWidth(tn);gfx_setCursor(2*bw+(bw-tw)/2,y+BOTTOM_H-8);gfx_print(tn);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -3713,6 +3711,7 @@ static void infoAction(uint8_t act){
   switch(act){
     case IA_MODE: g_wireless_mode=!g_wireless_mode;saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE");if(g_wireless_mode)ensureEspNow();drawInfoFull();break;
     case IA_FONT: applyFont((g_font+1)%3);saveConfigKey("FONT",fontName(g_font));drawInfoFull();break;
+    case IA_THEME: applyTheme((g_theme_idx+1)%NUM_THEMES);saveConfigKey("THEME",String(g_theme_idx));drawInfoFull();break;   // Vince test: theme cycling lives in CONFIG now
     case IA_LANG: g_lang=(g_lang+1)%LANG_N;saveConfigKey("LANG",LANG_NAMES[g_lang]);drawInfoFull();break;
     case IA_ROTATE: g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_COMPACT: g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
@@ -3805,12 +3804,11 @@ static void handleTap(uint16_t px,uint16_t py){
 
   // ── Bottom bar ── (slot count follows drawBottomBar: 5 with carousel, else 4)
   if(py>=VH-BOTTOM_H){
-    const int nb=5;int bw=VW/nb,btn=px/bw;if(btn>=nb)btn=nb-1;
+    const int nb=4;int bw=VW/nb,btn=px/bw;if(btn>=nb)btn=nb-1;   // Vince test: THEME removed from the bar (4 slots)
     if(btn==0&&g_sel>0){g_sel--;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[g_sel].name));if((float)(g_sel*LIST_ITEM_H)<g_scrollPx)g_scrollPx=g_sel*LIST_ITEM_H;drawListAndCover();gfx_flush();}
     else if(btn==1&&g_sel<(int)g_games.size()-1){g_sel++;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[g_sel].name));if((float)((g_sel+1)*LIST_ITEM_H)>g_scrollPx+(LIST_BOTTOM-LIST_TOP))g_scrollPx=(g_sel+1)*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP);drawListAndCover();gfx_flush();}
-    else if(btn==2){cycleTheme();}
-    else if(btn==3){ g_info_showing=false; carEnter(); }   // REEL — enter the carousel
-    else if(btn==4){ g_info_showing=!g_info_showing; if(g_info_showing){g_info_page=0;drawInfoFull();} else {drawFullUI();gfx_flush();} }
+    else if(btn==2){ g_info_showing=false; carEnter(); }   // REEL — enter the carousel
+    else if(btn==3){ g_info_showing=!g_info_showing; if(g_info_showing){g_info_page=0;drawInfoFull();} else {drawFullUI();gfx_flush();} }
     return;
   }
 }
