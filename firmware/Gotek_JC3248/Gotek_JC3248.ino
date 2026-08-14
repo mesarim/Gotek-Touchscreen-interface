@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.7.6-JC3248-TEST"
+#define FW_VERSION "5.7.7-JC3248-TEST"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -1925,6 +1925,7 @@ static uint8_t g_car_die=1, g_car_dieTick=0;
 static uint32_t g_car_die_rest_ms=0;   // v5.4.2: millis() when the die settled (for auto-hide)
 #define DIE_HIDE_MS 2500               // v5.4.2: hide the rested die this many ms after the roll settles
 static int g_car_ins_x=0,g_car_ins_y=0,g_car_ins_w=0,g_car_ins_h=0;   // INSERT button rect (set by drawCarousel)
+static int g_car_disk_n=0,g_car_disk_x=0,g_car_disk_y=0,g_car_disk_bw=0,g_car_disk_h=0;   // v5.7.x: reel multi-disk button row rect
 static void runScreensaver();   // defined below; the reel's idle tick can summon it
 #define CAR_TILE  150                            // decoded cover tile size (px)
 #define CAR_SLOTS 16                             // LRU tile cache entries (PSRAM, ~720 KB)
@@ -2129,6 +2130,7 @@ static void drawCarousel(){
   gfx_fillRect(0,STATUS_H,VW,VH-STATUS_H-BOTTOM_H,COL_BG);
   int n=carN();
   int ccx=VW/2, ccy=STATUS_H+12+CAR_TILE/2;              // center cover: y 32..182
+  g_car_disk_n=0;                                        // reset reel disk-button rect each frame; set below if multi-disk
   if(n==0){
     gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);
     String m=(g_car_src==1)?T(L_NO_FAVS):T(L_NO_GAMES);
@@ -2182,6 +2184,9 @@ static void drawCarousel(){
     // center title + info
     int gi=g_car_list[carWrap(ci)];
     auto&game=g_games[gi];
+    // v5.7.x: reset the reel disk selection when the centered game changes
+    static int carDiskGi=-1;
+    if(carDiskGi!=gi){carDiskGi=gi; g_disk_sel=(g_loaded&&g_loaded_game_idx==gi)?g_loaded_disk_idx:0;}
     gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);
     String t=game.name;while(gfx_textWidth(t)>VW-24&&t.length()>3)t=t.substring(0,t.length()-1);
     gfx_setCursor((VW-gfx_textWidth(t))/2,190);gfx_print(t);
@@ -2191,7 +2196,22 @@ static void drawCarousel(){
       if(findNFOFor(g_files[game.first_file_idx],nfoP)){File nf=SD_MMC.open(nfoP,FILE_READ);
         if(nf){String txt;while(nf.available()&&txt.length()<512)txt+=(char)nf.read();nf.close();parseNFO(txt,nT,nB);
           if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=nT;carBlurb=nB;}}}
-    if(carBlurb.length()){gfx_setTextSize(1);
+    if(game.disk_count>1){
+      // v5.7.x: reel disk buttons — pick a disk (unloaded) or clean-swap to it (loaded), without leaving the reel.
+      int nd=game.disk_count, dh=20, dy=VH-BOTTOM_H-42-26;
+      int dbw=min(40,(VW-16)/nd), totalW=dbw*nd, dx0=(VW-totalW)/2;
+      g_car_disk_n=nd; g_car_disk_x=dx0; g_car_disk_y=dy; g_car_disk_bw=dbw; g_car_disk_h=dh;
+      for(int d=0;d<nd;d++){
+        int bx=dx0+d*dbw;
+        bool isLd=(g_loaded&&g_loaded_game_idx==gi&&g_loaded_disk_idx==d);
+        bool isSel=(d==g_disk_sel);
+        uint16_t bc=isLd?COL_GREEN:(isSel?COL_AMBER:COL_BAR);
+        uint16_t tc=(isLd||isSel)?TFT_BLACK:COL_LIT;
+        gfx_fillRoundRect(bx+1,dy,dbw-2,dh,4,bc);
+        String dl=String(d+1); gfx_setTextSize(1); gfx_setTextColor(tc,bc);
+        gfx_setCursor(bx+(dbw-gfx_textWidth(dl))/2,dy+(dh-8)/2);gfx_print(dl);
+      }
+    } else if(carBlurb.length()){gfx_setTextSize(1);
       drawWrapped(70,210,carBlurb,VW-140,10,2,232,COL_MID,COL_BG);}
     // reel position "i/n" top-right of the stage
     gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
@@ -2282,13 +2302,29 @@ static void carHandleTap(uint16_t px,uint16_t py){
   int n=carN();if(!n)return;
   int ci=carWrap((int)lroundf(g_car_pos));
   int ccx=VW/2,ccy=STATUS_H+12+CAR_TILE/2;
+  // v5.7.x: reel disk buttons (multi-disk centered game) — checked before INSERT
+  if(g_car_disk_n>0 && py>=(uint16_t)g_car_disk_y && py<(uint16_t)(g_car_disk_y+g_car_disk_h) &&
+     px>=(uint16_t)g_car_disk_x && px<(uint16_t)(g_car_disk_x+g_car_disk_bw*g_car_disk_n)){
+    int d=(px-g_car_disk_x)/g_car_disk_bw; if(d<0)d=0; if(d>=g_car_disk_n)d=g_car_disk_n-1;
+    int gi=g_car_list[ci]; auto&gm=g_games[gi];
+    if(d<(int)gm.disk_indices.size()){
+      if(g_loaded&&g_loaded_game_idx==gi){
+        if(d!=g_loaded_disk_idx){                    // clean swap: flush saves + eject, then reload the chosen disk
+          doUnload(); g_sel=gi;g_disk_sel=d;g_disk_page=0;
+          doLoadSelected(g_files[gm.disk_indices[d]]);
+        }
+      } else { g_disk_sel=d; }                        // not loaded yet — just select; INSERT will mount it
+      if(g_car_active){drawCarousel();gfx_flush();}
+    }
+    return;
+  }
   // INSERT/EJECT button (checked FIRST — its corners overlap the side zones)
   if(px>=(uint16_t)g_car_ins_x&&px<(uint16_t)(g_car_ins_x+g_car_ins_w)&&
      py>=(uint16_t)g_car_ins_y&&py<(uint16_t)(g_car_ins_y+g_car_ins_h)){
     int gi=g_car_list[ci];
-    g_sel=gi;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[gi].name));
+    g_sel=gi;g_disk_page=0;setActiveLetter(bucketOf(g_games[gi].name));
     if(g_loaded&&g_loaded_game_idx==gi)doUnload();
-    else{auto&gm=g_games[gi];doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[0]]);}
+    else{auto&gm=g_games[gi];int d=(g_disk_sel>=0&&g_disk_sel<(int)gm.disk_indices.size())?g_disk_sel:0;doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[d]]);}
     if(g_car_active){drawCarousel();gfx_flush();}        // repaint over the list redraw the loader did
     return;
   }
