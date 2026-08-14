@@ -162,7 +162,7 @@ change it, change it in both places or wireless won't connect.
 
 Pairing links the touchscreen to a dongle so it can load disks over WiFi. How it works depends
 on the dongle firmware — full guide and troubleshooting on the
-**[Pairing wiki page](../../wiki/Pairing)**.
+**[Pairing guide](docs/PAIRING.md)**.
 
 **Release / stable dongle — auto-pair.** Flash the dongle, plug it into the Gotek's USB, set
 **MODE = WIRELESS** on the GTi, then **INFO → SCAN DONGLES → USE**. No button needed — the dongle
