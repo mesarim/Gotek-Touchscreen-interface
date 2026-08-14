@@ -32,7 +32,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.7.5-JC4827-TEST"
+#define FW_VERSION "5.7.6-JC4827-TEST"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -1843,12 +1843,9 @@ static void drawCarouselIcon(int cx,int cy,uint16_t col){
   gfx_drawRect(cx+3,cy-4,4,9,col);      // right cover, peeking
   gfx_fillRect(cx-2,cy-6,5,13,col);     // center cover, front & tall
 }
-// Vince test: bottom bars are white-on-black on every theme EXCEPT PAPER (paperwhite),
-// where they keep the theme's coloured keys so it stays readable on the light background.
-static inline bool themeIsPaper(){ return String(THEMES[g_theme_idx].name)=="PAPER"; }
+// Vince test: single bar split by divider lines, white-on-black on every theme.
 static void drawBottomBar(){
-  bool paper=themeIsPaper();
-  uint16_t bg=paper?COL_BAR:TFT_BLACK, ink=paper?COL_LIT:TFT_WHITE;
+  const uint16_t bg=TFT_BLACK, ink=TFT_WHITE;
   int y=VH-BOTTOM_H;gfx_fillRect(0,y,VW,BOTTOM_H,bg);gfx_hline(0,y,VW,COL_SEP);
   // Vince test: single bar split by divider lines (no separate key rectangles).
   // 4 slots (was 5): PREV, NEXT, REEL, CONFIG. THEME moved into CONFIG; INFO->CONFIG.
@@ -2178,10 +2175,9 @@ static void drawCarousel(){
      const char*lbl=isLd?T(L_EJECT):T(L_INSERT);int tw=gfx_textWidth(lbl);
      gfx_setCursor(g_car_ins_x+(g_car_ins_w-tw)/2,g_car_ins_y+(g_car_ins_h-16)/2);gfx_print(lbl);}
   }
-  // carousel bottom bar: Vince test — single bar split by dividers [LIST] [source] [ROLL] (PAPER keeps ink dark)
-  bool paper=themeIsPaper();
-  uint16_t bg=paper?COL_BAR:TFT_BLACK, ink=paper?COL_LIT:TFT_WHITE;
-  uint16_t dieBody=paper?COL_LIT:0xFFFF, diePip=paper?COL_BAR:TFT_BLACK;
+  // carousel bottom bar: Vince test — single bar split by dividers [LIST] [source] [ROLL], white-on-black
+  const uint16_t bg=TFT_BLACK, ink=TFT_WHITE;
+  const uint16_t dieBody=0xFFFF, diePip=TFT_BLACK;
   int y=VH-BOTTOM_H;gfx_fillRect(0,y,VW,BOTTOM_H,bg);gfx_hline(0,y,VW,COL_SEP);
   int bw=VW/3;
   for(int i=1;i<3;i++)gfx_vline(i*bw,y+8,BOTTOM_H-16,ink);          // slot dividers
@@ -3682,10 +3678,9 @@ static void switchLib(int m){   // int, not DiskMode: Arduino auto-generates thi
   drawFullUI();gfx_flush();
 }
 static void drawInfoBottomBar(){
-  bool paper=themeIsPaper();
-  uint16_t bg=paper?COL_BAR:TFT_BLACK, ink=paper?COL_LIT:TFT_WHITE;
+  const uint16_t bg=TFT_BLACK, ink=TFT_WHITE;
   int y=VH-BOTTOM_H,bw=VW/5;
-  gfx_fillRect(0,y,VW,BOTTOM_H,bg);gfx_hline(0,y,VW,COL_SEP);   // Vince test: single bar split by dividers (PAPER keeps ink dark)
+  gfx_fillRect(0,y,VW,BOTTOM_H,bg);gfx_hline(0,y,VW,COL_SEP);   // Vince test: single bar split by dividers, white-on-black
   struct{const char*l;bool on;}bb[5]={
     {"< PAGE",g_info_page>0},{"PAGE >",g_info_page<g_info_pages-1},
     {"THEME",true},{"",false},{"CLOSE",true}};
