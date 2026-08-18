@@ -608,6 +608,27 @@
 
   </div>
 
+  <div class="section-label" id="troubleshooting">Troubleshooting</div>
+
+  <div class="beta-note">
+    <b>&#128295; Diagnostic tools</b> &mdash; these are <i>not</i> the firmware. Flash one only to
+    test hardware; it temporarily replaces your GTi build. When you&rsquo;re done, just web-flash
+    the normal build above again to restore it &mdash; your SD card is left untouched.
+  </div>
+
+  <div class="device-grid">
+
+    <div class="device-card" data-manifest="firmware/jc3248-touchtest/manifest.json" onclick="selectDevice(this)">
+      <div class="selected-indicator"></div>
+      <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC3248 3.5-inch touchscreen" loading="lazy">
+      <div class="device-name">JC3248 &mdash; Touch Test</div>
+      <div class="device-chip">ESP32-S3 &middot; 3.5" 480×320 &middot; diagnostic &middot; AXS15231B touch @ 0x3B</div>
+      <div class="device-desc"><b>Touch not registering, or landing in the wrong spot?</b> This standalone checker uses the <i>exact</i> display init and touch read from the real firmware, so a wiring or controller fault can&rsquo;t hide as a software bug. You get four corner target boxes, a crosshair drawn wherever the panel thinks your finger is, and a live <b>RAW / MAP / status</b> readout (also streamed to Serial at 115200). <b>Tap each corner:</b> if the crosshair lands under your finger and the box turns green, the touch hardware is <b>fine</b> &mdash; so a fresh-install tap problem is the firmware, not the panel. If the crosshair jumps, sticks, shows junk, or you get <b>&ldquo;I2C&nbsp;ERR&rdquo;</b>, the touch controller or its flex cable is <b>faulty</b>. Flashing this replaces your GTi build &mdash; re-flash the normal JC3248 above when you&rsquo;re finished.</div>
+      <div><span class="device-badge" style="background:#3a2a10;color:#ffcc66;border:1px solid #5a4a1a;">DIAGNOSTIC</span> <span class="device-badge badge-standalone">Touch test</span></div>
+    </div>
+
+  </div>
+
   <div class="section-label">Flash firmware</div>
 
   <div class="flash-panel no-selection" id="flashPanel">

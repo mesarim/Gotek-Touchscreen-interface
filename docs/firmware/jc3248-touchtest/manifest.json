@@ -1,0 +1,13 @@
+{
+  "name": "GTi — JC3248 Touch Test (diagnostic)",
+  "version": "diag",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        { "path": "Gotek_JC3248_TouchTest.ino.merged.bin", "offset": 0 }
+      ]
+    }
+  ]
+}

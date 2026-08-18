@@ -19,6 +19,9 @@ volatile bool g_espnow_xiao_done             = false;
 volatile bool g_espnow_xiao_error            = false;
 volatile bool g_espnow_link_just_established = false;
 volatile uint32_t g_espnow_xiao_last_seen    = 0;
+volatile bool     g_dongle_loaded            = false;   // v5.7.x: load-state heartbeat
+volatile uint32_t g_dongle_load_id           = 0;
+volatile uint32_t g_dongle_img_size          = 0;
 
 bool espnowXiaoOnline() {
   if (!g_espnow_paired) return false;
@@ -147,6 +150,15 @@ static void handleIncoming(const uint8_t* data, int len) {
     g_espnow_dirty_size   = (uint32_t)data[7] | ((uint32_t)data[8]<<8) | ((uint32_t)data[9]<<16) | ((uint32_t)data[10]<<24);
     g_espnow_dirty = (g_espnow_dirty_count > 0);
     if (!g_espnow_dongle_caps) g_espnow_dongle_caps = 1;   // beacon itself proves capability
+    return;
+  }
+
+  if (type == PKT_XIAO_STATUS && len >= 10) {   // v5.7.x: load-state heartbeat from the dongle
+    g_espnow_xiao_last_seen = millis();
+    g_dongle_loaded   = data[1] ? true : false;
+    g_dongle_load_id  = (uint32_t)data[2] | ((uint32_t)data[3]<<8) | ((uint32_t)data[4]<<16) | ((uint32_t)data[5]<<24);
+    g_dongle_img_size = (uint32_t)data[6] | ((uint32_t)data[7]<<8) | ((uint32_t)data[8]<<16) | ((uint32_t)data[9]<<24);
+    if (!g_espnow_dongle_caps) g_espnow_dongle_caps = 1;
     return;
   }
 }

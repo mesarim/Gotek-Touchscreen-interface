@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.7.7-JC3248-TEST"
+#define FW_VERSION "5.7.8-JC3248-TEST"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -1558,10 +1558,24 @@ static void drawStatusBar(){
   gfx_setTextColor(COL_MID,COL_BAR);gfx_print("  " FW_VERSION);
   if(g_wireless_mode){gfx_setTextColor(espnowIsPaired()?0x07E0:0xFD20,COL_BAR);gfx_setCursor(VW/2-40,6);gfx_print(espnowIsPaired()?"WIRELESS:PAIRED":"WIRELESS:PAIR");}
   else{gfx_setTextColor(0x07FF,COL_BAR);int tw=gfx_textWidth("STANDALONE");gfx_setCursor((VW-tw)/2,6);gfx_print(T(L_STANDALONE));}
-  uint16_t ic=g_loaded?0xE8C4:COL_GREEN;gfx_fillCircle(VW-8,STATUS_H/2,3,ic);
-  if(g_loaded&&g_loaded_game_idx>=0&&g_loaded_game_idx<(int)g_games.size()&&g_games[g_loaded_game_idx].disk_count>1){   // v4.9.5: which disk of a multi-disk set is mounted
-    String dl="D"+String(g_loaded_disk_idx+1);gfx_setTextSize(1);gfx_setTextColor(ic,COL_BAR);
-    gfx_setCursor(VW-13-gfx_textWidth(dl),(STATUS_H-8)/2);gfx_print(dl);}
+  // v5.7.x: load-status indicator (top-right). Standalone reads g_loaded; wireless reads
+  // the dongle's heartbeat so it reflects reality. green=disk present, dim=empty,
+  // amber=OFFLINE (no beacon ~8s) or DISK? (GTi thinks loaded but the dongle disagrees).
+  { bool wl=(g_wireless_mode&&g_espnow_started);
+    bool alive = wl ? (millis()-g_espnow_xiao_last_seen < 8000UL) : true;
+    bool ld, desync=false;
+    if(wl){ ld=alive&&g_dongle_loaded; desync=g_loaded&&(!alive||!g_dongle_loaded); }
+    else  { ld=g_loaded; }
+    String lw; uint16_t lc; bool fill;
+    if(wl&&!alive){ lw="OFFLINE"; lc=0xFD20; fill=false; }
+    else if(desync){ lw="DISK?"; lc=0xFD20; fill=false; }
+    else if(ld){ bool multi=(g_loaded&&g_loaded_game_idx>=0&&g_loaded_game_idx<(int)g_games.size()&&g_games[g_loaded_game_idx].disk_count>1);
+                 lw=multi?("DISK "+String(g_loaded_disk_idx+1)):String("DISK"); lc=COL_GREEN; fill=true; }
+    else { lw="EMPTY"; lc=COL_DIM; fill=false; }
+    gfx_setTextSize(1); int lww=gfx_textWidth(lw); int wx=VW-6-lww, cx=wx-9;
+    if(fill) gfx_fillCircle(cx,STATUS_H/2,3,lc); else gfx_drawCircle(cx,STATUS_H/2,3,lc);
+    gfx_setTextColor(lc,COL_BAR); gfx_setCursor(wx,6); gfx_print(lw);
+  }
 }
 
 // disk grid geometry (landscape cover) — shared by draw + touch (struct declared up top)

@@ -27,7 +27,7 @@
 #include "esp_wifi.h"
 #include <LittleFS.h>
 
-#define FW_VERSION     "v3.5.2-mini"   // 3.5.0: OWNER LOCK — dongle only obeys enrolled GTis; BOOT-hold to pair/wipe. 3.4.0 = TCP EJECT line.
+#define FW_VERSION     "v3.5.3-mini"   // 3.5.0: OWNER LOCK — dongle only obeys enrolled GTis; BOOT-hold to pair/wipe. 3.4.0 = TCP EJECT line.
 #define ESPNOW_CHANNEL 6
 #define LED_RED        1   // GP1 — status/attention
 #define LED_BLUE       2   // GP2 — activity
@@ -47,6 +47,7 @@
 #define PKT_XIAO_DONE   0x12
 #define PKT_XIAO_ERROR  0x13
 #define PKT_XIAO_DIRTY  0x15   // v3.2.0: settled unsaved writes exist — GTi, come fetch
+#define PKT_XIAO_STATUS 0x17   // v3.5.3: periodic load-state heartbeat {loaded,load_id,image_size}
 #define PKT_UNPAIR      0x16   // v3.5.2: GTi -> dongle: forget me (drop the sender from the owner list)
 
 // ── Save writeback (v3.2.0) ─────────────────────────────────────────────────
@@ -57,6 +58,7 @@
 #define SAVE_PROTO_VER  1        // advertised in HELLO/REPLY pad[0]
 #define SAVE_SETTLE_MS  3000     // quiet time after last write before beaconing
 #define SAVE_BEACON_MS  10000    // beacon repeat until serviced
+#define STATUS_BEACON_MS 2500    // v3.5.3: load-state heartbeat cadence
 #define TCP_CMD_ESCAPE  0xFFFFFFFFUL  // size header value that means "command, not disk"
 #define CMD_GET_SAVE    0x01
 #define CMD_GET_STATUS  0x02
@@ -68,6 +70,7 @@ struct PktHello  { uint8_t type; uint8_t mac[6]; char ip[16]; uint8_t pad[227]; 
 struct PktSimple { uint8_t type; uint8_t pad[249]; };
 struct PktDirty  { uint8_t type; uint32_t load_id; uint16_t dirty_count;
                    uint32_t image_size; uint32_t age_ms; uint8_t flags; uint8_t pad[234]; };
+struct PktStatus { uint8_t type; uint8_t loaded; uint32_t load_id; uint32_t image_size; uint8_t pad[240]; };  // v3.5.3
 #pragma pack(pop)
 
 // FAT12 geometry
@@ -94,6 +97,7 @@ static volatile uint32_t g_total_writes  = 0;           // includes FAT noise (I
 static uint32_t g_load_id    = 0;                        // bumped per received disk
 static uint32_t g_image_size = ADF_DEFAULT_SIZE;         // size of the mounted image
 static uint32_t g_next_beacon_ms = 0;
+static uint32_t g_next_status_ms = 0;   // v3.5.3: load-state heartbeat timer
 static inline bool dGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void dSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
 static inline void dClr(uint8_t*m,uint32_t i){m[i>>3]&=(uint8_t)~(1u<<(i&7));}
@@ -473,6 +477,15 @@ static void sendDirtyBeacon(){
   if(dst)dst->send_pkt((uint8_t*)&pkt,sizeof(pkt));
 }
 
+// v3.5.3: periodic load-state heartbeat to the paired GTi so its disk indicator
+// reflects reality (loaded / empty / offline). Sent only to the active GTi.
+static void sendStatusBeacon(){
+  if(!_wavePeer)return;
+  PktStatus pkt={}; pkt.type=PKT_XIAO_STATUS;
+  pkt.loaded=g_disk_loaded?1:0; pkt.load_id=g_load_id; pkt.image_size=g_image_size;
+  _wavePeer->send_pkt((uint8_t*)&pkt,sizeof(pkt));
+}
+
 // Handle incoming TCP disk transfer
 static void handleTCPClient(WiFiClient& client) {
   Serial.printf("[TCP] Client connected from %s\n", client.remoteIP().toString().c_str());
@@ -562,6 +575,7 @@ static void handleTCPClient(WiFiClient& client) {
     if (g_disk_loaded) hardDetach();
     hardAttach();
     g_disk_loaded = true;
+    g_next_status_ms = 0;                 // v3.5.3: beacon the new loaded state immediately
     digitalWrite(LED_BLUE, HIGH);
 
     String dispName = (size == 901120) ? "ADF 880KB" : String(size/1024) + "KB";
@@ -755,6 +769,11 @@ void loop() {
   if (dirtyWaiting && millis() > g_next_beacon_ms) {
     sendDirtyBeacon();
     g_next_beacon_ms = millis() + SAVE_BEACON_MS;
+  }
+  // v3.5.3: steady load-state heartbeat (independent of dirty writes)
+  if (millis() > g_next_status_ms) {
+    sendStatusBeacon();
+    g_next_status_ms = millis() + STATUS_BEACON_MS;
   }
 
   // The BOOT owner-lock gesture owns the LEDs while held or while a pairing

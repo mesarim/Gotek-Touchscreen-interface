@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# GTi — recreate every version as a git tag. Run from repo root, review, then:
+#   git push origin --tags
+set -e
+
+# Guition JC3248 (3.5")
+git tag -f "5.7.3-JC3248-TEST" e674023d273d5cdcdc40bc663e9e993e6a4f8839   # 2026-08-14
+git tag -f "5.7.6-JC3248-TEST" 7b9f94bdf15609765e7b219a2a208c75c9ca5cfc   # 2026-08-14
+git tag -f "5.7.7-JC3248-TEST" 588ad589971d0dc8e52e4bf9c787f5b591dee128   # 2026-08-14
+git tag -f "5.7.2-JC3248" 359844977419fb74e11583d1625089a4dfff2dcd   # 2026-08-14
+git tag -f "5.7.5-JC3248-TEST" 2011219f7148381591f825657728cba6d96cc752   # 2026-08-14
+git tag -f "5.7.1-JC3248" 1b6a9d287711aa46730f7c2c034c0bd54537d34f   # 2026-08-13
+git tag -f "5.6.4-JC3248" 0cd88c2a272fee2e3503b0bf6b50343cbc19fa23   # 2026-08-11
+git tag -f "5.6.1-JC3248" aa15d6b8b0da624f67c3f5dba78c68a53e2c858f   # 2026-08-10
+git tag -f "5.6.0-JC3248" e884bb5bdffe4245225a46c61fecfdb9d3a29ced   # 2026-08-07
+git tag -f "5.5.5-JC3248" c4fbdb6928a3de97e53102f6f74df4b97503af6c   # 2026-08-06
+git tag -f "5.5.2-JC3248" 3790d1c5cb2ed68dee9c4358960cccf898cd42ea   # 2026-08-06
+git tag -f "5.4.2-JC3248" d0b2b7d82162dc0c011215ed28d395339a2077ed   # 2026-08-05
+git tag -f "5.4.1-JC3248" c09ba7228bdfee82bf174eac8d9f50a21026831d   # 2026-08-05
+git tag -f "5.4.0-JC3248" 7c8ac071c84f5821b502c5288433f9ef8fb6789b   # 2026-08-04
+git tag -f "5.3.0-JC3248" c18b1eb43cc927d1f010f79f2ac3ad9c9eea9c20   # 2026-08-02
+git tag -f "5.1.3-JC3248" 4c1e6b6b772b508773cbf378791b3f7a2a604717   # 2026-08-02
+git tag -f "5.2.0-JC3248" 3864cfece3746f6f549578a916aad8f1c10229dc   # 2026-08-02
+git tag -f "A.5.0.0-JC3248" e1b95208cccf1b3713d2564c4af2498fdd87b1c6   # 2026-08-01
+git tag -f "v4.9.7-JC3248" 1d5b585b74185ad64ce685360e2916a2fcacda5c   # 2026-07-31
+git tag -f "v4.9.1-JC3248" 821746e5f3e5786c47b0a648f20eafe4a5b6ce1a   # 2026-07-29
+git tag -f "v4.8.6-JC3248" 8a49d7bac1797d838d64a46dc089f62a0dfe5a72   # 2026-07-28
+git tag -f "v4.8.4-JC3248" 5b772e92936c208fc17c4d57a87d827980e90a58   # 2026-07-27
+git tag -f "v4.8.1-JC3248" d1f409f30ceb635ea62d2055d7c6abd51f22cc50   # 2026-07-24
+git tag -f "v4.7.4-JC3248" 976004b2f0ad88aa5aa45a64cb4b38cf166a9bc8   # 2026-07-24
+git tag -f "v4.7.2-JC3248" 92c05913ef200ba10de27ace2796ff89e6db82c2   # 2026-07-23
+git tag -f "v4.7.3-JC3248" 0ad6bf0111c00bb2c0535425caf69f4262ae1bd9   # 2026-07-23
+git tag -f "v4.4.0-JC3248" e2176df25aaf50532c346b5879900bb3765f3686   # 2026-07-21
+git tag -f "v4.2.1-JC3248" f380ba58de9301fa42b77a50f6cc65b8c9dc6d5d   # 2026-07-20
+git tag -f "v4.0.0-JC3248" f569bbc99c8ff6ec14d240c0d4c3686ebee795b7   # 2026-07-19
+git tag -f "v3.8.3-JC3248" cac033a0d296d56fffb5eb675278756a80df6b01   # 2026-07-19
+git tag -f "v3.6.2-JC3248" 0219a91a29b8017713bf6e4cb08b7359ce9493df   # 2026-06-17
+
+# Guition JC4827W543 (4.3")
+git tag -f "5.7.3-JC4827-TEST" e674023d273d5cdcdc40bc663e9e993e6a4f8839   # 2026-08-14
+git tag -f "5.7.6-JC4827-TEST" 7b9f94bdf15609765e7b219a2a208c75c9ca5cfc   # 2026-08-14
+git tag -f "5.7.7-JC4827-TEST" 588ad589971d0dc8e52e4bf9c787f5b591dee128   # 2026-08-14
+git tag -f "5.7.2-JC4827" 359844977419fb74e11583d1625089a4dfff2dcd   # 2026-08-14
+git tag -f "5.7.5-JC4827-TEST" 2011219f7148381591f825657728cba6d96cc752   # 2026-08-14
+git tag -f "5.7.1-JC4827" 1b6a9d287711aa46730f7c2c034c0bd54537d34f   # 2026-08-13
+git tag -f "5.6.4-JC4827" 0cd88c2a272fee2e3503b0bf6b50343cbc19fa23   # 2026-08-11
+git tag -f "5.6.1-JC4827" aa15d6b8b0da624f67c3f5dba78c68a53e2c858f   # 2026-08-10
+git tag -f "5.6.0-JC4827" e884bb5bdffe4245225a46c61fecfdb9d3a29ced   # 2026-08-07
+git tag -f "5.5.5-JC4827" c4fbdb6928a3de97e53102f6f74df4b97503af6c   # 2026-08-06
+git tag -f "5.5.2-JC4827" 3790d1c5cb2ed68dee9c4358960cccf898cd42ea   # 2026-08-06
+git tag -f "5.4.2-JC4827" d0b2b7d82162dc0c011215ed28d395339a2077ed   # 2026-08-05
+git tag -f "5.4.1-JC4827" c09ba7228bdfee82bf174eac8d9f50a21026831d   # 2026-08-05
+git tag -f "5.4.0-JC4827" 7c8ac071c84f5821b502c5288433f9ef8fb6789b   # 2026-08-04
+git tag -f "5.3.3-JC4827" 92944d0d0f05841628e9844e160a17c332006156   # 2026-08-03
+
+# Waveshare 7" — 7A (800x480)
+git tag -f "v4.13.0-7IN" 359844977419fb74e11583d1625089a4dfff2dcd   # 2026-08-14
+git tag -f "v4.12.2-7IN" 1b6a9d287711aa46730f7c2c034c0bd54537d34f   # 2026-08-13
+git tag -f "v4.10.4-7IN" f7c595f212d62edf60a63c225034c247e7020967   # 2026-08-12
+git tag -f "v4.10.1-7IN" 0cd88c2a272fee2e3503b0bf6b50343cbc19fa23   # 2026-08-11
+git tag -f "v4.8.1-7IN" a4a09d77fc4450b8cc7b0688c0b1284808f6e137   # 2026-08-06
+git tag -f "v4.7.6-7IN" c09ba7228bdfee82bf174eac8d9f50a21026831d   # 2026-08-05
+git tag -f "v4.7.6-7B" 31bdd5cc79b0b9e913333f5c34139976ac1c035c   # 2026-08-05
+git tag -f "v4.8.0-7IN" 21e5b6bfe2a1979c08183905036e7476902ee82f   # 2026-08-05
+git tag -f "v4.7.5-7IN" 1ee817596fdd94aaaf5e6d222073c11fb11f0c1f   # 2026-08-05
+
+# Waveshare 7B (1024x600)
+git tag -f "v4.13.0-7B-PERF3" 359844977419fb74e11583d1625089a4dfff2dcd   # 2026-08-14
+git tag -f "v4.8.19-7B-PERF3" 1b6a9d287711aa46730f7c2c034c0bd54537d34f   # 2026-08-13
+git tag -f "v4.8.15-7B-PERF3" f7c595f212d62edf60a63c225034c247e7020967   # 2026-08-12
+git tag -f "v4.8.11-7B-PERF3" 6bd0f79c11710361ba6fe9bc58afd4490869f2ad   # 2026-08-11
+git tag -f "v4.8.14-7B-FACTORY-TIMING" a4b039f38a72a0af2a487ec3dc0c464eafc1f032   # 2026-08-10
+git tag -f "v4.8.1-7B" a4a09d77fc4450b8cc7b0688c0b1284808f6e137   # 2026-08-06
+git tag -f "v4.7.6-7B" c09ba7228bdfee82bf174eac8d9f50a21026831d   # 2026-08-05
+git tag -f "v4.8.0-7B" 21e5b6bfe2a1979c08183905036e7476902ee82f   # 2026-08-05
+
+# Super Mini wireless dongle
+git tag -f "v3.5.2-mini" 1b6a9d287711aa46730f7c2c034c0bd54537d34f   # 2026-08-13
+git tag -f "v3.4.0-mini" e884bb5bdffe4245225a46c61fecfdb9d3a29ced   # 2026-08-07
+
+# XIAO wireless dongle
+git tag -f "v3.6.1-xiao" 1b6a9d287711aa46730f7c2c034c0bd54537d34f   # 2026-08-13
+git tag -f "v3.6.0-xiao" aa15d6b8b0da624f67c3f5dba78c68a53e2c858f   # 2026-08-10
+git tag -f "v3.5.0-xiao" 7c8ac071c84f5821b502c5288433f9ef8fb6789b   # 2026-08-04

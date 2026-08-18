@@ -11,6 +11,7 @@
 #define PKT_XIAO_ERROR   0x13  // XIAO → Waveshare: error
 #define PKT_XIAO_DIRTY   0x15  // XIAO → Waveshare: settled unsaved writes exist (v4.8.0 saves)
 #define PKT_UNPAIR       0x16  // Waveshare → dongle: forget me (drop this GTi from the owner list)
+#define PKT_XIAO_STATUS  0x17  // dongle → Waveshare: load-state heartbeat {loaded,load_id,image_size} (v5.7.x)
 
 // Shared ramdisk — defined in main .ino
 extern uint8_t* g_disk;
@@ -30,6 +31,9 @@ extern volatile bool g_espnow_xiao_done;
 extern volatile bool g_espnow_xiao_error;
 extern volatile bool g_espnow_link_just_established;
 extern volatile uint32_t g_espnow_xiao_last_seen; // millis() of last packet from XIAO
+extern volatile bool     g_dongle_loaded;         // v5.7.x: dongle's last-reported presented state
+extern volatile uint32_t g_dongle_load_id;        // v5.7.x: load_id the dongle currently presents
+extern volatile uint32_t g_dongle_img_size;       // v5.7.x: image size the dongle currently presents
 
 bool espnowXiaoOnline(); // true if heard from XIAO in last 30s
 
