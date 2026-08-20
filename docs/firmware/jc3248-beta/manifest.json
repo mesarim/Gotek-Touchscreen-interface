@@ -1,6 +1,6 @@
 {
-  "name": "Gotek Touchscreen Interface — JC3248 BETA (5.7.7 test — reel disk-swap + trial UI)",
-  "version": "5.7.7-beta",
+  "name": "Gotek Touchscreen Interface — JC3248 BETA (5.8.2 — carousel cover-load fix + Library toggle)",
+  "version": "5.8.2-beta",
   "new_install_prompt_erase": true,
   "builds": [ { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_JC3248.ino.merged.bin", "offset": 0 } ] } ]
 }

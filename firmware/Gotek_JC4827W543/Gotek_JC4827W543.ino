@@ -32,7 +32,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.7.8-JC4827-TEST"
+#define FW_VERSION "5.8.2-JC4827"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -1672,7 +1672,7 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG };
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
 static InfoItem g_ii[16]; static int g_ii_n=0;
 struct InfoRect { int x,y,w,h; uint8_t act; };
@@ -1698,6 +1698,7 @@ static void drawInfoPanel(){
   add(String("ROTATE: ")+(g_portrait?"PORTRAIT":"LANDSCAPE"), COL_BLUE, TFT_WHITE, IA_ROTATE);
   add(String("COMPACT: ")+(g_compact?"ON":"OFF"), g_compact?COL_GREEN:COL_BAR, g_compact?TFT_BLACK:COL_LIT, IA_COMPACT);
   add(String("LIBRARY: ")+(g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN"), COL_ACCENT, TFT_BLACK, IA_LIBMODE);   // v5.6.0: disk-format mode moved here from the mode bar
+  add(String("CATEGORIES: ")+(g_categories?"ON":"OFF"), g_categories?COL_GREEN:COL_BAR, g_categories?TFT_BLACK:COL_LIT, IA_CATEG);   // library/category browse toggle (mirrors CONFIG.TXT CATEGORIES=)
   if(g_wireless_mode){
     add(espnowIsPaired()?String("SWITCH DONGLE"):String("SCAN DONGLES"), espnowIsPaired()?COL_GREEN:COL_AMBER, TFT_BLACK, IA_DONGLE);
     uint8_t mm[64][6]; int mcN=enumMuCaDongles(mm,g_dongle_cap);
@@ -1912,6 +1913,10 @@ static uint16_t* car_buf[CAR_SLOTS]={0};
 static int      car_game[CAR_SLOTS]={-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
 static uint32_t car_stamp[CAR_SLOTS]={0};
 static uint32_t car_tick_ctr=0;
+#define CAR_BENCH 0
+#if CAR_BENCH
+static uint32_t g_bench_sharp=0,g_bench_micro=0,g_bench_square=0;
+#endif
 
 static int carN(){return (int)g_car_list.size();}
 static int carWrap(int i){int n=carN();if(n<=0)return 0;i%=n;if(i<0)i+=n;return i;}
@@ -2080,11 +2085,100 @@ static inline uint16_t carDim(uint16_t c,int lvl){
   return (uint16_t)((c>>2)&0x39E7);              // ~25%
 }
 // Blit a tile scaled to w x h centred at (cx,cy), dim level 0..2, nearest-neighbour.
-static void carBlit(uint16_t*tile,int cx,int cy,int w,int h,int dim){
+// == V1: resident micro-thumbnail set =========================================
+// A tiny RGB565 copy of every cover, always in PSRAM. On a cache miss the reel
+// blits the upscaled micro instead of the COL_BAR grey square -> blurry-then-
+// sharp, never a coloured square, independent of SD speed.
+#ifndef SD_LOCK
+#define SD_LOCK()   do{}while(0)
+#define SD_UNLOCK() do{}while(0)
+#endif
+static uint16_t* car_micro_block=NULL;   // n*dim*dim RGB565, contiguous
+static int       g_car_micro_dim=0;      // 16/24/32 (0 = disabled)
+static int       g_car_micro_n=0;        // games covered
+static uint32_t carGamesSig(){
+  uint32_t h=2166136261u; int n=(int)g_games.size();
+  h^=(uint32_t)n; h*=16777619u;
+  for(int i=0;i<n;i++){const String&p=g_files[g_games[i].first_file_idx];
+    for(unsigned k=0;k<p.length();k++){h^=(uint8_t)p[k]; h*=16777619u;}}
+  return h;
+}
+static void carMicroFree(){ if(car_micro_block){free(car_micro_block);car_micro_block=NULL;} g_car_micro_dim=0; g_car_micro_n=0; }
+static void carMicroInit(){
+  carMicroFree();
+  int n=(int)g_games.size(); if(!n)return;
+  int dim=(n<=1000)?32:(n<=1800)?24:16;
+  size_t bytes=(size_t)n*dim*dim*2;
+  car_micro_block=(uint16_t*)ps_malloc(bytes);
+  if(!car_micro_block&&dim!=16){dim=16;bytes=(size_t)n*dim*dim*2;car_micro_block=(uint16_t*)ps_malloc(bytes);}
+  if(!car_micro_block)return;
+  g_car_micro_dim=dim; g_car_micro_n=n;
+  size_t px=bytes/2; for(size_t i=0;i<px;i++)car_micro_block[i]=COL_BAR;
+}
+static void carMicroFromTile(int gi,const uint16_t*tile){
+  if(!car_micro_block||gi<0||gi>=g_car_micro_n||!tile)return;
+  int d=g_car_micro_dim; uint16_t*m=car_micro_block+(size_t)gi*d*d;
+  for(int y=0;y<d;y++){int sy=y*CAR_TILE/d;
+    for(int x=0;x<d;x++){int sx=x*CAR_TILE/d; m[y*d+x]=tile[sy*CAR_TILE+sx];}}
+}
+static inline uint16_t* carMicro(int gi){
+  if(!car_micro_block||gi<0||gi>=g_car_micro_n)return NULL;
+  return car_micro_block+(size_t)gi*g_car_micro_dim*g_car_micro_dim;
+}
+static bool carMicroLoad(){
+  if(!car_micro_block)return false;
+  File f=SD_MMC.open("/.gti_micro.pk","r"); if(!f)return false;
+  uint32_t hdr[4]; if(f.read((uint8_t*)hdr,16)!=16){f.close();return false;}
+  if(hdr[0]!=0x47544D31u||(int)hdr[1]!=g_car_micro_dim||(int)hdr[2]!=g_car_micro_n||hdr[3]!=carGamesSig()){f.close();return false;}
+  size_t want=(size_t)g_car_micro_n*g_car_micro_dim*g_car_micro_dim*2;
+  size_t got=f.read((uint8_t*)car_micro_block,want); f.close();
+  return got==want;
+}
+static void carMicroSave(){
+  if(!car_micro_block)return;
+  File f=SD_MMC.open("/.gti_micro.pk",FILE_WRITE); if(!f)return;
+  uint32_t hdr[4]={0x47544D31u,(uint32_t)g_car_micro_dim,(uint32_t)g_car_micro_n,carGamesSig()};
+  f.write((uint8_t*)hdr,16);
+  f.write((uint8_t*)car_micro_block,(size_t)g_car_micro_n*g_car_micro_dim*g_car_micro_dim*2);
+  f.close();
+}
+static void carMicroBuild(){
+  int n=g_car_micro_n; if(!n||!car_micro_block)return;
+  uint16_t*tmp=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2); if(!tmp)return;
+  uint32_t lastDraw=0;
+  for(int i=0;i<n;i++){
+    SD_LOCK();
+    bool ok=carLoadThumb(i,tmp); if(!ok)ok=carDecodeTile(i,tmp);
+    SD_UNLOCK();
+    if(ok)carMicroFromTile(i,tmp);
+    uint32_t nowMs=millis();
+    if(nowMs-lastDraw>120||i==n-1){ lastDraw=nowMs;
+      gfx_fillScreen(0x1082);
+      gfx_setTextSize(2);gfx_setTextColor(0xFC60,0x1082);
+      {const char*s="Preparing covers";int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH/2-40);gfx_print(s);}
+      int bw2=gW-120,bx=60,by=gH/2;
+      gfx_drawRect(bx,by,bw2,12,0x4A8A);
+      gfx_fillRect(bx+2,by+2,(int)((long)(bw2-4)*(i+1)/n),8,0x07E0);
+      gfx_flush();
+    }
+    if((i&15)==0)yield();
+  }
+  free(tmp);
+  SD_LOCK(); carMicroSave(); SD_UNLOCK();
+}
+static void carMicroEnsure(){
+  if(car_micro_block&&g_car_micro_n==(int)g_games.size())return;
+  carMicroInit();
+  if(!car_micro_block)return;
+  bool hit; SD_LOCK(); hit=carMicroLoad(); SD_UNLOCK();
+  if(!hit)carMicroBuild();
+}
+
+static void carBlit(uint16_t*tile,int srcDim,int cx,int cy,int w,int h,int dim){
   int x0=cx-w/2,y0=cy-h/2;
-  for(int dy=0;dy<h;dy++){int sy=dy*CAR_TILE/h;
-    for(int dx=0;dx<w;dx++){int sx=dx*CAR_TILE/w;
-      gfx_drawPixel(x0+dx,y0+dy,carDim(tile?tile[sy*CAR_TILE+sx]:COL_BAR,dim));}}
+  for(int dy=0;dy<h;dy++){int sy=dy*srcDim/h;
+    for(int dx=0;dx<w;dx++){int sx=dx*srcDim/w;
+      gfx_drawPixel(x0+dx,y0+dy,carDim(tile?tile[sy*srcDim+sx]:COL_BAR,dim));}}
 }
 
 // The d6 overlay: pips while rolling, final face at rest — or "23" on the lucky roll.
@@ -2145,7 +2239,15 @@ static void drawCarousel(){
       int h=(int)(CAR_TILE*scale),w=(int)(CAR_TILE*scale*squash);
       int dim=(ar<0.5f)?0:((ar<1.6f)?1:2);
       uint16_t*tile=carTile(gi,!moving&&ar<1.6f);
-      carBlit(tile,x,ccy,w,h,dim);
+      if(tile){ carBlit(tile,CAR_TILE,x,ccy,w,h,dim);
+#if CAR_BENCH
+        g_bench_sharp++;
+#endif
+      }else{ uint16_t*m=carMicro(gi); carBlit(m,m?g_car_micro_dim:CAR_TILE,x,ccy,w,h,dim);
+#if CAR_BENCH
+        if(m)g_bench_micro++; else g_bench_square++;
+#endif
+      }
       auto&gm=g_games[gi];
       bool isLd=(g_loaded&&g_loaded_game_idx==gi);
       uint16_t bord=(ar<0.5f)?(isLd?COL_GREEN:COL_AMBER):COL_ACCENT;
@@ -2196,6 +2298,11 @@ static void drawCarousel(){
     gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
     String pn=String(carWrap(ci)+1)+"/"+String(n);
     gfx_setCursor(VW-8-gfx_textWidth(pn),STATUS_H+4);gfx_print(pn);
+#if CAR_BENCH
+    {gfx_setTextSize(1);gfx_setTextColor(g_bench_square?0xF800:0x07E0,COL_BG);
+     char _bb[40];snprintf(_bb,sizeof _bb,"sq%lu mi%lu sh%lu",(unsigned long)g_bench_square,(unsigned long)g_bench_micro,(unsigned long)g_bench_sharp);
+     gfx_setCursor(8,STATUS_H+4);gfx_print(_bb);}
+#endif
     // INSERT/EJECT — an explicit button under the nfo (v4.7.3: tap-the-cover-to-
     // load removed; in portrait the cover fills the width, so swipes grazed
     // into accidental loads. Mounting is always a deliberate button on the GTi.)
@@ -2242,6 +2349,7 @@ static void writeLastView(int carousel){File f=SD_MMC.open(viewPath(),FILE_WRITE
 static int  readLastView(){File f=SD_MMC.open(viewPath(),FILE_READ);if(!f)return 0;int c=f.read();f.close();return (c=='1')?1:0;}
 static void carEnter(){
   carBuildList();                                        // stats/favs may have changed
+  carMicroEnsure();                                      // V1: micro-set ready before first draw
   g_car_active=true;g_car_touch=false;g_car_coast=false;
   if(g_car_bootmode==2)writeLastView(1);                 // CAROUSEL=LAST: remember we're in the reel
   int start=0;for(int i=0;i<carN();i++)if(g_car_list[i]==g_sel){start=i;break;}
@@ -3763,6 +3871,7 @@ static void infoAction(uint8_t act){
     case IA_SDACCESS: {gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0x05FF,COL_BG);const char*m="ENTERING SD ACCESS...";gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();g_sdaccess_magic=SDACCESS_MAGIC;delay(350);ESP.restart();}break;
     case IA_FWUPDATE: doFirmwareUpdate();g_info_showing=false;drawFullUI();gfx_flush();break;
     case IA_LIBMODE: switchLib((g_mode+1)%3); if(g_info_showing)drawInfoFull(); break;   // v5.6.0: cycle ADF->DSK->GEN, stay in INFO
+    case IA_CATEG: g_categories=!g_categories; saveConfigKey("CATEGORIES", g_categories?"ON":"OFF"); g_libpath=""; drawInfoFull(); break;   // flip+save like COMPACT/HIVEMIND; NO rescan (g_cats builds when the CATEGORIES button is tapped)
     default: break;
   }
 }
