@@ -56,6 +56,26 @@ options differ per board, and the wrong ones will fail to boot or won't be seen 
 
 ---
 
+## Why these boards? (the ESP32-S3 story)
+
+The GTi runs on the **ESP32-S3 primarily because of USB, not performance.** The standalone
+GTi has to *become* the Gotek's USB drive, and the S3 is the cheapest chip that can natively
+do that (USB-OTG device mode) **while also** having the dual cores, PSRAM and radio to run the
+touchscreen UI and the wireless link. The classic ESP32 can't be a USB device at all; the S2
+can but is single-core with no Bluetooth; the P4 can but has no radio of its own. So the S3 it is.
+
+On graphics: no LVGL, no GPU — an immediate-mode software rasteriser into a PSRAM framebuffer,
+flushed over QSPI. It's tuned to a clean ~60 FPS — the *practical* ceiling while holding clean
+full-frame rendering, stable operation and working USB; pushing past it buys frames only by
+trading one of those away. The
+ESP32-P4 (hardware 2D blitter + MIPI-DSI + double-buffering) is the next tier that removes that
+trade-off.
+
+**Full write-up:** [docs/HARDWARE-CHOICES.md](docs/HARDWARE-CHOICES.md) — the two board roles,
+the chip comparison, the cost logic, and exactly how much of the S3's ceiling we've reached.
+
+---
+
 ## JC3248 — 3.5" interface (recommended)
 
 The most developed build: fast cached boot, cover art, six themes, multi-disk grouping with a

@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GTi Support — OMEGAWARE</title>
+<meta name="description" content="Ask a question about setting up, updating or loading games on your OMEGAWARE GTi.">
+<style>
+  :root {
+    --bg:        #14131a;
+    --panel:     #1e1c27;
+    --panel-hi:  #272433;
+    --line:      #322e40;
+    --text:      #e9e5e2;
+    --muted:     #948da3;
+    --coral:     #ff6b5b;
+    --coral-dim: #b8483c;
+
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---- copper bars: the one flourish, and it earns its keep as the busy state ---- */
+  .copper {
+    height: 4px;
+    flex: none;
+    background: linear-gradient(90deg,
+      #ff6b5b 0%, #ffa24b 18%, #ffd84b 34%, #6fd98a 52%,
+      #5bc8ff 68%, #8b7bff 84%, #ff6b5b 100%);
+    background-size: 200% 100%;
+    opacity: .55;
+  }
+  .copper.live {
+    opacity: 1;
+    animation: sweep 1.4s linear infinite;
+  }
+  @keyframes sweep { to { background-position: -200% 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .copper.live { animation: none; opacity: 1; }
+  }
+
+  /* ---- header ---- */
+  header {
+    flex: none;
+    padding: 22px 20px 16px;
+    max-width: 780px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: var(--coral);
+    margin: 0 0 6px;
+  }
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(22px, 5vw, 30px);
+    font-weight: 600;
+    letter-spacing: -.01em;
+    margin: 0 0 6px;
+  }
+  .sub { margin: 0; color: var(--muted); font-size: 14.5px; max-width: 52ch; }
+
+  /* ---- transcript ---- */
+  main {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    width: 100%;
+  }
+  .inner { max-width: 780px; margin: 0 auto; padding: 18px 20px 8px; }
+
+  .msg { margin: 0 0 20px; }
+  .who {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .msg.you .who { color: var(--coral); }
+  .msg.you .body {
+    background: var(--panel);
+    border-left: 2px solid var(--coral-dim);
+    padding: 10px 14px;
+    border-radius: 0 6px 6px 0;
+  }
+  .body p { margin: 0 0 .7em; }
+  .body p:last-child { margin-bottom: 0; }
+  .body ol, .body ul { margin: 0 0 .7em; padding-left: 1.3em; }
+  .body li { margin-bottom: .3em; }
+  .body code {
+    font-family: var(--mono);
+    font-size: .88em;
+    background: var(--panel-hi);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .body strong { color: #fff; }
+  .body a { color: var(--coral); }
+
+  .cursor {
+    display: inline-block;
+    width: 8px; height: 1.05em;
+    background: var(--coral);
+    vertical-align: -2px;
+    animation: blink 1s steps(2) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+
+  .notice {
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--coral);
+    background: var(--panel);
+    padding: 10px 14px;
+    border-radius: 0 6px 6px 0;
+    font-size: 14.5px;
+  }
+
+  /* ---- starters ---- */
+  .starters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+  .starter {
+    font-family: var(--sans);
+    font-size: 14px;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 7px 14px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .starter:hover { border-color: var(--coral-dim); background: var(--panel-hi); }
+
+  /* ---- composer ---- */
+  footer {
+    flex: none;
+    border-top: 1px solid var(--line);
+    background: var(--bg);
+  }
+  .composer { max-width: 780px; margin: 0 auto; padding: 14px 20px 10px; }
+  .row { display: flex; gap: 10px; align-items: flex-end; }
+  textarea {
+    flex: 1;
+    resize: none;
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.45;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 11px 13px;
+    max-height: 160px;
+  }
+  textarea::placeholder { color: var(--muted); }
+  button.send {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: #1a1119;
+    background: var(--coral);
+    border: 0;
+    border-radius: 8px;
+    padding: 13px 18px;
+    cursor: pointer;
+  }
+  button.send:disabled { background: var(--panel-hi); color: var(--muted); cursor: default; }
+
+  :focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
+
+  .fine {
+    margin: 9px 0 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .fine a { color: var(--muted); }
+
+  @media (max-width: 560px) {
+    header { padding-top: 16px; }
+    .starter { font-size: 13.5px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="copper" id="copper"></div>
+
+<header>
+  <p class="eyebrow">OMEGAWARE</p>
+  <h1>GTi Support</h1>
+  <p class="sub">Ask about setting up your GTi, updating firmware, or getting games onto the card. Answers come from the GTi documentation.</p>
+</header>
+
+<main id="main">
+  <div class="inner" id="transcript">
+    <div class="starters" id="starters">
+      <button class="starter">I got the GTi — how should I set it up?</button>
+      <button class="starter">My GTi won't update the firmware</button>
+      <button class="starter">How do I add games to the GTi?</button>
+      <button class="starter">My SuperMini won't load HD games</button>
+      <button class="starter">The flasher can't see my board</button>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="composer">
+    <div class="row">
+      <textarea id="input" rows="1" placeholder="Describe what's happening…" aria-label="Your question"></textarea>
+      <button class="send" id="send">Ask</button>
+    </div>
+    <p class="fine">
+      Answers are generated from the GTi docs and can be wrong.
+      For anything it can't cover, ask on <a href="https://discord.gg/7gY4PKUnnf">Discord</a>
+      or <a href="https://github.com/mesarim/Gotek-Touchscreen-interface/issues">open an issue</a>.
+    </p>
+  </div>
+</footer>
+
+<script>
+// Set this to your deployed Worker URL.
+const WORKER_URL = "https://gti-support.YOUR-SUBDOMAIN.workers.dev";
+
+const transcript = document.getElementById("transcript");
+const starters   = document.getElementById("starters");
+const input      = document.getElementById("input");
+const sendBtn    = document.getElementById("send");
+const copper     = document.getElementById("copper");
+const main       = document.getElementById("main");
+
+let history = [];
+let busy = false;
+
+starters.addEventListener("click", (e) => {
+  const b = e.target.closest(".starter");
+  if (b) ask(b.textContent.trim());
+});
+
+input.addEventListener("input", () => {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 160) + "px";
+});
+
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    ask(input.value.trim());
+  }
+});
+
+sendBtn.addEventListener("click", () => ask(input.value.trim()));
+
+function bubble(cls, who) {
+  const el = document.createElement("div");
+  el.className = "msg " + cls;
+  el.innerHTML = '<div class="who"></div><div class="body"></div>';
+  el.querySelector(".who").textContent = who;
+  transcript.appendChild(el);
+  return el.querySelector(".body");
+}
+
+function scroll() { main.scrollTop = main.scrollHeight; }
+
+function setBusy(on) {
+  busy = on;
+  sendBtn.disabled = on;
+  copper.classList.toggle("live", on);
+}
+
+async function ask(text) {
+  if (!text || busy) return;
+
+  starters.remove?.();
+  input.value = "";
+  input.style.height = "auto";
+
+  bubble("you", "You").textContent = text;
+  history.push({ role: "user", content: text });
+  scroll();
+  setBusy(true);
+
+  const body = bubble("bot", "GTi Support");
+  body.innerHTML = '<span class="cursor"></span>';
+  let answer = "";
+
+  try {
+    const res = await fetch(WORKER_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: history }),
+    });
+
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error || "The support assistant didn't respond.");
+    }
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let carry = "";
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      carry += dec.decode(value, { stream: true });
+      const lines = carry.split("\n");
+      carry = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        let evt;
+        try { evt = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        if (evt.text) {
+          answer += evt.text;
+          body.innerHTML = render(answer) + '<span class="cursor"></span>';
+          scroll();
+        }
+      }
+    }
+
+    if (!answer) throw new Error("The support assistant returned nothing. Try rephrasing, or open a GitHub issue.");
+    body.innerHTML = render(answer);
+    history.push({ role: "assistant", content: answer });
+
+  } catch (e) {
+    body.innerHTML = '<div class="notice"></div>';
+    body.querySelector(".notice").textContent = e.message;
+    history.pop();
+  } finally {
+    setBusy(false);
+    scroll();
+    input.focus();
+  }
+}
+
+// Minimal renderer: paragraphs, lists, bold, inline code, bare links.
+function render(src) {
+  const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const inline = (s) =>
+    esc(s)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(https?:\/\/[^\s<)]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+
+  const out = [];
+  for (const block of src.split(/\n{2,}/)) {
+    const lines = block.split("\n").filter((l) => l.trim());
+    if (!lines.length) continue;
+
+    if (lines.every((l) => /^\s*\d+[.)]\s/.test(l))) {
+      out.push("<ol>" + lines.map((l) => "<li>" + inline(l.replace(/^\s*\d+[.)]\s/, "")) + "</li>").join("") + "</ol>");
+    } else if (lines.every((l) => /^\s*[-*]\s/.test(l))) {
+      out.push("<ul>" + lines.map((l) => "<li>" + inline(l.replace(/^\s*[-*]\s/, "")) + "</li>").join("") + "</ul>");
+    } else {
+      out.push("<p>" + inline(lines.join(" ")) + "</p>");
+    }
+  }
+  return out.join("");
+}
+</script>
+</body>
+</html>
