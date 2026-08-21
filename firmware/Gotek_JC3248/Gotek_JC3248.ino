@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.8.2-JC3248"
+#define FW_VERSION "5.8.3-JC3248"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -831,6 +831,8 @@ static uint32_t g_ss_idle_ms=SS_IDLE_MS, g_ss_load_ms=SS_LOAD_MS;   // hidden SS
 //    PLUS the cover art of every FAVOURITED game (SSFAV=ON). If the pool is empty
 //    (no folder images, no favourites) it falls through to the sprite bounce as before.
 static bool g_ss_slides=true;         // SSMODE: true=slideshow, false=classic bounce
+static bool g_ss_matrix=false;        // SSMODE=MATRIX: falling-code screensaver (5.8.3)
+static bool g_btn_pill=true;          // BTNSTYLE: coloured rounded pill reel buttons (5.8.3)
 static int  g_ss_fx=0;                // SSFX: 0=SHUFFLE 1=FADE 2=DISSOLVE 3=SLIDE 4=CUT
 static bool g_ss_fav=true;            // SSFAV: fold favourited game covers into the slide pool
 static uint32_t g_ss_time_ms=6000UL;  // SSTIME: seconds each slide holds (2..120)
@@ -1058,7 +1060,7 @@ static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=
 enum { LANG_EN=0, LANG_FR, LANG_IT, LANG_ES, LANG_DE, LANG_N };
 static int g_lang=0;
 static const char* const LANG_NAMES[LANG_N]={"EN","FR","IT","ES","DE"};
-enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_STR_N };
+enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_CFG_MODE, L_CFG_FONT, L_CFG_LANG, L_CFG_ROTATE, L_CFG_COMPACT, L_CFG_LIBRARY, L_CFG_CATEG, L_CFG_BUTTONS, L_CFG_SAVER, L_CFG_FAVSAVER, L_CFG_HIVEMIND, L_ON, L_OFF, L_PORTRAIT, L_LANDSCAPE, L_FONT_SMALL, L_FONT_NORMAL, L_FONT_LARGE, L_PILL, L_FLAT, L_SLIDES, L_BOUNCE, L_MATRIX, L_SWITCH_DONGLE, L_SCAN_DONGLES, L_STR_N };
 static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_PREV          */ {"PREV","PREC","PREC","ANT","VORH"},
   /*L_NEXT          */ {"NEXT","SUIV","SUCC","SIG","WEIT"},
@@ -1116,6 +1118,31 @@ static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_LOAD_DIAG     */ {"LOAD DIAG","CHARGER DIAG","CARICA DIAG","CARGAR DIAG","DIAG LADEN"},
   /*L_EJECT_DIAG    */ {"EJECT DIAG","EJECTER DIAG","ESPELLI DIAG","EXPULSAR DIAG","DIAG AUSWERF"},
   /*L_GAMES_TAP     */ {" games - tap INSERT"," jeux - toucher INSERER"," giochi - tocca INSERISCI"," juegos - toca INSERTAR"," Spiele - INSERT tippen"},
+  /*L_CFG_MODE     */ {"MODE","MODE","MODO","MODO","MODUS"},
+  /*L_CFG_FONT     */ {"FONT","POLICE","CARATTERE","FUENTE","SCHRIFT"},
+  /*L_CFG_LANG     */ {"LANG","LANGUE","LINGUA","IDIOMA","SPRACHE"},
+  /*L_CFG_ROTATE   */ {"ROTATE","ROTATION","ROTAZIONE","ROTAR","DREHEN"},
+  /*L_CFG_COMPACT  */ {"COMPACT","COMPACT","COMPATTO","COMPACTO","KOMPAKT"},
+  /*L_CFG_LIBRARY  */ {"LIBRARY","BIBLIO.","LIBRERIA","BIBLIOTECA","BIBLIOTHEK"},
+  /*L_CFG_CATEG    */ {"CATEGORIES","CATEGORIES","CATEGORIE","CATEGORIAS","KATEGORIEN"},
+  /*L_CFG_BUTTONS  */ {"BUTTONS","BOUTONS","PULSANTI","BOTONES","TASTEN"},
+  /*L_CFG_SAVER    */ {"SAVER","VEILLE","SALVASCH.","SALVAPANT.","SCHONER"},
+  /*L_CFG_FAVSAVER */ {"FAV SAVER","FAV VEILLE","FAV SALVASCH","FAV SALVAP.","FAV SCHONER"},
+  /*L_CFG_HIVEMIND */ {"HIVEMIND","HIVEMIND","HIVEMIND","HIVEMIND","HIVEMIND"},
+  /*L_ON           */ {"ON","ON","ON","ON","EIN"},
+  /*L_OFF          */ {"OFF","OFF","OFF","OFF","AUS"},
+  /*L_PORTRAIT     */ {"PORTRAIT","PORTRAIT","VERTICALE","VERTICAL","HOCHFORMAT"},
+  /*L_LANDSCAPE    */ {"LANDSCAPE","PAYSAGE","ORIZZONTALE","HORIZONTAL","QUERFORMAT"},
+  /*L_FONT_SMALL   */ {"SMALL","PETIT","PICCOLO","PEQUENO","KLEIN"},
+  /*L_FONT_NORMAL  */ {"NORMAL","NORMAL","NORMALE","NORMAL","NORMAL"},
+  /*L_FONT_LARGE   */ {"LARGE","GRAND","GRANDE","GRANDE","GROSS"},
+  /*L_PILL         */ {"PILL","ARRONDI","ARROTOND.","REDOND.","RUND"},
+  /*L_FLAT         */ {"FLAT","PLAT","PIATTO","PLANO","FLACH"},
+  /*L_SLIDES       */ {"SLIDES","DIAPO.","DIAPO.","DIAPOS.","DIASHOW"},
+  /*L_BOUNCE       */ {"BOUNCE","REBOND","RIMBALZO","REBOTE","HUEPFEN"},
+  /*L_MATRIX       */ {"MATRIX","MATRIX","MATRIX","MATRIX","MATRIX"},
+  /*L_SWITCH_DONGLE*/ {"SWITCH DONGLE","CHANGER DONGLE","CAMBIA DONGLE","CAMBIAR DONGLE","DONGLE WECHSELN"},
+  /*L_SCAN_DONGLES */ {"SCAN DONGLES","SCAN DONGLES","CERCA DONGLE","BUSCAR DONGLES","DONGLES SUCHEN"},
 };
 static inline const char* T(int id){ return LSTR[id][g_lang]; }
 
@@ -1258,7 +1285,8 @@ static void loadConfig(){
     else if(k=="SCREENSAVER"){g_ss_enabled=(v!="OFF"&&v!="0");}
     else if(k=="SS_IDLE"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_idle_ms=s*1000UL;}
     else if(k=="SS_LOAD"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_load_ms=s*1000UL;}
-    else if(k=="SSMODE"){String u=v;u.toUpperCase();g_ss_slides=!(u=="BOUNCE"||u=="0"||u=="SPRITES");}   // v5.7.2 slideshow
+    else if(k=="SSMODE"){String u=v;u.toUpperCase();g_ss_matrix=(u=="MATRIX"||u=="RAIN");g_ss_slides=!(u=="BOUNCE"||u=="0"||u=="SPRITES"||g_ss_matrix);}   // v5.7.2 slideshow; 5.8.3 matrix
+    else if(k=="BTNSTYLE"){String u=v;u.toUpperCase();g_btn_pill=!(u=="FLAT"||u=="0"||u=="BAR");}   // 5.8.3 reel button style
     else if(k=="SSFX"){String u=v;u.toUpperCase();
       if(u=="FADE")g_ss_fx=1; else if(u=="DISSOLVE"||u=="DISS")g_ss_fx=2;
       else if(u=="SLIDE"||u=="PUSH")g_ss_fx=3; else if(u=="CUT"||u=="NONE")g_ss_fx=4; else g_ss_fx=0; }  // default SHUFFLE
@@ -1299,7 +1327,8 @@ static void applyFont(int f){if(f<0||f>2)f=1;g_font=f;g_name_sz=(f==0?1:f==2?3:2
   int target=(f==0?34:f==2?70:50),listH=LIST_BOTTOM-LIST_TOP,rows=listH/target;
   if(listH%target>=target/2)rows++; if(rows<1)rows=1;
   g_item_h=listH/rows; g_items_vis=rows;}
-static const char* fontName(int f){return f==0?"SMALL":f==2?"LARGE":"NORMAL";}
+static const char* fontName(int f){return f==0?T(L_FONT_SMALL):f==2?T(L_FONT_LARGE):T(L_FONT_NORMAL);}
+static const char* fontKey(int f){return f==0?"SMALL":f==2?"LARGE":"NORMAL";}   // canonical CONFIG.TXT token — NEVER localized (load parser matches these)
 static void relayout(){
   if(g_portrait){gW=320;gH=480;}else{gW=480;gH=320;}
   // Reset the clip window to the new canvas. The clip statics init to the
@@ -1704,11 +1733,11 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV };
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
-static InfoItem g_ii[16]; static int g_ii_n=0;
+static InfoItem g_ii[20]; static int g_ii_n=0;
 struct InfoRect { int x,y,w,h; uint8_t act; };
-static InfoRect g_ir[16]; static int g_ir_n=0;
+static InfoRect g_ir[20]; static int g_ir_n=0;
 static int g_info_page=0, g_info_pages=1;
 static void drawInfoFull();   // paginated settings + INFO bottom bar + flush
 // v5.6.7: readable ink for a key's colour on the dim fill — dark key colours
@@ -1724,20 +1753,23 @@ static void drawInfoPanel(){
   // record their rects in g_ir[] so the tap handler hits exactly what's drawn.
   g_ii_n=0;
   auto add=[&](const String&l,uint16_t bg,uint16_t fg,uint8_t act){
-    if(g_ii_n>=16)return; strncpy(g_ii[g_ii_n].lbl,l.c_str(),31); g_ii[g_ii_n].lbl[31]=0;
+    if(g_ii_n>=20)return; strncpy(g_ii[g_ii_n].lbl,l.c_str(),31); g_ii[g_ii_n].lbl[31]=0;
     g_ii[g_ii_n].bg=bg; g_ii[g_ii_n].fg=fg; g_ii[g_ii_n].act=act; g_ii_n++; };
-  add(String("MODE: ")+(g_wireless_mode?T(L_WIRELESS):T(L_STANDALONE)), g_wireless_mode?COL_BLUE:COL_GREEN, TFT_BLACK, IA_MODE);
-  add(String("FONT: ")+fontName(g_font), COL_AMBER, TFT_BLACK, IA_FONT);
-  add(String("THEME: ")+THEMES[g_theme_idx].name, COL_ACCENT, TFT_WHITE, IA_THEME);   // Vince test: moved off the bottom bar
-  add(String("LANG: ")+LANG_NAMES[g_lang], (uint16_t)0x79D6, TFT_WHITE, IA_LANG);
-  add(String("ROTATE: ")+(g_portrait?"PORTRAIT":"LANDSCAPE"), COL_BLUE, TFT_WHITE, IA_ROTATE);
-  add(String("COMPACT: ")+(g_compact?"ON":"OFF"), g_compact?COL_GREEN:COL_BAR, g_compact?TFT_BLACK:COL_LIT, IA_COMPACT);
-  add(String("LIBRARY: ")+(g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN"), COL_ACCENT, TFT_BLACK, IA_LIBMODE);   // v5.6.0: disk-format mode moved here from the mode bar
-  add(String("CATEGORIES: ")+(g_categories?"ON":"OFF"), g_categories?COL_GREEN:COL_BAR, g_categories?TFT_BLACK:COL_LIT, IA_CATEG);   // library/category browse toggle (mirrors CONFIG.TXT CATEGORIES=)
+  add(String(T(L_CFG_MODE))+": "+(g_wireless_mode?T(L_WIRELESS):T(L_STANDALONE)), g_wireless_mode?COL_BLUE:COL_GREEN, TFT_BLACK, IA_MODE);
+  add(String(T(L_CFG_FONT))+": "+fontName(g_font), COL_AMBER, TFT_BLACK, IA_FONT);
+  add(String(T(L_THEME))+": "+THEMES[g_theme_idx].name, COL_ACCENT, TFT_WHITE, IA_THEME);   // Vince test: moved off the bottom bar
+  add(String(T(L_CFG_LANG))+": "+LANG_NAMES[g_lang], (uint16_t)0x79D6, TFT_WHITE, IA_LANG);
+  add(String(T(L_CFG_ROTATE))+": "+(g_portrait?T(L_PORTRAIT):T(L_LANDSCAPE)), COL_BLUE, TFT_WHITE, IA_ROTATE);
+  add(String(T(L_CFG_COMPACT))+": "+(g_compact?T(L_ON):T(L_OFF)), g_compact?COL_GREEN:COL_BAR, g_compact?TFT_BLACK:COL_LIT, IA_COMPACT);
+  add(String(T(L_CFG_LIBRARY))+": "+(g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN"), COL_ACCENT, TFT_BLACK, IA_LIBMODE);   // v5.6.0: disk-format mode moved here from the mode bar
+  add(String(T(L_CFG_CATEG))+": "+(g_categories?T(L_ON):T(L_OFF)), g_categories?COL_GREEN:COL_BAR, g_categories?TFT_BLACK:COL_LIT, IA_CATEG);   // library/category browse toggle (mirrors CONFIG.TXT CATEGORIES=)
+  add(String(T(L_CFG_BUTTONS))+": "+(g_btn_pill?T(L_PILL):T(L_FLAT)), g_btn_pill?COL_ACCENT:COL_BAR, g_btn_pill?TFT_WHITE:COL_LIT, IA_BTNSTYLE);   // 5.8.3 reel button style
+  add(String(T(L_CFG_SAVER))+": "+(g_ss_matrix?T(L_MATRIX):(g_ss_slides?T(L_SLIDES):T(L_BOUNCE))), COL_BLUE, TFT_WHITE, IA_SSMODE);   // 5.8.3 screensaver mode
+  add(String(T(L_CFG_FAVSAVER))+": "+(g_ss_fav?T(L_ON):T(L_OFF)), g_ss_fav?COL_GREEN:COL_BAR, g_ss_fav?TFT_BLACK:COL_LIT, IA_SSFAV);   // 5.8.3 favourites into slideshow
   if(g_wireless_mode){
-    add(espnowIsPaired()?String("SWITCH DONGLE"):String("SCAN DONGLES"), espnowIsPaired()?COL_GREEN:COL_AMBER, TFT_BLACK, IA_DONGLE);
+    add(espnowIsPaired()?String(T(L_SWITCH_DONGLE)):String(T(L_SCAN_DONGLES)), espnowIsPaired()?COL_GREEN:COL_AMBER, TFT_BLACK, IA_DONGLE);
     uint8_t mm[64][6]; int mcN=enumMuCaDongles(mm,g_dongle_cap);
-    if(mcN>0) add(String("HIVEMIND: ")+(g_hivemind?"ON":"OFF"), g_hivemind?COL_ACCENT:COL_BAR, g_hivemind?TFT_WHITE:COL_LIT, IA_HIVEMIND);
+    if(mcN>0) add(String(T(L_CFG_HIVEMIND))+": "+(g_hivemind?T(L_ON):T(L_OFF)), g_hivemind?COL_ACCENT:COL_BAR, g_hivemind?TFT_WHITE:COL_LIT, IA_HIVEMIND);
   }
   add(T(L_RESCAN_SD), COL_BLUE, TFT_WHITE, IA_RESCAN);
   add(T(L_SOFT_RESET), (uint16_t)0x8000, TFT_WHITE, IA_RESET);
@@ -1769,7 +1801,7 @@ static void drawInfoPanel(){
     if(tw>colW-8){ sz=1; gfx_setTextSize(sz); tw=gfx_textWidth(g_ii[i2].lbl); }   // shrink an over-long label to fit the half-width cell
     gfx_setTextColor(kink,kdim);
     gfx_setCursor(bx+(colW-tw)/2,by+(bh-8*sz)/2);gfx_print(g_ii[i2].lbl);
-    if(g_ir_n<16){g_ir[g_ir_n].x=bx;g_ir[g_ir_n].y=by;g_ir[g_ir_n].w=colW;g_ir[g_ir_n].h=bh;g_ir[g_ir_n].act=g_ii[i2].act;g_ir_n++;}
+    if(g_ir_n<20){g_ir[g_ir_n].x=bx;g_ir[g_ir_n].y=by;g_ir[g_ir_n].w=colW;g_ir[g_ir_n].h=bh;g_ir[g_ir_n].act=g_ii[i2].act;g_ir_n++;}
   }
   gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
   gfx_setCursor(8,iy+ih-11);gfx_print("Heap:"+String(ESP.getFreeHeap()/1024)+"K PSRAM:"+String(ESP.getFreePsram()/1024)+"K  Games:"+String(g_games.size()));
@@ -2351,6 +2383,28 @@ static void drawCarousel(){
      const char*lbl=isLd?T(L_EJECT):T(L_INSERT);int tw=gfx_textWidth(lbl);
      gfx_setCursor(g_car_ins_x+(g_car_ins_w-tw)/2,g_car_ins_y+(g_car_ins_h-16)/2);gfx_print(lbl);}
   }
+  if(g_btn_pill){                                             // 5.8.3: coloured rounded pill buttons
+    int y=VH-BOTTOM_H; gfx_fillRect(0,y,VW,BOTTOM_H,COL_BG); gfx_hline(0,y,VW,COL_SEP);
+    int bw=VW/3, pad=5, bh=BOTTOM_H-2*pad, r=bh/2, by=y+pad;
+    gfx_setTextSize(2);
+    { uint16_t bc=COL_BLUE, ic=inkFor(bc); int bx=0*bw+pad, w=bw-2*pad;
+      gfx_fillRoundRect(bx,by,w,bh,r,bc);
+      int tw=gfx_textWidth(T(L_LIST)),total=16+tw,sx=bx+(w-total)/2;
+      drawListIcon(sx+7,by+bh/2,ic); gfx_setTextColor(ic,bc);
+      gfx_setCursor(sx+16,by+(bh-16)/2); gfx_print(T(L_LIST)); }
+    { uint16_t bc=COL_AMBER, ic=inkFor(bc); int bx=1*bw+pad, w=bw-2*pad;
+      gfx_fillRoundRect(bx,by,w,bh,r,bc); String sl=carSrcName(); int tw=gfx_textWidth(sl);
+      gfx_setTextColor(ic,bc); gfx_setCursor(bx+(w-tw)/2,by+(bh-16)/2); gfx_print(sl); }
+    { uint16_t bc=COL_GREEN, ic=inkFor(bc); int bx=2*bw+pad, w=bw-2*pad;
+      gfx_fillRoundRect(bx,by,w,bh,r,bc);
+      int tw=gfx_textWidth(T(L_ROLL)),ds=16,total=ds+4+tw,sx=bx+(w-total)/2;
+      int dx=sx+ds/2,dy2=by+bh/2;
+      gfx_fillRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,0xFFFF); gfx_drawRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,TFT_BLACK);
+      int o=4; gfx_fillCircle(dx,dy2,1,TFT_BLACK);
+      gfx_fillCircle(dx-o,dy2-o,1,TFT_BLACK); gfx_fillCircle(dx+o,dy2+o,1,TFT_BLACK);
+      gfx_fillCircle(dx+o,dy2-o,1,TFT_BLACK); gfx_fillCircle(dx-o,dy2+o,1,TFT_BLACK);
+      gfx_setTextColor(ic,bc); gfx_setCursor(sx+ds+4,by+(bh-16)/2); gfx_print(T(L_ROLL)); }
+  } else {
   // carousel bottom bar: Vince test — single bar split by dividers [LIST] [source] [ROLL], white-on-black
   const uint16_t bg=TFT_BLACK, ink=TFT_WHITE;
   const uint16_t dieBody=0xFFFF, diePip=TFT_BLACK;
@@ -2374,6 +2428,7 @@ static void drawCarousel(){
     gfx_fillCircle(dx-o,dy2-o,1,diePip);gfx_fillCircle(dx+o,dy2+o,1,diePip);
     gfx_fillCircle(dx+o,dy2-o,1,diePip);gfx_fillCircle(dx-o,dy2+o,1,diePip);
     gfx_setCursor(sx+ds+4,y+(BOTTOM_H-16)/2);gfx_print(T(L_ROLL)); }
+  }
   if(g_car_dieShow&&carN()>0)carDrawDie();   // dice overlay rides on top of everything
 }
 
@@ -3047,9 +3102,52 @@ static void runSlideshow(std::vector<String>&pool){
   ssSlideFree();
 }
 
+// 5.8.3: SSMODE=MATRIX — falling-code screensaver. Any touch exits (same wake
+// contract as bounce/slideshow). Cheap: full-frame redraw of short per-column
+// glyph trails at ~16 fps.
+static void runMatrixRain(){
+  const int CW=12, CH=16;                       // cell (text size 2)
+  int cols=gW/CW; if(cols>64)cols=64; if(cols<1)cols=1;
+  int rows=gH/CH; if(rows<1)rows=1;
+  int head[64], spd[64];
+  for(int c=0;c<cols;c++){ head[c]=-(int)(esp_random()%(uint32_t)(rows+1)); spd[c]=1+(int)(esp_random()%2); }
+  static const char GL[]="0123456789ABCDEFGHKMNPRXZ<>[]=+*/";
+  const int NG=(int)sizeof(GL)-1;
+  gfx_setTextSize(2);
+  gfx_fillScreen(TFT_BLACK); gfx_flush();
+  uint32_t last=millis(), seed=1;
+  while(true){
+    if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
+    uint32_t nf=millis();
+    if(nf-last>=60){ last=nf; seed++;
+      gfx_fillScreen(TFT_BLACK);
+      for(int c=0;c<cols;c++){
+        int hy=head[c];
+        for(int tl=0;tl<14;tl++){
+          int ry=hy-tl; if(ry<0||ry>=rows) continue;
+          uint16_t col;
+          if(tl==0) col=0xFFFF;                                  // bright head
+          else { int g=60-tl*4; if(g<8)g=8; col=(uint16_t)((g&0x3F)<<5); }   // fading green trail
+          uint32_t h=(uint32_t)c*928371u + (uint32_t)ry*1237u + (tl==0?seed:0u);
+          char s[2]={ GL[h%(uint32_t)NG], 0 };
+          gfx_setTextColor(col,TFT_BLACK);
+          gfx_setCursor(c*CW, ry*CH);
+          gfx_print(s);
+        }
+        head[c]+=spd[c];
+        if(head[c]-14>rows){ head[c]=0; spd[c]=1+(int)(esp_random()%2); }
+      }
+      gfx_flush();
+    } else delay(5);
+  }
+  g_touch_active=false; g_touch_release=0; g_last_touch_ms=millis();
+  if(g_car_active){drawCarousel();gfx_flush();} else {drawFullUI();gfx_flush();}
+}
+
 static void runScreensaver(){                                // blocking bounce loop; any touch exits
   // v5.7.2: slideshow mode — real images (folder + favourited covers) with transitions.
   // Only engages when there's genuine content; otherwise falls through to the sprite bounce.
+  if(g_ss_matrix){ runMatrixRain(); return; }                 // 5.8.3: falling-code saver
   if(g_ss_slides && g_cracktro!=7 && g_cracktro!=8){
     std::vector<String> pool=ssBuildSlidePool();
     if(!pool.empty()){
@@ -3343,7 +3441,7 @@ static void doManual(const String& path){
       if(pressed&&++rel>=3){ pressed=false;
         if(!moved){ int by=VH-botH;
           if(lastY>=by){ int idx=lastX/bw; if(idx>=nbtn)idx=nbtn-1;
-            if(idx==0){ applyFont((g_font+1)%3); saveConfigKey("FONT",fontName(g_font)); rewrap(); float ms=maxScroll(); if(scroll>ms)scroll=ms; dirty=true; }
+            if(idx==0){ applyFont((g_font+1)%3); saveConfigKey("FONT",fontKey(g_font)); rewrap(); float ms=maxScroll(); if(scroll>ms)scroll=ms; dirty=true; }
             else if(idx==1){ scroll=0; vel=0; dirty=true; }                                            // TOP
             else if(secName.size()&&idx==2){ int pick=rtfmSectionMenu(secName);                        // SECTIONS jump
               if(pick>=0&&pick<(int)secLine.size()){ scroll=(float)secLine[pick]*lineH; float ms=maxScroll(); if(scroll<0)scroll=0; if(scroll>ms)scroll=ms; vel=0; }
@@ -3895,7 +3993,7 @@ static void drawInfoFull(){
 static void infoAction(uint8_t act){
   switch(act){
     case IA_MODE: g_wireless_mode=!g_wireless_mode;saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE");if(g_wireless_mode)ensureEspNow();drawInfoFull();break;
-    case IA_FONT: applyFont((g_font+1)%3);saveConfigKey("FONT",fontName(g_font));drawInfoFull();break;
+    case IA_FONT: applyFont((g_font+1)%3);saveConfigKey("FONT",fontKey(g_font));drawInfoFull();break;
     case IA_THEME: applyTheme((g_theme_idx+1)%NUM_THEMES);saveConfigKey("THEME",String(g_theme_idx));drawInfoFull();break;   // Vince test: theme cycling lives in CONFIG now
     case IA_LANG: g_lang=(g_lang+1)%LANG_N;saveConfigKey("LANG",LANG_NAMES[g_lang]);drawInfoFull();break;
     case IA_ROTATE: g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
@@ -3909,6 +4007,13 @@ static void infoAction(uint8_t act){
     case IA_FWUPDATE: doFirmwareUpdate();g_info_showing=false;drawFullUI();gfx_flush();break;
     case IA_LIBMODE: switchLib((g_mode+1)%3); if(g_info_showing)drawInfoFull(); break;   // v5.6.0: cycle ADF->DSK->GEN, stay in INFO
     case IA_CATEG: g_categories=!g_categories; saveConfigKey("CATEGORIES", g_categories?"ON":"OFF"); g_libpath=""; drawInfoFull(); break;   // flip+save like COMPACT/HIVEMIND; NO rescan (g_cats builds when the CATEGORIES button is tapped)
+    case IA_BTNSTYLE: g_btn_pill=!g_btn_pill; saveConfigKey("BTNSTYLE", g_btn_pill?"PILL":"FLAT"); drawInfoFull(); break;   // 5.8.3
+    case IA_SSMODE:
+      if(g_ss_slides){ g_ss_slides=false; g_ss_matrix=false; saveConfigKey("SSMODE","BOUNCE"); }
+      else if(!g_ss_matrix){ g_ss_matrix=true; g_ss_slides=false; saveConfigKey("SSMODE","MATRIX"); }
+      else { g_ss_slides=true; g_ss_matrix=false; saveConfigKey("SSMODE","SLIDES"); }
+      drawInfoFull(); break;   // 5.8.3 cycle SLIDES->BOUNCE->MATRIX
+    case IA_SSFAV: g_ss_fav=!g_ss_fav; saveConfigKey("SSFAV", g_ss_fav?"ON":"OFF"); drawInfoFull(); break;   // 5.8.3
     default: break;
   }
 }
