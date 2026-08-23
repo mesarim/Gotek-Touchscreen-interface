@@ -43,6 +43,8 @@
 #undef MOTOLONG
 #include <PNGdec.h>      // v4.7.7: PNG cover support (Larry Bank's PNGdec library)
 #include <sys/stat.h>
+#include <dirent.h>
+#include <unistd.h>
 #include <vector>
 #include <algorithm>
 #include <ctype.h>
@@ -53,7 +55,7 @@
 #include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 
 // ---------- Version ----------
-#define FW_VERSION  "v4.13.0-7B-PERF3"
+#define FW_VERSION  "v4.14.12-7B-GRID"
 // NOTE: version converged with the 7A (-7IN) at 4.13.0 — same interface, so matching
 // functionality now carries a matching number (they had drifted to 4.8.x vs 4.12.x).
 // The -PERF3 suffix still marks this board's dirty-rect perf engine generation.
@@ -913,17 +915,26 @@ static bool findNFOFor(const String& adfPath, String& outNFO){
   return false;
 }
 static bool findJPGFor(const String& adfPath, String& outJPG){
-  String base = basenameNoExt(filenameOnly(adfPath));
-  String dir  = parentDir(adfPath);
+  String base  = basenameNoExt(filenameOnly(adfPath));
+  String dir   = parentDir(adfPath);
+  String gbase = getGameBaseName(adfPath);   // "Emerald Mine 2-1" -> "Emerald Mine 2" (multi-disk cover has no disk number)
   const char* exts[] = {".jpg",".jpeg",".JPG",".JPEG",".Jpg",".Jpeg"};
-  // Look in same folder as the ADF first
+  // Same folder as the ADF: exact name first, then the disk-stripped name
   for(auto e : exts){
     String cand = dir + "/" + base + e;
     if(SD_MMC.exists(cand.c_str())){ outJPG = cand; return true; }
   }
-  // Fallback to root
+  if(gbase != base) for(auto e : exts){
+    String cand = dir + "/" + gbase + e;
+    if(SD_MMC.exists(cand.c_str())){ outJPG = cand; return true; }
+  }
+  // Fallback to root (exact, then disk-stripped)
   for(auto e : exts){
     String cand = "/" + base + e;
+    if(SD_MMC.exists(cand.c_str())){ outJPG = cand; return true; }
+  }
+  if(gbase != base) for(auto e : exts){
+    String cand = "/" + gbase + e;
     if(SD_MMC.exists(cand.c_str())){ outJPG = cand; return true; }
   }
   return false;
@@ -1434,6 +1445,30 @@ static void parseNFO(const String& txt,String& outTitle,String& outBlurb){
 // ============================================================================
 // ── Game cache — caches buildGameList output so NFO/JPG lookups only happen once ──
 static String gameCachePath(){return g_mode==MODE_ADF?"/ADF/.gamecache":g_mode==MODE_DSK?"/DSK/.gamecache":"/GENERIC/.gamecache";}
+static String fileListPath(){return g_mode==MODE_ADF?"/ADF/.filelist":g_mode==MODE_DSK?"/DSK/.filelist":"/GENERIC/.filelist";}
+// Cache the raw file list so a normal boot can SKIP the slow directory-tree walk
+// (thousands of tiny reads on the card). RESCAN deletes it and re-walks; adding
+// games already needs a RESCAN, so freshness is unchanged.
+static void writeFileList(){
+  File f=SD_MMC.open(fileListPath().c_str(),FILE_WRITE); if(!f)return;
+  f.println("#N="+String(g_files.size()));
+  for(auto&p:g_files) f.println(p);
+  f.close();
+}
+static bool readFileList(){
+  File f=SD_MMC.open(fileListPath().c_str(),FILE_READ); if(!f)return false;
+  long declared=-1; std::vector<String> tmp;
+  while(f.available()){
+    String line=f.readStringUntil('\n');
+    while(line.length()&&(line[line.length()-1]=='\r'||line[line.length()-1]=='\n')) line.remove(line.length()-1);
+    if(line.startsWith("#N=")){ declared=line.substring(3).toInt(); continue; }
+    if(!line.length()) continue;
+    tmp.push_back(line);
+  }
+  f.close();
+  if(declared<0 || (long)tmp.size()!=declared || tmp.empty()) return false;
+  g_files=tmp; return true;
+}
 
 static void writeGameCache(){
   File f=SD_MMC.open(gameCachePath().c_str(),FILE_WRITE);if(!f)return;
@@ -1445,6 +1480,7 @@ static void writeGameCache(){
     f.println();
   }
   f.close();
+  writeFileList();   // keep the raw file-list cache in sync with the game cache
 }
 
 static bool readGameCache(){
@@ -1581,10 +1617,12 @@ static bool handleAlphabetTouch(uint16_t px,uint16_t py){
 // ============================================================================
 // RESCAN — delete cache files and rebuild the game list from a fresh SD scan.
 // Use after adding/removing games on the card so the cached list updates.
+static void carInvalidateThumbs();   // (defined below) RESCAN cover-cache refresh
 static void doRescan(){
   g_info_showing=false;
   SD_MMC.remove("/ADF/.index");   SD_MMC.remove("/DSK/.index");
   SD_MMC.remove("/ADF/.gamecache");SD_MMC.remove("/DSK/.gamecache");
+  SD_MMC.remove("/ADF/.filelist"); SD_MMC.remove("/DSK/.filelist");   // force a fresh tree walk
   // v4.13.0-7B: re-read CONFIG.TXT on a RESCAN so card edits (theme, categories, font,
   // language, rotation, ...) apply without a reboot. Runs before the rebuild so
   // CATEGORIES/NESTING take effect. Transfer MODE is preserved — flipping
@@ -1594,6 +1632,7 @@ static void doRescan(){
   listImages(SD_MMC,g_files);
   buildGameList();           // no cache now → full rebuild, writes fresh cache
   buildActiveLetters();
+  carInvalidateThumbs();   // RESCAN also forces a fresh cover-cache rebuild
   g_sel=0; g_scroll=0; g_disk_sel=0; g_scrollPx=0; g_inertia_on=false;
   drawFullUI();
 }
@@ -1768,7 +1807,7 @@ static void drawJpegFit(const String&path,int boxX,int boxY,int maxW,int maxH){
   size_t sz=f.size();
   // SD_MMC f.size() can be 0 for subdir files — fall back to VFS stat
   if(sz==0){ f.close(); struct stat st; String vp="/sdcard"+path; if(stat(vp.c_str(),&st)==0) sz=st.st_size; f=SD_MMC.open(path.c_str(),FILE_READ); if(!f) return; }
-  if(sz==0||sz>500000){ f.close(); return; }
+  if(sz==0||sz>2000000){ f.close(); return; }
   uint8_t*buf=(uint8_t*)ps_malloc(sz); if(!buf){ buf=(uint8_t*)malloc(sz); } if(!buf){ f.close(); return; }
   f.read(buf,sz); f.close();
   if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){ free(buf); return; }
@@ -1808,7 +1847,7 @@ static void drawPngFit(const String&path,int boxX,int boxY,int maxW,int maxH){
   File f=SD_MMC.open(path.c_str(),FILE_READ); if(!f) return;
   size_t sz=f.size();
   if(sz==0){ f.close(); struct stat st; String vp="/sdcard"+path; if(stat(vp.c_str(),&st)==0) sz=st.st_size; f=SD_MMC.open(path.c_str(),FILE_READ); if(!f) return; }
-  if(sz==0||sz>500000){ f.close(); return; }
+  if(sz==0||sz>2000000){ f.close(); return; }
   uint8_t*buf=(uint8_t*)ps_malloc(sz); if(!buf){ buf=(uint8_t*)malloc(sz); } if(!buf){ f.close(); return; }
   f.read(buf,sz); f.close();
   if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){ free(buf); return; }
@@ -2259,9 +2298,8 @@ static void drawListIcon(int cx,int cy,uint16_t col){
   for(int r=-1;r<=1;r++) UG->fillRect(cx-6,cy+r*5-1,12,2,col);   // three stacked rows
 }
 static void drawCarouselIcon(int cx,int cy,uint16_t col){
-  UG->drawRect(cx-9,cy-5,5,11,col);      // left cover, peeking
-  UG->drawRect(cx+4,cy-5,5,11,col);      // right cover, peeking
-  UG->fillRect(cx-3,cy-7,6,15,col);      // center cover, front & tall
+  UG->drawRect(cx-9,cy-6,8,5,col);  UG->drawRect(cx+1,cy-6,8,5,col);   // 2x2 grid glyph (replaces coverflow)
+  UG->drawRect(cx-9,cy+1,8,5,col);  UG->drawRect(cx+1,cy+1,8,5,col);
 }
 static void drawBottomBar(){ UiFrame _uf;
   int y=LCD_HEIGHT-BOTTOM_H;
@@ -2270,7 +2308,7 @@ static void drawBottomBar(){ UiFrame _uf;
   const int nb=5; int bw=LCD_WIDTH/nb;   // v4.8.16-7B: enlarged word-labelled rounded-rect nav keys (was small circle glyphs)
 
   const uint16_t bcol[5]={COL_ORANGE,COL_BLUE,COL_AMBER,COL_GREEN,COL_MID};
-  const char* blbl[5]={"< PREV","NEXT >","THEME","REEL","INFO"};
+  const char* blbl[5]={"< PREV","NEXT >","THEME","GRID","INFO"};
   const int pad=6, rad=10;
   for(int i=0;i<nb;i++){
     int bx=i*bw;
@@ -2886,20 +2924,14 @@ static bool doSearch(){
 // ════════════════════════════════════════════════════════════════════════════
 static bool g_car_active=false;
 static std::vector<int> g_car_list;             // reel order -> g_games indices
-static float g_car_pos=0;                       // fractional reel position
-static bool g_car_touch=false,g_car_moved=false,g_car_coast=false;
-static int  g_car_x0=0,g_car_y0=0,g_car_lastX=0,g_car_rel=0;
-static float g_car_pos0=0,g_car_vel=0,g_car_ivel=0;
-static uint32_t g_car_lastMs=0;
-#define CAR_PX_PER_STEP 160.0f
-static bool  g_car_spin=false, g_car_dieShow=false, g_car_die23=false;
-static bool  g_car_tilesOnly=false;   // motion frame: repaint only the tile band (chrome/title persist)
-static float g_car_spinTarget=0;
-static uint8_t g_car_die=1, g_car_dieTick=0;
-static uint32_t g_car_die_rest_ms=0;
-#define DIE_HIDE_MS 2500
-static int g_car_ins_x=0,g_car_ins_y=0,g_car_ins_w=0,g_car_ins_h=0;   // INSERT button rect (set by drawCarousel)
-static bool g_car_built=false;                  // build the thumb cache once per session (first reel entry)
+// --- static 3x2 GRID browser state (replaces the carousel; no moving parts) ---
+static int  g_car_page=0;                        // current grid page (0-based)
+static int  g_grid_sel=-1;                       // g_games index highlighted in the grid (-1=none)
+static bool g_grid_touch=false, g_grid_moved=false;
+static int  g_grid_x0=0, g_grid_y0=0, g_grid_rel=0;
+#define GRID_COLS 3
+#define GRID_ROWS 2
+#define GRID_PER  6
 #define CAR_TILE  200                            // decoded cover tile size (px) — bigger stage than the JC
 #define CAR_SLOTS 16                             // LRU tile cache entries (PSRAM, ~1.28 MB)
 static uint16_t* car_buf[CAR_SLOTS]={0};
@@ -2922,7 +2954,7 @@ static bool carDecodeTile(int gi,uint16_t*dst){
   if(!game.jpg_path.length()){String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg))game.jpg_path=jpg;else game.jpg_path="?";}
   if(!(game.jpg_path.length()>0&&game.jpg_path!="?"))return false;
   String vfsPath="/sdcard"+game.jpg_path;struct stat st;
-  if(stat(vfsPath.c_str(),&st)!=0||st.st_size==0||st.st_size>500000)return false;
+  if(stat(vfsPath.c_str(),&st)!=0||st.st_size==0||st.st_size>2000000)return false;
   size_t sz=(size_t)st.st_size;
   File f=SD_MMC.open(game.jpg_path.c_str(),"r");if(!f)return false;
   uint8_t*buf=(uint8_t*)ps_malloc(sz);if(!buf){f.close();return false;}
@@ -2977,11 +3009,13 @@ static bool carLoadThumb(int gi,uint16_t*dst){
   GameEntry&g=g_games[gi];
   if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return false;
   String tp=carThumbPath(gi);
-  struct stat stT,stJ;
-  String vT="/sdcard"+tp,vJ="/sdcard"+g.jpg_path;
+  struct stat stT;
+  String vT="/sdcard"+tp;
   if(stat(vT.c_str(),&stT)!=0)return false;
   if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))return false;
-  if(stat(vJ.c_str(),&stJ)==0&&stJ.st_mtime>stT.st_mtime)return false;   // cover replaced -> stale
+  // No mtime "stale" check: these boards often have no RTC, so a freshly written thumb
+  // is dated 1980 and would always look older than the PC-dated cover, wrongly rejecting
+  // every cached tile. RESCAN (which wipes .thumbs) is the invalidator.
   File f=SD_MMC.open(tp.c_str(),"r");if(!f)return false;
   size_t want=(size_t)CAR_TILE*CAR_TILE*2;
   size_t got=f.read((uint8_t*)dst,want);f.close();
@@ -3013,44 +3047,23 @@ static uint16_t* carTile(int gi,bool mayDecode){
   return car_buf[slot];
 }
 // Build ALL cover thumbnails up-front (first reel entry / rescan). Fresh thumbs are
-// stat-checked and skipped, so a re-run over a built card is seconds, not minutes.
-static void buildThumbs(){
-  int n=(int)g_games.size(); if(!n)return;
-  uint16_t*tmp=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2);
-  if(!tmp)return;
-  uint32_t lastDraw=0;
-  for(int i=0;i<n;i++){
-    GameEntry&g=g_games[i];
-    if(!g.jpg_path.length()){String jpg;if(findJPGFor(g_files[g.first_file_idx],jpg))g.jpg_path=jpg;else g.jpg_path="?";}
-    bool need=false;
-    if(g.jpg_path.length()>0&&g.jpg_path!="?"){
-      String vT="/sdcard"+carThumbPath(i),vJ="/sdcard"+g.jpg_path;
-      struct stat stT,stJ;
-      if(stat(vT.c_str(),&stT)!=0)need=true;
-      else if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))need=true;
-      else if(stat(vJ.c_str(),&stJ)==0&&stJ.st_mtime>stT.st_mtime)need=true;
-    }
-    if(need&&carDecodeTile(i,tmp))carSaveThumb(i,tmp);
-    uint32_t nowMs=millis();
-    if(nowMs-lastDraw>100||i==n-1){
-      lastDraw=nowMs;
-      { UiFrame _uf;
-        UG->fillScreen(COL_BG);
-        UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextColor(COL_AMBER,COL_BG);
-        { const char*s="BUILDING COVER CACHE"; int tw=UG->textWidth(s); UG->setCursor((LCD_WIDTH-tw)/2,LCD_HEIGHT/2-52); UG->print(s); }
-        UG->setFont(&lgfx::fonts::DejaVu9); UG->setTextColor(COL_MID,COL_BG);
-        { String m=String(i+1)+" / "+String(n); int tw=UG->textWidth(m); UG->setCursor((LCD_WIDTH-tw)/2,LCD_HEIGHT/2-22); UG->print(m); }
-        int bw2=LCD_WIDTH-160,bx=80,by=LCD_HEIGHT/2;
-        UG->drawRect(bx,by,bw2,14,COL_SEP);
-        UG->fillRect(bx+2,by+2,(int)((long)(bw2-4)*(i+1)/n),10,COL_GREEN);
-        UG->setTextColor(COL_DIM,COL_BG);
-        { const char*s="one-off: reel thumbnails (first launch / rescan)"; int tw=UG->textWidth(s); UG->setCursor((LCD_WIDTH-tw)/2,LCD_HEIGHT/2+30); UG->print(s); }
-      }
-    }
-    if((i&7)==0)yield();
+// Wipe the persistent .thumbs tiles so the grid re-decodes covers lazily (per page) on
+// the next browse. Used by RESCAN — refreshes covers that were added or replaced.
+static void purgeThumbDir(const char* vfsDir){
+  DIR* d=opendir(vfsDir); if(!d)return;
+  struct dirent* de;
+  while((de=readdir(d))){
+    if(de->d_name[0]=='.')continue;                 // skip "." / ".." (and any dotfiles)
+    String fp=String(vfsDir)+"/"+de->d_name;
+    unlink(fp.c_str());
+    yield();
   }
-  free(tmp);
-  writeGameCache();   // persist jpg paths resolved during the build
+  closedir(d);
+}
+static void carInvalidateThumbs(){
+  purgeThumbDir("/sdcard/ADF/.thumbs");
+  purgeThumbDir("/sdcard/DSK/.thumbs");
+  // covers rebuild lazily per page as you browse — no blocking full rebuild
 }
 
 static inline uint16_t carDim(uint16_t c,int lvl){
@@ -3065,173 +3078,95 @@ static void carBlit(uint16_t*tile,int cx,int cy,int w,int h,int dim){
     for(int dx=0;dx<w;dx++){int sx=dx*CAR_TILE/w;
       UG->drawPixel(x0+dx,y0+dy,carDim(tile?tile[sy*CAR_TILE+sx]:COL_BAR,dim));}}
 }
-// The d6 overlay: pips while rolling, final face at rest — or "23" on the lucky roll.
-static void carDrawDie(){
-  int third=LCD_WIDTH/3,s=30,x=2*third+(third-s)/2,y=LCD_HEIGHT-BOTTOM_H-s-16;   // hover a few lines ABOVE the ROLL button
-  UG->fillRoundRect(x,y,s,s,6,0xFFFF);
-  UG->drawRoundRect(x,y,s,s,6,COL_ACCENT);
-  int c=x+s/2,m=y+s/2,o=8;
-  if(g_car_die23&&!g_car_spin){
-    UG->setFont(&lgfx::fonts::DejaVu12);UG->setTextColor(TFT_BLACK,0xFFFF);
-    UG->setCursor(c-8,m-6);UG->print("23");return;   // a d6, and it came out 23
-  }
-  uint8_t f=g_car_die;
-  if(f&1)UG->fillCircle(c,m,2,TFT_BLACK);
-  if(f>=2){UG->fillCircle(c-o,m-o,2,TFT_BLACK);UG->fillCircle(c+o,m+o,2,TFT_BLACK);}
-  if(f>=4){UG->fillCircle(c+o,m-o,2,TFT_BLACK);UG->fillCircle(c-o,m+o,2,TFT_BLACK);}
-  if(f==6){UG->fillCircle(c-o,m,2,TFT_BLACK);UG->fillCircle(c+o,m,2,TFT_BLACK);}
-}
-
-static void drawCarousel(){ UiFrame _uf;   // KGfx UiFrame -> one VSYNC flush per reel frame
+static void drawCarousel(){ UiFrame _uf;   // static 3x2 GRID page (no motion) — replaces the carousel
   int W=LCD_WIDTH,H=LCD_HEIGHT;
-  int ccx=W/2, ccy=STATUS_H+16+CAR_TILE/2;
-  if(!g_car_tilesOnly){
-    drawStatusBar();
-    UG->fillRect(0,STATUS_H,W,H-STATUS_H-BOTTOM_H,COL_BG);      // full chrome repaint
-  } else {
-    // MOTION frame: clear ONLY the tile band. Chrome (bars/INSERT), title and
-    // blurb persist untouched from the last full paint -> tiny dirty rect.
-    int bandTop=ccy-CAR_TILE/2-6; if(bandTop<STATUS_H)bandTop=STATUS_H;
-    UG->fillRect(0,bandTop,W,CAR_TILE+12,COL_BG);
-  }
+  drawStatusBar();
+  UG->fillRect(0,STATUS_H,W,H-STATUS_H-BOTTOM_H,COL_BG);
   int n=carN();
+  int gridH=H-STATUS_H-BOTTOM_H;
+  int cellW=W/GRID_COLS, cellH=gridH/GRID_ROWS;
+  int pages=(n+GRID_PER-1)/GRID_PER; if(pages<1)pages=1;
+  if(g_car_page>=pages)g_car_page=pages-1; if(g_car_page<0)g_car_page=0;
   if(n==0){
     UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextColor(COL_LIT,COL_BG);
-    String m="NO GAMES";
-    UG->setCursor((W-UG->textWidth(m))/2,ccy);UG->print(m);
+    String m=String("NO GAMES");
+    UG->setCursor((W-UG->textWidth(m))/2,STATUS_H+gridH/2);UG->print(m);
   }else{
-    int ci=(int)lroundf(g_car_pos);
-    float frac=g_car_pos-(float)ci;                      // -0.5..0.5
-    bool moving=(g_car_touch&&g_car_moved)||g_car_coast||g_car_spin;
-    int maxOff=(n>=5)?2:((n>=2)?1:0);
-    // Warm the cache CENTER-FIRST when settled (the star of the show decodes first).
-    if(!moving){
-      carTile(g_car_list[carWrap(ci)],true);
-      if(maxOff>=1){carTile(g_car_list[carWrap(ci-1)],true);carTile(g_car_list[carWrap(ci+1)],true);}
-    }
-    float SPX=CAR_TILE*0.74f;
-    static const int order[5]={-2,2,-1,1,0};             // far to near, center last (painter's order)
-    for(int oi=0;oi<5;oi++){
-      int off=order[oi];if(abs(off)>maxOff)continue;
-      int gi=g_car_list[carWrap(ci+off)];
-      float rel=(float)off-frac;
-      float ar=fabsf(rel);if(ar>2.6f)continue;
-      int x=ccx+(int)(rel*SPX*(1.0f-min(ar,1.0f)*0.22f));
-      float scale=1.0f-ar*0.28f;if(scale<0.42f)scale=0.42f;
-      float squash=1.0f-ar*0.20f;if(squash<0.55f)squash=0.55f;
-      int h=(int)(CAR_TILE*scale),w=(int)(CAR_TILE*scale*squash);
-      int dim=(ar<0.5f)?0:((ar<1.6f)?1:2);
-      uint16_t*tile=carTile(gi,!moving&&ar<1.6f);
-      carBlit(tile,x,ccy,w,h,dim);
+    for(int c=0;c<GRID_PER;c++){
+      int li=g_car_page*GRID_PER+c; if(li>=n)break;
+      int gi=g_car_list[li];
+      int gcol=c%GRID_COLS, grow=c/GRID_COLS;
+      int cx=gcol*cellW+cellW/2;
+      int cyTop=STATUS_H+grow*cellH;
+      int box=cellW-18, boxH=cellH-56; if(box>boxH)box=boxH;   // room reserved below for a 2-line title
+      int cyImg=cyTop+6+box/2;   // cover near the cell top, title(s) below
       GameEntry&gm=g_games[gi];
       bool isLd=(g_loaded&&g_loaded_game_idx==gi);
-      uint16_t bord=(ar<0.5f)?(isLd?COL_GREEN:COL_AMBER):COL_ACCENT;
-      UG->drawRect(x-w/2-1,ccy-h/2-1,w+2,h+2,bord);
-      if(isLd)UG->drawRect(x-w/2-2,ccy-h/2-2,w+4,h+4,COL_GREEN);
-      // no-art placeholder letter
-      if(gm.jpg_path=="?"){
-        UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextSize((w>=CAR_TILE*3/4)?2:1);
+      bool isSel=(g_grid_sel==gi);
+      // Cover into the tile box, decoded with the SAME path the list uses (proven
+      // reliable on-card): letterbox background first, then the art — or a letter if none.
+      UG->fillRect(cx-box/2,cyImg-box/2,box,box,COL_BAR);
+      if(!gm.jpg_path.length()){String jpg;if(findJPGFor(g_files[gm.first_file_idx],jpg))gm.jpg_path=jpg;else gm.jpg_path="?";}
+      if(gm.jpg_path.length()>0&&gm.jpg_path!="?"){
+        if(coverIsPng(gm.jpg_path)) drawPngFit(gm.jpg_path,cx-box/2,cyImg-box/2,box,box);
+        else                        drawJpegFit(gm.jpg_path,cx-box/2,cyImg-box/2,box,box);
+      } else {                                            // no-art placeholder letter
+        UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextSize(2);
         char ib[2]={(char)toupper(gm.name.charAt(0)),0};
-        UG->setTextColor(carDim(COL_LIT,dim),carDim(COL_BAR,dim));
+        UG->setTextColor(COL_LIT,COL_BAR);
         int gw=UG->textWidth(ib),gh=UG->charH();
-        UG->setCursor(x-gw/2,ccy-gh/2);UG->print(ib);
-        UG->setTextSize(1);
+        UG->setCursor(cx-gw/2,cyImg-gh/2);UG->print(ib);UG->setTextSize(1);
+      }
+      uint16_t bord=isLd?COL_GREEN:(isSel?COL_AMBER:COL_ACCENT);
+      UG->drawRect(cx-box/2-1,cyImg-box/2-1,box+2,box+2,bord);
+      if(isLd||isSel)UG->drawRect(cx-box/2-2,cyImg-box/2-2,box+4,box+4,bord);
+      UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextColor(COL_LIT,COL_BG);   // DejaVu18 white title; wraps to 2 lines instead of cutting off
+      { int budget=cellW-8; String l1=gm.name, l2="";
+        if(UG->textWidth(l1)>budget){                    // too wide -> split at the best space
+          int sp=-1; for(int k=0;k<(int)l1.length();k++) if(l1[k]==' '){ if(UG->textWidth(l1.substring(0,k))<=budget) sp=k; else break; }
+          if(sp>0){ l2=l1.substring(sp+1); l1=l1.substring(0,sp); }
+          while(UG->textWidth(l1)>budget&&l1.length()>2) l1=l1.substring(0,l1.length()-1);
+          while(UG->textWidth(l2)>budget&&l2.length()>2) l2=l2.substring(0,l2.length()-1);
+        }
+        int lh=19, th=l2.length()?2*lh:lh;
+        int ny=cyImg+box/2+4; if(ny>cyTop+cellH-th-2) ny=cyTop+cellH-th-2;
+        UG->setCursor(cx-UG->textWidth(l1)/2,ny);UG->print(l1);
+        if(l2.length()){ UG->setCursor(cx-UG->textWidth(l2)/2,ny+lh);UG->print(l2); } }
+      if(isSel||isLd){                                   // INSERT/EJECT chip = the deliberate mount button
+        const char*chip=isLd?"EJECT":"INSERT";
+        UG->setFont(&lgfx::fonts::DejaVu9);
+        int cw=UG->textWidth(chip)+14, chh=18;
+        int chx=cx-cw/2, chy=cyImg-box/2+3;
+        uint16_t cf=isLd?COL_GREEN:COL_AMBER;
+        UG->fillRoundRect(chx,chy,cw,chh,6,cf);
+        UG->setTextColor(TFT_BLACK,cf);UG->setCursor(chx+7,chy+4);UG->print(chip);
       }
     }
-    if(!g_car_tilesOnly){
-    // center title
-    int gi=g_car_list[carWrap(ci)];
-    GameEntry&game=g_games[gi];
-    UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextColor(COL_LIT,COL_BG);
-    String t=game.name;while(UG->textWidth(t)>W-40&&t.length()>3)t=t.substring(0,t.length()-1);
-    int titleY=ccy+CAR_TILE/2+16;
-    UG->setCursor((W-UG->textWidth(t))/2,titleY);UG->print(t);
-    // lazy NFO blurb (keyed to the center game)
-    static int carNfoSel=-1;static String carBlurb="";
-    if(carNfoSel!=gi){carNfoSel=gi;carBlurb="";String nfoP;
-      if(findNFOFor(g_files[game.first_file_idx],nfoP)){File nf=SD_MMC.open(nfoP,FILE_READ);
-        if(nf){String txt;while(nf.available()&&txt.length()<512)txt+=(char)nf.read();nf.close();String nT,nB;parseNFO(txt,nT,nB);
-          if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=nT;carBlurb=nB;}}}
-    if(carBlurb.length()){
-      UG->setFont(&lgfx::fonts::DejaVu9);UG->setTextColor(COL_MID,COL_BG);
-      int by=titleY+22,bw=W-160,bx=80,lines=0;String line="",word="";
-      String s=carBlurb+" ";
-      for(unsigned i=0;i<s.length()&&lines<3;i++){char c=s[i];
-        if(c==' '||c=='\n'){String cand=line.length()?line+" "+word:word;
-          if(UG->textWidth(cand)>bw&&line.length()){UG->setCursor(bx,by);UG->print(line);by+=12;lines++;line=word;}
-          else line=cand; word="";}
-        else word+=c;}
-      if(lines<3&&line.length()){UG->setCursor(bx,by);UG->print(line);}
-    }
-    // reel position "i/n" top-right of the stage
-    UG->setFont(&lgfx::fonts::DejaVu9);UG->setTextColor(COL_DIM,COL_BG);
-    String pn=String(carWrap(ci)+1)+"/"+String(n);
-    UG->setCursor(W-10-UG->textWidth(pn),STATUS_H+6);UG->print(pn);
-    // INSERT/EJECT — explicit button (center tap is a dead zone)
-    {bool isLd=(g_loaded&&g_loaded_game_idx==gi);
-     g_car_ins_w=200;g_car_ins_h=40;
-     g_car_ins_x=(W-g_car_ins_w)/2;g_car_ins_y=H-BOTTOM_H-52;
-     uint16_t bf=isLd?(uint16_t)0xE8C4:COL_GREEN;
-     UG->fillRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,8,bf);
-     UG->drawRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,8,isLd?COL_AMBER:COL_GREEN);
-     UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextColor(TFT_BLACK,bf);
-     const char*lbl=isLd?"EJECT":"INSERT";int tw=UG->textWidth(lbl);
-     UG->setCursor(g_car_ins_x+(g_car_ins_w-tw)/2,g_car_ins_y+(g_car_ins_h-16)/2);UG->print(lbl);}
-    }  // end if(!g_car_tilesOnly)
   }
-  if(!g_car_tilesOnly){
-  // carousel bottom bar (v4.8.18): enlarged rounded-rect keys [LIST] [ALL] [ROLL] — matches the nav bar
-  int y=H-BOTTOM_H;UG->fillRect(0,y,W,BOTTOM_H,COL_BAR);UG->drawFastHLine(0,y,W,COL_SEP);
-  int third=W/3;
-  const int cpad=6,crad=10; int crw=third-2*cpad,crh=BOTTOM_H-20,cry=y+5;
-  // LIST — list glyph + word
-  { int rx=0*third+cpad; uint16_t col=COL_ORANGE,dim=(uint16_t)((col>>2)&0x39E7);
-    UG->fillRoundRect(rx,cry,crw,crh,crad,dim);UG->drawRoundRect(rx,cry,crw,crh,crad,col);UG->drawRoundRect(rx+1,cry+1,crw-2,crh-2,crad-1,col);
-    drawListIcon(rx+16,cry+crh/2,col);
-    UG->setFont(&lgfx::fonts::DejaVu12);UG->setTextColor(col,dim);
-    int wax=rx+30,waw=crw-30-4,tw=UG->textWidth("LIST");
-    UG->setCursor(wax+(waw-tw)/2,cry+(crh-12)/2);UG->print("LIST"); }
-  // SOURCE (ALL — reserved for FAV/MOST later)
-  { int rx=1*third+cpad; uint16_t col=COL_AMBER,dim=(uint16_t)((col>>2)&0x39E7);
-    UG->fillRoundRect(rx,cry,crw,crh,crad,dim);UG->drawRoundRect(rx,cry,crw,crh,crad,col);UG->drawRoundRect(rx+1,cry+1,crw-2,crh-2,crad-1,col);
-    UG->setFont(&lgfx::fonts::DejaVu12);UG->setTextColor(col,dim);
-    int tw=UG->textWidth("ALL");
-    UG->setCursor(rx+(crw-tw)/2,cry+(crh-12)/2);UG->print("ALL"); }
-  // ROLL — die glyph + word
-  { int rx=2*third+cpad; uint16_t col=COL_GREEN,dim=(uint16_t)((col>>2)&0x39E7);
-    UG->fillRoundRect(rx,cry,crw,crh,crad,dim);UG->drawRoundRect(rx,cry,crw,crh,crad,col);UG->drawRoundRect(rx+1,cry+1,crw-2,crh-2,crad-1,col);
-    int dx=rx+16,dy2=cry+crh/2,ds=18;
-    UG->fillRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,0xFFFF);UG->drawRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,col);
-    int o=5;
-    UG->fillCircle(dx,dy2,1,TFT_BLACK);
-    UG->fillCircle(dx-o,dy2-o,1,TFT_BLACK);UG->fillCircle(dx+o,dy2+o,1,TFT_BLACK);
-    UG->fillCircle(dx+o,dy2-o,1,TFT_BLACK);UG->fillCircle(dx-o,dy2+o,1,TFT_BLACK);
-    UG->setFont(&lgfx::fonts::DejaVu12);UG->setTextColor(col,dim);
-    int wax=rx+30,waw=crw-30-4,tw=UG->textWidth("ROLL");
-    UG->setCursor(wax+(waw-tw)/2,cry+(crh-12)/2);UG->print("ROLL"); }
-  }  // end if(!g_car_tilesOnly) bottom bar
-  if(g_car_dieShow&&carN()>0){
-    if(g_car_tilesOnly){
-      // keep the die OUT of the main tile-band box -> its own small aux dirty box,
-      // so a spin frame copies (tile band) + (die) instead of one giant union.
-      int s0=tft.dx0,s1=tft.dy0,s2=tft.dx1,s3=tft.dy1;
-      carDrawDie();
-      int third=LCD_WIDTH/3,S=30,dxp=2*third+(third-S)/2,dyp=LCD_HEIGHT-BOTTOM_H-S-16;
-      tft.markAux(dxp-2,dyp-2,dxp+S+3,dyp+S+3);
-      tft.dx0=s0;tft.dy0=s1;tft.dx1=s2;tft.dy1=s3;   // restore main box (die excluded)
-    } else carDrawDie();
-  }
+  UG->setFont(&lgfx::fonts::DejaVu9);UG->setTextColor(COL_DIM,COL_BG);   // page x/y, top-right
+  String pg=String(g_car_page+1)+"/"+String(pages);
+  UG->setCursor(W-10-UG->textWidth(pg),STATUS_H+6);UG->print(pg);
+  // ---- bottom bar: [LIST] [< PREV] [ mid ] [NEXT >] ----
+  int y=H-BOTTOM_H; UG->fillRect(0,y,W,BOTTOM_H,COL_BAR); UG->drawFastHLine(0,y,W,COL_SEP);
+  int q=W/4; const int cpad=6,crad=10; int crw=q-2*cpad,crh=BOTTOM_H-20,cry=y+5;
+  #define GBTN(ix,COL,LBL) { int rx=(ix)*q+cpad; uint16_t col=(COL),dm=(uint16_t)((col>>2)&0x39E7); \
+      UG->fillRoundRect(rx,cry,crw,crh,crad,dm);UG->drawRoundRect(rx,cry,crw,crh,crad,col);UG->drawRoundRect(rx+1,cry+1,crw-2,crh-2,crad-1,col); \
+      UG->setFont(&lgfx::fonts::DejaVu12);UG->setTextColor(col,dm); String _l=(LBL); int tw=UG->textWidth(_l); \
+      UG->setCursor(rx+(crw-tw)/2,cry+(crh-12)/2);UG->print(_l); }
+  GBTN(0,COL_ORANGE,String("LIST"));
+  GBTN(1,COL_BLUE,String("< PREV"));
+  GBTN(2,COL_MID,pg);
+  GBTN(3,COL_GREEN,String("NEXT >"));
+  #undef GBTN
 }
-// Motion-frame helper: repaint only the tile band (+ die), leaving chrome/title
-// untouched -> partial-flush copies a fraction of the frame. Used by spin/coast/drag.
-static void carDrawMotion(){ g_car_tilesOnly=true; drawCarousel(); g_car_tilesOnly=false; }
 
 static void carEnter(){
-  if(!g_car_built){buildThumbs();g_car_built=true;}      // one predictable build pass, first entry
+  // covers load lazily, 6 per page, as you browse — no blocking full-library build
   carBuildList();
-  g_car_active=true;g_car_touch=false;g_car_coast=false;g_car_spin=false;g_car_dieShow=false;
+  g_car_active=true; g_grid_touch=false; g_grid_moved=false;
   int start=0;for(int i=0;i<carN();i++)if(g_car_list[i]==g_sel){start=i;break;}
-  g_car_pos=(float)start;
+  g_car_page=(carN()>0)?(start/GRID_PER):0;
+  g_grid_sel=(carN()>0)?g_car_list[start]:-1;
   drawCarousel();
 }
 static void carExit(){
@@ -3243,127 +3178,51 @@ static void carExit(){
   g_scrollPx=sp; g_scroll=(int)(sp/LIST_ITEM_H); g_inertia_on=false;
   drawFullUI();
 }
-// ROLL — spins to a random cover with a d6 overlay. Every tap re-rolls.
-static void carRollDice(){
-  int n=carN(); if(n<=0)return;
-  int tgt=(int)(esp_random()%n);
-  int cur=carWrap((int)lroundf(g_car_pos));
-  int off=((tgt-cur)%n+n)%n; if(off<15)off+=n;       // at least 15 covers of travel
-  g_car_pos=(float)cur;
-  g_car_spinTarget=(float)cur+(float)off;
-  g_car_spin=true; g_car_dieShow=true; g_car_coast=false; g_car_die_rest_ms=0;
-  g_car_die=1+(uint8_t)(esp_random()%6);
-  g_car_die23=((esp_random()%23)==0);                // the impossible roll
+static void gridPage(int d){
+  int n=carN(); int pages=(n+GRID_PER-1)/GRID_PER; if(pages<1)pages=1;
+  g_car_page=((g_car_page+d)%pages+pages)%pages;         // wrap PREV/NEXT
   drawCarousel();
 }
-static void carHandleTap(uint16_t px,uint16_t py){
+static void gridHandleTap(uint16_t px,uint16_t py){
   int W=LCD_WIDTH,H=LCD_HEIGHT;
-  if(py>=(uint16_t)(H-BOTTOM_H)){
-    int third=W/3;
-    if(px<(uint16_t)third)carExit();
-    else if(px<(uint16_t)(2*third)){/* middle (ALL) — reserved for FAV/MOST */}
-    else carRollDice();
+  if(py>=(uint16_t)(H-BOTTOM_H)){                         // bottom bar quarters
+    int q=W/4;
+    if(px<(uint16_t)q) carExit();                         // LIST -> back to the list view
+    else if(px<(uint16_t)(2*q)) gridPage(-1);             // PREV page
+    else if(px<(uint16_t)(3*q)) { /* no source cycle on 7B */ }   // mid cell
+    else gridPage(+1);                                    // NEXT page
     return;
   }
-  int n=carN();if(!n)return;
-  int ci=carWrap((int)lroundf(g_car_pos));
-  int ccx=W/2,ccy=STATUS_H+16+CAR_TILE/2;
-  // INSERT/EJECT button (checked first — its corners overlap the side zones)
-  if(px>=(uint16_t)g_car_ins_x&&px<(uint16_t)(g_car_ins_x+g_car_ins_w)&&
-     py>=(uint16_t)g_car_ins_y&&py<(uint16_t)(g_car_ins_y+g_car_ins_h)){
-    int gi=g_car_list[ci];
-    g_sel=gi;g_disk_sel=0;
-    if(g_loaded&&g_loaded_game_idx==gi)doUnload();
-    else{GameEntry&gm=g_games[gi];doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[0]]);}
-    if(g_car_active)drawCarousel();                     // repaint over the list redraw the loader did
-    return;
+  int n=carN(); if(!n)return;
+  int gridH=H-STATUS_H-BOTTOM_H;
+  int cellW=W/GRID_COLS, cellH=gridH/GRID_ROWS;
+  if(py<(uint16_t)STATUS_H)return;
+  int gcol=px/cellW; if(gcol>=GRID_COLS)gcol=GRID_COLS-1;
+  int grow=((int)py-STATUS_H)/cellH; if(grow>=GRID_ROWS)grow=GRID_ROWS-1; if(grow<0)return;
+  int li=g_car_page*GRID_PER+grow*GRID_COLS+gcol;
+  if(li>=n)return;
+  int gi=g_car_list[li];
+  if(g_grid_sel==gi){                                     // second tap on the selected tile -> mount/eject
+    g_sel=gi; g_disk_sel=0;
+    if(g_loaded&&g_loaded_game_idx==gi) doUnload();
+    else { GameEntry&gm=g_games[gi]; doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[0]]); }
+    if(g_car_active) drawCarousel();                      // repaint over the loader's list redraw
+  } else {
+    g_grid_sel=gi; drawCarousel();                        // first tap just selects (shows the INSERT chip)
   }
-  // center cover = DEAD ZONE (mounting is always the deliberate button)
-  if(px>=(uint16_t)(ccx-CAR_TILE/2)&&px<(uint16_t)(ccx+CAR_TILE/2)&&
-     py>=(uint16_t)(ccy-CAR_TILE/2)&&py<(uint16_t)(ccy+CAR_TILE/2))return;
-  // side tap = step one cover toward that side
-  if(px<(uint16_t)(ccx-CAR_TILE/2))g_car_pos-=1.0f;
-  else if(px>=(uint16_t)(ccx+CAR_TILE/2))g_car_pos+=1.0f;
-  else return;
-  g_car_pos=(float)carWrap((int)lroundf(g_car_pos));
-  g_car_coast=false;drawCarousel();
 }
-// Carousel touch state machine — mirrors the list's tap/drag/coast logic.
+// Grid touch: rising-edge tap only (no drag, no coast).
 static void carTick(bool touch,uint16_t px,uint16_t py,uint32_t now){
-  int n=carN();
+  (void)now;
   if(touch){
-    g_car_rel=0;
-    if(!g_car_touch){
-      // a touch mid-roll skips the spin straight to the result; any touch clears the die
-      if(g_car_spin){g_car_spin=false;g_car_pos=(float)carWrap((int)lroundf(g_car_spinTarget));}
-      g_car_dieShow=false;
-      g_car_touch=true;g_car_moved=false;g_car_x0=px;g_car_y0=py;g_car_lastX=px;
-      g_car_pos0=g_car_pos;g_car_vel=0;g_car_coast=false;g_car_lastMs=now;
-    }else{
-      if(abs((int)px-g_car_x0)>DRAG_THRESH)g_car_moved=true;
-      if(g_car_moved&&n>0&&py<(uint16_t)(LCD_HEIGHT-BOTTOM_H)){
-        g_car_pos=g_car_pos0-((float)((int)px-g_car_x0))/CAR_PX_PER_STEP;
-        uint32_t dt=now-g_car_lastMs;
-        if(dt>0){g_car_vel=((float)((int)px-g_car_lastX))/(float)dt;g_car_lastX=px;g_car_lastMs=now;}
-        carDrawMotion();
-      }
-    }
+    if(!g_grid_touch){ g_grid_touch=true; g_grid_moved=false; g_grid_x0=px; g_grid_y0=py; g_grid_rel=0; }
+    else if(abs((int)px-g_grid_x0)>DRAG_THRESH||abs((int)py-g_grid_y0)>DRAG_THRESH) g_grid_moved=true;
     return;
   }
-  if(g_car_touch){
-    if(++g_car_rel<RELEASE_FRAMES)return;
-    g_car_touch=false;g_car_rel=0;
-    if(g_car_moved){g_car_ivel=-g_car_vel*16.0f/CAR_PX_PER_STEP;g_car_coast=(fabsf(g_car_ivel)>0.004f);if(!g_car_coast){g_car_coast=true;g_car_ivel=0;}}
-    else carHandleTap((uint16_t)g_car_x0,(uint16_t)g_car_y0);
-    return;
-  }
-  if(g_car_spin&&n>0){
-    // dice-roll spin: ease-out toward the pre-chosen target, tumbling the die
-    float d=g_car_spinTarget-g_car_pos;
-    g_car_pos+=d*0.14f;
-    if((++g_car_dieTick&3)==0)g_car_die=1+(uint8_t)(esp_random()%6);   // tumble pips
-    if(fabsf(d)<0.05f){
-      g_car_pos=(float)carWrap((int)lroundf(g_car_spinTarget));
-      g_car_spin=false;                                  // die rests on its final face
-      g_car_die=1+(uint8_t)(esp_random()%6);
-      g_car_die_rest_ms=now;                             // arm the auto-hide timer
-    }
-    if(g_car_spin) carDrawMotion(); else drawCarousel();   // settle frame paints full (title/chrome)
-    return;
-  }
-  // auto-hide the rested die a few seconds after the roll settles
-  if(g_car_dieShow&&!g_car_spin&&g_car_die_rest_ms&&now-g_car_die_rest_ms>=DIE_HIDE_MS){
-    g_car_dieShow=false;g_car_die_rest_ms=0;drawCarousel();return;
-  }
-  if(g_car_coast&&n>0){
-    g_car_pos+=g_car_ivel;g_car_ivel*=0.92f;
-    if(fabsf(g_car_ivel)<0.02f){
-      float target=(float)lroundf(g_car_pos);
-      float dd=target-g_car_pos;
-      if(fabsf(dd)<0.01f){g_car_pos=(float)carWrap((int)target);g_car_coast=false;}
-      else g_car_pos+=dd*0.35f;
-    }
-    if(g_car_coast) carDrawMotion(); else drawCarousel();   // settle frame paints full
-    return;
-  }
-  // Idle prefetch: while the reel rests, quietly warm the neighbours (one per ~150 ms).
-  if(n>0){
-    static uint32_t lastPre=0;
-    if(now-lastPre>=150){
-      lastPre=now;
-      int ci=carWrap((int)lroundf(g_car_pos));
-      int maxPre=min(5,n/2);
-      for(int d2=1;d2<=maxPre;d2++)for(int sgn=-1;sgn<=1;sgn+=2){
-        int gi=g_car_list[carWrap(ci+d2*sgn)];
-        bool cached=false;
-        for(int sl=0;sl<CAR_SLOTS;sl++)if(car_buf[sl]&&car_game[sl]==gi){cached=true;break;}
-        if(!cached){
-          carTile(gi,true);
-          if(d2<=2)drawCarousel();                       // it's on screen — show it
-          return;                                        // one tile per tick, stay responsive
-        }
-      }
-    }
+  if(g_grid_touch){
+    if(++g_grid_rel<RELEASE_FRAMES)return;
+    g_grid_touch=false; g_grid_rel=0;
+    if(!g_grid_moved) gridHandleTap((uint16_t)g_grid_x0,(uint16_t)g_grid_y0);
   }
 }
 
@@ -3495,7 +3354,7 @@ void setup(){
   if(!sdok){ delay(200); sdok=SD_MMC.begin("/sdcard",true); }
   if(sdok){
     ensureConfig();      // create CONFIG.TXT with defaults if missing or empty
-    listImages(SD_MMC,g_files);
+    if(!readFileList()) listImages(SD_MMC,g_files);   // cached file list -> skip the slow tree walk
     if(!readGameCache()) buildGameList();
     buildActiveLetters();
     g_sel=0; g_scroll=0; g_disk_sel=0;

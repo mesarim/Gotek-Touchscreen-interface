@@ -3,7 +3,7 @@
   "builtInLibrariesFolders": "C:\\Users\\mesar\\AppData\\Local\\Arduino15\\libraries",
   "compiler.optimization_flags": "-Os",
   "customBuildProperties": "",
-  "fqbn": "esp32:esp32:waveshare_esp32_s3_touch_lcd_7:UploadSpeed=921600,USBMode=default,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio,FlashSize=16M,PartitionScheme=huge_app,DebugLevel=none,PSRAM=enabled,LoopCore=1,EventsCore=1,EraseFlash=none",
+  "fqbn": "esp32:esp32:waveshare_esp32_s3_touch_lcd_7:UploadSpeed=921600,USBMode=default,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,DebugLevel=none,PSRAM=enabled,LoopCore=1,EventsCore=1,EraseFlash=none",
   "hardwareFolders": "C:\\Users\\mesar\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.11,C:\\Users\\mesar\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.11",
   "otherLibrariesFolders": "c:\\Users\\mesar\\OneDrive\\Documents\\Arduino\\libraries",
   "sketchLocation": "D:\\GitClone\\Gotek-Touchscreen-interface\\firmware\\Gotek_7inch"
