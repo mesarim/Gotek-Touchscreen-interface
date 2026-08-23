@@ -1,6 +1,6 @@
 {
-  "name": "Gotek Touchscreen Interface — JC3248 BETA (5.8.3 — coloured pill buttons + matrix screensaver + full menu translations)",
-  "version": "5.8.3-beta",
+  "name": "Gotek Touchscreen Interface — JC3248 BETA (5.8.4 — recurse-flatten library + self-healing config, on top of pill buttons + matrix screensaver + translations)",
+  "version": "5.8.4-beta",
   "new_install_prompt_erase": true,
   "builds": [ { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_JC3248.ino.merged.bin", "offset": 0 } ] } ]
 }

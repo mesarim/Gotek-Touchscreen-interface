@@ -1,6 +1,6 @@
 {
-  "name": "Gotek Touchscreen Interface — Waveshare 7\" BETA (v4.14.12 — 3x2 grid browser, cover fixes, faster boot)",
-  "version": "4.14.12-7IN-beta",
+  "name": "Gotek Touchscreen Interface — Waveshare 7\" BETA (v5.0.0 — recurse-flatten library, optional desert cracktro, self-healing config)",
+  "version": "5.0.0-7IN-beta",
   "new_install_prompt_erase": true,
   "builds": [ { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_7inch.ino.merged.bin", "offset": 0 } ] } ]
 }

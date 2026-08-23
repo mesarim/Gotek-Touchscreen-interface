@@ -32,7 +32,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.8.3-JC4827"
+#define FW_VERSION "5.8.4-JC4827"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -459,6 +459,47 @@ static bool   g_nesting=false;      // NESTING=ON : allow category recursion bey
 static String g_libpath="";         // current category path under the mode root ("" = at the root)
 static std::vector<String> g_cats;  // category sub-folder names at the current level (filled by the scan)
 static void reloadLevel();          // fwd: fresh (uncached) rescan of mode root + g_libpath
+// Recurse the mode tree collecting disk images into `out` (flattened). A folder with
+// NO direct disk images is an ORGANISATIONAL folder: in Categories mode it becomes a
+// browsable bucket (g_cats); otherwise we recurse into it so games nested under
+// letter/label folders (ADF/A/<game>/, ADF/Games/<game>/) still surface in the flat
+// list — the card can be organised, the screen looks exactly the same.
+static void scanDirInto(const String& dir, std::vector<String>& out, const String& ext,
+                        int depth, int& count, uint32_t& lastDraw){
+  if(depth>5) return;                                   // safety cap against pathological trees
+  File root=SD_MMC.open(dir.c_str());
+  if(!root||!root.isDirectory()){ if(root)root.close(); return; }
+  File gd;while((gd=root.openNextFile())){
+    String en=gd.name();if(!en.startsWith("/"))en=dir+"/"+en;
+    if(gd.isDirectory()){
+      {String leaf=en;int sl2=leaf.lastIndexOf('/');if(sl2>=0)leaf=leaf.substring(sl2+1);leaf.toUpperCase();
+       if(leaf=="SAMPLE"||leaf.startsWith(".")){gd.close();continue;}}   // skip SAMPLE + dot-folders at every level
+      size_t _imgs0=out.size();
+      File e;while((e=gd.openNextFile())){String fn=e.name();int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
+      if(isCoverExtU(u)){String ap=en+"/"+fn;if(!ap.startsWith("/"))ap="/"+ap;ap.toLowerCase();g_coverset.insert(ap);}
+      if(u.indexOf(".SAV.")>=0){
+        if(u.endsWith(".TMP")){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;SD_MMC.remove(fp);}
+        e.close();continue;}
+      if(g_mode==MODE_GEN?isGenImage(u):(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ"))){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;out.push_back(fp);count++;
+        if(millis()-lastDraw>80){drawScanFrame(count);lastDraw=millis();}}e.close();}
+      if(out.size()==_imgs0){                            // image-less folder = organisational
+        if(g_categories&&(g_libpath.length()==0||g_nesting)){
+          String _cn=en;int _cs=_cn.lastIndexOf('/');if(_cs>=0)_cn=_cn.substring(_cs+1);g_cats.push_back(_cn);   // Categories: browsable bucket
+        }else{
+          scanDirInto(en,out,ext,depth+1,count,lastDraw);   // otherwise recurse-and-flatten
+        }
+      }
+    }
+    else{String fn=en;int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
+      if(isCoverExtU(u)){String ap=en;ap.toLowerCase();g_coverset.insert(ap);}
+      if(u.indexOf(".SAV.")>=0){
+        if(u.endsWith(".TMP"))SD_MMC.remove(en);
+        gd.close();continue;}
+      if(g_mode==MODE_GEN?isGenImage(u):(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ"))){out.push_back(en);count++;
+        if(millis()-lastDraw>80){drawScanFrame(count);lastDraw=millis();}}}
+    gd.close();}
+  root.close();
+}
 static std::vector<String> scanImagesAnimated(){
   std::vector<String>out;g_coverset.clear();g_cats.clear();String dir=g_mode==MODE_ADF?"/ADF":g_mode==MODE_DSK?"/DSK":"/GENERIC";if(g_categories&&g_libpath.length())dir+=g_libpath;String ext=g_mode==MODE_ADF?".ADF":".DSK";
   // Init ball position
@@ -471,34 +512,7 @@ static std::vector<String> scanImagesAnimated(){
   {const char*s="Building game index...";int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH/2+40);gfx_print(s);}
   gfx_flush();
   int count=0;uint32_t lastDraw=0;
-  File root=SD_MMC.open(dir.c_str());
-  if(root&&root.isDirectory()){File gd;while((gd=root.openNextFile())){
-    String en=gd.name();if(!en.startsWith("/"))en=dir+"/"+en;
-    if(gd.isDirectory()){
-      {String leaf=en;int sl2=leaf.lastIndexOf('/');if(sl2>=0)leaf=leaf.substring(sl2+1);leaf.toUpperCase();
-       // skip the SAMPLE example folder AND all dot-folders (.thumbs cache,
-       // plus macOS SD litter like .Trashes / .Spotlight-V100 — free immunity)
-       if(leaf=="SAMPLE"||leaf.startsWith(".")){gd.close();continue;}}
-      size_t _imgs0=out.size();   // v5.6.0: if this child dir yields NO disk images, it's a category folder
-      File e;while((e=gd.openNextFile())){String fn=e.name();int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
-      if(isCoverExtU(u)){String ap=en+"/"+fn;if(!ap.startsWith("/"))ap="/"+ap;ap.toLowerCase();g_coverset.insert(ap);}   // 5.3.7: harvest the cover image while we're already reading this dir entry
-      // v4.8.0: .sav.adf files attach to their master (INSERT prefers them) — never list
-      // them as games. Orphaned .tmp from an interrupted save persist gets swept here.
-      if(u.indexOf(".SAV.")>=0){
-        if(u.endsWith(".TMP")){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;SD_MMC.remove(fp);}
-        e.close();continue;}
-      if(g_mode==MODE_GEN?isGenImage(u):(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ"))){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;out.push_back(fp);count++;
-        if(millis()-lastDraw>80){drawScanFrame(count);lastDraw=millis();}}e.close();}
-      if(g_categories&&out.size()==_imgs0&&(g_libpath.length()==0||g_nesting)){String _cn=en;int _cs=_cn.lastIndexOf('/');if(_cs>=0)_cn=_cn.substring(_cs+1);g_cats.push_back(_cn);}   // v5.6.0: image-less child = category
-    }
-    else{String fn=en;int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
-      if(isCoverExtU(u)){String ap=en;ap.toLowerCase();g_coverset.insert(ap);}   // 5.3.7: harvest root-level cover image
-      if(u.indexOf(".SAV.")>=0){
-        if(u.endsWith(".TMP"))SD_MMC.remove(en);
-        gd.close();continue;}
-      if(g_mode==MODE_GEN?isGenImage(u):(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ"))){out.push_back(en);count++;
-        if(millis()-lastDraw>80){drawScanFrame(count);lastDraw=millis();}}}
-    gd.close();}root.close();}
+  scanDirInto(dir,out,ext,0,count,lastDraw);
   // Final count
   drawScanFrame(count);delay(500);
   std::sort(out.begin(),out.end());return out;
@@ -1126,12 +1140,15 @@ static void generateDefaultConfig(){
   f.println("# Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW to dongle)");
   f.println("MODE=STANDALONE");
   f.println("");
+  f.println("# CAROUSEL: default boot view. OFF=game list, ON=cover reel, LAST=restore last view.");
+  f.println("CAROUSEL=OFF");
+  f.println("");
   f.println("# Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s");
   f.println("LOOP=0");
   f.println("");
   f.println("# Boot cracktro style: 0=random each boot, or pick one:");
   f.println("#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER");
-  f.println("#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE");
+  f.println("#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE  7=DENISE  8=WRANGLER");
   f.println("CRACKTRO=0");
   f.println("");
   f.println("# Font size: SMALL, NORMAL, LARGE");
@@ -1147,8 +1164,14 @@ static void generateDefaultConfig(){
   f.println("# COMPACT: OFF = cover art + list, ON = maximise the game list (cover collapses to a strip)");
   f.println("COMPACT=OFF");
   f.println("");
+  f.println("# BTNSTYLE: reel button style. PILL=rounded coloured buttons (default), FLAT=flat bar.");
+  f.println("BTNSTYLE=PILL");
+  f.println("");
   f.println("# CAP: max wireless dongles the scan will list (default 32, up to 64)");
   f.println("CAP=32");
+  f.println("");
+  f.println("# HIVEMIND: wireless FLING fan-out. ON=send to all paired MuCa dongles (classic), OFF=only the selected dongle.");
+  f.println("HIVEMIND=ON");
   f.println("");
   f.println("# Load/eject behaviour (all OFF = safest: select, then press the button)");
   f.println("# TAPLOAD: ON = tapping the already-highlighted game row loads it (old double-tap)");
@@ -1178,7 +1201,7 @@ static void generateDefaultConfig(){
   f.println("");
   f.println("# SCREENSAVER: idle slideshow. ON = show it after a few minutes idle, OFF = never.");
   f.println("SCREENSAVER=ON");
-  f.println("# SSMODE: SLIDES = full-screen photo slideshow (default), BOUNCE = classic bouncing logo.");
+  f.println("# SSMODE: SLIDES = full-screen photo slideshow (default), BOUNCE = bouncing logo, MATRIX = code rain.");
   f.println("SSMODE=SLIDES");
   f.println("# SSFX: transition between slides - SHUFFLE (random), FADE, DISSOLVE, SLIDE, or CUT.");
   f.println("SSFX=SHUFFLE");
@@ -1205,13 +1228,16 @@ static void selfHealConfig(){
   static const CfgKey KEYS[]={
     {"THEME",    "\n# Theme: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD\nTHEME=0\n"},
     {"MODE",     "\n# Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW to dongle)\nMODE=STANDALONE\n"},
+    {"CAROUSEL", "\n# CAROUSEL: default boot view. OFF=game list, ON=cover reel, LAST=restore last view.\nCAROUSEL=OFF\n"},
     {"LOOP",     "\n# Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s\nLOOP=0\n"},
-    {"CRACKTRO", "\n# Boot cracktro style: 0=random each boot, or pick one:\n#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER\n#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE\nCRACKTRO=0\n"},
+    {"CRACKTRO", "\n# Boot cracktro style: 0=random each boot, or pick one:\n#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER\n#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE  7=DENISE  8=WRANGLER\nCRACKTRO=0\n"},
     {"FONT",     "\n# Font size: SMALL, NORMAL, LARGE\nFONT=NORMAL\n"},
     {"LANG",     "\n# Language: EN, FR, IT, ES, DE  (pull the SD and edit this line if you get stuck)\nLANG=EN\n"},
     {"ROTATE",   "\n# Screen rotation in degrees: 0 or 180 = landscape, 90 or 270 = portrait.\nROTATE=0\n"},
     {"COMPACT",  "\n# COMPACT: OFF = cover art + list, ON = maximise the game list (cover collapses to a strip)\nCOMPACT=OFF\n"},
+    {"BTNSTYLE", "\n# BTNSTYLE: reel button style. PILL=rounded coloured buttons (default), FLAT=flat bar.\nBTNSTYLE=PILL\n"},
     {"CAP",      "\n# CAP: max wireless dongles the scan will list (default 32, up to 64)\nCAP=32\n"},
+    {"HIVEMIND", "\n# HIVEMIND: wireless FLING fan-out. ON=all paired MuCa dongles (classic), OFF=selected dongle only.\nHIVEMIND=ON\n"},
     {"TAPLOAD",  "\n# TAPLOAD: ON = tapping the already-highlighted game row loads it (old double-tap)\nTAPLOAD=OFF\n"},
     {"HOTSWAP",  "# HOTSWAP: ON = tapping another disk while loaded swaps to it instantly\nHOTSWAP=OFF\n"},
     {"FORCESWAP","# FORCESWAP: ON = swap disk contents without the USB eject/re-attach cycle\nFORCESWAP=OFF\n"},
@@ -1220,7 +1246,7 @@ static void selfHealConfig(){
     {"CATEGORIES","\n# CATEGORIES: OFF = flat library. ON = browse by category (a top-level folder with no disk images, only subfolders, is a category).\nCATEGORIES=OFF\n"},
     {"NESTING",  "# NESTING: OFF = one category level. ON = allow sub-categories (folders within category folders).\nNESTING=OFF\n"},
     {"SCREENSAVER","\n# SCREENSAVER: idle slideshow. ON = show it after a few minutes idle, OFF = never.\nSCREENSAVER=ON\n"},
-    {"SSMODE",   "# SSMODE: SLIDES = full-screen photo slideshow (default), BOUNCE = classic bouncing logo.\nSSMODE=SLIDES\n"},
+    {"SSMODE",   "# SSMODE: SLIDES = full-screen photo slideshow (default), BOUNCE = bouncing logo, MATRIX = code rain.\nSSMODE=SLIDES\n"},
     {"SSFX",     "# SSFX: transition between slides - SHUFFLE (random), FADE, DISSOLVE, SLIDE, or CUT.\nSSFX=SHUFFLE\n"},
     {"SSTIME",   "# SSTIME: seconds each slide is shown (2-120).\nSSTIME=6\n"},
     {"SSFAV",    "# SSFAV: ON = also slideshow favourited game covers; OFF = only /screensaver/ images.\nSSFAV=ON\n"},

@@ -52,7 +52,7 @@
 #include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 
 // ---------- Version ----------
-#define FW_VERSION  "v4.14.12-7IN-GRID"
+#define FW_VERSION  "v5.0.0-7IN-GRID"
 // NOTE: 7A (-7IN) and 7B (-7B) versions converged at 4.13.0 — same interface, so
 // matching functionality now carries a matching number (they had drifted to 4.12.x vs 4.8.x).
 
@@ -733,56 +733,64 @@ static bool   g_categories=false;   // CATEGORIES=ON : browse image-less folders
 static bool   g_nesting=false;      // NESTING=ON : allow category recursion beyond one level
 static String g_libpath="";         // current category path under the mode root ("" = root)
 static std::vector<String> g_cats;  // category sub-folder names at the current level
+// v4.14.13-7IN: recurse image-less "organisational" folders and flatten their games into
+// the single alphabetical list (screen identical, card just tidy). A child dir with NO direct
+// disk images is organisational: in Categories mode it becomes a browsable bucket (g_cats);
+// otherwise we recurse into it so games nested under letter/label folders still surface flat.
+static void scanDirImages(const String& dir, std::vector<String>& out, const String& ext1, int depth){
+  if(depth>5) return;                                   // safety cap against pathological trees
+  File root = SD_MMC.open(dir.c_str());
+  if(!root || !root.isDirectory()){ if(root) root.close(); return; }
+  File gameDir;
+  while ((gameDir = root.openNextFile())) {
+    String entryName = gameDir.name();
+    if (!entryName.startsWith("/")) entryName = dir + "/" + entryName;
+    if (gameDir.isDirectory()) {
+      { String leaf=entryName; int sl2=leaf.lastIndexOf('/'); if(sl2>=0) leaf=leaf.substring(sl2+1); leaf.toUpperCase();
+        if(leaf=="SAMPLE" || leaf.startsWith(".")){ gameDir.close(); continue; } }
+      size_t _imgs0=out.size();
+      File entry;
+      while ((entry = gameDir.openNextFile())) {
+        String fname = entry.name();
+        int slash = fname.lastIndexOf('/');
+        if (slash >= 0) fname = fname.substring(slash + 1);
+        String upper = fname; upper.toUpperCase();
+        if ((g_mode==MODE_GEN ? isGenImage(upper) : (upper.endsWith(ext1) || upper.endsWith(".IMG") || upper.endsWith(".ADZ")))) {
+          String fullPath = entryName + "/" + fname;
+          if (!fullPath.startsWith("/")) fullPath = "/" + fullPath;
+          out.push_back(fullPath);
+        }
+        entry.close();
+      }
+      if(out.size()==_imgs0){                            // image-less child = organisational
+        if(g_categories && (g_libpath.length()==0 || g_nesting)){
+          String _cn=entryName; int _cs=_cn.lastIndexOf('/'); if(_cs>=0)_cn=_cn.substring(_cs+1); g_cats.push_back(_cn);   // Categories: browsable bucket
+        }else{
+          scanDirImages(entryName, out, ext1, depth+1);  // otherwise recurse-and-flatten
+        }
+      }
+    } else {
+      String fname = entryName;
+      int slash = fname.lastIndexOf('/');
+      if (slash >= 0) fname = fname.substring(slash + 1);
+      String upper = fname; upper.toUpperCase();
+      if ((g_mode==MODE_GEN ? isGenImage(upper) : (upper.endsWith(ext1) || upper.endsWith(".IMG") || upper.endsWith(".ADZ")))) {
+        out.push_back(entryName);
+      }
+    }
+    gameDir.close();
+  }
+  root.close();
+}
 static bool listImages(fs::FS& fs, std::vector<String>& out) {
   out.clear();
   String modeDir = (g_mode == MODE_ADF) ? "/ADF" : (g_mode == MODE_DSK) ? "/DSK" : "/GENERIC";
   String ext1    = (g_mode == MODE_ADF) ? ".ADF" : ".DSK";
   if(g_categories){ g_cats.clear(); if(g_libpath.length()) modeDir += g_libpath; }   // v4.9.1-7IN
 
-  // Primary scan: /ADF/<GameFolder>/<file>.adf  or  /ADF/<file>.adf
-  File root = SD_MMC.open(modeDir.c_str());
-  if (root && root.isDirectory()) {
-    File gameDir;
-    while ((gameDir = root.openNextFile())) {
-      String entryName = gameDir.name();
-      if (!entryName.startsWith("/")) entryName = modeDir + "/" + entryName;
-
-      if (gameDir.isDirectory()) {
-        // Skip the SAMPLE example folder + all dot-folders (.thumbs cache, macOS .Trashes/.Spotlight-V100 litter)
-        { String leaf=entryName; int sl2=leaf.lastIndexOf('/'); if(sl2>=0) leaf=leaf.substring(sl2+1); leaf.toUpperCase();
-          if(leaf=="SAMPLE" || leaf.startsWith(".")){ gameDir.close(); continue; } }
-        // Subfolder: /ADF/GameName/GameName.adf
-        size_t _imgs0=out.size();   // v4.9.1-7IN: a child dir that yields NO disk images = a category
-        File entry;
-        while ((entry = gameDir.openNextFile())) {
-          String fname = entry.name();
-          int slash = fname.lastIndexOf('/');
-          if (slash >= 0) fname = fname.substring(slash + 1);
-          String upper = fname; upper.toUpperCase();
-          if ((g_mode==MODE_GEN ? isGenImage(upper) : (upper.endsWith(ext1) || upper.endsWith(".IMG") || upper.endsWith(".ADZ")))) {
-            String fullPath = entryName + "/" + fname;
-            if (!fullPath.startsWith("/")) fullPath = "/" + fullPath;
-            out.push_back(fullPath);
-          }
-          entry.close();
-        }
-        if(g_categories && out.size()==_imgs0 && (g_libpath.length()==0 || g_nesting)){   // v4.9.1-7IN category
-          String _cn=entryName; int _cs=_cn.lastIndexOf('/'); if(_cs>=0)_cn=_cn.substring(_cs+1); g_cats.push_back(_cn);
-        }
-      } else {
-        // Flat: /ADF/GameName.adf
-        String fname = entryName;
-        int slash = fname.lastIndexOf('/');
-        if (slash >= 0) fname = fname.substring(slash + 1);
-        String upper = fname; upper.toUpperCase();
-        if ((g_mode==MODE_GEN ? isGenImage(upper) : (upper.endsWith(ext1) || upper.endsWith(".IMG") || upper.endsWith(".ADZ")))) {
-          out.push_back(entryName);
-        }
-      }
-      gameDir.close();
-    }
-    root.close();
-  }
+  // Primary scan (recurse-and-flatten): /ADF/<GameFolder>/<file>.adf, nested letter/label
+  // folders, or flat /ADF/<file>.adf — image-less folders recurse (or become categories).
+  scanDirImages(modeDir, out, ext1, 0);
 
   // Fallback: also scan root for any .ADF/.DSK files (legacy / flat SD layout)
   // Only add if no file with the same basename already exists from subfolder scan
@@ -897,6 +905,8 @@ static bool g_wireless_mode  = false;  // set by MODE=WIRELESS in CONFIG.TXT
 static bool g_espnow_started  = false;  // guard: espnowBegin() inits once (scan + pair share it)
 static inline void ensureEspNow(){ if(!g_espnow_started){ espnowBegin(); g_espnow_started=true; } }
 static int  g_rot            = 0;      // CONFIG.TXT ROTATE= : LovyanGFX rotation. 0=landscape, 2=180 flip. (90/270 portrait = stage 2)
+static bool g_cracktro       = false;  // CRACKTRO=ON : David's opt-in Arizona boot intro
+static bool g_loop_cracktro  = true;   // LOOP=1 : loop cracktro until tapped ; LOOP=0 : auto-dismiss
 
 // ── K rendering targets ─────────────────────────────────────────────────────
 // Everything (the whole UI) draws into the ONE KGfx compose buffer; a flush
@@ -1100,6 +1110,35 @@ static void saveFont(){
   File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);
   if(fw){ fw.print(lines); fw.close(); }
 }
+static void selfHealConfig(){
+  if(!SD_MMC.exists("/CONFIG.TXT"))return;   // fresh cards already get the full template
+  struct CfgKey{const char*key;const char*block;};
+  static const CfgKey KEYS[]={
+    {"THEME","\n# Theme colour scheme. Easiest to change with the THEME button on-screen.\nTHEME=0\n"},
+    {"MODE","\n# Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW to dongle)\nMODE=STANDALONE\n"},
+    {"CAROUSEL","\n# CAROUSEL: default boot view. OFF=game list, ON=cover grid.\nCAROUSEL=OFF\n"},
+    {"CRACKTRO","\n# CRACKTRO: ON=show the Arizona desert boot intro, OFF=straight to the library.\nCRACKTRO=OFF\n"},
+    {"LOOP","\n# LOOP: cracktro behaviour. 1=loop until you tap the screen, 0=auto-dismiss after ~10s.\nLOOP=1\n"},
+    {"FONT","\n# Font size: SMALL, NORMAL, LARGE\nFONT=NORMAL\n"},
+    {"LANG","\n# Language: EN, FR, IT, ES, DE  (pull the SD and edit this line if you get stuck)\nLANG=EN\n"},
+    {"ROTATE","\n# Screen rotation (reboot to apply): 0=landscape, 180=flipped. 90/270 not supported on this panel.\nROTATE=0\n"},
+    {"SAVES","\n# SAVES: save-games. OFF=lost on eject (classic), COPY=kept as GameName.sav.adf (recommended), OVERWRITE=patch the master.\nSAVES=COPY\n"},
+    {"CATEGORIES","\n# CATEGORIES: OFF=flat library. ON=browse by category (a folder with no disk images, only subfolders, is a category).\nCATEGORIES=OFF\n"},
+    {"NESTING","\n# NESTING: OFF=one category level. ON=allow sub-categories (folders within category folders).\nNESTING=OFF\n"},
+  };
+  const int NK=sizeof(KEYS)/sizeof(KEYS[0]);
+  bool present[NK]; for(int i=0;i<NK;i++)present[i]=false;
+  File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ); if(!fr)return;
+  while(fr.available()){String l=fr.readStringUntil('\n');l.trim();if(l.startsWith("#"))continue;
+    int eq=l.indexOf('=');if(eq<0)continue;String k=l.substring(0,eq);k.trim();
+    for(int i=0;i<NK;i++)if(k==KEYS[i].key)present[i]=true;}
+  fr.close();
+  String add=""; int missing=0;
+  for(int i=0;i<NK;i++)if(!present[i]){add+=KEYS[i].block;missing++;}
+  if(!missing)return;
+  File fw=SD_MMC.open("/CONFIG.TXT",FILE_APPEND);
+  if(fw){fw.print(add);fw.close();}
+}
 static void ensureConfig(){
   // If CONFIG.TXT is missing or empty, write defaults so the user
   // always has a starting point and WiFi works out of the box.
@@ -1113,24 +1152,42 @@ static void ensureConfig(){
     File fw = SD_MMC.open("/CONFIG.TXT", FILE_WRITE);
     if(fw){
       fw.print(
-        "# Gotek Touchscreen Interface — Configuration\n"
-        "# Edit this file to customise behaviour.\n"
+        "# Gotek Touchscreen Interface - OMEGAWARE\n"
+        "# Edit values below, then reboot.\n"
         "#\n"
+        "# Theme colour scheme. Easiest to change with the THEME button on-screen.\n"
         "THEME=0\n"
-        "# Screen rotation (reboot to apply): 0=landscape, 180=flipped (mount upside-down). 90/270 portrait coming soon.\n"
-        "ROTATE=0\n"
+        "\n"
+        "# Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW to dongle)\n"
         "MODE=STANDALONE\n"
-        "# CATEGORIES: OFF=flat library (classic). ON=browse by folder category (a folder with no disk images, only subfolders, is a category).\n"
+        "\n"
+        "# CAROUSEL: default boot view. OFF=game list, ON=cover grid.\n"
+        "CAROUSEL=OFF\n"
+        "\n"
+        "# CRACKTRO: ON=show the Arizona desert boot intro, OFF=straight to the library.\n"
+        "CRACKTRO=OFF\n"
+        "\n"
+        "# LOOP: cracktro behaviour. 1=loop until you tap the screen, 0=auto-dismiss after ~10s.\n"
+        "LOOP=1\n"
+        "\n"
+        "# Font size: SMALL, NORMAL, LARGE\n"
+        "FONT=NORMAL\n"
+        "\n"
+        "# Language: EN, FR, IT, ES, DE  (pull the SD and edit this line if you get stuck)\n"
+        "LANG=EN\n"
+        "\n"
+        "# Screen rotation (reboot to apply): 0=landscape, 180=flipped. 90/270 not supported on this panel.\n"
+        "ROTATE=0\n"
+        "\n"
+        "# SAVES: save-games. OFF=lost on eject (classic), COPY=kept as GameName.sav.adf (recommended), OVERWRITE=patch the master.\n"
+        "SAVES=COPY\n"
+        "\n"
+        "# CATEGORIES: OFF=flat library. ON=browse by category (a folder with no disk images, only subfolders, is a category).\n"
         "CATEGORIES=OFF\n"
+        "\n"
         "# NESTING: OFF=one category level. ON=allow sub-categories (folders within category folders).\n"
         "NESTING=OFF\n"
-        "# Language: EN FR IT ES DE\n"
-        "LANG=EN\n"
-        "LASTMODE=ADF\n"
-        "# Save-games: OFF = lost on eject (classic), COPY = kept as GameName.sav.adf\n"
-        "# beside the master (recommended), OVERWRITE = patch the master in place.\n"
-        "SAVES=COPY\n"
-        "#\n"
+        "\n"
         "# WiFi AP settings (XIAO connects to this)\n"
         "WIFI_SSID=GotekWifi\n"
         "WIFI_PASS=gotek1234\n"
@@ -1321,6 +1378,8 @@ static void loadTheme(){
     else if(key == "ROTATE"){ int d=((val.toInt()/90)%4+4)%4; if(d==1||d==3) d=(d==1)?0:2; g_rot=d; }
     else if(key == "SAVES"){ String v=val; v.toUpperCase(); g_saves_mode=(v=="OVERWRITE")?2:((v=="OFF"||v=="0")?0:1); }
     else if(key == "CAROUSEL"){ String v=val; v.toUpperCase(); g_car_bootmode=(v=="1"||v=="ON"||v=="TRUE")?1:0; }
+    else if(key == "CRACKTRO"){ String v=val; v.toUpperCase(); g_cracktro=(v=="ON"||v=="1"||v=="TRUE"); }
+    else if(key == "LOOP"){ String v=val; v.toUpperCase(); g_loop_cracktro=(v=="1"||v=="ON"||v=="TRUE"); }
     else if(key == "CATEGORIES"){ String v=val; v.toUpperCase(); g_categories=(v=="ON"||v=="1"||v=="TRUE"); }
     else if(key == "NESTING"){ String v=val; v.toUpperCase(); g_nesting=(v=="ON"||v=="1"||v=="TRUE"); }
     else if(key == "LANG"){ String lu=val; lu.toUpperCase(); for(int i=0;i<LANG_N;i++) if(lu==LANG_NAMES[i]){ g_lang=i; break; } }
@@ -3405,6 +3464,128 @@ static void doScanDongles(){
   g_info_showing=false; drawFullUI();
 }
 
+// ============================================================================
+// CRACKTRO=ON — David's opt-in Arizona-desert boot intro (v5.0.0)
+// The whole scene is composed ONCE; only the greetz scroller band is repainted
+// each frame, so movement (and CPU) is minimal on the RGB panel. Loops until the
+// screen is tapped, and auto-skips after CRK_TIMEOUT_MS so an unattended boot never
+// hangs. Enabled by CRACKTRO=ON in CONFIG.TXT (default off).
+// ============================================================================
+static inline uint16_t crkLerp565(uint16_t a,uint16_t b,float t){
+  int ar=(a>>11)&0x1F, ag=(a>>5)&0x3F, ab=a&0x1F;
+  int br=(b>>11)&0x1F, bg=(b>>5)&0x3F, bb=b&0x1F;
+  int r =ar+(int)((br-ar)*t+0.5f);
+  int g =ag+(int)((bg-ag)*t+0.5f);
+  int bl=ab+(int)((bb-ab)*t+0.5f);
+  return (uint16_t)((r<<11)|(g<<5)|bl);
+}
+// A saguaro silhouette built from rounded rects: a tall trunk + two arms (out then up).
+static void crkSaguaro(int cx,int baseY,int h,uint16_t c){
+  int tw=h/8; if(tw<10) tw=10;
+  int aw=(int)(tw*0.8f); if(aw<7) aw=7;
+  int topY=baseY-h;
+  UG->fillRoundRect(cx-tw/2, topY, tw, h, tw/2, c);                     // trunk
+  int alen=(int)(h*0.22f);
+  int ry=baseY-(int)(h*0.52f);                                         // right arm
+  UG->fillRoundRect(cx+tw/2-2, ry, alen, aw, aw/2, c);                 //   out
+  UG->fillRoundRect(cx+tw/2-2+alen-aw, ry-(int)(h*0.30f), aw, (int)(h*0.30f)+aw, aw/2, c);  //   up
+  int ly=baseY-(int)(h*0.38f);                                         // left arm (attaches lower)
+  UG->fillRoundRect(cx-tw/2-alen+2, ly, alen, aw, aw/2, c);            //   out
+  UG->fillRoundRect(cx-tw/2-alen+2, ly-(int)(h*0.24f), aw, (int)(h*0.24f)+aw, aw/2, c);      //   up
+}
+static void drawCracktro(){
+  const int W=gW, H=gH;
+  const uint16_t SKY_TOP =0x1889;   // deep indigo
+  const uint16_t SKY_MID =0x8A0C;   // dusty violet
+  const uint16_t SKY_HOR =0xFCA7;   // warm orange horizon glow
+  const uint16_t SUN     =0xFF4F;   // hot yellow
+  const uint16_t SUN_HALO=0xFDAB;
+  const uint16_t DUNE_1  =0x9B06;   // lit sand
+  const uint16_t DUNE_2  =0x61A5;   // shadow sand
+  const uint16_t CACTUS  =0x1943;   // dark silhouette
+  const uint16_t STAR    =0xFFFF;
+  const uint16_t BAR_BG  =0x0862;   // near-black scroller bar
+  const uint16_t BAR_HI  =0xFD45;   // amber edge line
+  const uint16_t TITLE   =0xFE6B;   // amber title
+  const uint16_t SUBTLE  =0xD635;   // light grey subtitle
+  const uint16_t GREETZ  =0x3F3E;   // cyan scroller text
+  const uint32_t CRK_TIMEOUT_MS = g_loop_cracktro ? 60000u : 10000u;   // LOOP=1: loop (60s safety) ; LOOP=0: ~10s auto-dismiss
+  const int      CRK_STEP=4;             // scroller px/frame
+
+  int titleH  = H/6;                     // flat indigo zone at top -> crisp title text
+  int horizon = (int)(H*0.58f);
+  int barH    = (H>=560)?52:42;
+  int barY    = H-barH-10;
+
+  // ---- SKY (drawn once) ----
+  UG->fillRect(0,0,W,titleH,SKY_TOP);
+  for(int y=titleH;y<horizon;y++){
+    float t=(float)(y-titleH)/(float)(horizon-titleH);
+    uint16_t c=(t<0.5f)?crkLerp565(SKY_TOP,SKY_MID,t*2.0f)
+                       :crkLerp565(SKY_MID,SKY_HOR,(t-0.5f)*2.0f);
+    UG->drawFastHLine(0,y,W,c);
+  }
+  // stars (deterministic LCG)
+  uint32_t s=0xC0FFEEu;
+  for(int i=0;i<40;i++){
+    s=s*1664525u+1013904223u;
+    int sx=(int)((s>>8)%(uint32_t)W);
+    int sy=titleH+(int)((s>>3)%(uint32_t)(horizon-titleH-20));
+    if((s&7)==0) UG->fillRect(sx,sy,2,2,STAR); else UG->drawPixel(sx,sy,STAR);
+  }
+  // sun sitting on the horizon (lower half hidden by the dunes below)
+  int sunx=W/2, suny=horizon-(int)(H*0.055f), sunr=(H>=560)?66:52;
+  UG->fillCircle(sunx,suny,sunr+8,SUN_HALO);
+  UG->fillCircle(sunx,suny,sunr,SUN);
+  // ---- DUNES (once): shadow base, lit rolling ridge, nearer shadow dune ----
+  UG->fillRect(0,horizon,W,H-horizon,DUNE_2);
+  int rr=(H>=560)?150:120, cy=horizon+rr-18;
+  for(int bx=0;bx<W+rr;bx+=(int)(rr*1.15f)) UG->fillCircle(bx,cy,rr,DUNE_1);
+  UG->fillRect(0,horizon+58,W,H-(horizon+58),DUNE_2);
+  // ---- CACTI (once) ----
+  int ridge=horizon+50;
+  crkSaguaro((int)(W*0.18f),ridge,   (H>=560)?150:120,CACTUS);
+  crkSaguaro((int)(W*0.80f),ridge-4, (H>=560)?190:150,CACTUS);
+  crkSaguaro((int)(W*0.50f),ridge+8, (H>=560)?110:90, CACTUS);
+  // ---- TITLE + subtitle (once) — neutralise the accessibility font multiplier ----
+  float _fm=g_font_mult; g_font_mult=1.0f;
+  UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(2);
+  const char* T1="OMEGAWARE";
+  UG->setTextColor(TITLE,SKY_TOP);
+  int tw=UG->textWidth(T1);
+  UG->setCursor((W-tw)/2, titleH/2-UG->charH()/2); UG->print(T1);
+  UG->setFont(&lgfx::fonts::DejaVu12); UG->setTextSize(1);
+  const char* T2="GTi  -  7-inch  -  for DavidZinAZ";
+  UG->setTextColor(SUBTLE,SKY_TOP);
+  int tw2=UG->textWidth(T2);
+  UG->setCursor((W-tw2)/2, titleH-20); UG->print(T2);
+  // ---- SCROLLER bar edge lines (once, OUTSIDE the repaint band) ----
+  UG->drawFastHLine(0,barY-2,W,BAR_HI);
+  UG->drawFastHLine(0,barY+barH+1,W,BAR_HI);
+  // ---- greetz scroller (the ONLY animated element) ----
+  UG->setFont(&lgfx::fonts::DejaVu18); UG->setTextSize(1);   // 12x16 glyphs
+  const char* GZ="OMEGAWARE presents the GTi 7-inch  ***  greetz to DavidZinAZ out in the Arizona sun  ***  keep it kosher  ***  tap to enter ...";
+  int gw=UG->textWidth(GZ);
+  int off=0, ty=barY+(barH-16)/2;
+  uint32_t t0=millis();
+  while(true){
+    uint16_t tx,tyy;
+    if(Touch_ReadFrame() && getTouchXY(&tx,&tyy)) break;
+    if(millis()-t0>CRK_TIMEOUT_MS) break;
+    int x=W-off;
+    UG->setClip(0,barY,W,barY+barH);
+    UG->fillRect(0,barY,W,barH,BAR_BG);
+    UG->setTextColor(GREETZ,BAR_BG);
+    UG->setCursor(x,ty); UG->print(GZ);
+    UG->resetClip();
+    uiFlush();
+    off+=CRK_STEP; if(x<-gw) off=0;
+  }
+  g_font_mult=_fm;   // restore accessibility font scale
+  // drain the entering tap so it doesn't fall through to the UI underneath
+  { uint32_t d0=millis(); while(Touch_ReadFrame() && millis()-d0<500) delay(10); }
+}
+
 void setup(){
   applyTheme(0);  // default colours before SD is available
   Serial.begin(115200); delay(200);
@@ -3428,6 +3609,7 @@ void setup(){
   if(!sdok){ delay(200); sdok=SD_MMC.begin("/sdcard",true); }
   if(sdok){
     ensureConfig();      // create CONFIG.TXT with defaults if missing or empty
+    selfHealConfig();    // append any documented keys an older CONFIG.TXT is missing
     if(!readFileList()) listImages(SD_MMC,g_files);   // cached file list -> skip the slow tree walk
     if(!readGameCache()) buildGameList();
     buildActiveLetters();
@@ -3455,6 +3637,7 @@ void setup(){
   MSC.onRead(onRead); MSC.onWrite(onWrite); MSC.mediaPresent(true);
   MSC.begin(TOTAL_SECTORS,SECTOR_SIZE); USB.begin();
   hardDetach();
+  if(g_cracktro) drawCracktro();   // CRACKTRO=ON: David's opt-in Arizona boot intro (loops until touch, ~10s auto-skip)
   if(g_car_bootmode==1 && !g_games.empty()) carEnter();   // CAROUSEL=1: boot straight into the reel
   else drawFullUI();
   esp_ota_mark_app_valid_cancel_rollback();   // v4.8.1: confirm this image booted OK (satisfies the A/B rollback handshake on dual-OTA; harmless no-op otherwise). Without it the 7B boots once then rolls back to a blank slot.
