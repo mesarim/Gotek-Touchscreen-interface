@@ -32,7 +32,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.8.4-JC4827"
+#define FW_VERSION "5.8.6-JC4827"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -811,6 +811,9 @@ static int g_dongle_cap=32;   // CONFIG.TXT CAP= : max wireless dongles to disco
 static int g_hivemind=1;      // v4.8.1 (undocumented HIVEMIND=): 1 = FLING fans out to all MuCa dongles (classic), 0 = paired dongle only
 static int g_cracktro=0;      // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or 0 = pick one at random each boot
 static int g_car_bootmode=0;  // CONFIG.TXT CAROUSEL= : default boot VIEW — 0/OFF=list, 1/ON=reel, 2=LAST (restore last view, remembered in /.gtiview). v4.8.5+: carousel is ALWAYS available via the flip toggle regardless.
+// ── 5.8.6: home-WiFi dongle transport (LINK=HOMEWIFI) — route the FLING via the home router to a Webby dongle's gotek.local, instead of hopping to the dongle's own AP ──
+static bool   g_link_home=false;                                    // LINK: false=ESP-NOW/AP (default), true=HOME WIFI
+static String g_home_ssid="", g_home_pass="", g_dongle_home_ip="";  // HOME_SSID / HOME_PASS (set in CONFIG.TXT) + cached DONGLE_HOME_IP
 // ── Item 4: load/eject behaviour toggles (all default OFF = safest) ──
 static bool g_tapload=false;    // ON = tapping the already-selected row loads it (old double-tap behaviour)
 static bool g_hotswap=false;    // ON = tapping another disk while loaded swaps to it instantly
@@ -1001,6 +1004,15 @@ static void setDongleName(const String&mac,const String&name){String key=macKey(
     if(l.startsWith(key+"=")){lines+=key+"="+name+"\n";written=true;}else lines+=l+"\n";}fr.close();}
   if(!written){if(!hasHeading)lines+="\n# Dongle names\n";lines+=key+"="+name+"\n";}
   File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);if(fw){fw.print(lines);fw.close();}}
+// Webby security: per-dongle LOCK flag, stored as a "DONGLE_<hex>.LOCK=1" line (mirrors setDongleName).
+static bool getDongleLock(const String&mac){String key=macKey(mac)+".LOCK";File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);if(!f)return false;bool r=false;
+  while(f.available()){String l=f.readStringUntil('\n');l.trim();if(l.startsWith("#"))continue;if(l.startsWith(key+"=")){r=(l.substring(key.length()+1).toInt()!=0);break;}}f.close();return r;}
+static void setDongleLock(const String&mac,bool on){String key=macKey(mac)+".LOCK";
+  String lines="";bool written=false;File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
+  if(fr){while(fr.available()){String l=fr.readStringUntil('\n');l.trim();
+    if(l.startsWith(key+"=")){lines+=key+"="+(on?"1":"0")+"\n";written=true;}else lines+=l+"\n";}fr.close();}
+  if(!written)lines+=key+"="+(on?"1":"0")+"\n";
+  File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);if(fw){fw.print(lines);fw.close();}}
 static uint8_t hexNib(char c){ if(c>='0'&&c<='9')return c-'0'; c=(char)toupper(c); if(c>='A'&&c<='F')return c-'A'+10; return 0; }
 // Collect MACs of dongles named with a "MuCa-" prefix (the undocumented multicast group), from CONFIG.TXT.
 static int enumMuCaDongles(uint8_t macs[][6], int maxN){
@@ -1100,31 +1112,31 @@ static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_LOAD_DIAG     */ {"LOAD DIAG","CHARGER DIAG","CARICA DIAG","CARGAR DIAG","DIAG LADEN"},
   /*L_EJECT_DIAG    */ {"EJECT DIAG","EJECTER DIAG","ESPELLI DIAG","EXPULSAR DIAG","DIAG AUSWERF"},
   /*L_GAMES_TAP     */ {" games - tap INSERT"," jeux - toucher INSERER"," giochi - tocca INSERISCI"," juegos - toca INSERTAR"," Spiele - INSERT tippen"},
-  /*L_CFG_MODE     */ {"MODE","MODE","MODO","MODO","MODUS"},
-  /*L_CFG_FONT     */ {"FONT","POLICE","CARATTERE","FUENTE","SCHRIFT"},
-  /*L_CFG_LANG     */ {"LANG","LANGUE","LINGUA","IDIOMA","SPRACHE"},
-  /*L_CFG_ROTATE   */ {"ROTATE","ROTATION","ROTAZIONE","ROTAR","DREHEN"},
-  /*L_CFG_COMPACT  */ {"COMPACT","COMPACT","COMPATTO","COMPACTO","KOMPAKT"},
-  /*L_CFG_LIBRARY  */ {"LIBRARY","BIBLIO.","LIBRERIA","BIBLIOTECA","BIBLIOTHEK"},
-  /*L_CFG_CATEG    */ {"CATEGORIES","CATEGORIES","CATEGORIE","CATEGORIAS","KATEGORIEN"},
-  /*L_CFG_BUTTONS  */ {"BUTTONS","BOUTONS","PULSANTI","BOTONES","TASTEN"},
-  /*L_CFG_SAVER    */ {"SAVER","VEILLE","SALVASCH.","SALVAPANT.","SCHONER"},
-  /*L_CFG_FAVSAVER */ {"FAV SAVER","FAV VEILLE","FAV SALVASCH","FAV SALVAP.","FAV SCHONER"},
+  /*L_CFG_MODE     */ {"MODE","MODE","MODE","MODO","MODUS"},
+  /*L_CFG_FONT     */ {"FONT","POLICE","FONT","FUENTE","SCHRIFT"},
+  /*L_CFG_LANG     */ {"LANG","LANGUE","LANG","IDIOMA","SPRACHE"},
+  /*L_CFG_ROTATE   */ {"ROTATE","ROTATION","ROTATE","ROTAR","DREHEN"},
+  /*L_CFG_COMPACT  */ {"COMPACT","COMPACT","COMPACT","COMPACTO","KOMPAKT"},
+  /*L_CFG_LIBRARY  */ {"LIBRARY","BIBLIO.","LIBRARY","BIBLIOTECA","BIBLIOTHEK"},
+  /*L_CFG_CATEG    */ {"CATEGORIES","CATEGORIES","CATEGORIES","CATEGORIAS","KATEGORIEN"},
+  /*L_CFG_BUTTONS  */ {"BUTTONS","BOUTONS","BUTTONS","BOTONES","TASTEN"},
+  /*L_CFG_SAVER    */ {"SAVER","VEILLE","SAVER","SALVAPANT.","SCHONER"},
+  /*L_CFG_FAVSAVER */ {"FAV SAVER","FAV VEILLE","FAV SAVER","FAV SALVAP.","FAV SCHONER"},
   /*L_CFG_HIVEMIND */ {"HIVEMIND","HIVEMIND","HIVEMIND","HIVEMIND","HIVEMIND"},
   /*L_ON           */ {"ON","ON","ON","ON","EIN"},
   /*L_OFF          */ {"OFF","OFF","OFF","OFF","AUS"},
-  /*L_PORTRAIT     */ {"PORTRAIT","PORTRAIT","VERTICALE","VERTICAL","HOCHFORMAT"},
-  /*L_LANDSCAPE    */ {"LANDSCAPE","PAYSAGE","ORIZZONTALE","HORIZONTAL","QUERFORMAT"},
-  /*L_FONT_SMALL   */ {"SMALL","PETIT","PICCOLO","PEQUENO","KLEIN"},
-  /*L_FONT_NORMAL  */ {"NORMAL","NORMAL","NORMALE","NORMAL","NORMAL"},
-  /*L_FONT_LARGE   */ {"LARGE","GRAND","GRANDE","GRANDE","GROSS"},
-  /*L_PILL         */ {"PILL","ARRONDI","ARROTOND.","REDOND.","RUND"},
-  /*L_FLAT         */ {"FLAT","PLAT","PIATTO","PLANO","FLACH"},
-  /*L_SLIDES       */ {"SLIDES","DIAPO.","DIAPO.","DIAPOS.","DIASHOW"},
-  /*L_BOUNCE       */ {"BOUNCE","REBOND","RIMBALZO","REBOTE","HUEPFEN"},
+  /*L_PORTRAIT     */ {"PORTRAIT","PORTRAIT","PORTRAIT","VERTICAL","HOCHFORMAT"},
+  /*L_LANDSCAPE    */ {"LANDSCAPE","PAYSAGE","LANDSCAPE","HORIZONTAL","QUERFORMAT"},
+  /*L_FONT_SMALL   */ {"SMALL","PETIT","SMALL","PEQUENO","KLEIN"},
+  /*L_FONT_NORMAL  */ {"NORMAL","NORMAL","NORMAL","NORMAL","NORMAL"},
+  /*L_FONT_LARGE   */ {"LARGE","GRAND","LARGE","GRANDE","GROSS"},
+  /*L_PILL         */ {"PILL","ARRONDI","PILL","REDOND.","RUND"},
+  /*L_FLAT         */ {"FLAT","PLAT","FLAT","PLANO","FLACH"},
+  /*L_SLIDES       */ {"SLIDES","DIAPO.","SLIDES","DIAPOS.","DIASHOW"},
+  /*L_BOUNCE       */ {"BOUNCE","REBOND","BOUNCE","REBOTE","HUEPFEN"},
   /*L_MATRIX       */ {"MATRIX","MATRIX","MATRIX","MATRIX","MATRIX"},
-  /*L_SWITCH_DONGLE*/ {"SWITCH DONGLE","CHANGER DONGLE","CAMBIA DONGLE","CAMBIAR DONGLE","DONGLE WECHSELN"},
-  /*L_SCAN_DONGLES */ {"SCAN DONGLES","SCAN DONGLES","CERCA DONGLE","BUSCAR DONGLES","DONGLES SUCHEN"},
+  /*L_SWITCH_DONGLE*/ {"SWITCH DONGLE","CHANGER DONGLE","SWITCH DONGLE","CAMBIAR DONGLE","DONGLE WECHSELN"},
+  /*L_SCAN_DONGLES */ {"SCAN DONGLES","SCAN DONGLES","SCAN DONGLES","BUSCAR DONGLES","DONGLES SUCHEN"},
 };
 static inline const char* T(int id){ return LSTR[id][g_lang]; }
 
@@ -1211,6 +1223,15 @@ static void generateDefaultConfig(){
   f.println("#        OFF = only images you drop in the /screensaver/ folder.");
   f.println("SSFAV=ON");
   f.println("");
+  f.println("# LINK: dongle transport. ESPNOW = the dongle's own AP + ESP-NOW (default).");
+  f.println("#       HOMEWIFI = route the FLING via your home router to a Webby dongle's gotek.local.");
+  f.println("LINK=ESPNOW");
+  f.println("# HOME_SSID / HOME_PASS: your home WiFi (only used when LINK=HOMEWIFI).");
+  f.println("HOME_SSID=");
+  f.println("HOME_PASS=");
+  f.println("# DONGLE_HOME_IP: auto-filled cache of the dongle's home IP (mDNS gotek.local is primary).");
+  f.println("DONGLE_HOME_IP=");
+  f.println("");
   f.println("# Wireless dongle MAC (auto-filled when you pair via INFO screen)");
   f.println("# XIAO_MAC=");
   f.close();
@@ -1250,6 +1271,10 @@ static void selfHealConfig(){
     {"SSFX",     "# SSFX: transition between slides - SHUFFLE (random), FADE, DISSOLVE, SLIDE, or CUT.\nSSFX=SHUFFLE\n"},
     {"SSTIME",   "# SSTIME: seconds each slide is shown (2-120).\nSSTIME=6\n"},
     {"SSFAV",    "# SSFAV: ON = also slideshow favourited game covers; OFF = only /screensaver/ images.\nSSFAV=ON\n"},
+    {"LINK",           "\n# LINK: dongle transport. ESPNOW = the dongle's own AP + ESP-NOW (default). HOMEWIFI = route the FLING via your home router to a Webby dongle's gotek.local.\nLINK=ESPNOW\n"},
+    {"HOME_SSID",      "# HOME_SSID: your home WiFi name (only used when LINK=HOMEWIFI).\nHOME_SSID=\n"},
+    {"HOME_PASS",      "# HOME_PASS: your home WiFi password (only used when LINK=HOMEWIFI).\nHOME_PASS=\n"},
+    {"DONGLE_HOME_IP", "# DONGLE_HOME_IP: auto-filled cache of the dongle's home-network IP (mDNS gotek.local is the primary lookup).\nDONGLE_HOME_IP=\n"},
   };
   const int NK=sizeof(KEYS)/sizeof(KEYS[0]);
   bool present[NK]; for(int i=0;i<NK;i++)present[i]=false;
@@ -1292,7 +1317,11 @@ static void loadConfig(){
     else if(k=="SDSPEED"){int hz=v.toInt(); g_sd_freq=(hz>=40||hz>=40000)?40000:20000;}
     else if(k=="HIVEMIND"){g_hivemind=(v=="OFF"||v=="0")?0:1;}
     else if(k=="CATEGORIES"){String cv=v;cv.toUpperCase();g_categories=(cv=="ON"||cv=="1"||cv=="TRUE");}
-    else if(k=="NESTING"){String nv=v;nv.toUpperCase();g_nesting=(nv=="ON"||nv=="1"||nv=="TRUE");}}
+    else if(k=="NESTING"){String nv=v;nv.toUpperCase();g_nesting=(nv=="ON"||nv=="1"||nv=="TRUE");}
+    else if(k=="LINK"){String lv=v;lv.toUpperCase();g_link_home=(lv=="HOMEWIFI"||lv=="HOME"||lv=="WIFI");}
+    else if(k=="HOME_SSID"){g_home_ssid=v;}
+    else if(k=="HOME_PASS"){g_home_pass=v;}
+    else if(k=="DONGLE_HOME_IP"){g_dongle_home_ip=v;}}
   f.close();
 }
 
@@ -1727,7 +1756,7 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK };
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
 static InfoItem g_ii[20]; static int g_ii_n=0;
 struct InfoRect { int x,y,w,h; uint8_t act; };
@@ -1747,6 +1776,13 @@ static void drawInfoPanel(){
     if(g_ii_n>=20)return; strncpy(g_ii[g_ii_n].lbl,l.c_str(),31); g_ii[g_ii_n].lbl[31]=0;
     g_ii[g_ii_n].bg=bg; g_ii[g_ii_n].fg=fg; g_ii[g_ii_n].act=act; g_ii_n++; };
   add(String(T(L_CFG_MODE))+": "+(g_wireless_mode?T(L_WIRELESS):T(L_STANDALONE)), g_wireless_mode?COL_BLUE:COL_GREEN, TFT_BLACK, IA_MODE);
+  // v0.2: keep the dongle controls next to the MODE toggle (page 1) — SWITCH DONGLE (with LOCK/UNLOCK) used to land on page 2.
+  if(g_wireless_mode){
+    add(espnowIsPaired()?String(T(L_SWITCH_DONGLE)):String(T(L_SCAN_DONGLES)), espnowIsPaired()?COL_GREEN:COL_AMBER, TFT_BLACK, IA_DONGLE);
+    add(String("LINK: ")+(g_link_home?"HOME WIFI":"ESP-NOW"), g_link_home?COL_BLUE:COL_BAR, g_link_home?TFT_WHITE:COL_LIT, IA_LINK);   // 5.8.6: transport picker
+    uint8_t mm[64][6]; int mcN=enumMuCaDongles(mm,g_dongle_cap);
+    if(mcN>0) add(String(T(L_CFG_HIVEMIND))+": "+(g_hivemind?T(L_ON):T(L_OFF)), g_hivemind?COL_ACCENT:COL_BAR, g_hivemind?TFT_WHITE:COL_LIT, IA_HIVEMIND);
+  }
   add(String(T(L_CFG_FONT))+": "+fontName(g_font), COL_AMBER, TFT_BLACK, IA_FONT);
   add(String(T(L_THEME))+": "+THEMES[g_theme_idx].name, COL_ACCENT, TFT_WHITE, IA_THEME);   // Vince test: moved off the bottom bar
   add(String(T(L_CFG_LANG))+": "+LANG_NAMES[g_lang], (uint16_t)0x79D6, TFT_WHITE, IA_LANG);
@@ -1757,11 +1793,6 @@ static void drawInfoPanel(){
   add(String(T(L_CFG_BUTTONS))+": "+(g_btn_pill?T(L_PILL):T(L_FLAT)), g_btn_pill?COL_ACCENT:COL_BAR, g_btn_pill?TFT_WHITE:COL_LIT, IA_BTNSTYLE);   // 5.8.3 reel button style
   add(String(T(L_CFG_SAVER))+": "+(g_ss_matrix?T(L_MATRIX):(g_ss_slides?T(L_SLIDES):T(L_BOUNCE))), COL_BLUE, TFT_WHITE, IA_SSMODE);   // 5.8.3 screensaver mode
   add(String(T(L_CFG_FAVSAVER))+": "+(g_ss_fav?T(L_ON):T(L_OFF)), g_ss_fav?COL_GREEN:COL_BAR, g_ss_fav?TFT_BLACK:COL_LIT, IA_SSFAV);   // 5.8.3 favourites into slideshow
-  if(g_wireless_mode){
-    add(espnowIsPaired()?String(T(L_SWITCH_DONGLE)):String(T(L_SCAN_DONGLES)), espnowIsPaired()?COL_GREEN:COL_AMBER, TFT_BLACK, IA_DONGLE);
-    uint8_t mm[64][6]; int mcN=enumMuCaDongles(mm,g_dongle_cap);
-    if(mcN>0) add(String(T(L_CFG_HIVEMIND))+": "+(g_hivemind?T(L_ON):T(L_OFF)), g_hivemind?COL_ACCENT:COL_BAR, g_hivemind?TFT_WHITE:COL_LIT, IA_HIVEMIND);
-  }
   add(T(L_RESCAN_SD), COL_BLUE, TFT_WHITE, IA_RESCAN);
   add(T(L_SOFT_RESET), (uint16_t)0x8000, TFT_WHITE, IA_RESET);
   {bool diagOn=(g_loaded&&g_loaded_name=="AMIGA TEST KIT");   // v5.6.1: ATK is Amiga-only — hide LOAD DIAG in DSK/GEN (keep EJECT DIAG if somehow still loaded)
@@ -2750,6 +2781,12 @@ static bool doLoadSelected(const String&adfPath){
         gfx_setCursor(6,STATUS_H+26);gfx_print("Multicast "+String(i+1)+"/"+String(mcN));gfx_flush();
         espnowSendDiskTo(mcMacs[i],copied);
       }
+    } else if(g_link_home && g_home_ssid.length()){         // 5.8.6: home-WiFi transport — route via the router to the dongle's gotek.local
+      String prevIp=g_dongle_home_ip;
+      if(espnowSendDiskHome(g_home_ssid,g_home_pass,g_dongle_home_ip,copied)){
+        g_sv_wl_path=loadPath;g_sv_wl_loadid=g_espnow_load_id;
+      }
+      if(g_dongle_home_ip!=prevIp&&g_dongle_home_ip.length())saveConfigKey("DONGLE_HOME_IP",g_dongle_home_ip);  // persist the resolved IP for next time
     } else if(espnowIsPaired()){                            // single paired dongle — unchanged
       espnowSendNotify(g_loaded_name,g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN",copied);
       if(espnowSendDisk(copied)){                           // v4.8.0: remember what we flung, keyed by the dongle's load_id
@@ -3557,8 +3594,9 @@ static void doScanDongles(){
       if(n>maxRows){int trackY=listTop,trackH=maxRows*rowH-4,thumbH=trackH*maxRows/n;if(thumbH<10)thumbH=10;
         int thumbY=trackY+(trackH-thumbH)*scanScroll/maxScroll;
         gfx_fillRect(VW-4,trackY,3,trackH,COL_PANEL);gfx_fillRect(VW-4,thumbY,3,thumbH,COL_AMBER);}
-      int bw=(VW-5*4)/4,bx=4;const char* BL[4]={"USE","RENAME","DEL","BACK"};uint16_t BC[4]={COL_GREEN,COL_ACCENT,(uint16_t)0x8000,COL_BAR};
-      for(int i=0;i<4;i++){gfx_fillRoundRect(bx,btnBarY+2,bw,34,6,BC[i]);gfx_setTextColor(inkFor(BC[i]),BC[i]);gfx_setTextSize(1);gfx_setCursor(bx+(bw-gfx_textWidth(BL[i]))/2,btnBarY+14);gfx_print(BL[i]);bx+=bw+4;}
+      bool selLocked=(n>0)?getDongleLock(espnowScanGetMac(sel)):false;
+      int bw=(VW-6*4)/5,bx=4;const char* BL[5]={"USE","RENAME","DEL",selLocked?"UNLOCK":"LOCK","BACK"};uint16_t BC[5]={COL_GREEN,COL_ACCENT,(uint16_t)0x8000,COL_AMBER,COL_BAR};
+      for(int i=0;i<5;i++){gfx_fillRoundRect(bx,btnBarY+2,bw,34,6,BC[i]);gfx_setTextColor(inkFor(BC[i]),BC[i]);gfx_setTextSize(1);gfx_setCursor(bx+(bw-gfx_textWidth(BL[i]))/2,btnBarY+14);gfx_print(BL[i]);bx+=bw+4;}
       gfx_flush();
     }
     bool t=Touch_ReadFrame(); uint16_t tx=0,ty=0; if(t)t=getTouchXY(&tx,&ty);
@@ -3571,14 +3609,21 @@ static void doScanDongles(){
     } else if(down){
       down=false;
       if(!moved){
-        if(downY>=btnBarY){int bw=(VW-5*4)/4,i=(downX-4)/(bw+4);
+        if(downY>=btnBarY){int bw=(VW-6*4)/5,i=(downX-4)/(bw+4);
           if(i==0){espnowScanSelect(sel);gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_GREEN,COL_BG);{const char*s="PAIRED";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);}gfx_print(T(L_PAIRED));gfx_flush();delay(700);break;}
           else if(i==1){String mac=espnowScanGetMac(sel);String label="OMEGA-"+mac.substring(12),nm=getDongleName(mac),out;if(onScreenKeyboard(label,nm,out)){setDongleName(mac,out);}uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<500)delay(10);down=false;dirty=true;}
           else if(i==2){   // DEL — forget this dongle: tell it to drop us (over-air) + clear its name & active link
             uint8_t m[6]; espnowScanMacBytes(sel,m);
             espnowSendUnpair(m); espnowForgetActive(m); setDongleName(espnowScanGetMac(sel),"");
             gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0xE8C4,COL_BG);{const char*s="REMOVED";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);}gfx_print("REMOVED");gfx_flush();delay(800);break;}
-          else break; // BACK (i==3)
+          else if(i==3){   // LOCK / UNLOCK — Webby security: lock this dongle to this GTi, or open it up
+            uint8_t m[6]; espnowScanMacBytes(sel,m); String mac=espnowScanGetMac(sel);
+            bool now=!getDongleLock(mac);
+            if(now) espnowSendLock(m); else espnowSendUnlock(m);
+            setDongleLock(mac,now);
+            gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_AMBER,COL_BG);{const char*s=now?"LOCKED":"UNLOCKED";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);gfx_print(s);}gfx_flush();delay(800);
+            uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<500)delay(10);down=false;dirty=true;}
+          else break; // BACK (i==4)
         } else if(downY>=listTop&&downY<listTop+maxRows*rowH){int slot=(downY-listTop)/rowH,idx=scanScroll+slot; if(idx>=0&&idx<n&&idx!=sel){sel=idx;dirty=true;}}
       }
     }
@@ -3989,6 +4034,7 @@ static void infoAction(uint8_t act){
     case IA_COMPACT: g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_DONGLE: doPairNow();drawInfoFull();break;
     case IA_HIVEMIND: g_hivemind=!g_hivemind;saveConfigKey("HIVEMIND",g_hivemind?"ON":"OFF");drawInfoFull();break;
+    case IA_LINK: g_link_home=!g_link_home;saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW");drawInfoFull();break;   // 5.8.6: ESP-NOW <-> HOME WIFI transport
     case IA_RESCAN: doRescan();break;
     case IA_RESET: {gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0xE8C4,COL_BG);const char*m=T(L_RESETTING);gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();delay(700);ESP.restart();}break;
     case IA_DIAG: if(g_loaded&&g_loaded_name=="AMIGA TEST KIT"){g_info_showing=false;doUnload();drawFullUI();gfx_flush();}else doLoadDiag();break;

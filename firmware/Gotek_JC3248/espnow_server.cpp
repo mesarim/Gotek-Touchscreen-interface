@@ -9,6 +9,7 @@
 #include <esp_mac.h>
 #include <SD_MMC.h>
 #include <WiFiClient.h>
+#include <ESPmDNS.h>   // home-WiFi transport: resolve the dongle's gotek.local
 
 #define ESPNOW_CHANNEL 6
 
@@ -284,6 +285,28 @@ void espnowSendUnpair(const uint8_t* mac){
   if (tp->add_peer()) for(int k=0;k<3;k++){ tp->send_pkt((uint8_t*)&pkt, sizeof(pkt)); delay(30); }
   delete tp;
 }
+// Webby: tell ONE dongle (unicast) to LOCK to this GTi (enroll me as sole owner). Sent 3x.
+void espnowSendLock(const uint8_t* mac){
+  PktHello pkt = {}; pkt.type = PKT_LOCK; WiFi.macAddress(pkt.mac);
+  if (_xiaoPeer && memcmp(_xiao_mac, mac, 6)==0) {
+    for(int k=0;k<3;k++){ _xiaoPeer->send_pkt((uint8_t*)&pkt, sizeof(pkt)); delay(30); }
+    return;
+  }
+  GotekPeer* tp = new GotekPeer(mac, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
+  if (tp->add_peer()) for(int k=0;k<3;k++){ tp->send_pkt((uint8_t*)&pkt, sizeof(pkt)); delay(30); }
+  delete tp;
+}
+// Webby: tell ONE dongle (unicast) to UNLOCK (clear owners -> open to any GTi). Sent 3x.
+void espnowSendUnlock(const uint8_t* mac){
+  PktHello pkt = {}; pkt.type = PKT_UNLOCK; WiFi.macAddress(pkt.mac);
+  if (_xiaoPeer && memcmp(_xiao_mac, mac, 6)==0) {
+    for(int k=0;k<3;k++){ _xiaoPeer->send_pkt((uint8_t*)&pkt, sizeof(pkt)); delay(30); }
+    return;
+  }
+  GotekPeer* tp = new GotekPeer(mac, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
+  if (tp->add_peer()) for(int k=0;k<3;k++){ tp->send_pkt((uint8_t*)&pkt, sizeof(pkt)); delay(30); }
+  delete tp;
+}
 // If we're forgetting the currently-active dongle, clear the local pairing + strip CONFIG.TXT.
 void espnowForgetActive(const uint8_t* mac){
   if (memcmp(_xiao_mac, mac, 6)!=0) return;
@@ -442,6 +465,70 @@ static bool sendDiskCore(const uint8_t* mac, const char* ipc, uint32_t size, uin
 
   if (ok) g_espnow_xiao_done = true;
   else    g_espnow_xiao_error = true;
+  return ok;
+}
+
+// Home-WiFi transport: join the home router (STA/DHCP), resolve the dongle via mDNS
+// "gotek.local" (or use the cached ioIp), push the disk over TCP-3333, then restore
+// ESP-NOW/AP_STA exactly like sendDiskCore. ioIp receives the resolved IP to persist.
+bool espnowSendDiskHome(const String& ssid, const String& pass, String& ioIp, uint32_t size) {
+  if (ssid.length() == 0) { g_espnow_xiao_error = true; return false; }
+  Serial.printf("[HOME] Joining '%s' to reach the dongle\n", ssid.c_str());
+  ESP_NOW.end(); delay(100);
+  WiFi.mode(WIFI_STA); delay(100);
+  WiFi.persistent(false); WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, true); delay(200);
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) { delay(200); Serial.print("."); }
+  Serial.println();
+
+  bool ok = false;
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("[HOME] Joined. IP %s\n", WiFi.localIP().toString().c_str());
+    String ip = ioIp;                                  // cached IP is the fallback
+    if (MDNS.begin("gti-remote")) {
+      IPAddress r = MDNS.queryHost("gotek", 2500);     // Webby advertises gotek.local in WiFi mode
+      if ((uint32_t)r != 0) { ip = r.toString(); ioIp = ip; Serial.printf("[HOME] gotek.local -> %s\n", ip.c_str()); }
+      MDNS.end();
+    }
+    if (ip.length() > 0) {
+      WiFiClient client;
+      if (client.connect(ip.c_str(), DONGLE_TCP_PORT)) {
+        uint8_t* src = g_disk + ESPNOW_DATA_LBA * ESPNOW_SECTOR_SIZE;
+        uint8_t hdr[4] = { (uint8_t)(size>>24),(uint8_t)(size>>16),(uint8_t)(size>>8),(uint8_t)size };
+        client.write(hdr, 4);
+        uint32_t sent = 0; const size_t BUF = 4096;
+        while (sent < size) { size_t n = min((uint32_t)BUF, size-sent); size_t w = client.write(src+sent, n); if (!w) break; sent += w; }
+        client.clear();
+        t0 = millis(); while (!client.available() && millis()-t0 < 10000) delay(10);
+        if (client.available()) {
+          ok = (client.read() == 0x01);
+          if (ok) { uint32_t tid = millis(); uint8_t lid[4]; int got = 0;
+            while (got < 4 && millis()-tid < 300) { if (client.available()) lid[got++] = client.read(); else delay(5); }
+            g_espnow_load_id = (got == 4) ? ((uint32_t)lid[0]|((uint32_t)lid[1]<<8)|((uint32_t)lid[2]<<16)|((uint32_t)lid[3]<<24)) : 0;
+          }
+        }
+        client.stop();
+        Serial.printf("[HOME] sent %lu bytes, ack=%s\n", (unsigned long)sent, ok?"OK":"ERR");
+      } else Serial.println("[HOME] TCP connect failed");
+    } else Serial.println("[HOME] dongle not found (mDNS gotek.local + no cached IP)");
+  } else Serial.println("[HOME] home WiFi join failed");
+
+  // Restore ESP-NOW / AP_STA (same teardown as sendDiskCore)
+  WiFi.disconnect(); delay(200);
+  WiFi.mode(WIFI_AP_STA); WiFi.setChannel(ESPNOW_CHANNEL);
+  while (!WiFi.STA.started()) delay(100);
+  ESP_NOW.begin(); ESP_NOW.onNewPeer(onNewPeer, nullptr);
+  if (_bcastPeer) { delete _bcastPeer; _bcastPeer = nullptr; }
+  _bcastPeer = new GotekPeer(ESP_NOW.BROADCAST_ADDR, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
+  if (!_bcastPeer->add_peer()) { delete _bcastPeer; _bcastPeer = nullptr; }
+  if (g_espnow_paired) {
+    if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
+    _xiaoPeer = new GotekPeer(_xiao_mac, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
+    if (!_xiaoPeer->add_peer()) { delete _xiaoPeer; _xiaoPeer = nullptr; }
+  }
+  if (ok) g_espnow_xiao_done = true; else g_espnow_xiao_error = true;
   return ok;
 }
 

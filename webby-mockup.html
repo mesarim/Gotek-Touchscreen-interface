@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Webby — Gotek OMEGA</title>
+<style>
+  /* Self-contained: no CDNs, no external fonts — the ESP32 serves this from flash. */
+  :root{
+    --bg:#0f1016; --panel:#181a24; --panel2:#1f2230; --line:#2b2f42;
+    --ink:#e9ecf5; --dim:#8b93ad; --amber:#ffca57; --cyan:#3fe0e8;
+    --green:#54d67e; --red:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:radial-gradient(120% 80% at 50% -10%,#1a1d2b 0%,var(--bg) 60%);
+    color:var(--ink); min-height:100vh;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased; padding:env(safe-area-inset-top) 0 0;
+  }
+  .wrap{max-width:460px;margin:0 auto;padding:18px 16px 40px}
+  /* header */
+  header{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+  .badge{width:38px;height:38px;border-radius:9px;background:linear-gradient(150deg,#2a2e42,#12131b);
+    border:1px solid var(--line);display:grid;place-items:center;flex:none}
+  .badge b{font-weight:800;font-size:15px;color:var(--amber);letter-spacing:.5px}
+  .title{line-height:1.1}
+  .title h1{margin:0;font-size:15px;letter-spacing:.4px}
+  .title span{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:1.4px}
+  .conn{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--dim);
+    background:var(--panel);border:1px solid var(--line);padding:6px 10px;border-radius:20px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
+  /* tabs */
+  .tabs{display:flex;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:4px;margin-bottom:16px}
+  .tabs button{flex:1;border:0;background:transparent;color:var(--dim);font:inherit;font-weight:600;
+    font-size:13px;padding:9px;border-radius:9px;cursor:pointer}
+  .tabs button.on{background:var(--panel2);color:var(--ink);box-shadow:0 1px 0 #0006}
+  /* card */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+  .card h2{margin:0 0 12px;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--dim)}
+  /* drive */
+  .drive{display:flex;align-items:center;gap:14px}
+  .floppy{width:52px;height:52px;border-radius:8px;flex:none;position:relative;
+    background:linear-gradient(160deg,#2b3350,#1a1f33);border:1px solid #3a4166}
+  .floppy::before{content:"";position:absolute;left:9px;right:9px;top:7px;height:16px;border-radius:2px;background:#0e1120}
+  .floppy::after{content:"";position:absolute;left:15px;right:15px;bottom:8px;height:16px;border-radius:2px 2px 0 0;background:#c9d2ee}
+  .floppy.empty{filter:grayscale(1);opacity:.4}
+  .drive .meta{min-width:0}
+  .drive .name{font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .drive .sub{font-size:12px;color:var(--dim);margin-top:2px}
+  .drive .sub.live{color:var(--cyan)}
+  .btn{border:0;border-radius:10px;font:inherit;font-weight:700;font-size:14px;padding:11px 16px;cursor:pointer}
+  .btn.ghost{background:var(--panel2);color:var(--ink);border:1px solid var(--line)}
+  .btn.amber{background:linear-gradient(180deg,#ffd06a,#f0a92e);color:#241a02}
+  .btn.wide{width:100%;padding:14px}
+  .btn:disabled{opacity:.4;cursor:default}
+  .eject{margin-left:auto;flex:none}
+  /* drop zone */
+  .drop{margin-top:4px;border:2px dashed #3a4064;border-radius:14px;padding:26px 16px;text-align:center;
+    transition:.15s;cursor:pointer;background:#141626}
+  .drop.hot{border-color:var(--amber);background:#1c1a10}
+  .drop .big{font-size:15px;font-weight:700}
+  .drop .small{font-size:12px;color:var(--dim);margin-top:5px}
+  .drop .plus{font-size:26px;color:var(--amber);margin-bottom:6px}
+  input[type=file]{display:none}
+  /* progress */
+  .prog{height:8px;background:#0e1120;border-radius:6px;overflow:hidden;margin-top:14px;display:none}
+  .prog i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--cyan),var(--amber));transition:width .12s}
+  /* wifi */
+  .net{display:flex;align-items:center;gap:12px;padding:12px 6px;border-bottom:1px solid var(--line);cursor:pointer}
+  .net:last-child{border-bottom:0}
+  .net .ss{font-weight:600;font-size:14px}
+  .net .bars{margin-left:auto;color:var(--dim);font-size:12px}
+  .net.sel .ss{color:var(--amber)}
+  .field{margin-top:12px}
+  .field label{display:block;font-size:12px;color:var(--dim);margin-bottom:6px}
+  .field input{width:100%;background:#0e1120;border:1px solid var(--line);border-radius:10px;
+    color:var(--ink);font:inherit;font-size:15px;padding:12px}
+  .hint{font-size:12px;color:var(--dim);margin-top:12px;line-height:1.5}
+  .note{font-size:11.5px;color:var(--dim);text-align:center;margin-top:6px}
+  /* toast */
+  .toast{position:fixed;left:50%;bottom:22px;transform:translate(-50%,20px);opacity:0;pointer-events:none;
+    background:#0c1a12;border:1px solid #2f6b45;color:#c9f5d8;padding:11px 16px;border-radius:11px;
+    font-size:13.5px;font-weight:600;transition:.25s;max-width:90%}
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+  .toast.err{background:#1e0f12;border-color:#6b3030;color:#ffd3d3}
+  footer{text-align:center;color:#5b6076;font-size:11px;margin-top:22px;letter-spacing:.3px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="badge"><b>Ω</b></div>
+    <div class="title"><h1>GOTEK&nbsp;OMEGA</h1><span>Webby</span></div>
+    <div class="conn"><span class="dot" id="condot"></span><span id="conntxt">gotek.local</span></div>
+  </header>
+
+  <div class="tabs">
+    <button class="on" data-view="disk" onclick="showView('disk',this)">Disk</button>
+    <button data-view="wifi" onclick="showView('wifi',this)">Wi‑Fi</button>
+  </div>
+
+  <!-- DISK VIEW -->
+  <section id="view-disk">
+    <div class="card">
+      <h2>In the drive</h2>
+      <div class="drive">
+        <div class="floppy empty" id="floppy"></div>
+        <div class="meta">
+          <div class="name" id="dname">— no disk —</div>
+          <div class="sub" id="dsub">Load an ADF to insert it</div>
+        </div>
+        <button class="btn ghost eject" id="ejectBtn" onclick="eject()" disabled>Eject</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Load image</h2>
+      <label class="drop" id="drop" for="file">
+        <div class="plus">＋</div>
+        <div class="big">Tap to choose an ADF</div>
+        <div class="small">or drag a file here · .adf .adz .img</div>
+      </label>
+      <input type="file" id="file" accept=".adf,.adz,.img" onchange="picked(this.files[0])">
+      <div class="prog" id="prog"><i id="bar"></i></div>
+      <div class="note">DD image up to ~880&nbsp;KB · one disk at a time</div>
+    </div>
+  </section>
+
+  <!-- WIFI VIEW -->
+  <section id="view-wifi" class="hidden">
+    <div class="card">
+      <h2>Connect Webby to your Wi‑Fi</h2>
+      <div id="scan">
+        <div class="net" onclick="pickNet(this,'Amiga_Loft')"><span class="ss">Amiga_Loft</span><span class="bars">▂▄▆█</span></div>
+        <div class="net" onclick="pickNet(this,'BT-Hub-9F2A')"><span class="ss">BT-Hub-9F2A</span><span class="bars">▂▄▆_</span></div>
+        <div class="net" onclick="pickNet(this,'iPhone (rthorntn)')"><span class="ss">iPhone (rthorntn)</span><span class="bars">▂▄__</span></div>
+      </div>
+      <div class="field"><label>Network</label><input id="ssid" placeholder="Pick above or type it"></div>
+      <div class="field"><label>Password</label><input id="pass" type="password" placeholder="••••••••"></div>
+      <button class="btn amber wide" style="margin-top:16px" onclick="joinWifi()">Save &amp; Join</button>
+      <div class="hint">First time only. After it joins, just open <b>gotek.local</b> in any browser on your home Wi‑Fi — no app needed.</div>
+    </div>
+  </section>
+
+  <footer>Webby-0.1 · OMEGAWARE · no app required</footer>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ---- MOCKUP ONLY: all client-side, no real backend. Simulates the Webby firmware. ----
+function showView(v,btn){
+  document.getElementById('view-disk').classList.toggle('hidden',v!=='disk');
+  document.getElementById('view-wifi').classList.toggle('hidden',v!=='wifi');
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b===btn));
+}
+function toast(msg,err){
+  var t=document.getElementById('toast');
+  t.textContent=msg; t.classList.toggle('err',!!err); t.classList.add('show');
+  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),2600);
+}
+function fmt(b){return b>=1048576?(b/1048576).toFixed(2)+' MB':Math.round(b/1024)+' KB';}
+
+function picked(f){
+  if(!f) return;
+  var ok=/\.(adf|adz|img)$/i.test(f.name);
+  if(!ok){ toast('Not an ADF — pick .adf .adz or .img',true); return; }
+  if(f.size>1024*1024){ toast('That looks like an HD image — Webby holds DD (~880 KB) only',true); return; }
+  // simulate upload → insert
+  var prog=document.getElementById('prog'), bar=document.getElementById('bar');
+  prog.style.display='block'; bar.style.width='0';
+  var p=0;
+  var iv=setInterval(()=>{
+    p+=Math.random()*22+8; if(p>=100){p=100;clearInterval(iv);setTimeout(()=>{prog.style.display='none';insert(f);},250);}
+    bar.style.width=p+'%';
+  },110);
+}
+function insert(f){
+  document.getElementById('floppy').classList.remove('empty');
+  document.getElementById('dname').textContent=f.name.replace(/\.(adf|adz|img)$/i,'');
+  var sub=document.getElementById('dsub'); sub.textContent='Inserted · '+fmt(f.size); sub.classList.add('live');
+  document.getElementById('ejectBtn').disabled=false;
+  toast('Inserted — check your Amiga ✓');
+}
+function eject(){
+  document.getElementById('floppy').classList.add('empty');
+  document.getElementById('dname').textContent='— no disk —';
+  var sub=document.getElementById('dsub'); sub.textContent='Load an ADF to insert it'; sub.classList.remove('live');
+  document.getElementById('ejectBtn').disabled=true;
+  toast('Ejected');
+}
+function pickNet(el,ss){
+  document.querySelectorAll('.net').forEach(n=>n.classList.remove('sel'));
+  el.classList.add('sel'); document.getElementById('ssid').value=ss;
+  document.getElementById('pass').focus();
+}
+function joinWifi(){
+  var ss=document.getElementById('ssid').value.trim();
+  if(!ss){ toast('Pick a network first',true); return; }
+  toast('Joining '+ss+' …');
+  setTimeout(()=>{ toast('Connected ✓ — now at gotek.local'); },1500);
+}
+// drag & drop
+var drop=document.getElementById('drop');
+['dragenter','dragover'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('hot');}));
+['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('hot');}));
+drop.addEventListener('drop',ev=>{ if(ev.dataTransfer.files[0]) picked(ev.dataTransfer.files[0]); });
+</script>
+</body>
+</html>

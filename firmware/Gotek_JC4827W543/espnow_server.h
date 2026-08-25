@@ -12,6 +12,8 @@
 #define PKT_XIAO_DIRTY   0x15  // XIAO → Waveshare: settled unsaved writes exist (v4.8.0 saves)
 #define PKT_UNPAIR       0x16  // Waveshare → dongle: forget me (drop this GTi from the owner list)
 #define PKT_XIAO_STATUS  0x17  // dongle → Waveshare: load-state heartbeat {loaded,load_id,image_size} (v5.7.x)
+#define PKT_LOCK         0x18  // Waveshare → dongle: enroll me as sole owner + LOCK (Webby security)
+#define PKT_UNLOCK       0x19  // Waveshare → dongle: clear owners + UNLOCK (open to any GTi)
 
 // Shared ramdisk — defined in main .ino
 extern uint8_t* g_disk;
@@ -70,10 +72,15 @@ bool   espnowScanSelect(int i);
 void   espnowSetScanCap(int n);   // runtime cap on discovered dongles (CONFIG.TXT CAP=)
 void   espnowScanMacBytes(int i, uint8_t* out);   // raw 6-byte MAC of a scanned dongle
 void   espnowSendUnpair(const uint8_t* mac);       // tell a dongle to forget this GTi (unicast)
+void   espnowSendLock(const uint8_t* mac);         // Webby: lock this dongle to this GTi (unicast)
+void   espnowSendUnlock(const uint8_t* mac);       // Webby: unlock this dongle -> open to any GTi (unicast)
 void   espnowForgetActive(const uint8_t* mac);     // clear local pairing if mac is the active dongle
 
 // Transfer — sends via WiFi TCP, uses ESP-NOW only for DONE/ERROR reply
 bool   espnowSendNotify(const String& name, const String& mode, uint32_t size);
 bool   espnowSendDisk(uint32_t size);
 bool   espnowSendDiskTo(const uint8_t* mac, uint32_t size);   // multicast: send to one dongle by MAC
+// Home-WiFi transport: join the home router (STA), resolve the dongle via mDNS "gotek.local"
+// (ioIp seeds a cached IP and receives the resolved one to persist), push over TCP-3333.
+bool   espnowSendDiskHome(const String& ssid, const String& pass, String& ioIp, uint32_t size);
 void   espnowSendEject();
