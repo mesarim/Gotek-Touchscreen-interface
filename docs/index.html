@@ -469,6 +469,14 @@
     </div>
   </div>
 
+  <div class="hw-note" style="background:var(--panel);border:1px solid var(--border);border-left:3px solid #cc9900;border-radius:6px;padding:0.9rem 1.1rem;margin:0 0 1.5rem;font-size:0.8rem;line-height:1.65;color:var(--text);">
+    <strong style="color:#e0b93a;letter-spacing:.4px;">A quick note on hardware.</strong>
+    Everything on this page is a board I've personally tested and was happy with, so you can flash it knowing it'll just work. If a board isn't listed, it's simply one I haven't tested yet &mdash; so it sits outside what I'm able to help with.
+    One thing worth knowing: the <strong>Super&nbsp;Mini dongle</strong> &mdash; the piece that plugs into the Gotek and presents the disk over USB &mdash; <strong>must be an ESP32-S3 (or newer) with PSRAM</strong>, since it needs the native USB and the room to hold the disk.
+    A board that only acts as a <em>wireless screen</em> and beams disks across to that dongle is lighter and doesn't need PSRAM &mdash; that's how the CYD does it.
+    Other S3-with-PSRAM boards may well run it if you enjoy tinkering (unsupported, so you'd be on your own), while something like a Raspberry&nbsp;Pi&nbsp;Pico won't run it at all. For the smoothest ride, grab one of the listed boards. &#128578;
+  </div>
+
   <div class="section-label">Select your device</div>
 
   <div class="device-grid">
@@ -592,9 +600,9 @@
 
     <div class="device-card" data-manifest="firmware/supermini-beta/manifest.json" onclick="selectDevice(this)">
       <div class="selected-indicator"></div>
-      <div class="device-name">Super Mini Dongle &mdash; BETA</div>
-      <div class="device-chip">ESP32-S3 Super Mini &middot; v3.5.2-beta &middot; save protocol + owner-lock pairing</div>
-      <div class="device-desc">Dongle side of wireless saves: tracks what the Gotek writes and hands the changed sectors back to the JC BETA on request. <b>New in v3.5.2: owner-lock pairing</b> &mdash; the dongle only obeys GTis you deliberately enrol (hold <b>BOOT ~5&nbsp;s</b> to open a pairing window; hold <b>15&nbsp;s</b> to wipe all owners), so nobody at an event can pair with or steal it. Up to 4 owner GTis. Fully compatible with stable screens (save features simply stay dormant). See the <a href="#pairing" style="color:var(--blue);">pairing guide</a> below.</div>
+      <div class="device-name">Super Mini Dongle &mdash; Webby BETA</div>
+      <div class="device-chip">ESP32-S3 Super Mini &middot; Webby-0.2 &middot; web loader + ESP-NOW + home WiFi</div>
+      <div class="device-desc"><b>The Super Mini, now with a built-in web page.</b> Plug it into the Gotek and load Amiga disks straight from your phone's browser &mdash; drag an <b>.adf</b> onto the page and it's in the drive: no SD card, no app. <b>Two modes, flipped from the page:</b> its own access point (<b>GotekOMEGA</b> &rarr; <b>192.168.4.1</b>) running ESP-NOW so a GTi touchscreen drives it exactly like the classic dongle, or <b>your home WiFi</b> (then reach it at <b>gotek.local</b> from any browser on the network). <b>Security is opt-in</b> &mdash; it ships open so it just works, and you lock it to your GTi from the touchscreen's <b>Manage Dongles</b> screen (no BOOT-button dance), with an optional web-page password on top. Keeps the full <b>save-writeback + owner-lock</b> protocol, so JC / 7&Prime; GTis work with it exactly as before. DD (~880&nbsp;KB) images, one disk at a time. Needs an ESP32-S3 Super Mini with PSRAM.</div>
       <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-dongle">USB Dongle</span></div>
     </div>
 
@@ -1150,7 +1158,7 @@ relayout();bootCracktro();requestAnimationFrame(frame);
     'firmware/supermini/manifest.json':  { name: 'Super Mini Dongle', version: 'Firmware v3.2.0' },
     'firmware/xiao/manifest.json':       { name: 'XIAO Dongle',   version: 'Firmware v3.2.0' },
     'firmware/cyd/manifest.json':        { name: 'CYD',           version: 'Firmware v3.9.0' },
-    'firmware/supermini-beta/manifest.json': { name: 'Super Mini Dongle BETA', version: 'Firmware v3.5.2-beta (save protocol · owner-lock pairing)' },
+    'firmware/supermini-beta/manifest.json': { name: 'Super Mini Dongle — Webby BETA', version: 'Webby-0.2 (web loader · ESP-NOW · home WiFi · lock)' },
     'firmware/xiao-beta/manifest.json':      { name: 'XIAO Dongle BETA',      version: 'Firmware v3.5.0-beta (untested)' },
   };
 
