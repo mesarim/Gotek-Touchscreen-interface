@@ -133,6 +133,47 @@ struct PsramAlloc {
 // unchanged — only the declarations needed touching.
 using DAVEntryList = std::vector<DAVFileEntry, PsramAlloc<DAVFileEntry>>;
 
+// Consume a chunked response's trailer section: whatever follows the
+// terminal 0-length chunk, up to and including its final blank line — for
+// every server we meet that is exactly "\r\n". Leave those two bytes behind
+// and the POOLED socket poisons the next request: its header parser reads a
+// blank line first, never sees a status, and downloadFile once wrote raw
+// HTTP headers into an NFO on the card before anyone noticed (the panel
+// displayed 'HTTP/1.1 200 OK' as the game's description).
+static void davDrainChunkTrailer(WiFiClient *tcp) {
+  const uint32_t deadline = millis() + 300;
+  String line;
+  while (millis() < deadline) {
+    if (!tcp->available()) {
+      if (!tcp->connected()) return;
+      delay(1);
+      continue;
+    }
+    const char c = (char)tcp->read();
+    if (c == '\n') {
+      String t = line;
+      t.trim();
+      if (t.length() == 0) return;   // the blank line ends the trailers
+      line = "";
+    } else {
+      line += c;
+    }
+  }
+}
+
+// Between chunks: the CRLF after a chunk body. Waiting briefly matters — the
+// old "take it only if it already arrived" left these bytes behind whenever
+// the network was a millisecond slow, with the same pool-poisoning result.
+static void davDrainChunkCrlf(WiFiClient *tcp) {
+  int need = 2;
+  const uint32_t deadline = millis() + 200;
+  while (need > 0 && millis() < deadline) {
+    if (tcp->available()) { tcp->read(); need--; }
+    else if (!tcp->connected()) return;
+    else delay(1);
+  }
+}
+
 // Full radio for the duration of one network operation.
 //
 // The firmware runs WIFI_PS_MAX_MODEM at rest, deliberately: the radio sleeps
@@ -417,7 +458,28 @@ public:
 
     long contentLength = -1;
     bool chunked = false;
-    _readHTTPHeaders(tcp, contentLength, chunked);
+    for (int attempt = 0; ; attempt++) {
+      _readHTTPHeaders(tcp, contentLength, chunked);
+      // Same rule as every other path: a reused socket that answers nothing
+      // (status 0) or a proxy 408 means the POOL went stale, not the server.
+      // This function skipping that rule is how raw HTTP headers ended up
+      // inside an NFO file on the card: status 0 sailed past the >=400 check.
+      if (attempt > 0 || !reused || (_httpStatus != 0 && _httpStatus != 408)) break;
+      _log("DAV: pooled connection was stale, retrying download on a fresh one");
+      _dropPool();
+      tcp = _acquire(true, 30000, reused);
+      if (!tcp) { _lastError = "Reconnect failed"; return -1; }
+      tcp->println("GET " + encodedPath + " HTTP/1.1");
+      tcp->println("Host: " + _cfg.host);
+      tcp->println("Authorization: Basic " + auth);
+      tcp->println("Connection: keep-alive");
+      tcp->println();
+    }
+    if (_httpStatus == 0) {
+      _lastError = "No HTTP response";
+      _release(tcp, false);
+      return -1;
+    }
     if (_httpStatus >= 400) {
       _lastError = "HTTP " + String(_httpStatus);
       _release(tcp, false);   // error path: never reuse
@@ -826,7 +888,11 @@ private:
         if (sizeLine.length() == 0) { timeout = millis(); continue; }
         chunkRemaining = strtol(sizeLine.c_str(), nullptr, 16);
         timeout = millis();
-        if (chunkRemaining <= 0) { complete = true; break; }   // terminal chunk
+        if (chunkRemaining <= 0) {                              // terminal chunk
+          davDrainChunkTrailer(tcp);
+          complete = true;
+          break;
+        }
       }
 
       // ---- how much may we take right now -------------------------------
@@ -856,11 +922,7 @@ private:
 
       if (chunked) {
         chunkRemaining -= got;
-        if (chunkRemaining == 0) {
-          // Consume the CRLF terminating the chunk body.
-          if (tcp->available()) tcp->read();
-          if (tcp->available()) tcp->read();
-        }
+        if (chunkRemaining == 0) davDrainChunkCrlf(tcp);
       }
 
       // Deliver. Once full we keep reading (above) but stop handing over,
@@ -1125,7 +1187,10 @@ private:
               sizeLine.trim();
               if (sizeLine.length() > 0) {
                 chunkRemaining = strtol(sizeLine.c_str(), nullptr, 16);
-                if (chunkRemaining <= 0) eof = true;   // terminal chunk
+                if (chunkRemaining <= 0) {             // terminal chunk
+                  davDrainChunkTrailer(tcp);
+                  eof = true;
+                }
                 timeout = millis();
               }
               canRead = false;   // re-evaluate framing on the next pass
@@ -1152,11 +1217,7 @@ private:
               totalBytes += got;
               if (chunked) {
                 chunkRemaining -= got;
-                if (chunkRemaining == 0) {
-                  // Consume the CRLF that terminates the chunk body.
-                  if (tcp->available()) tcp->read();
-                  if (tcp->available()) tcp->read();
-                }
+                if (chunkRemaining == 0) davDrainChunkCrlf(tcp);
               }
               timeout = millis();
               _fireProgress(totalBytes, contentLength > 0 ? (size_t)contentLength : 0);
