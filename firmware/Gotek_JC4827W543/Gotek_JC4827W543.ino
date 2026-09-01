@@ -6,6 +6,10 @@
 #include <Arduino.h>
 #include "USB.h"
 #include "USBMSC.h"
+// Merge step 1: the shared WebDAV client (see firmware/shared/README.md).
+// Self-contained — WiFi.h/WiFiClientSecure only; settings arrive through
+// DavConfig via configure(), logging through a callback. Nothing global.
+#include "../shared/webdav_client.h"
 #include <FS.h>
 #include <SD_MMC.h>
 #include "driver/spi_master.h"
@@ -814,6 +818,10 @@ static int g_car_bootmode=0;  // CONFIG.TXT CAROUSEL= : default boot VIEW — 0/
 // ── 5.8.6: home-WiFi dongle transport (LINK=HOMEWIFI) — route the FLING via the home router to a Webby dongle's gotek.local, instead of hopping to the dongle's own AP ──
 static bool   g_link_home=false;                                    // LINK: false=ESP-NOW/AP (default), true=HOME WIFI
 static String g_home_ssid="", g_home_pass="", g_dongle_home_ip="";  // HOME_SSID / HOME_PASS (set in CONFIG.TXT) + cached DONGLE_HOME_IP
+static String g_dav_host="",g_dav_user="",g_dav_pass="",g_dav_path="/";static int g_dav_port=443;static bool g_dav_https=true,g_dav_on=false;   // DAV_* in CONFIG.TXT (merge step 1)
+static String g_dav_test="";   // DAV_TEST= : smoke test — fetch this remote path once at boot. Proves the wiring without UI; remove the key (or the hook) once real UI exists.
+static void davLogSerial(const String&m){Serial.println(m);}
+static void davApplyConfig(){DavConfig c;c.host=g_dav_host;c.port=(uint16_t)g_dav_port;c.https=g_dav_https;c.user=g_dav_user;c.pass=g_dav_pass;c.basePath=g_dav_path;c.enabled=g_dav_on;davClient.configure(c,davLogSerial);}
 // ── Item 4: load/eject behaviour toggles (all default OFF = safest) ──
 static bool g_tapload=false;    // ON = tapping the already-selected row loads it (old double-tap behaviour)
 static bool g_hotswap=false;    // ON = tapping another disk while loaded swaps to it instantly
@@ -1319,10 +1327,19 @@ static void loadConfig(){
     else if(k=="CATEGORIES"){String cv=v;cv.toUpperCase();g_categories=(cv=="ON"||cv=="1"||cv=="TRUE");}
     else if(k=="NESTING"){String nv=v;nv.toUpperCase();g_nesting=(nv=="ON"||nv=="1"||nv=="TRUE");}
     else if(k=="LINK"){String lv=v;lv.toUpperCase();g_link_home=(lv=="HOMEWIFI"||lv=="HOME"||lv=="WIFI");}
-    else if(k=="HOME_SSID"){g_home_ssid=v;}
-    else if(k=="HOME_PASS"){g_home_pass=v;}
+    else if(k=="HOME_SSID"||k=="WIFI_CLIENT_SSID"){if(v.length())g_home_ssid=v;}   // WIFI_CLIENT_SSID: the OMEGAWARE tree stores the same credential under this name; empty never erases a value another key already set
+    else if(k=="HOME_PASS"||k=="WIFI_CLIENT_PASS"){if(v.length())g_home_pass=v;}
+    else if(k=="DAV"||k=="DAV_ENABLED"){String dv=v;dv.toUpperCase();g_dav_on=(dv=="ON"||dv=="1");}   // DAV_ENABLED: the OMEGAWARE tree writes this name for the same switch — cards travel between firmwares, so accept both
+    else if(k=="DAV_HOST"){g_dav_host=v;}
+    else if(k=="DAV_PORT"){int p=v.toInt();g_dav_port=(p>0&&p<65536)?p:443;}
+    else if(k=="DAV_USER"){g_dav_user=v;}
+    else if(k=="DAV_PASS"){g_dav_pass=v;}
+    else if(k=="DAV_PATH"){g_dav_path=v;}
+    else if(k=="DAV_HTTPS"){String hv=v;hv.toUpperCase();g_dav_https=!(hv=="OFF"||hv=="0");}
+    else if(k=="DAV_TEST"){g_dav_test=v;}
     else if(k=="DONGLE_HOME_IP"){g_dongle_home_ip=v;}}
   f.close();
+  davApplyConfig();   // hand the DAV_* settings to the shared client (merge step 1)
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2797,6 +2814,47 @@ static bool doLoadSelected(const String&adfPath){
   drawStatusBar();drawListAndCover();gfx_flush();return true;
 }
 
+// ── WebDAV fetch into the RAM disk (merge step 1) ─────────────────────────
+// Minimal wiring, no UI: call it from wherever the menu decides. Joins
+// HOME_SSID, streams the remote file straight into the RAM disk's data
+// region, builds the FAT metadata around the bytes, attaches. Refuses while
+// the wireless dongle link is up — fetch-over-WiFi next to ESP-NOW is the
+// radio-coexistence question deliberately parked for a later step.
+static String g_dav_fail="";   // why the last doLoadWebdav gave up, for on-screen reporting
+static bool doLoadWebdav(const String&remotePath,const String&showName){
+  if(!g_dav_on||g_dav_host.length()==0){g_dav_fail="not configured (DAV=ON + DAV_HOST=)";Serial.println("[DAV] "+g_dav_fail);return false;}
+  if(g_espnow_started){g_dav_fail="wireless dongle link active";Serial.println("[DAV] "+g_dav_fail);return false;}
+  if(g_home_ssid.length()==0){g_dav_fail="HOME_SSID not set";Serial.println("[DAV] "+g_dav_fail);return false;}
+  Serial.printf("[DAV] joining '%s'\n",g_home_ssid.c_str());
+  WiFi.mode(WIFI_STA);WiFi.persistent(false);WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false,true);delay(200);
+  WiFi.begin(g_home_ssid.c_str(),g_home_pass.c_str());
+  uint32_t t0=millis();while(WiFi.status()!=WL_CONNECTED&&millis()-t0<15000)delay(200);
+  if(WiFi.status()!=WL_CONNECTED){g_dav_fail="WiFi join failed";Serial.println("[DAV] "+g_dav_fail);WiFi.disconnect();WiFi.mode(WIFI_OFF);return false;}
+  davApplyConfig();
+  if(g_loaded&&!g_forceswap)hardDetach();
+  long got=davClient.streamToBuffer(remotePath,g_disk+DATA_LBA*512,MAX_FILE_BYTES,false);
+  davClient.closeIdle();                          // the pooled TLS context is ~50KB of internal heap
+  WiFi.disconnect();delay(100);WiFi.mode(WIFI_OFF);   // same leave discipline as espnowSendDiskHome
+  if(got<=0||davClient.lastTruncated()){
+    g_dav_fail=davClient.lastError();
+    Serial.printf("[DAV] fetch failed: %s\n",davClient.lastError().c_str());
+    if(g_loaded)hardAttach();                     // put the previous disk back
+    return false;
+  }
+  // build_volume() would memset the data region we just filled — build the
+  // metadata around the bytes instead: the same three calls minus the wipe.
+  memset(g_disk,0,DATA_LBA*512);
+  build_boot_sector(g_disk);
+  build_fat(g_disk+RESERVED_SECTORS*512,(uint32_t)got);
+  String outn=(g_mode==MODE_GEN)?showName:String(getOutputFilename());
+  build_root(g_disk+(RESERVED_SECTORS+SECTORS_PER_FAT)*512,outn.c_str(),(uint32_t)got);
+  g_sv_img_size=0;svDirtyReset();                 // no SD path to write saves back to — tracking off for now
+  hardAttach();g_loaded=true;g_loaded_name=showName;g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
+  Serial.printf("[DAV] mounted %s (%ld bytes)\n",showName.c_str(),got);
+  return true;
+}
+
 static void doUnload(){
   // v4.8.0: EJECT is a save point — drain before the disk goes away
   // (v4.8.1: own-disk flush in any mode)
@@ -3846,6 +3904,22 @@ void setup(){
   bool bootCar=(g_car_bootmode==1)||(g_car_bootmode==2&&readLastView()==1);   // v4.8.6: CAROUSEL= 0=list / 1=reel / LAST=restore
   if(bootCar&&!g_games.empty())carEnter();else{drawFullUI();gfx_flush();}
   esp_ota_mark_app_valid_cancel_rollback();   // v5.3: confirm this image booted OK (satisfies the A/B rollback handshake; harmless no-op on non-rollback bootloaders)
+  // Merge step 1 smoke test: DAV_TEST=<remote path> in CONFIG.TXT fetches that
+  // file over WebDAV right after boot and mounts it — the whole shared-client
+  // wiring, visible on a Gotek, with zero UI. Skipped in wireless mode (the
+  // coexistence question parked for a later step) and when unset.
+  if(g_dav_test.length()&&!g_espnow_started){
+    String tn=g_dav_test;int ls=tn.lastIndexOf('/');if(ls>=0)tn=tn.substring(ls+1);
+    gfx_setTextSize(1);gfx_setTextColor(TFT_CYAN,TFT_BLACK);gfx_setCursor(8,300);gfx_print("DAV_TEST: "+tn);gfx_flush();
+    // Failure must be readable on the PANEL: the serial port is plugged into
+    // the Gotek, so a Serial-only message is a message to nobody.
+    if(doLoadWebdav(g_dav_test,tn)){
+      gfx_setTextColor(TFT_GREEN,TFT_BLACK);gfx_setCursor(8,312);gfx_print("DAV_TEST: mounted OK");gfx_flush();delay(1500);
+    }else{
+      gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,312);gfx_print("DAV_TEST failed: "+g_dav_fail);gfx_flush();delay(4000);
+    }
+    drawFullUI();gfx_flush();
+  }
   g_last_touch_ms=millis();
 }
 
