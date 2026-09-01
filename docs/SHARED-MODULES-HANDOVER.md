@@ -174,5 +174,35 @@ success/failure verdict → firmware joins your WiFi → `http://gotek.local`
 serves the interface. Every later firmware goes on via the page's Firmware
 card; the cable retires after this one flash.
 
+## Feature inventory: what this tree has and the web surface could carry
+
+Requested by Dimitri: a catalogue of mesarim-tree features OMEGAWARE never
+had, with where each stands on the shared web UI.
+
+| Feature | State on the web surface |
+|---|---|
+| Panel behaviour options (carousel, screensaver+modes, language, font, rotation, compact, button style, tap/hot/force-swap, categories, nesting, cracktro) | **Exposed now** — "Panel Options" section on the Config page, persisted via saveConfigKey, applied at next boot, with a Reboot button |
+| HIVEMIND + CAP (FLING fan-out to every paired dongle) | **Exposed now** as the two config keys; the *act* of flinging is not |
+| Wireless dongle fleet: pairing, per-dongle friendly names, FLING to one/all, LINK=HOMEWIFI routing, wireless save writeback | **Not exposed — candidate endpoints.** A "Dongles" card (list paired MuCa dongles via the enumerator, name them, fling the current disk to one/all) is the most user-visible thing the web UI could gain next. Needs the ESP-NOW coexistence question answered first, since the web server holds STA. |
+| OTA-from-SD (doFirmwareUpdate) | Untouched; complements the web OTA for offline use |
+| SD-access boot (card served to a PC over USB) | Untouched; a web button to reboot into it would be trivial *and* is a footgun (it never returns) — review call |
+| Amiga Test Kit diagnostic ADF | Untouched; a one-tap "load diagnostics" web button is cheap if wanted |
+| Favourites + play statistics | Not exposed; belongs to the library-surface conversation |
+| GEN mode (generic/any-machine library) | Mode is reported read-only in system info; switching modes over the web belongs to the library surface |
+
+The dividing line used: **settings that already live in CONFIG.TXT are
+exposed as settings; actions and library semantics wait for the surface
+review.** Config keys are already this tree's public interface — mirroring
+them over the web invents nothing.
+
+## Config page mechanics (changed with the Panel Options work)
+
+The Config page now hides every section whose probe keys are absent from
+`/api/config`, and disables the hidden fields so Save never posts empty
+values into settings a device never showed. Consequence: **GET /api/config IS
+the config UI.** A device adds a section by answering with its keys — nobody
+edits the page per device. This tree's GET deliberately answers with client
+WiFi + DAV + the panel options above, nothing borrowed.
+
 — written 2026-09-01; the commit messages on both branches carry the longer
 versions of every story above.

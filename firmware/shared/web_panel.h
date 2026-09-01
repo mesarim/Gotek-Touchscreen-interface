@@ -302,12 +302,43 @@ static void wpHandleClient(WiFiClient &client) {
         g_dav_on = (wpPairValue(bodyStr, "DAV_ENABLED") == "1");
         saveConfigKey("DAV", g_dav_on ? "ON" : "OFF");
       }
+      // Client-WiFi credentials persist under this tree's canonical names.
+      // Applied at the next boot: swapping the network out from under the
+      // request that carries the change would answer nobody.
+      if (bodyStr.indexOf("WIFI_CLIENT_SSID=") >= 0) {
+        const String v = wpPairValue(bodyStr, "WIFI_CLIENT_SSID");
+        if (v.length()) { g_home_ssid = v; saveConfigKey("HOME_SSID", v); }
+      }
+      if (bodyStr.indexOf("WIFI_CLIENT_PASS=") >= 0) {
+        const String v = wpPairValue(bodyStr, "WIFI_CLIENT_PASS");
+        if (v.length()) { g_home_pass = v; saveConfigKey("HOME_PASS", v); }
+      }
+      // The panel's own options: persisted verbatim through saveConfigKey
+      // (update-in-place-or-append), picked up by loadConfig at the next
+      // boot. The page says so and offers the reboot button.
+      static const char *passThrough[] = {
+        "CAROUSEL", "SCREENSAVER", "SSMODE", "SSTIME", "SSFAV", "LANG",
+        "FONT", "ROTATE", "COMPACT", "BTNSTYLE", "TAPLOAD", "HOTSWAP",
+        "FORCESWAP", "CATEGORIES", "NESTING", "HIVEMIND", "CAP",
+        "CRACKTRO", "LOOP"
+      };
+      for (auto k : passThrough) {
+        if (bodyStr.indexOf(String(k) + "=") >= 0) {
+          const String v = wpPairValue(bodyStr, k);
+          if (v.length()) saveConfigKey(k, v);
+        }
+      }
       davApplyConfig();
       wpSendJson(client, 200, "{\"status\":\"ok\"}");
     } else {
-      String j = "{\"THEME\":\"GTI\",\"DISPLAY\":\"" + String(FW_VERSION) + "\",";
+      // Exactly the keys this firmware supports, nothing borrowed: the page
+      // hides every config section whose probe keys are absent, so this list
+      // IS the config UI. No THEME/SAVES/AP keys — those sections belong to
+      // the OMEGAWARE boards until their surface is pinned.
+      String j = "{";
       j += "\"WIFI_CLIENT_ENABLED\":\"1\",";
       j += "\"WIFI_CLIENT_SSID\":\"" + wpJsonEscape(g_home_ssid) + "\",";
+      j += "\"WIFI_CLIENT_PASS\":\"" + wpJsonEscape(g_home_pass) + "\",";
       j += "\"DAV_ENABLED\":\"" + String(g_dav_on ? "1" : "0") + "\",";
       j += "\"DAV_HOST\":\"" + wpJsonEscape(g_dav_host) + "\",";
       j += "\"DAV_PORT\":\"" + String(g_dav_port) + "\",";
@@ -315,7 +346,28 @@ static void wpHandleClient(WiFiClient &client) {
       j += "\"DAV_USER\":\"" + wpJsonEscape(g_dav_user) + "\",";
       j += "\"DAV_PASS\":\"" + wpJsonEscape(g_dav_pass) + "\",";
       j += "\"DAV_PATH\":\"" + wpJsonEscape(g_dav_path) + "\",";
-      j += "\"LOG_ENABLED\":\"0\",\"SAVES\":\"OFF\"}";
+      // The panel's own CONFIG.TXT options, read back from the live globals
+      // so the page shows what is actually in effect.
+      j += "\"CAROUSEL\":\"" + String(g_car_bootmode == 2 ? "LAST" : g_car_bootmode == 1 ? "ON" : "OFF") + "\",";
+      j += "\"SCREENSAVER\":\"" + String(g_ss_enabled ? "ON" : "OFF") + "\",";
+      j += "\"SSMODE\":\"" + String(g_ss_matrix ? "MATRIX" : g_ss_slides ? "SLIDES" : "BOUNCE") + "\",";
+      j += "\"SSTIME\":\"" + String((uint32_t)(g_ss_time_ms / 1000UL)) + "\",";
+      j += "\"SSFAV\":\"" + String(g_ss_fav ? "ON" : "OFF") + "\",";
+      j += "\"LANG\":\"" + String(LANG_NAMES[g_lang]) + "\",";
+      j += "\"FONT\":\"" + String(g_font == 0 ? "SMALL" : g_font == 2 ? "LARGE" : "NORMAL") + "\",";
+      j += "\"ROTATE\":\"" + String(g_rot * 90) + "\",";
+      j += "\"COMPACT\":\"" + String(g_compact ? "ON" : "OFF") + "\",";
+      j += "\"BTNSTYLE\":\"" + String(g_btn_pill ? "PILL" : "FLAT") + "\",";
+      j += "\"TAPLOAD\":\"" + String(g_tapload ? "ON" : "OFF") + "\",";
+      j += "\"HOTSWAP\":\"" + String(g_hotswap ? "ON" : "OFF") + "\",";
+      j += "\"FORCESWAP\":\"" + String(g_forceswap ? "ON" : "OFF") + "\",";
+      j += "\"CATEGORIES\":\"" + String(g_categories ? "ON" : "OFF") + "\",";
+      j += "\"NESTING\":\"" + String(g_nesting ? "ON" : "OFF") + "\",";
+      j += "\"HIVEMIND\":\"" + String(g_hivemind ? "ON" : "OFF") + "\",";
+      j += "\"CAP\":\"" + String(g_dongle_cap) + "\",";
+      j += "\"CRACKTRO\":\"" + String(g_cracktro) + "\",";
+      j += "\"LOOP\":\"" + String(g_loop_cracktro ? "1" : "0") + "\"";
+      j += "}";
       wpSendJson(client, 200, j);
     }
   }
@@ -340,6 +392,12 @@ static void wpHandleClient(WiFiClient &client) {
     doUnload();
     g_webDavLoaded = "";
     wpSendJson(client, 200, "{\"status\":\"ok\"}");
+  }
+  else if (method == "POST" && path == "/api/system/reboot") {
+    // Most panel options apply at boot; this makes "save, reboot" one page.
+    wpSendJson(client, 200, "{\"status\":\"ok\"}");
+    client.flush(); delay(250); client.stop(); delay(250);
+    ESP.restart();
   }
   else if (method == "POST" && path == "/api/system/ota") {
     if (boundary.length() == 0) {
