@@ -95,7 +95,13 @@ changed = old server).
    the inactive slot of this tree's own `partitions.csv` (which already has
    two 6.9 MB slots — BUILDING.md's "Huge APP No OTA" note predates it).
 
-7. **Errors must reach the panel screen, not only Serial.** The serial port
+7. **Build with USB CDC OFF (CDCOnBoot=default).** FlashFloppy on some units
+   refuses CDC+MSC composite devices while every PC accepts them — proven by
+   single-variable tests on two board types after a day of 'the Gotek does
+   not see it'. BUILDING.md said it first; now it has the war story
+   (issue #21).
+
+8. **Errors must reach the panel screen, not only Serial.** The serial port
    is plugged into a Gotek; a Serial-only error is a message to nobody. See
    `g_dav_fail` and the DAV_TEST result lines.
 
