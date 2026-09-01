@@ -305,10 +305,15 @@ public:
     // Read just the headers — the document itself is consumed by the
     // streaming parser below, which never materialises it in RAM.
     _readHTTPHeaders(tcp, contentLength, chunked);
-    // A pooled socket the server had already closed answers nothing at all.
-    // That is the one failure worth retrying, and only once.
-    if (_httpStatus != 0 || attempt > 0 || !reused) break;
-    _log("DAV: pooled connection was stale, retrying on a fresh one");
+    // A pooled socket the server had already closed answers nothing at all —
+    // or, behind a proxy, answers HTTP 408 ("you were too slow": the request
+    // landed on a socket the proxy was already tearing down; Dimmy's HAProxy
+    // does exactly this, intermittently, and Refresh always worked because the
+    // second attempt got a fresh socket). Both mean the POOL went stale, not
+    // the server. Retry once, fresh.
+    if (attempt > 0 || !reused || (_httpStatus != 0 && _httpStatus != 408)) break;
+    _log(_httpStatus == 408 ? "DAV: pooled connection answered 408, retrying on a fresh one"
+                            : "DAV: pooled connection was stale, retrying on a fresh one");
     _dropPool();
     tcp = _acquire(true, 15000, reused);
     if (!tcp) { _lastError = "Reconnect failed"; return false; }
@@ -495,10 +500,15 @@ public:
     tcp->println();
 
     _readHTTPHeaders(tcp, contentLength, chunked);
-    // A pooled socket the server had already closed answers nothing at all.
-    // That is the one failure worth retrying, and only once.
-    if (_httpStatus != 0 || attempt > 0 || !reused) break;
-    _log("DAV: pooled connection was stale, retrying on a fresh one");
+    // A pooled socket the server had already closed answers nothing at all —
+    // or, behind a proxy, answers HTTP 408 ("you were too slow": the request
+    // landed on a socket the proxy was already tearing down; Dimmy's HAProxy
+    // does exactly this, intermittently, and Refresh always worked because the
+    // second attempt got a fresh socket). Both mean the POOL went stale, not
+    // the server. Retry once, fresh.
+    if (attempt > 0 || !reused || (_httpStatus != 0 && _httpStatus != 408)) break;
+    _log(_httpStatus == 408 ? "DAV: pooled connection answered 408, retrying on a fresh one"
+                            : "DAV: pooled connection was stale, retrying on a fresh one");
     _dropPool();
     tcp = _acquire(true, 30000, reused);
     if (!tcp) { _lastError = "Reconnect failed"; return -1; }
