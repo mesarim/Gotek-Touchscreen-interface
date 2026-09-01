@@ -3183,6 +3183,7 @@ static void runSlideshow(std::vector<String>&pool){
   gfx_flush();
   if(ssSlideHold(g_ss_time_ms)){ ssSlideFree(); return; }
   while(true){
+    webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
     if(pool.size()<=1){ if(ssSlideHold(g_ss_time_ms))break; else continue; }
     int ni=(idx+1)%(int)pool.size();
     if(dbl){
@@ -3215,6 +3216,7 @@ static void runMatrixRain(){
   gfx_fillScreen(TFT_BLACK); gfx_flush();
   uint32_t last=millis(), seed=1;
   while(true){
+    webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
     if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
     uint32_t nf=millis();
     if(nf-last>=60){ last=nf; seed++;
@@ -3289,6 +3291,7 @@ static void runScreensaver(){                                // blocking bounce 
   gfx_fillScreen(TFT_BLACK);
   uint32_t last=millis();
   while(true){
+    webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
     if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
     uint32_t nf=millis();
     if(nf-last>=33){ last=nf;
