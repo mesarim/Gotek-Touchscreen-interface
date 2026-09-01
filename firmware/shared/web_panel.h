@@ -25,6 +25,12 @@
 // them and nothing else defines them. Requires WEBUI=ON in CONFIG.TXT and
 // HOME_SSID/HOME_PASS (or their OMEGAWARE aliases) to join.
 
+// Bumped on every change to this file or the embedded page, and appended to
+// the reported firmware string — so a device always tells you WHICH build of
+// the web layer it runs. Flashing identical version numbers taught us that a
+// number nobody increments is a number nobody can verify.
+#define GTI_WEB_REV "r3"
+
 #include <Update.h>
 #include <ESPmDNS.h>
 #include "multipart_scan.h"
@@ -250,7 +256,7 @@ static void wpHandleClient(WiFiClient &client) {
     // SD library and theme surfaces, whose exact endpoint shape (categories,
     // favourites, covers) is the review conversation — not a guess to bake in.
     String j = "{";
-    j += "\"firmware\":\"" + String(FW_VERSION) + "\",";
+    j += "\"firmware\":\"" + String(FW_VERSION) + " (gti-web " GTI_WEB_REV ")\",";
     j += "\"heap_free\":" + String((uint32_t)ESP.getFreeHeap()) + ",";
     j += "\"psram_free\":" + String((uint32_t)ESP.getFreePsram()) + ",";
     j += "\"sd_used_mb\":0,\"sd_total_mb\":0,";
