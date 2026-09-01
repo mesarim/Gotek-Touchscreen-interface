@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.0-JC3248"
+#define FW_VERSION "5.8.9-JC3248"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -944,7 +944,6 @@ static String gameCachePath(){return g_mode==MODE_ADF?"/ADF/.gamecache":g_mode==
 
 static void writeGameCache(){
   File f=SD_MMC.open(gameCachePath().c_str(),FILE_WRITE);if(!f)return;
-  f.println("#V=590");                            // 5.9.0: bump invalidates pre-shard caches -> one clean rebuild into the bucketed .thumbs
   f.println("#FILES="+String(g_files.size()));  // bind to the index this was built from
   for(auto&g:g_games){
     f.print(g.name);f.print("|");f.print(g.first_file_idx);f.print("|");
@@ -959,10 +958,9 @@ static bool readGameCache(){
   g_games.clear();g_games.reserve(g_files.size());
   File f=SD_MMC.open(gameCachePath().c_str(),FILE_READ);
   if(!f){return false;}
-  long declaredFiles=-1; int cacheVer=-1;
+  long declaredFiles=-1;
   while(f.available()){
     String line=f.readStringUntil('\n');line.trim();if(!line.length())continue;
-    if(line.startsWith("#V=")){cacheVer=line.substring(3).toInt();continue;}
     if(line.startsWith("#FILES=")){declaredFiles=line.substring(7).toInt();continue;}
     int p1=line.indexOf('|');if(p1<0)continue;
     int p2=line.indexOf('|',p1+1);if(p2<0)continue;
@@ -979,8 +977,6 @@ static bool readGameCache(){
     if(e.first_file_idx>=0&&e.first_file_idx<(int)g_files.size()) g_games.push_back(e);
   }
   f.close();
-  // 5.9.0: a cache without the current version marker predates the sharded .thumbs — force one rebuild
-  if(cacheVer!=590){g_games.clear();return false;}
   // If the game cache was built from a different-sized index, it's stale — force rebuild
   if(declaredFiles>=0&&declaredFiles!=(long)g_files.size()){g_games.clear();return false;}
   return!g_games.empty();
@@ -2102,9 +2098,9 @@ static int g_car_ins_x=0,g_car_ins_y=0,g_car_ins_w=0,g_car_ins_h=0;   // INSERT 
 static int g_car_disk_n=0,g_car_disk_x=0,g_car_disk_y=0,g_car_disk_bw=0,g_car_disk_h=0;   // v5.7.x: reel multi-disk button row rect
 static void runScreensaver();   // defined below; the reel's idle tick can summon it
 #define CAR_TILE  150                            // decoded cover tile size (px)
-#define CAR_SLOTS 48                             // 5.9.0: LRU tile cache entries (PSRAM ~2.1 MB) — was 16; more cache = less re-reading when you scroll back. Dial down if PSRAM gets tight.
-static uint16_t* car_buf[CAR_SLOTS]={0};         // NULL gates every read of car_game below, so the zero-init is safe at any CAR_SLOTS
-static int      car_game[CAR_SLOTS]={0};         // set to -1 the instant a slot buffer is first allocated (see carTile)
+#define CAR_SLOTS 16                             // LRU tile cache entries (PSRAM, ~720 KB)
+static uint16_t* car_buf[CAR_SLOTS]={0};
+static int      car_game[CAR_SLOTS]={-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
 static uint32_t car_stamp[CAR_SLOTS]={0};
 static uint32_t car_tick_ctr=0;
 #define CAR_BENCH 0
@@ -2159,17 +2155,18 @@ static String carThumbPath(int gi){
   const String&p=g_files[g.first_file_idx];
   uint32_t h=5381; for(unsigned i=0;i<p.length();i++)h=((h<<5)+h)^(uint8_t)p[i];   // djb2-xor
   char hx[6]; snprintf(hx,sizeof(hx),"%04X",(unsigned)(h&0xFFFF));
-  char bkt[2]={hx[0],0};                                                            // 5.9.0: shard by first hex nibble -> ~n/16 files per dir
-  return carThumbRoot(gi)+"/"+bkt+"/"+getGameBaseName(p)+"_"+hx+".tnl";
+  return carThumbRoot(gi)+"/"+getGameBaseName(p)+"_"+hx+".tnl";
 }
 static bool carLoadThumb(int gi,uint16_t*dst){
   auto&g=g_games[gi];
   if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return false;
-  // 5.9.0: open+read only. The two stat() calls each linearly walked the .thumbs
-  // dir (FAT has no index) — the real "slow with many files" cost. Staleness is
-  // re-checked at build time (buildThumbs `need`); a short/corrupt tile still fails
-  // via got!=want below and self-heals through carDecodeTile.
-  File f=SD_MMC.open(carThumbPath(gi).c_str(),"r");if(!f)return false;
+  String tp=carThumbPath(gi);
+  struct stat stT,stJ;
+  String vT="/sdcard"+tp,vJ="/sdcard"+g.jpg_path;
+  if(stat(vT.c_str(),&stT)!=0)return false;
+  if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))return false;
+  if(stat(vJ.c_str(),&stJ)==0&&stJ.st_mtime>stT.st_mtime)return false;   // cover replaced -> stale
+  File f=SD_MMC.open(tp.c_str(),"r");if(!f)return false;
   size_t want=(size_t)CAR_TILE*CAR_TILE*2;
   size_t got=f.read((uint8_t*)dst,want);f.close();
   return got==want;
@@ -2179,10 +2176,7 @@ static void carSaveThumb(int gi,uint16_t*src){
   if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return;
   String root=carThumbRoot(gi);
   if(!SD_MMC.exists(root.c_str()))SD_MMC.mkdir(root.c_str());
-  String tp=carThumbPath(gi);
-  int sl=tp.lastIndexOf('/'); String dir=tp.substring(0,sl);          // 5.9.0: ensure the shard bucket (.thumbs/<nibble>) exists
-  if(!SD_MMC.exists(dir.c_str()))SD_MMC.mkdir(dir.c_str());
-  File f=SD_MMC.open(tp.c_str(),FILE_WRITE);if(!f)return;
+  File f=SD_MMC.open(carThumbPath(gi).c_str(),FILE_WRITE);if(!f)return;
   f.write((uint8_t*)src,(size_t)CAR_TILE*CAR_TILE*2);f.close();
 }
 // Fetch a game's tile (NULL if uncached and decoding isn't allowed right now).
@@ -2206,12 +2200,10 @@ static uint16_t* carTile(int gi,bool mayDecode){
 // (Michael's call: one predictable pass with a progress bar, never live jank).
 // Fresh thumbs are stat-checked and skipped, so a re-run over a built card is
 // seconds, not minutes. v4.8.5: carousel is first-class, so thumbs always build.
-static void carMicroInit(); static void carMicroFromTile(int gi,const uint16_t*tile); static void carMicroSave();  // 5.9.0 fwd-decls (definitions below)
 static void buildThumbs(){
   int n=(int)g_games.size(); if(!n)return;
   uint16_t*tmp=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2);
   if(!tmp)return;
-  carMicroInit();                          // 5.9.0: build the resident micro-thumb set in-line with the thumb pass
   uint32_t lastDraw=0;
   for(int i=0;i<n;i++){
     auto&g=g_games[i];
@@ -2224,10 +2216,7 @@ static void buildThumbs(){
       else if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))need=true;
       else if(stat(vJ.c_str(),&stJ)==0&&stJ.st_mtime>stT.st_mtime)need=true;
     }
-    bool haveTile=false;                                     // 5.9.0: seed the micro-thumb in the SAME pass (no second 45 MB re-read)
-    if(need){ if(carDecodeTile(i,tmp)){carSaveThumb(i,tmp);haveTile=true;} }
-    else     { haveTile=carLoadThumb(i,tmp); }
-    if(haveTile)carMicroFromTile(i,tmp);
+    if(need&&carDecodeTile(i,tmp))carSaveThumb(i,tmp);
     uint32_t nowMs=millis();
     if(nowMs-lastDraw>100||i==n-1){
       lastDraw=nowMs;
@@ -2247,7 +2236,6 @@ static void buildThumbs(){
     if((i&7)==0)yield();
   }
   free(tmp);
-  carMicroSave();     // 5.9.0: persist /.gti_micro.pk now — the reel's "Preparing covers" pass never runs again
   writeGameCache();   // persist jpg paths resolved during the build (faster covers later too)
   g_coverset.clear();   // 5.3.7: cover set has done its job — free the PSRAM
 }

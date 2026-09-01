@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.0-JC3248"
+#define FW_VERSION "5.8.7-JC3248"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -513,7 +513,7 @@ static bool readIndexCache(std::vector<String>&out){out.clear();File f=SD_MMC.op
 // Draw bouncing Amiga ball animation frame + counter
 static int ball_x=0,ball_y=0,ball_dx=3,ball_dy=2;
 static void drawScanFrame(int count){
-  if((count%128)==0)gLog("[scan] files=%d int=%u psram=%u\n",count,(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
+  if((count%128)==0)Serial.printf("[scan] files=%d int=%u psram=%u\n",count,(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
   // Ball area: centre of screen
   int areaX=60,areaY=gH/2-50,areaW=gW-120,areaH=60;
   // Erase previous ball
@@ -548,8 +548,7 @@ static bool isGenImage(const String&u){
   if(u.endsWith(".INDEX")||u.endsWith(".GAMECACHE"))return false;
   return true;
 }
-static std::vector<uint64_t> g_coverset;
-static uint64_t coverHash(const String&s){uint64_t h=1469598103934665603ULL;for(unsigned i=0;i<s.length();i++){h^=(uint8_t)s[i];h*=1099511628211ULL;}return h;}   // 5.3.7: lowercased cover-image paths (jpg/png) harvested during the scan walk, so buildThumbs resolves each cover from RAM instead of probing the card. Covers ONLY — .nfo/.rtfm are read on demand when you open a game, never in bulk, so they were dead weight here.
+static std::set<String> g_coverset;   // 5.3.7: lowercased cover-image paths (jpg/png) harvested during the scan walk, so buildThumbs resolves each cover from RAM instead of probing the card. Covers ONLY — .nfo/.rtfm are read on demand when you open a game, never in bulk, so they were dead weight here.
 static inline bool isCoverExtU(const String&u){return u.endsWith(".JPG")||u.endsWith(".JPEG")||u.endsWith(".PNG");}
 // ── v5.6.0 Library Categories (CONFIG.TXT gated; folders auto-classified by content) ──
 static bool   g_categories=false;   // CATEGORIES=ON : show the category browse (a folder with no disk images but subfolders = a category)
@@ -574,7 +573,7 @@ static void scanDirInto(const String& dir, std::vector<String>& out, const Strin
        if(leaf=="SAMPLE"||leaf.startsWith(".")){gd.close();continue;}}   // skip SAMPLE + dot-folders at every level
       size_t _imgs0=out.size();
       File e;while((e=gd.openNextFile())){String fn=e.name();int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
-      if(isCoverExtU(u)){String ap=en+"/"+fn;if(!ap.startsWith("/"))ap="/"+ap;ap.toLowerCase();g_coverset.push_back(coverHash(ap));}
+      if(isCoverExtU(u)){String ap=en+"/"+fn;if(!ap.startsWith("/"))ap="/"+ap;ap.toLowerCase();g_coverset.insert(ap);}
       if(u.indexOf(".SAV.")>=0){
         if(u.endsWith(".TMP")){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;SD_MMC.remove(fp);}
         e.close();continue;}
@@ -589,7 +588,7 @@ static void scanDirInto(const String& dir, std::vector<String>& out, const Strin
       }
     }
     else{String fn=en;int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
-      if(isCoverExtU(u)){String ap=en;ap.toLowerCase();g_coverset.push_back(coverHash(ap));}
+      if(isCoverExtU(u)){String ap=en;ap.toLowerCase();g_coverset.insert(ap);}
       if(u.indexOf(".SAV.")>=0){
         if(u.endsWith(".TMP"))SD_MMC.remove(en);
         gd.close();continue;}
@@ -600,7 +599,7 @@ static void scanDirInto(const String& dir, std::vector<String>& out, const Strin
 }
 static std::vector<String> scanImagesAnimated(){
   std::vector<String>out;out.reserve(4096);   // scan-fix: no vector-growth copy-storm on big cards
-  g_coverset.clear();g_coverset.reserve(4096);g_cats.clear();String dir=g_mode==MODE_ADF?"/ADF":g_mode==MODE_DSK?"/DSK":"/GENERIC";if(g_categories&&g_libpath.length())dir+=g_libpath;String ext=g_mode==MODE_ADF?".ADF":".DSK";
+  g_coverset.clear();g_cats.clear();String dir=g_mode==MODE_ADF?"/ADF":g_mode==MODE_DSK?"/DSK":"/GENERIC";if(g_categories&&g_libpath.length())dir+=g_libpath;String ext=g_mode==MODE_ADF?".ADF":".DSK";
   // Init ball position
   ball_x=gW/2;ball_y=gH/2-30;ball_dx=3;ball_dy=2;
   // Draw initial scan screen
@@ -612,7 +611,6 @@ static std::vector<String> scanImagesAnimated(){
   gfx_flush();
   int count=0;uint32_t lastDraw=0;
   scanDirInto(dir,out,ext,0,count,lastDraw);
-  std::sort(g_coverset.begin(),g_coverset.end());   // 5.8.8: sorted for binary_search
   // Final count
   drawScanFrame(count);delay(500);
   std::sort(out.begin(),out.end());return out;
@@ -863,7 +861,7 @@ static bool findJPGFor(const String&p,String&out){
   if(folderName.length()&&folderName!=b&&folderName!=gb)stems[ns++]=folderName;
   bool harvested=!g_coverset.empty();   // set populated by the scan? then it's authoritative — zero card I/O
   for(int si=0;si<ns;si++)for(auto e:exts){String c=d+"/"+stems[si]+e;
-    if(harvested){String cl=c;cl.toLowerCase();if(std::binary_search(g_coverset.begin(),g_coverset.end(),coverHash(cl))){out=c;return true;}}
+    if(harvested){String cl=c;cl.toLowerCase();if(g_coverset.count(cl)){out=c;return true;}}
     else if(SD_MMC.exists(c.c_str())){out=c;return true;}}   // fallback: lazy call with no harvest (warm-boot cover-less game)
   return false;
 }
@@ -944,7 +942,6 @@ static String gameCachePath(){return g_mode==MODE_ADF?"/ADF/.gamecache":g_mode==
 
 static void writeGameCache(){
   File f=SD_MMC.open(gameCachePath().c_str(),FILE_WRITE);if(!f)return;
-  f.println("#V=590");                            // 5.9.0: bump invalidates pre-shard caches -> one clean rebuild into the bucketed .thumbs
   f.println("#FILES="+String(g_files.size()));  // bind to the index this was built from
   for(auto&g:g_games){
     f.print(g.name);f.print("|");f.print(g.first_file_idx);f.print("|");
@@ -959,10 +956,9 @@ static bool readGameCache(){
   g_games.clear();g_games.reserve(g_files.size());
   File f=SD_MMC.open(gameCachePath().c_str(),FILE_READ);
   if(!f){return false;}
-  long declaredFiles=-1; int cacheVer=-1;
+  long declaredFiles=-1;
   while(f.available()){
     String line=f.readStringUntil('\n');line.trim();if(!line.length())continue;
-    if(line.startsWith("#V=")){cacheVer=line.substring(3).toInt();continue;}
     if(line.startsWith("#FILES=")){declaredFiles=line.substring(7).toInt();continue;}
     int p1=line.indexOf('|');if(p1<0)continue;
     int p2=line.indexOf('|',p1+1);if(p2<0)continue;
@@ -979,8 +975,6 @@ static bool readGameCache(){
     if(e.first_file_idx>=0&&e.first_file_idx<(int)g_files.size()) g_games.push_back(e);
   }
   f.close();
-  // 5.9.0: a cache without the current version marker predates the sharded .thumbs — force one rebuild
-  if(cacheVer!=590){g_games.clear();return false;}
   // If the game cache was built from a different-sized index, it's stale — force rebuild
   if(declaredFiles>=0&&declaredFiles!=(long)g_files.size()){g_games.clear();return false;}
   return!g_games.empty();
@@ -1009,7 +1003,7 @@ static void parseNFO(const String&txt,String&t,String&b){
 
 static void buildGameList(){
   g_games.clear();g_games.reserve(g_files.size());   // scan-fix: no GameEntry copy-storm (2 Strings each)
-  gLog("[buildGameList] files=%d int=%u psram=%u\n",(int)g_files.size(),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
+  Serial.printf("[buildGameList] files=%d int=%u psram=%u\n",(int)g_files.size(),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
   std::vector<bool>used(g_files.size(),false);
   for(int i=0;i<(int)g_files.size();i++){if(used[i])continue;
     String bn=getGameBaseName(g_files[i]);int dn=getDiskNumber(g_files[i]);String dir=parentDir(g_files[i]);
@@ -1026,7 +1020,7 @@ static void buildGameList(){
     g_games.push_back(e);
   }
   std::sort(g_games.begin(),g_games.end(),[](const GameEntry&a,const GameEntry&b){String al=a.name,bl=b.name;al.toLowerCase();bl.toLowerCase();return al<bl;});
-  gLog("[buildGameList] done games=%d int=%u psram=%u\n",(int)g_games.size(),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
+  Serial.printf("[buildGameList] done games=%d int=%u psram=%u\n",(int)g_games.size(),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
   if(g_libpath.length()==0)writeGameCache();   // v5.6.0: only cache the top level; category sub-levels scan fresh each time
 }
 // ── Per-game stats: favourites + play counts, keyed by name, survives RESCAN ──
@@ -1384,12 +1378,6 @@ static void selfHealConfig(){
   if(fw){fw.print(add);fw.close();}
 }
 
-static bool g_log_enabled=true;   // 5.8.8 test build: /gti.log ON by default; LOG=OFF in CONFIG.TXT disables
-static void gLog(const char*fmt,...){
-  char buf[192]; va_list ap; va_start(ap,fmt); vsnprintf(buf,sizeof buf,fmt,ap); va_end(ap);
-  Serial.print(buf);
-  if(g_log_enabled){ File lf=SD_MMC.open("/gti.log",FILE_APPEND); if(lf){ lf.print(buf); lf.close(); } }
-}
 static void loadConfig(){
   applyTheme(0);
   File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);if(!f)return;
@@ -1415,7 +1403,6 @@ static void loadConfig(){
     else if(k=="CRACKTRO"){String cu=v;cu.trim();cu.toUpperCase(); if(cu=="DENISE")g_cracktro=7; else if(cu=="WRANGLER")g_cracktro=8; else{int c=v.toInt(); if(c>=0&&c<=6)g_cracktro=c;}}
     else if(k=="SAVES"){v.toUpperCase(); g_saves_mode=(v=="OVERWRITE")?2:(v=="OFF"||v=="0")?0:1;}
     else if(k=="SDSPEED"){int hz=v.toInt(); g_sd_freq=(hz>=40||hz>=40000)?40000:20000;}
-    else if(k=="LOG"){String lu=v;lu.toUpperCase();g_log_enabled=(lu!="OFF"&&lu!="0");}
     else if(k=="HIVEMIND"){g_hivemind=(v=="OFF"||v=="0")?0:1;}
     else if(k=="CATEGORIES"){String cv=v;cv.toUpperCase();g_categories=(cv=="ON"||cv=="1"||cv=="TRUE");}
     else if(k=="NESTING"){String nv=v;nv.toUpperCase();g_nesting=(nv=="ON"||nv=="1"||nv=="TRUE");}
@@ -2102,9 +2089,9 @@ static int g_car_ins_x=0,g_car_ins_y=0,g_car_ins_w=0,g_car_ins_h=0;   // INSERT 
 static int g_car_disk_n=0,g_car_disk_x=0,g_car_disk_y=0,g_car_disk_bw=0,g_car_disk_h=0;   // v5.7.x: reel multi-disk button row rect
 static void runScreensaver();   // defined below; the reel's idle tick can summon it
 #define CAR_TILE  150                            // decoded cover tile size (px)
-#define CAR_SLOTS 48                             // 5.9.0: LRU tile cache entries (PSRAM ~2.1 MB) — was 16; more cache = less re-reading when you scroll back. Dial down if PSRAM gets tight.
-static uint16_t* car_buf[CAR_SLOTS]={0};         // NULL gates every read of car_game below, so the zero-init is safe at any CAR_SLOTS
-static int      car_game[CAR_SLOTS]={0};         // set to -1 the instant a slot buffer is first allocated (see carTile)
+#define CAR_SLOTS 16                             // LRU tile cache entries (PSRAM, ~720 KB)
+static uint16_t* car_buf[CAR_SLOTS]={0};
+static int      car_game[CAR_SLOTS]={-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
 static uint32_t car_stamp[CAR_SLOTS]={0};
 static uint32_t car_tick_ctr=0;
 #define CAR_BENCH 0
@@ -2159,17 +2146,18 @@ static String carThumbPath(int gi){
   const String&p=g_files[g.first_file_idx];
   uint32_t h=5381; for(unsigned i=0;i<p.length();i++)h=((h<<5)+h)^(uint8_t)p[i];   // djb2-xor
   char hx[6]; snprintf(hx,sizeof(hx),"%04X",(unsigned)(h&0xFFFF));
-  char bkt[2]={hx[0],0};                                                            // 5.9.0: shard by first hex nibble -> ~n/16 files per dir
-  return carThumbRoot(gi)+"/"+bkt+"/"+getGameBaseName(p)+"_"+hx+".tnl";
+  return carThumbRoot(gi)+"/"+getGameBaseName(p)+"_"+hx+".tnl";
 }
 static bool carLoadThumb(int gi,uint16_t*dst){
   auto&g=g_games[gi];
   if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return false;
-  // 5.9.0: open+read only. The two stat() calls each linearly walked the .thumbs
-  // dir (FAT has no index) — the real "slow with many files" cost. Staleness is
-  // re-checked at build time (buildThumbs `need`); a short/corrupt tile still fails
-  // via got!=want below and self-heals through carDecodeTile.
-  File f=SD_MMC.open(carThumbPath(gi).c_str(),"r");if(!f)return false;
+  String tp=carThumbPath(gi);
+  struct stat stT,stJ;
+  String vT="/sdcard"+tp,vJ="/sdcard"+g.jpg_path;
+  if(stat(vT.c_str(),&stT)!=0)return false;
+  if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))return false;
+  if(stat(vJ.c_str(),&stJ)==0&&stJ.st_mtime>stT.st_mtime)return false;   // cover replaced -> stale
+  File f=SD_MMC.open(tp.c_str(),"r");if(!f)return false;
   size_t want=(size_t)CAR_TILE*CAR_TILE*2;
   size_t got=f.read((uint8_t*)dst,want);f.close();
   return got==want;
@@ -2179,10 +2167,7 @@ static void carSaveThumb(int gi,uint16_t*src){
   if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return;
   String root=carThumbRoot(gi);
   if(!SD_MMC.exists(root.c_str()))SD_MMC.mkdir(root.c_str());
-  String tp=carThumbPath(gi);
-  int sl=tp.lastIndexOf('/'); String dir=tp.substring(0,sl);          // 5.9.0: ensure the shard bucket (.thumbs/<nibble>) exists
-  if(!SD_MMC.exists(dir.c_str()))SD_MMC.mkdir(dir.c_str());
-  File f=SD_MMC.open(tp.c_str(),FILE_WRITE);if(!f)return;
+  File f=SD_MMC.open(carThumbPath(gi).c_str(),FILE_WRITE);if(!f)return;
   f.write((uint8_t*)src,(size_t)CAR_TILE*CAR_TILE*2);f.close();
 }
 // Fetch a game's tile (NULL if uncached and decoding isn't allowed right now).
@@ -2206,12 +2191,10 @@ static uint16_t* carTile(int gi,bool mayDecode){
 // (Michael's call: one predictable pass with a progress bar, never live jank).
 // Fresh thumbs are stat-checked and skipped, so a re-run over a built card is
 // seconds, not minutes. v4.8.5: carousel is first-class, so thumbs always build.
-static void carMicroInit(); static void carMicroFromTile(int gi,const uint16_t*tile); static void carMicroSave();  // 5.9.0 fwd-decls (definitions below)
 static void buildThumbs(){
   int n=(int)g_games.size(); if(!n)return;
   uint16_t*tmp=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2);
   if(!tmp)return;
-  carMicroInit();                          // 5.9.0: build the resident micro-thumb set in-line with the thumb pass
   uint32_t lastDraw=0;
   for(int i=0;i<n;i++){
     auto&g=g_games[i];
@@ -2224,16 +2207,13 @@ static void buildThumbs(){
       else if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))need=true;
       else if(stat(vJ.c_str(),&stJ)==0&&stJ.st_mtime>stT.st_mtime)need=true;
     }
-    bool haveTile=false;                                     // 5.9.0: seed the micro-thumb in the SAME pass (no second 45 MB re-read)
-    if(need){ if(carDecodeTile(i,tmp)){carSaveThumb(i,tmp);haveTile=true;} }
-    else     { haveTile=carLoadThumb(i,tmp); }
-    if(haveTile)carMicroFromTile(i,tmp);
+    if(need&&carDecodeTile(i,tmp))carSaveThumb(i,tmp);
     uint32_t nowMs=millis();
     if(nowMs-lastDraw>100||i==n-1){
       lastDraw=nowMs;
       gfx_fillScreen(0x1082);
       gfx_setTextSize(2);gfx_setTextColor(0xFC60,0x1082);
-      gLog("[thumbs] %d/%d int=%u psram=%u\n",i+1,n,(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
+      Serial.printf("[thumbs] %d/%d int=%u psram=%u\n",i+1,n,(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
       {const char*s=T(L_BUILDING);int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH/2-50);gfx_print(s);}
       gfx_setTextSize(1);gfx_setTextColor(0x9BD6,0x1082);
       {String m=String(i+1)+" / "+String(n);int tw=gfx_textWidth(m);gfx_setCursor((gW-tw)/2,gH/2-22);gfx_print(m);}
@@ -2247,7 +2227,6 @@ static void buildThumbs(){
     if((i&7)==0)yield();
   }
   free(tmp);
-  carMicroSave();     // 5.9.0: persist /.gti_micro.pk now — the reel's "Preparing covers" pass never runs again
   writeGameCache();   // persist jpg paths resolved during the build (faster covers later too)
   g_coverset.clear();   // 5.3.7: cover set has done its job — free the PSRAM
 }
@@ -3340,7 +3319,7 @@ static void doRescan(){
   { bool wl=g_wireless_mode; selfHealConfig(); loadConfig(); g_wireless_mode=wl; relayout(); }
   // Rescan with animation
   g_files.clear();g_games.clear();
-  heap_caps_malloc_extmem_enable(16);listImages(SD_MMC,g_files);buildGameList();buildThumbs();heap_caps_malloc_extmem_enable(4096);applyStats();buildActiveLetters();scanScreensaver();
+  listImages(SD_MMC,g_files);buildGameList();buildThumbs();applyStats();buildActiveLetters();scanScreensaver();
   g_sel=0;g_scroll=0;g_disk_sel=0;g_disk_page=0;g_scrollPx=0;g_az_page=0;g_inertia_on=false;
   if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
   drawFullUI();gfx_flush();
@@ -3914,13 +3893,8 @@ void setup(){
     }
     espnowSetScanCap(g_dongle_cap);
     relayout();                 // apply ROTATE/COMPACT from config before first draw
-    gLog("\n=== BOOT %s === reset=%d int=%u psram=%u ===\n",FW_VERSION,(int)esp_reset_reason(),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
-    heap_caps_malloc_extmem_enable(16);   // 5.8.9: library index/list onto idle PSRAM, off the ~180KB internal SRAM
-    uint32_t _tscan=millis();
     listImages(SD_MMC,g_files);
     if(!readGameCache()){buildGameList();buildThumbs();}   // fresh card: build reel thumbs up-front
-    heap_caps_malloc_extmem_enable(4096);   // restore: runtime allocations back to internal (fast UI)
-    gLog("[boot] scan+build %lums int=%u psram=%u\n",(unsigned long)(millis()-_tscan),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
     applyStats();
     buildActiveLetters();
     if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
@@ -4092,7 +4066,7 @@ static void doCategoryBrowse(){
 static void switchLib(int m){   // int, not DiskMode: Arduino auto-generates this prototype ABOVE the enum decl, so an enum param won't compile
   g_mode=(DiskMode)m;g_libpath="";
   if(g_categories){reloadLevel();}
-  else{g_files.clear();heap_caps_malloc_extmem_enable(16);listImages(SD_MMC,g_files);if(!readGameCache()){buildGameList();buildThumbs();}heap_caps_malloc_extmem_enable(4096);buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));}
+  else{g_files.clear();listImages(SD_MMC,g_files);if(!readGameCache()){buildGameList();buildThumbs();}buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));}
   drawFullUI();gfx_flush();
 }
 static void drawInfoBottomBar(){

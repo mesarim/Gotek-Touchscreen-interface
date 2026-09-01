@@ -31,7 +31,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.0-JC3248"
+#define FW_VERSION "5.8.6-JC3248"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -265,95 +265,44 @@ int png_buf_cb(PNGDRAW*pDraw){   // PNGdec's PNG_DRAW_CALLBACK returns int
   pngdec.getLineAsRGB565(pDraw,&jpeg_tmp_buf[row*jpeg_tmp_w],PNG_RGB565_LITTLE_ENDIAN,0x00000000);
   return 1;
 }
-// ── Cover ingest: one size-agnostic, garbage-proof decode point (v1) ──────────
-#define COVER_TILE_PX        150               // decode-budget long edge (== CAR_TILE); both panel + reel share this
-#define COVER_FILE_CAP       (4u*1024u*1024u)  // max raw cover file loaded into PSRAM; bigger -> placeholder
-#define COVER_DECODE_BUDGET  (4u*1024u*1024u)  // max decoded RGB565 bytes (post hardware-scale); bounds intermediate + resident cache
-
-// A ".png" beside a ".jpg" cover (boxart ships both) — the progressive/failed-JPEG fallback.
-static bool pngSiblingFor(const String& jpgPath, String& out){
-  if(coverIsPng(jpgPath)) return false;
-  int d=jpgPath.lastIndexOf('.'); if(d<0) return false;
-  String cand=jpgPath.substring(0,d)+".png";
-  struct stat st; String v="/sdcard"+cand;
-  if(stat(v.c_str(),&st)==0 && st.st_size>0){ out=cand; return true; }
-  return false;
-}
-
-// jpeg_tmp_buf is now a RESIDENT 1-entry natural-decode cache (was freed after every use).
-static String   g_dec_path = "";       // cover path currently held in jpeg_tmp_buf ("" = none)
-static uint16_t* g_dec_buf = NULL;      // pointer we cached (guards against external reuse of jpeg_tmp_buf)
-static bool     g_dec_failed = false;   // last decode of g_dec_path failed (negative cache)
-
-// Decode ONE file into jpeg_tmp_buf at natural aspect, long side scaled toward budgetLong.
-// Frees its own file buffer. On failure: frees jpeg_tmp_buf, sets NULL, returns false.
-static bool _coverDecodeRaw(const String& path, int budgetLong){
-  String vfsPath="/sdcard"+path; struct stat st;
-  if(stat(vfsPath.c_str(),&st)!=0 || st.st_size==0 || (uint32_t)st.st_size>COVER_FILE_CAP) return false;
+static void gfx_drawJpgFile(const String&path,int x,int y,int maxW,int maxH){
+  // Use VFS to get real file size (SD_MMC f.size() returns 0 for subdirectory files)
+  String vfsPath="/sdcard"+path;
+  struct stat st;
+  if(stat(vfsPath.c_str(),&st)!=0||st.st_size==0||st.st_size>500000) return;
   size_t sz=(size_t)st.st_size;
-  File f=SD_MMC.open(path.c_str(),"r"); if(!f) return false;
-  uint8_t* buf=(uint8_t*)ps_malloc(sz); if(!buf){ f.close(); return false; }
-  if(f.read(buf,sz)!=(int)sz){ free(buf); f.close(); return false; } f.close();
-  int djw=0,djh=0;
+  File f=SD_MMC.open(path.c_str(),"r"); if(!f){return;}
+  uint8_t*buf=(uint8_t*)ps_malloc(sz); if(!buf){f.close();return;}
+  f.read(buf,sz); f.close();
+  int jw=0,jh=0;
   if(coverIsPng(path)){
-    if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){ free(buf); return false; }
-    int jw=pngdec.getWidth(), jh=pngdec.getHeight();
-    if(jw<=0||jh<=0 || (size_t)jw*jh*2>COVER_DECODE_BUDGET){ pngdec.close(); free(buf); return false; } // PNGdec has no HW scale
-    djw=jw; djh=jh;
-    jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)djw*djh*2);
-    if(!jpeg_tmp_buf){ pngdec.close(); free(buf); return false; }
-    memset(jpeg_tmp_buf,0,(size_t)djw*djh*2); jpeg_tmp_w=djw; jpeg_tmp_h=djh;
-    int rc=pngdec.decode(NULL,0); pngdec.close(); free(buf);
-    if(rc!=PNG_SUCCESS){ free(jpeg_tmp_buf); jpeg_tmp_buf=NULL; return false; }
+    if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){free(buf);return;}
+    jw=pngdec.getWidth();jh=pngdec.getHeight();
+    if(jw<=0||jh<=0||jw>2000||jh>2000){pngdec.close();free(buf);return;}
+    jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)jw*jh*2);
+    if(!jpeg_tmp_buf){pngdec.close();free(buf);return;}
+    memset(jpeg_tmp_buf,0,(size_t)jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
+    pngdec.decode(NULL,0); pngdec.close(); free(buf);
   } else {
-    if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){ free(buf); return false; }        // progressive/corrupt header -> false
-    int jw=jpegdec.getWidth(), jh=jpegdec.getHeight();
-    if(jw<=0||jh<=0){ jpegdec.close(); free(buf); return false; }
-    int longSide=max(jw,jh), div=1, opt=0;                                       // HW downscale so even 40 MP lands near budget
-    if(longSide>=budgetLong*8){ opt=JPEG_SCALE_EIGHTH; div=8; }
-    else if(longSide>=budgetLong*4){ opt=JPEG_SCALE_QUARTER; div=4; }
-    else if(longSide>=budgetLong*2){ opt=JPEG_SCALE_HALF;  div=2; }
-    djw=jw/div; djh=jh/div;
-    if(djw<=0||djh<=0||(size_t)djw*djh*2>COVER_DECODE_BUDGET){ jpegdec.close(); free(buf); return false; }
-    jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)djw*djh*2);
-    if(!jpeg_tmp_buf){ jpegdec.close(); free(buf); return false; }
-    memset(jpeg_tmp_buf,0,(size_t)djw*djh*2); jpeg_tmp_w=djw; jpeg_tmp_h=djh;
-    int rc=jpegdec.decode(0,0,opt); jpegdec.close(); free(buf);                  // progressive that passed the header -> rc==0
-    if(!rc){ free(jpeg_tmp_buf); jpeg_tmp_buf=NULL; return false; }
+    if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return;}
+    jw=jpegdec.getWidth();jh=jpegdec.getHeight();
+    if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return;}
+    jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)jw*jh*2);
+    if(!jpeg_tmp_buf){jpegdec.close();free(buf);return;}
+    memset(jpeg_tmp_buf,0,(size_t)jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
+    jpegdec.decode(0,0,0); jpegdec.close(); free(buf);
   }
-  return true;
-}
-
-// Cached, garbage-proof cover decode shared by the cover panel AND the reel tile builder.
-// budgetLong fixed at COVER_TILE_PX so both share one decode keyed by path.
-static bool coverDecodeNatural(const String& path, int budgetLong, int* ow, int* oh){
-  if(g_dec_path==path && jpeg_tmp_buf!=NULL && jpeg_tmp_buf==g_dec_buf){ *ow=jpeg_tmp_w; *oh=jpeg_tmp_h; return true; }
-  if(g_dec_path==path && g_dec_failed && g_dec_buf==NULL){ *ow=*oh=0; return false; }
-  if(jpeg_tmp_buf!=NULL && jpeg_tmp_buf==g_dec_buf){ free(jpeg_tmp_buf); }   // free only if it's still OURS
-  jpeg_tmp_buf=NULL; g_dec_buf=NULL;
-  g_dec_path=path; g_dec_failed=false;
-  bool ok=_coverDecodeRaw(path,budgetLong);
-  if(!ok){ String sib; if(pngSiblingFor(path,sib)) ok=_coverDecodeRaw(sib,budgetLong); }
-  if(!ok){ if(jpeg_tmp_buf){ free(jpeg_tmp_buf); jpeg_tmp_buf=NULL; } g_dec_failed=true; g_dec_buf=NULL; *ow=*oh=0; return false; }
-  g_dec_buf=jpeg_tmp_buf; *ow=jpeg_tmp_w; *oh=jpeg_tmp_h; return true;
-}
-
-// Fit-blit a cover into (x,y,maxW,maxH). Returns false when nothing legible was drawn
-// (caller then paints the letter placeholder). Does NOT free jpeg_tmp_buf — the cache owns it.
-static bool gfx_drawJpgFile(const String& path, int x, int y, int maxW, int maxH){
-  int jw, jh;
-  if(!coverDecodeNatural(path, COVER_TILE_PX, &jw, &jh)) return false;
-  float scX=(float)maxW/jw, scY=(float)maxH/jh, sc=min(scX,scY);
+  float scX=(float)maxW/jw,scY=(float)maxH/jh,sc=min(scX,scY);
   if(sc>1.0f)sc=1.0f;
-  int dw=(int)(jw*sc), dh=(int)(jh*sc);
-  if(dw<=0||dh<=0) return false;
-  int ox=x+(maxW-dw)/2, oy=y+(maxH-dh)/2;
+  int dw=(int)(jw*sc),dh=(int)(jh*sc);
+  if(dw<=0||dh<=0){free(jpeg_tmp_buf);jpeg_tmp_buf=NULL;return;}
+  int ox=x+(maxW-dw)/2,oy=y+(maxH-dh)/2;
   for(int r=0;r<dh;r++){int srcY=(int)(r/sc);if(srcY>=jh)srcY=jh-1;
     for(int c=0;c<dw;c++){int srcX=(int)(c/sc);if(srcX>=jw)srcX=jw-1;
       int vx=ox+c,vy=oy+r;
       if(vx>=0&&vx<gW&&vy>=0&&vy<gH) fb_setPixel(vx,vy,jpeg_tmp_buf[srcY*jw+srcX]);}
     if(r%20==0)yield();}
-  return true;
+  free(jpeg_tmp_buf); jpeg_tmp_buf=NULL;
 }
 
 // ── Display init (from Dimi) ──
@@ -504,7 +453,7 @@ static void writeIndexCache(const std::vector<String>&v){File f=SD_MMC.open(inde
 static bool readIndexCache(std::vector<String>&out){out.clear();File f=SD_MMC.open(indexFilePath().c_str(),FILE_READ);if(!f){return false;}
   long declaredCount=-1;
   while(f.available()){String l=f.readStringUntil('\n');l.trim();if(!l.length())continue;
-    if(l.startsWith("#COUNT=")){declaredCount=l.substring(7).toInt();if(declaredCount>0)out.reserve(declaredCount);continue;}
+    if(l.startsWith("#COUNT=")){declaredCount=l.substring(7).toInt();continue;}
     out.push_back(l);}
   f.close();
   // Validate: declared count must match actual lines read (catches partial writes/corruption)
@@ -513,7 +462,6 @@ static bool readIndexCache(std::vector<String>&out){out.clear();File f=SD_MMC.op
 // Draw bouncing Amiga ball animation frame + counter
 static int ball_x=0,ball_y=0,ball_dx=3,ball_dy=2;
 static void drawScanFrame(int count){
-  if((count%128)==0)gLog("[scan] files=%d int=%u psram=%u\n",count,(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
   // Ball area: centre of screen
   int areaX=60,areaY=gH/2-50,areaW=gW-120,areaH=60;
   // Erase previous ball
@@ -548,8 +496,7 @@ static bool isGenImage(const String&u){
   if(u.endsWith(".INDEX")||u.endsWith(".GAMECACHE"))return false;
   return true;
 }
-static std::vector<uint64_t> g_coverset;
-static uint64_t coverHash(const String&s){uint64_t h=1469598103934665603ULL;for(unsigned i=0;i<s.length();i++){h^=(uint8_t)s[i];h*=1099511628211ULL;}return h;}   // 5.3.7: lowercased cover-image paths (jpg/png) harvested during the scan walk, so buildThumbs resolves each cover from RAM instead of probing the card. Covers ONLY — .nfo/.rtfm are read on demand when you open a game, never in bulk, so they were dead weight here.
+static std::set<String> g_coverset;   // 5.3.7: lowercased cover-image paths (jpg/png) harvested during the scan walk, so buildThumbs resolves each cover from RAM instead of probing the card. Covers ONLY — .nfo/.rtfm are read on demand when you open a game, never in bulk, so they were dead weight here.
 static inline bool isCoverExtU(const String&u){return u.endsWith(".JPG")||u.endsWith(".JPEG")||u.endsWith(".PNG");}
 // ── v5.6.0 Library Categories (CONFIG.TXT gated; folders auto-classified by content) ──
 static bool   g_categories=false;   // CATEGORIES=ON : show the category browse (a folder with no disk images but subfolders = a category)
@@ -574,7 +521,7 @@ static void scanDirInto(const String& dir, std::vector<String>& out, const Strin
        if(leaf=="SAMPLE"||leaf.startsWith(".")){gd.close();continue;}}   // skip SAMPLE + dot-folders at every level
       size_t _imgs0=out.size();
       File e;while((e=gd.openNextFile())){String fn=e.name();int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
-      if(isCoverExtU(u)){String ap=en+"/"+fn;if(!ap.startsWith("/"))ap="/"+ap;ap.toLowerCase();g_coverset.push_back(coverHash(ap));}
+      if(isCoverExtU(u)){String ap=en+"/"+fn;if(!ap.startsWith("/"))ap="/"+ap;ap.toLowerCase();g_coverset.insert(ap);}
       if(u.indexOf(".SAV.")>=0){
         if(u.endsWith(".TMP")){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;SD_MMC.remove(fp);}
         e.close();continue;}
@@ -589,7 +536,7 @@ static void scanDirInto(const String& dir, std::vector<String>& out, const Strin
       }
     }
     else{String fn=en;int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
-      if(isCoverExtU(u)){String ap=en;ap.toLowerCase();g_coverset.push_back(coverHash(ap));}
+      if(isCoverExtU(u)){String ap=en;ap.toLowerCase();g_coverset.insert(ap);}
       if(u.indexOf(".SAV.")>=0){
         if(u.endsWith(".TMP"))SD_MMC.remove(en);
         gd.close();continue;}
@@ -599,8 +546,7 @@ static void scanDirInto(const String& dir, std::vector<String>& out, const Strin
   root.close();
 }
 static std::vector<String> scanImagesAnimated(){
-  std::vector<String>out;out.reserve(4096);   // scan-fix: no vector-growth copy-storm on big cards
-  g_coverset.clear();g_coverset.reserve(4096);g_cats.clear();String dir=g_mode==MODE_ADF?"/ADF":g_mode==MODE_DSK?"/DSK":"/GENERIC";if(g_categories&&g_libpath.length())dir+=g_libpath;String ext=g_mode==MODE_ADF?".ADF":".DSK";
+  std::vector<String>out;g_coverset.clear();g_cats.clear();String dir=g_mode==MODE_ADF?"/ADF":g_mode==MODE_DSK?"/DSK":"/GENERIC";if(g_categories&&g_libpath.length())dir+=g_libpath;String ext=g_mode==MODE_ADF?".ADF":".DSK";
   // Init ball position
   ball_x=gW/2;ball_y=gH/2-30;ball_dx=3;ball_dy=2;
   // Draw initial scan screen
@@ -612,7 +558,6 @@ static std::vector<String> scanImagesAnimated(){
   gfx_flush();
   int count=0;uint32_t lastDraw=0;
   scanDirInto(dir,out,ext,0,count,lastDraw);
-  std::sort(g_coverset.begin(),g_coverset.end());   // 5.8.8: sorted for binary_search
   // Final count
   drawScanFrame(count);delay(500);
   std::sort(out.begin(),out.end());return out;
@@ -863,7 +808,7 @@ static bool findJPGFor(const String&p,String&out){
   if(folderName.length()&&folderName!=b&&folderName!=gb)stems[ns++]=folderName;
   bool harvested=!g_coverset.empty();   // set populated by the scan? then it's authoritative — zero card I/O
   for(int si=0;si<ns;si++)for(auto e:exts){String c=d+"/"+stems[si]+e;
-    if(harvested){String cl=c;cl.toLowerCase();if(std::binary_search(g_coverset.begin(),g_coverset.end(),coverHash(cl))){out=c;return true;}}
+    if(harvested){String cl=c;cl.toLowerCase();if(g_coverset.count(cl)){out=c;return true;}}
     else if(SD_MMC.exists(c.c_str())){out=c;return true;}}   // fallback: lazy call with no harvest (warm-boot cover-less game)
   return false;
 }
@@ -944,7 +889,6 @@ static String gameCachePath(){return g_mode==MODE_ADF?"/ADF/.gamecache":g_mode==
 
 static void writeGameCache(){
   File f=SD_MMC.open(gameCachePath().c_str(),FILE_WRITE);if(!f)return;
-  f.println("#V=590");                            // 5.9.0: bump invalidates pre-shard caches -> one clean rebuild into the bucketed .thumbs
   f.println("#FILES="+String(g_files.size()));  // bind to the index this was built from
   for(auto&g:g_games){
     f.print(g.name);f.print("|");f.print(g.first_file_idx);f.print("|");
@@ -956,13 +900,12 @@ static void writeGameCache(){
 }
 
 static bool readGameCache(){
-  g_games.clear();g_games.reserve(g_files.size());
+  g_games.clear();
   File f=SD_MMC.open(gameCachePath().c_str(),FILE_READ);
   if(!f){return false;}
-  long declaredFiles=-1; int cacheVer=-1;
+  long declaredFiles=-1;
   while(f.available()){
     String line=f.readStringUntil('\n');line.trim();if(!line.length())continue;
-    if(line.startsWith("#V=")){cacheVer=line.substring(3).toInt();continue;}
     if(line.startsWith("#FILES=")){declaredFiles=line.substring(7).toInt();continue;}
     int p1=line.indexOf('|');if(p1<0)continue;
     int p2=line.indexOf('|',p1+1);if(p2<0)continue;
@@ -979,8 +922,6 @@ static bool readGameCache(){
     if(e.first_file_idx>=0&&e.first_file_idx<(int)g_files.size()) g_games.push_back(e);
   }
   f.close();
-  // 5.9.0: a cache without the current version marker predates the sharded .thumbs — force one rebuild
-  if(cacheVer!=590){g_games.clear();return false;}
   // If the game cache was built from a different-sized index, it's stale — force rebuild
   if(declaredFiles>=0&&declaredFiles!=(long)g_files.size()){g_games.clear();return false;}
   return!g_games.empty();
@@ -1008,9 +949,7 @@ static void parseNFO(const String&txt,String&t,String&b){
 }
 
 static void buildGameList(){
-  g_games.clear();g_games.reserve(g_files.size());   // scan-fix: no GameEntry copy-storm (2 Strings each)
-  gLog("[buildGameList] files=%d int=%u psram=%u\n",(int)g_files.size(),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
-  std::vector<bool>used(g_files.size(),false);
+  g_games.clear();std::vector<bool>used(g_files.size(),false);
   for(int i=0;i<(int)g_files.size();i++){if(used[i])continue;
     String bn=getGameBaseName(g_files[i]);int dn=getDiskNumber(g_files[i]);String dir=parentDir(g_files[i]);
     GameEntry e;e.first_file_idx=i;e.disk_count=1;e.disk_indices.push_back(i);
@@ -1026,7 +965,6 @@ static void buildGameList(){
     g_games.push_back(e);
   }
   std::sort(g_games.begin(),g_games.end(),[](const GameEntry&a,const GameEntry&b){String al=a.name,bl=b.name;al.toLowerCase();bl.toLowerCase();return al<bl;});
-  gLog("[buildGameList] done games=%d int=%u psram=%u\n",(int)g_games.size(),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
   if(g_libpath.length()==0)writeGameCache();   // v5.6.0: only cache the top level; category sub-levels scan fresh each time
 }
 // ── Per-game stats: favourites + play counts, keyed by name, survives RESCAN ──
@@ -1384,12 +1322,6 @@ static void selfHealConfig(){
   if(fw){fw.print(add);fw.close();}
 }
 
-static bool g_log_enabled=true;   // 5.8.8 test build: /gti.log ON by default; LOG=OFF in CONFIG.TXT disables
-static void gLog(const char*fmt,...){
-  char buf[192]; va_list ap; va_start(ap,fmt); vsnprintf(buf,sizeof buf,fmt,ap); va_end(ap);
-  Serial.print(buf);
-  if(g_log_enabled){ File lf=SD_MMC.open("/gti.log",FILE_APPEND); if(lf){ lf.print(buf); lf.close(); } }
-}
 static void loadConfig(){
   applyTheme(0);
   File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);if(!f)return;
@@ -1415,7 +1347,6 @@ static void loadConfig(){
     else if(k=="CRACKTRO"){String cu=v;cu.trim();cu.toUpperCase(); if(cu=="DENISE")g_cracktro=7; else if(cu=="WRANGLER")g_cracktro=8; else{int c=v.toInt(); if(c>=0&&c<=6)g_cracktro=c;}}
     else if(k=="SAVES"){v.toUpperCase(); g_saves_mode=(v=="OVERWRITE")?2:(v=="OFF"||v=="0")?0:1;}
     else if(k=="SDSPEED"){int hz=v.toInt(); g_sd_freq=(hz>=40||hz>=40000)?40000:20000;}
-    else if(k=="LOG"){String lu=v;lu.toUpperCase();g_log_enabled=(lu!="OFF"&&lu!="0");}
     else if(k=="HIVEMIND"){g_hivemind=(v=="OFF"||v=="0")?0:1;}
     else if(k=="CATEGORIES"){String cv=v;cv.toUpperCase();g_categories=(cv=="ON"||cv=="1"||cv=="TRUE");}
     else if(k=="NESTING"){String nv=v;nv.toUpperCase();g_nesting=(nv=="ON"||nv=="1"||nv=="TRUE");}
@@ -1810,9 +1741,8 @@ static void drawCoverPanel(){
   // Cover art
   gfx_fillRoundRect(COVER_ART_X,COVER_ART_Y,COVER_ART_W,COVER_ART_H,5,COL_BAR);
   gfx_drawRoundRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,6,COL_ACCENT);
-  {bool _drew=false;
-   if(game.jpg_path.length()>0&&game.jpg_path!="?")_drew=gfx_drawJpgFile(game.jpg_path,COVER_ART_X+2,COVER_ART_Y+2,COVER_ART_W-4,COVER_ART_H-4);
-   if(!_drew){char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setCursor(COVER_ART_X+COVER_ART_W/2-6,COVER_ART_Y+COVER_ART_H/2-8);gfx_print(ib);}}
+  if(game.jpg_path.length()>0&&game.jpg_path!="?")gfx_drawJpgFile(game.jpg_path,COVER_ART_X+2,COVER_ART_Y+2,COVER_ART_W-4,COVER_ART_H-4);
+  else{char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setCursor(COVER_ART_X+COVER_ART_W/2-6,COVER_ART_Y+COVER_ART_H/2-8);gfx_print(ib);}
   // v4.8.0: floppy icon — this game has a save-copy (INSERT will boot the save)
   if(cachedHasSav)drawSaveFloppy(COVER_ART_X+3,COVER_ART_Y+3);
   if(cachedHD){drawHDChip(COVER_ART_X+COVER_ART_W-23,COVER_ART_Y+3);drawNoA500(COVER_ART_X+15,COVER_ART_Y+COVER_ART_H-15,13,TFT_RED);}   // v4.9 HD markers
@@ -2102,9 +2032,9 @@ static int g_car_ins_x=0,g_car_ins_y=0,g_car_ins_w=0,g_car_ins_h=0;   // INSERT 
 static int g_car_disk_n=0,g_car_disk_x=0,g_car_disk_y=0,g_car_disk_bw=0,g_car_disk_h=0;   // v5.7.x: reel multi-disk button row rect
 static void runScreensaver();   // defined below; the reel's idle tick can summon it
 #define CAR_TILE  150                            // decoded cover tile size (px)
-#define CAR_SLOTS 48                             // 5.9.0: LRU tile cache entries (PSRAM ~2.1 MB) — was 16; more cache = less re-reading when you scroll back. Dial down if PSRAM gets tight.
-static uint16_t* car_buf[CAR_SLOTS]={0};         // NULL gates every read of car_game below, so the zero-init is safe at any CAR_SLOTS
-static int      car_game[CAR_SLOTS]={0};         // set to -1 the instant a slot buffer is first allocated (see carTile)
+#define CAR_SLOTS 16                             // LRU tile cache entries (PSRAM, ~720 KB)
+static uint16_t* car_buf[CAR_SLOTS]={0};
+static int      car_game[CAR_SLOTS]={-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
 static uint32_t car_stamp[CAR_SLOTS]={0};
 static uint32_t car_tick_ctr=0;
 #define CAR_BENCH 0
@@ -2133,8 +2063,38 @@ static bool carDecodeTile(int gi,uint16_t*dst){
   auto&game=g_games[gi];
   if(!game.jpg_path.length()){String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg))game.jpg_path=jpg;else game.jpg_path="?";}
   if(!(game.jpg_path.length()>0&&game.jpg_path!="?"))return false;
+  String vfsPath="/sdcard"+game.jpg_path;struct stat st;
+  if(stat(vfsPath.c_str(),&st)!=0||st.st_size==0||st.st_size>500000)return false;
+  size_t sz=(size_t)st.st_size;
+  File f=SD_MMC.open(game.jpg_path.c_str(),"r");if(!f)return false;
+  uint8_t*buf=(uint8_t*)ps_malloc(sz);if(!buf){f.close();return false;}
+  f.read(buf,sz);f.close();
   int djw=0,djh=0;
-  if(!coverDecodeNatural(game.jpg_path, COVER_TILE_PX, &djw, &djh)) return false;   // dst pre-filled COL_BAR; progressive->png sibling else placeholder
+  if(coverIsPng(game.jpg_path)){
+    if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){free(buf);return false;}
+    int jw=pngdec.getWidth(),jh=pngdec.getHeight();
+    if(jw<=0||jh<=0||jw>2000||jh>2000){pngdec.close();free(buf);return false;}
+    djw=jw;djh=jh;                          // PNGdec has no built-in downscale -> full decode, then shrink
+    jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)djw*djh*2);
+    if(!jpeg_tmp_buf){pngdec.close();free(buf);return false;}
+    memset(jpeg_tmp_buf,0,(size_t)djw*djh*2);jpeg_tmp_w=djw;jpeg_tmp_h=djh;
+    pngdec.decode(NULL,0);pngdec.close();free(buf);
+  } else {
+    if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return false;}
+    int jw=jpegdec.getWidth(),jh=jpegdec.getHeight();
+    if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return false;}
+    // Use JPEGDEC's built-in downscale: decoding a big cover at 1/2, 1/4 or 1/8
+    // is up to 16x less work than full-decode-then-shrink (the "slow covers" fix).
+    int opt=0,div=1;
+    if(jw>=CAR_TILE*8&&jh>=CAR_TILE*8){opt=JPEG_SCALE_EIGHTH;div=8;}
+    else if(jw>=CAR_TILE*4&&jh>=CAR_TILE*4){opt=JPEG_SCALE_QUARTER;div=4;}
+    else if(jw>=CAR_TILE*2&&jh>=CAR_TILE*2){opt=JPEG_SCALE_HALF;div=2;}
+    djw=jw/div;djh=jh/div;
+    jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)djw*djh*2);
+    if(!jpeg_tmp_buf){jpegdec.close();free(buf);return false;}
+    memset(jpeg_tmp_buf,0,(size_t)djw*djh*2);jpeg_tmp_w=djw;jpeg_tmp_h=djh;
+    jpegdec.decode(0,0,opt);jpegdec.close();free(buf);
+  }
   float sc=min((float)CAR_TILE/djw,(float)CAR_TILE/djh);if(sc>1.0f)sc=1.0f;
   int dw=(int)(djw*sc),dh=(int)(djh*sc);
   int ox=(CAR_TILE-dw)/2,oy=(CAR_TILE-dh)/2;
@@ -2142,7 +2102,7 @@ static bool carDecodeTile(int gi,uint16_t*dst){
     for(int c=0;c<dw;c++){int sx=(int)(c/sc);if(sx>=djw)sx=djw-1;
       dst[(oy+r)*CAR_TILE+(ox+c)]=jpeg_tmp_buf[sy*djw+sx];}
     if(r%20==0)yield();}
-  return true;
+  free(jpeg_tmp_buf);jpeg_tmp_buf=NULL;return true;
 }
 // Persistent SD thumbnail cache: the first view decodes the big JPEG once, then
 // the finished 45 KB tile is written beside the game as ".<name>.tnl". Every
@@ -2159,17 +2119,18 @@ static String carThumbPath(int gi){
   const String&p=g_files[g.first_file_idx];
   uint32_t h=5381; for(unsigned i=0;i<p.length();i++)h=((h<<5)+h)^(uint8_t)p[i];   // djb2-xor
   char hx[6]; snprintf(hx,sizeof(hx),"%04X",(unsigned)(h&0xFFFF));
-  char bkt[2]={hx[0],0};                                                            // 5.9.0: shard by first hex nibble -> ~n/16 files per dir
-  return carThumbRoot(gi)+"/"+bkt+"/"+getGameBaseName(p)+"_"+hx+".tnl";
+  return carThumbRoot(gi)+"/"+getGameBaseName(p)+"_"+hx+".tnl";
 }
 static bool carLoadThumb(int gi,uint16_t*dst){
   auto&g=g_games[gi];
   if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return false;
-  // 5.9.0: open+read only. The two stat() calls each linearly walked the .thumbs
-  // dir (FAT has no index) — the real "slow with many files" cost. Staleness is
-  // re-checked at build time (buildThumbs `need`); a short/corrupt tile still fails
-  // via got!=want below and self-heals through carDecodeTile.
-  File f=SD_MMC.open(carThumbPath(gi).c_str(),"r");if(!f)return false;
+  String tp=carThumbPath(gi);
+  struct stat stT,stJ;
+  String vT="/sdcard"+tp,vJ="/sdcard"+g.jpg_path;
+  if(stat(vT.c_str(),&stT)!=0)return false;
+  if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))return false;
+  if(stat(vJ.c_str(),&stJ)==0&&stJ.st_mtime>stT.st_mtime)return false;   // cover replaced -> stale
+  File f=SD_MMC.open(tp.c_str(),"r");if(!f)return false;
   size_t want=(size_t)CAR_TILE*CAR_TILE*2;
   size_t got=f.read((uint8_t*)dst,want);f.close();
   return got==want;
@@ -2179,10 +2140,7 @@ static void carSaveThumb(int gi,uint16_t*src){
   if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return;
   String root=carThumbRoot(gi);
   if(!SD_MMC.exists(root.c_str()))SD_MMC.mkdir(root.c_str());
-  String tp=carThumbPath(gi);
-  int sl=tp.lastIndexOf('/'); String dir=tp.substring(0,sl);          // 5.9.0: ensure the shard bucket (.thumbs/<nibble>) exists
-  if(!SD_MMC.exists(dir.c_str()))SD_MMC.mkdir(dir.c_str());
-  File f=SD_MMC.open(tp.c_str(),FILE_WRITE);if(!f)return;
+  File f=SD_MMC.open(carThumbPath(gi).c_str(),FILE_WRITE);if(!f)return;
   f.write((uint8_t*)src,(size_t)CAR_TILE*CAR_TILE*2);f.close();
 }
 // Fetch a game's tile (NULL if uncached and decoding isn't allowed right now).
@@ -2206,12 +2164,10 @@ static uint16_t* carTile(int gi,bool mayDecode){
 // (Michael's call: one predictable pass with a progress bar, never live jank).
 // Fresh thumbs are stat-checked and skipped, so a re-run over a built card is
 // seconds, not minutes. v4.8.5: carousel is first-class, so thumbs always build.
-static void carMicroInit(); static void carMicroFromTile(int gi,const uint16_t*tile); static void carMicroSave();  // 5.9.0 fwd-decls (definitions below)
 static void buildThumbs(){
   int n=(int)g_games.size(); if(!n)return;
   uint16_t*tmp=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2);
   if(!tmp)return;
-  carMicroInit();                          // 5.9.0: build the resident micro-thumb set in-line with the thumb pass
   uint32_t lastDraw=0;
   for(int i=0;i<n;i++){
     auto&g=g_games[i];
@@ -2224,16 +2180,12 @@ static void buildThumbs(){
       else if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))need=true;
       else if(stat(vJ.c_str(),&stJ)==0&&stJ.st_mtime>stT.st_mtime)need=true;
     }
-    bool haveTile=false;                                     // 5.9.0: seed the micro-thumb in the SAME pass (no second 45 MB re-read)
-    if(need){ if(carDecodeTile(i,tmp)){carSaveThumb(i,tmp);haveTile=true;} }
-    else     { haveTile=carLoadThumb(i,tmp); }
-    if(haveTile)carMicroFromTile(i,tmp);
+    if(need&&carDecodeTile(i,tmp))carSaveThumb(i,tmp);
     uint32_t nowMs=millis();
     if(nowMs-lastDraw>100||i==n-1){
       lastDraw=nowMs;
       gfx_fillScreen(0x1082);
       gfx_setTextSize(2);gfx_setTextColor(0xFC60,0x1082);
-      gLog("[thumbs] %d/%d int=%u psram=%u\n",i+1,n,(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
       {const char*s=T(L_BUILDING);int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH/2-50);gfx_print(s);}
       gfx_setTextSize(1);gfx_setTextColor(0x9BD6,0x1082);
       {String m=String(i+1)+" / "+String(n);int tw=gfx_textWidth(m);gfx_setCursor((gW-tw)/2,gH/2-22);gfx_print(m);}
@@ -2247,7 +2199,6 @@ static void buildThumbs(){
     if((i&7)==0)yield();
   }
   free(tmp);
-  carMicroSave();     // 5.9.0: persist /.gti_micro.pk now — the reel's "Preparing covers" pass never runs again
   writeGameCache();   // persist jpg paths resolved during the build (faster covers later too)
   g_coverset.clear();   // 5.3.7: cover set has done its job — free the PSRAM
 }
@@ -3340,7 +3291,7 @@ static void doRescan(){
   { bool wl=g_wireless_mode; selfHealConfig(); loadConfig(); g_wireless_mode=wl; relayout(); }
   // Rescan with animation
   g_files.clear();g_games.clear();
-  heap_caps_malloc_extmem_enable(16);listImages(SD_MMC,g_files);buildGameList();buildThumbs();heap_caps_malloc_extmem_enable(4096);applyStats();buildActiveLetters();scanScreensaver();
+  listImages(SD_MMC,g_files);buildGameList();buildThumbs();applyStats();buildActiveLetters();scanScreensaver();
   g_sel=0;g_scroll=0;g_disk_sel=0;g_disk_page=0;g_scrollPx=0;g_az_page=0;g_inertia_on=false;
   if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
   drawFullUI();gfx_flush();
@@ -3914,13 +3865,8 @@ void setup(){
     }
     espnowSetScanCap(g_dongle_cap);
     relayout();                 // apply ROTATE/COMPACT from config before first draw
-    gLog("\n=== BOOT %s === reset=%d int=%u psram=%u ===\n",FW_VERSION,(int)esp_reset_reason(),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
-    heap_caps_malloc_extmem_enable(16);   // 5.8.9: library index/list onto idle PSRAM, off the ~180KB internal SRAM
-    uint32_t _tscan=millis();
     listImages(SD_MMC,g_files);
     if(!readGameCache()){buildGameList();buildThumbs();}   // fresh card: build reel thumbs up-front
-    heap_caps_malloc_extmem_enable(4096);   // restore: runtime allocations back to internal (fast UI)
-    gLog("[boot] scan+build %lums int=%u psram=%u\n",(unsigned long)(millis()-_tscan),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
     applyStats();
     buildActiveLetters();
     if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
@@ -4092,7 +4038,7 @@ static void doCategoryBrowse(){
 static void switchLib(int m){   // int, not DiskMode: Arduino auto-generates this prototype ABOVE the enum decl, so an enum param won't compile
   g_mode=(DiskMode)m;g_libpath="";
   if(g_categories){reloadLevel();}
-  else{g_files.clear();heap_caps_malloc_extmem_enable(16);listImages(SD_MMC,g_files);if(!readGameCache()){buildGameList();buildThumbs();}heap_caps_malloc_extmem_enable(4096);buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));}
+  else{g_files.clear();listImages(SD_MMC,g_files);if(!readGameCache()){buildGameList();buildThumbs();}buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));}
   drawFullUI();gfx_flush();
 }
 static void drawInfoBottomBar(){

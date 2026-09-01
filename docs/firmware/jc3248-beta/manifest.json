@@ -1,6 +1,16 @@
 {
-  "name": "Gotek Touchscreen Interface — JC3248 BETA (5.8.4 — recurse-flatten library + self-healing config, on top of pill buttons + matrix screensaver + translations)",
-  "version": "5.8.4-beta",
+  "name": "Gotek Touchscreen Interface — JC3248 BETA (5.9.0 — fast reel on 1000+ game libraries: sharded thumb cache + folded micro-thumbs, carrying the big-library scan fix)",
+  "version": "5.9.0-beta",
   "new_install_prompt_erase": true,
-  "builds": [ { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_JC3248.ino.merged.bin", "offset": 0 } ] } ]
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "Gotek_JC3248.ino.merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
 }
