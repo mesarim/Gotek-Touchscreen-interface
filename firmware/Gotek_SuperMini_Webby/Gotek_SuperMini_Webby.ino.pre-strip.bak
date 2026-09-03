@@ -45,7 +45,7 @@
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-0.5-OMEGA"
+#define FW_VERSION     "Webby-0.4-HDpanel"
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -753,6 +753,16 @@ static void apiThemesList(){
   j += "\",\"themes\":[\"AMIGA_WB2\",\"AMIGA_WB13\",\"PAPER_WHITE\",\"MIDNIGHT\",\"PHOSPHOR\",\"OMEGA_DARK\"]}";
   server.send(200,"application/json", j);
 }
+static void apiDavStatus(){
+  server.send(200,"application/json","{\"connected\":false,\"enabled\":false,\"host\":\"\",\"port\":0}");
+}
+static void apiFtpStatus(){
+  server.send(200,"application/json","{\"connected\":false,\"enabled\":false,\"host\":\"\",\"port\":0,\"user\":\"\",\"wifi_connected\":false}");
+}
+static void apiLog(){
+  server.send(200,"application/json","{\"log\":\"Serial log is not stored on this dongle build.\"}");
+}
+static void apiLogClear(){ server.send(200,"application/json","{\"status\":\"ok\"}"); }
 
 static void handleWebUI(){
   server.sendHeader("Content-Encoding","gzip");
@@ -781,8 +791,12 @@ static void startWebServer(){
   server.on("/api/config",       HTTP_GET,  apiConfig);
   server.on("/api/config",       HTTP_POST, apiConfigSave);
   server.on("/api/system/reboot",HTTP_POST, apiReboot);
-  // PANEL: theme gallery (built-in presets, no card needed)
+  // PANEL: parity tabs — theme gallery works; dav/ftp/log open cleanly as "not available"
   server.on("/api/themes/list", HTTP_GET,  apiThemesList);
+  server.on("/api/dav/status",  HTTP_GET,  apiDavStatus);
+  server.on("/api/ftp/status",  HTTP_GET,  apiFtpStatus);
+  server.on("/api/log",         HTTP_GET,  apiLog);
+  server.on("/api/log/clear",   HTTP_POST, apiLogClear);
   // API misses -> clean 404 JSON (SPA tolerates it); everything else -> captive portal to /
   server.onNotFound([](){
     String u = server.uri();

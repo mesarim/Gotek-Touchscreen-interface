@@ -38,30 +38,16 @@
 #include <WiFiClient.h>
 #include <esp_mac.h>
 #include "esp_wifi.h"
-#include "esp_heap_caps.h"   // HD test: internal-heap readout
 #include <LittleFS.h>
 #include <WebServer.h>     // WEBBY: built-in (ESP32 core) — no external lib
 #include <ESPmDNS.h>       // WEBBY: gotek.local
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
-#include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-0.5-OMEGA"
+#define FW_VERSION     "Webby-0.1"
 #define ESPNOW_CHANNEL 6
-// ── Board profile ──────────────────────────────────────────
-// Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
-// USB broken out to a usable connector (it IS the USB drive), and >=4MB flash.
-// The SuperMini is just the cheapest board that packages those three. To port to
-// another S3, override these pins for that board (an unused GPIO is fine — the
-// LEDs are optional status, not required). Defaults = SuperMini.
-#ifndef LED_RED
 #define LED_RED        1
-#endif
-#ifndef LED_BLUE
 #define LED_BLUE       2
-#endif
-#ifndef BOOT_PIN
 #define BOOT_PIN       0
-#endif
 
 #define AP_SSID     "GotekOMEGA"
 #define AP_PASS     "gotek1234"
@@ -100,11 +86,10 @@ struct PktStatus { uint8_t type; uint8_t loaded; uint32_t load_id; uint32_t imag
 
 // FAT12 geometry
 #define SECTOR_SIZE      512
-#define TOTAL_SECTORS    3584   // HD: 1.75MB RAM disk (holds a 1.76MB HD ADF + FAT); leaves ~256KB PSRAM free on a 2MB board. Do NOT set to the full 2MB (4096) — ps_malloc can't take 100% of PSRAM.
+#define TOTAL_SECTORS    2048
 #define RESERVED_SECTORS 1
 #define SECTORS_PER_FAT  6
 #define NUM_FATS         1
-#define SECTORS_PER_CLUSTER 2   // HD: 1KB clusters -> ~2042 clusters, safely FAT12
 #define ROOT_ENTRIES     64
 #define ROOT_DIR_SECTORS 4
 #define DATA_LBA         11
@@ -198,7 +183,7 @@ static void build_volume_ex(const char* outName, uint32_t fsz, bool wipeAll) {
   memset(g_disk, 0, (wipeAll ? (size_t)TOTAL_SECTORS*SECTOR_SIZE : (size_t)DATA_LBA*SECTOR_SIZE));
   uint8_t* bs=g_disk;
   bs[0]=0xEB;bs[1]=0x3C;bs[2]=0x90;memcpy(&bs[3],"MSDOS5.0",8);
-  wr16(bs,11,SECTOR_SIZE);bs[13]=SECTORS_PER_CLUSTER;wr16(bs,14,RESERVED_SECTORS);bs[16]=NUM_FATS;
+  wr16(bs,11,SECTOR_SIZE);bs[13]=1;wr16(bs,14,RESERVED_SECTORS);bs[16]=NUM_FATS;
   wr16(bs,17,ROOT_ENTRIES);wr16(bs,19,TOTAL_SECTORS);bs[21]=0xF8;
   wr16(bs,22,SECTORS_PER_FAT);wr16(bs,24,32);wr16(bs,26,64);
   bs[36]=0x80;bs[38]=0x29;wr32(bs,39,0x12345678);
@@ -206,7 +191,7 @@ static void build_volume_ex(const char* outName, uint32_t fsz, bool wipeAll) {
   bs[510]=0x55;bs[511]=0xAA;
   uint8_t* fat=g_disk+RESERVED_SECTORS*SECTOR_SIZE;
   fat[0]=0xF8;fat[1]=0xFF;fat[2]=0xFF;
-  uint32_t clb=(uint32_t)SECTORS_PER_CLUSTER*512; uint32_t need=(fsz+clb-1)/clb;
+  uint32_t need=(fsz+511)/512;
   for(uint32_t i=0;i<need;i++){ uint16_t c=(uint16_t)(2+i); fat12_set(fat,c,(i==(need-1))?0x0FFF:(c+1)); }
   uint8_t* root=fat+SECTORS_PER_FAT*SECTOR_SIZE;
   char n[8],e[3]; memset(n,' ',8); memset(e,' ',3);
@@ -499,15 +484,11 @@ static String jsonEsc(const String& s){
 static String statusJson(){
   String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
   String s = "{";
-  s += "\"fw\":\""; s += FW_VERSION; s += "\",";
   s += "\"loaded\":"; s += (g_disk_loaded?"true":"false");
   s += ",\"name\":\""; s += jsonEsc(g_loaded_name); s += "\"";
   s += ",\"size\":"; s += String(g_image_size);
   s += ",\"mode\":\""; s += (g_webmode==1 ? "wifi" : "espnow"); s += "\"";
   s += ",\"ip\":\""; s += ip; s += "\"";
-  s += ",\"heap\":"; s += String((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));   // HD test
-  s += ",\"psram\":"; s += String((unsigned)ESP.getFreePsram());
-  s += ",\"disk\":"; s += String((unsigned)((uint32_t)TOTAL_SECTORS*SECTOR_SIZE));
   s += "}";
   return s;
 }
@@ -662,140 +643,16 @@ drop.addEventListener('drop',function(ev){if(ev.dataTransfer.files[0])picked(ev.
 setInterval(poll,1500);poll();
 </script></body></html>)HTML";
 
-// ── PANEL: Dimmy shared-UI adapter ──────────────────────────────────────────
-// Serves webui.h (his single-page app) and answers the /api/* calls its
-// card-less "has_sd:false" dongle surface makes, mapped onto our Webby state.
-// This is a thin shim — NOT web_panel.h — so the JC-only globals stay out.
-static String g_active_theme = "OMEGA_DARK";  // PANEL: which theme the gallery has activated
-static void saveTheme(const String& t){
-  if(!LittleFS.begin(true)) return;
-  File f=LittleFS.open("/THEME.TXT","w"); if(!f) return;
-  f.print(t); f.close();
-}
-static void loadTheme(){
-  if(!LittleFS.begin(true)) return;
-  File f=LittleFS.open("/THEME.TXT","r"); if(!f) return;
-  String t=f.readStringUntil('\n'); t.trim(); f.close();
-  if(t.length()) g_active_theme=t;
-}
-static void apiSystemInfo(){
-  String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
-  String j = "{";
-  j += "\"firmware\":\""; j += FW_VERSION; j += "\",";
-  j += "\"heap_free\":"; j += String((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL)); j += ",";
-  j += "\"psram_free\":"; j += String((unsigned)ESP.getFreePsram()); j += ",";
-  j += "\"sd_used_mb\":0,\"sd_total_mb\":0,";
-  j += "\"game_count\":0,\"file_count\":0,";
-  j += "\"loaded_game\":\""; j += (g_disk_loaded ? jsonEsc(g_loaded_name) : String("none")); j += "\",";
-  j += "\"mode\":\""; j += (g_webmode==1 ? "WIFI" : "ESPNOW"); j += "\",";
-  j += "\"theme\":\""; j += g_active_theme; j += "\",";
-  j += "\"wifi_ip\":\""; j += ip; j += "\",";
-  j += "\"wifi_clients\":"; j += String((unsigned)WiFi.softAPgetStationNum()); j += ",";
-  j += "\"internet\":false,\"internet_ssid\":\"\",\"internet_ip\":\"\",";
-  j += "\"has_sd\":false,\"has_display\":false,\"has_ota\":false,";
-  j += "\"ftp_enabled\":false,\"dav_enabled\":false,\"log_enabled\":false";
-  j += "}";
-  server.send(200,"application/json", j);
-}
-static void apiDiskStatus(){
-  String j = "{";
-  j += "\"loaded\":"; j += (g_disk_loaded?"true":"false"); j += ",";
-  j += "\"file\":\""; j += jsonEsc(g_loaded_name); j += "\",";
-  j += "\"name\":\""; j += jsonEsc(g_loaded_name); j += "\",";
-  j += "\"game\":\""; j += jsonEsc(g_loaded_name); j += "\",";
-  j += "\"path\":\"\",\"source\":\""; j += (g_disk_loaded?"USB":""); j += "\",";
-  j += "\"disk_num\":"; j += String(g_disk_loaded?1:0); j += ",";
-  j += "\"disk_total\":"; j += String(g_disk_loaded?1:0);
-  j += "}";
-  server.send(200,"application/json", j);
-}
-static void apiDiskUnload(){
-  if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
-  dirtyReset(); g_loaded_name=""; digitalWrite(LED_BLUE, LOW);
-  server.send(200,"application/json","{\"status\":\"ok\"}");
-}
-static void apiGamesUploadDone(){
-  if (g_up_overflow) { server.send(413,"application/json","{\"error\":\"image too big for the HD ramdisk\"}"); return; }
-  if (g_up_recv == 0) { server.send(400,"application/json","{\"error\":\"empty upload\"}"); return; }
-  g_loaded_name = g_up_name;
-  webFinishLoad();
-  String j = "{\"name\":\""; j += jsonEsc(g_up_name); j += "\",\"bytes\":"; j += String((unsigned)g_up_recv); j += "}";
-  server.send(200,"application/json", j);
-}
-static void apiWifiStatus(){
-  bool sta = (WiFi.status()==WL_CONNECTED);
-  String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
-  String j = "{\"sta\":"; j += (sta?"true":"false");
-  j += ",\"ip\":\""; j += ip; j += "\",\"sta_ssid\":\""; j += jsonEsc(g_ssid); j += "\"}";
-  server.send(200,"application/json", j);
-}
-static void apiConfig(){
-  String j = "{";
-  j += "\"DISPLAY\":\"SUPERMINI\",\"LASTMODE\":\"ADF\",";
-  j += "\"MDNS_NAME\":\"" MDNS_NAME "\",";
-  j += "\"WIFI_ENABLED\":\"1\",";
-  j += "\"WIFI_CLIENT_ENABLED\":\""; j += (g_webmode==1?"1":"0"); j += "\",";
-  j += "\"WIFI_CLIENT_SSID\":\""; j += jsonEsc(g_ssid); j += "\",";
-  j += "\"WIFI_CLIENT_PASS\":\"\",";
-  j += "\"FTP_ENABLED\":\"0\",\"DAV_ENABLED\":\"0\"";
-  j += "}";
-  server.send(200,"application/json", j);
-}
-static void apiConfigSave(){
-  String ssid = server.arg("WIFI_CLIENT_SSID");
-  String pass = server.arg("WIFI_CLIENT_PASS");
-  if (ssid.length()) { saveWifiCfg(ssid, pass); server.send(200,"application/json","{\"status\":\"ok\",\"reboot\":true}"); delay(400); ESP.restart(); return; }
-  server.send(200,"application/json","{\"status\":\"ok\"}");
-}
-static void apiReboot(){ server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
-static void apiThemesList(){
-  String j = "{\"active\":\""; j += g_active_theme;
-  j += "\",\"themes\":[\"AMIGA_WB2\",\"AMIGA_WB13\",\"PAPER_WHITE\",\"MIDNIGHT\",\"PHOSPHOR\",\"OMEGA_DARK\"]}";
-  server.send(200,"application/json", j);
-}
-
-static void handleWebUI(){
-  server.sendHeader("Content-Encoding","gzip");
-  server.send_P(200, "text/html", (PGM_P)webui_gz, webui_gz_len);
-}
-
 static void handleRoot(){ server.send_P(200, "text/html", PAGE_HTML); }
 
 static void startWebServer(){
-  // PANEL: Dimmy's SPA is the front door; the old simple page stays at /classic.
-  server.on("/", HTTP_GET, handleWebUI);
-  server.on("/classic", HTTP_GET, handleRoot);
-  // legacy simple endpoints (kept — the /classic page and any old clients use them)
+  server.on("/", HTTP_GET, handleRoot);
   server.on("/status", HTTP_GET, [](){ server.send(200,"application/json", statusJson()); });
   server.on("/upload", HTTP_POST, handleUploadDone, handleUpload);
   server.on("/eject", HTTP_POST, handleEjectWeb);
   server.on("/savewifi", HTTP_POST, handleSaveWifi);
   server.on("/espnow", HTTP_POST, handleEspnowWeb);
-  // PANEL: /api/* shim the SPA calls (has_sd:false dongle surface)
-  server.on("/api/system/info",  HTTP_GET,  apiSystemInfo);
-  server.on("/api/disk/status",  HTTP_GET,  apiDiskStatus);
-  server.on("/api/disk/unload",  HTTP_POST, apiDiskUnload);
-  server.on("/api/games/upload", HTTP_POST, apiGamesUploadDone, handleUpload);
-  server.on("/api/games/list",   HTTP_GET,  [](){ server.send(200,"application/json","{\"games\":[]}"); });
-  server.on("/api/wifi/status",  HTTP_GET,  apiWifiStatus);
-  server.on("/api/config",       HTTP_GET,  apiConfig);
-  server.on("/api/config",       HTTP_POST, apiConfigSave);
-  server.on("/api/system/reboot",HTTP_POST, apiReboot);
-  // PANEL: theme gallery (built-in presets, no card needed)
-  server.on("/api/themes/list", HTTP_GET,  apiThemesList);
-  // API misses -> clean 404 JSON (SPA tolerates it); everything else -> captive portal to /
-  server.onNotFound([](){
-    String u = server.uri();
-    // theme gallery activate: /api/themes/<name>/activate  (remember the choice)
-    if (u.startsWith("/api/themes/") && u.endsWith("/activate")) {
-      int a = 12; int b = u.lastIndexOf("/activate");   // 12 = strlen("/api/themes/")
-      if (b > a) g_active_theme = u.substring(a, b);
-      saveTheme(g_active_theme);   // PANEL: remember across reboots
-      server.send(200,"application/json","{\"status\":\"ok\"}"); return;
-    }
-    if (u.startsWith("/api/")) { server.send(404,"application/json","{\"error\":\"not found\"}"); return; }
-    server.sendHeader("Location","/"); server.send(302,"text/plain","");   // captive portal
-  });
+  server.onNotFound([](){ server.sendHeader("Location","/"); server.send(302,"text/plain",""); });
   server.begin();
 }
 
@@ -877,7 +734,7 @@ void setup() {
   // PSRAM ramdisk
   g_disk = (uint8_t*)ps_malloc((size_t)TOTAL_SECTORS*SECTOR_SIZE);
   if (!g_disk) g_disk = (uint8_t*)malloc((size_t)TOTAL_SECTORS*SECTOR_SIZE);
-  if (!g_disk) { Serial.println("[FATAL] RAM disk alloc failed \u2014 enable PSRAM (QSPI) in the board menu, or the disk is too big for this board's PSRAM"); oledStatus("FATAL: no RAM","Set PSRAM=QSPI","in board menu",""); while(true){digitalWrite(LED_RED,HIGH);delay(200);digitalWrite(LED_RED,LOW);delay(200);} }
+  if (!g_disk) { oledStatus("FATAL: no RAM","Set PSRAM=QSPI","in board menu",""); while(true){digitalWrite(LED_RED,HIGH);delay(200);digitalWrite(LED_RED,LOW);delay(200);} }
   build_volume("DISK.ADF", ADF_DEFAULT_SIZE);
 
   // USB MSC
@@ -889,7 +746,6 @@ void setup() {
 
   loadConfig();       // enrolled owners (used in ESPNOW mode)
   loadWifiCfg();      // WEBBY: home creds + mode
-  loadTheme();        // PANEL: last-chosen web theme
 
   // WEBBY: pick the radio mode.
   bool tryWifi = (g_modeStr == "WIFI" && g_ssid.length() > 0);

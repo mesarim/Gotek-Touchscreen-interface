@@ -45,7 +45,7 @@
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-0.5-OMEGA"
+#define FW_VERSION     "Webby-0.4-HDpanel"
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -666,18 +666,6 @@ setInterval(poll,1500);poll();
 // Serves webui.h (his single-page app) and answers the /api/* calls its
 // card-less "has_sd:false" dongle surface makes, mapped onto our Webby state.
 // This is a thin shim — NOT web_panel.h — so the JC-only globals stay out.
-static String g_active_theme = "OMEGA_DARK";  // PANEL: which theme the gallery has activated
-static void saveTheme(const String& t){
-  if(!LittleFS.begin(true)) return;
-  File f=LittleFS.open("/THEME.TXT","w"); if(!f) return;
-  f.print(t); f.close();
-}
-static void loadTheme(){
-  if(!LittleFS.begin(true)) return;
-  File f=LittleFS.open("/THEME.TXT","r"); if(!f) return;
-  String t=f.readStringUntil('\n'); t.trim(); f.close();
-  if(t.length()) g_active_theme=t;
-}
 static void apiSystemInfo(){
   String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
   String j = "{";
@@ -688,7 +676,7 @@ static void apiSystemInfo(){
   j += "\"game_count\":0,\"file_count\":0,";
   j += "\"loaded_game\":\""; j += (g_disk_loaded ? jsonEsc(g_loaded_name) : String("none")); j += "\",";
   j += "\"mode\":\""; j += (g_webmode==1 ? "WIFI" : "ESPNOW"); j += "\",";
-  j += "\"theme\":\""; j += g_active_theme; j += "\",";
+  j += "\"theme\":\"OMEGA_DARK\",";
   j += "\"wifi_ip\":\""; j += ip; j += "\",";
   j += "\"wifi_clients\":"; j += String((unsigned)WiFi.softAPgetStationNum()); j += ",";
   j += "\"internet\":false,\"internet_ssid\":\"\",\"internet_ip\":\"\",";
@@ -748,12 +736,6 @@ static void apiConfigSave(){
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiReboot(){ server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
-static void apiThemesList(){
-  String j = "{\"active\":\""; j += g_active_theme;
-  j += "\",\"themes\":[\"AMIGA_WB2\",\"AMIGA_WB13\",\"PAPER_WHITE\",\"MIDNIGHT\",\"PHOSPHOR\",\"OMEGA_DARK\"]}";
-  server.send(200,"application/json", j);
-}
-
 static void handleWebUI(){
   server.sendHeader("Content-Encoding","gzip");
   server.send_P(200, "text/html", (PGM_P)webui_gz, webui_gz_len);
@@ -781,20 +763,10 @@ static void startWebServer(){
   server.on("/api/config",       HTTP_GET,  apiConfig);
   server.on("/api/config",       HTTP_POST, apiConfigSave);
   server.on("/api/system/reboot",HTTP_POST, apiReboot);
-  // PANEL: theme gallery (built-in presets, no card needed)
-  server.on("/api/themes/list", HTTP_GET,  apiThemesList);
   // API misses -> clean 404 JSON (SPA tolerates it); everything else -> captive portal to /
   server.onNotFound([](){
-    String u = server.uri();
-    // theme gallery activate: /api/themes/<name>/activate  (remember the choice)
-    if (u.startsWith("/api/themes/") && u.endsWith("/activate")) {
-      int a = 12; int b = u.lastIndexOf("/activate");   // 12 = strlen("/api/themes/")
-      if (b > a) g_active_theme = u.substring(a, b);
-      saveTheme(g_active_theme);   // PANEL: remember across reboots
-      server.send(200,"application/json","{\"status\":\"ok\"}"); return;
-    }
-    if (u.startsWith("/api/")) { server.send(404,"application/json","{\"error\":\"not found\"}"); return; }
-    server.sendHeader("Location","/"); server.send(302,"text/plain","");   // captive portal
+    if (server.uri().startsWith("/api/")) { server.send(404,"application/json","{\"error\":\"not found\"}"); }
+    else { server.sendHeader("Location","/"); server.send(302,"text/plain",""); }
   });
   server.begin();
 }
@@ -889,7 +861,6 @@ void setup() {
 
   loadConfig();       // enrolled owners (used in ESPNOW mode)
   loadWifiCfg();      // WEBBY: home creds + mode
-  loadTheme();        // PANEL: last-chosen web theme
 
   // WEBBY: pick the radio mode.
   bool tryWifi = (g_modeStr == "WIFI" && g_ssid.length() > 0);

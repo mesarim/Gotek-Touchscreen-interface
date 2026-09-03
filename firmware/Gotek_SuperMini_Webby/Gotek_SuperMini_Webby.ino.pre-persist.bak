@@ -45,7 +45,7 @@
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-0.5-OMEGA"
+#define FW_VERSION     "Webby-0.4-HDpanel"
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -667,17 +667,6 @@ setInterval(poll,1500);poll();
 // card-less "has_sd:false" dongle surface makes, mapped onto our Webby state.
 // This is a thin shim — NOT web_panel.h — so the JC-only globals stay out.
 static String g_active_theme = "OMEGA_DARK";  // PANEL: which theme the gallery has activated
-static void saveTheme(const String& t){
-  if(!LittleFS.begin(true)) return;
-  File f=LittleFS.open("/THEME.TXT","w"); if(!f) return;
-  f.print(t); f.close();
-}
-static void loadTheme(){
-  if(!LittleFS.begin(true)) return;
-  File f=LittleFS.open("/THEME.TXT","r"); if(!f) return;
-  String t=f.readStringUntil('\n'); t.trim(); f.close();
-  if(t.length()) g_active_theme=t;
-}
 static void apiSystemInfo(){
   String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
   String j = "{";
@@ -692,8 +681,8 @@ static void apiSystemInfo(){
   j += "\"wifi_ip\":\""; j += ip; j += "\",";
   j += "\"wifi_clients\":"; j += String((unsigned)WiFi.softAPgetStationNum()); j += ",";
   j += "\"internet\":false,\"internet_ssid\":\"\",\"internet_ip\":\"\",";
-  j += "\"has_sd\":false,\"has_display\":false,\"has_ota\":false,";
-  j += "\"ftp_enabled\":false,\"dav_enabled\":false,\"log_enabled\":false";
+  j += "\"has_sd\":true,\"has_display\":true,\"has_ota\":false,";
+  j += "\"ftp_enabled\":true,\"dav_enabled\":true,\"log_enabled\":true";
   j += "}";
   server.send(200,"application/json", j);
 }
@@ -753,6 +742,16 @@ static void apiThemesList(){
   j += "\",\"themes\":[\"AMIGA_WB2\",\"AMIGA_WB13\",\"PAPER_WHITE\",\"MIDNIGHT\",\"PHOSPHOR\",\"OMEGA_DARK\"]}";
   server.send(200,"application/json", j);
 }
+static void apiDavStatus(){
+  server.send(200,"application/json","{\"connected\":false,\"enabled\":false,\"host\":\"\",\"port\":0}");
+}
+static void apiFtpStatus(){
+  server.send(200,"application/json","{\"connected\":false,\"enabled\":false,\"host\":\"\",\"port\":0,\"user\":\"\",\"wifi_connected\":false}");
+}
+static void apiLog(){
+  server.send(200,"application/json","{\"log\":\"Serial log is not stored on this dongle build.\"}");
+}
+static void apiLogClear(){ server.send(200,"application/json","{\"status\":\"ok\"}"); }
 
 static void handleWebUI(){
   server.sendHeader("Content-Encoding","gzip");
@@ -781,8 +780,12 @@ static void startWebServer(){
   server.on("/api/config",       HTTP_GET,  apiConfig);
   server.on("/api/config",       HTTP_POST, apiConfigSave);
   server.on("/api/system/reboot",HTTP_POST, apiReboot);
-  // PANEL: theme gallery (built-in presets, no card needed)
+  // PANEL: parity tabs — theme gallery works; dav/ftp/log open cleanly as "not available"
   server.on("/api/themes/list", HTTP_GET,  apiThemesList);
+  server.on("/api/dav/status",  HTTP_GET,  apiDavStatus);
+  server.on("/api/ftp/status",  HTTP_GET,  apiFtpStatus);
+  server.on("/api/log",         HTTP_GET,  apiLog);
+  server.on("/api/log/clear",   HTTP_POST, apiLogClear);
   // API misses -> clean 404 JSON (SPA tolerates it); everything else -> captive portal to /
   server.onNotFound([](){
     String u = server.uri();
@@ -790,7 +793,6 @@ static void startWebServer(){
     if (u.startsWith("/api/themes/") && u.endsWith("/activate")) {
       int a = 12; int b = u.lastIndexOf("/activate");   // 12 = strlen("/api/themes/")
       if (b > a) g_active_theme = u.substring(a, b);
-      saveTheme(g_active_theme);   // PANEL: remember across reboots
       server.send(200,"application/json","{\"status\":\"ok\"}"); return;
     }
     if (u.startsWith("/api/")) { server.send(404,"application/json","{\"error\":\"not found\"}"); return; }
@@ -889,7 +891,6 @@ void setup() {
 
   loadConfig();       // enrolled owners (used in ESPNOW mode)
   loadWifiCfg();      // WEBBY: home creds + mode
-  loadTheme();        // PANEL: last-chosen web theme
 
   // WEBBY: pick the radio mode.
   bool tryWifi = (g_modeStr == "WIFI" && g_ssid.length() > 0);
