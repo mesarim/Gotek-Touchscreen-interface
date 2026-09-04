@@ -46,7 +46,7 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-0.7-fleet"
+#define FW_VERSION     "Webby-0.6-disco"
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -68,7 +68,7 @@
 #define AP_PASS     "gotek1234"
 #define AP_IP       "192.168.4.1"
 #define TCP_PORT    3333
-#define MDNS_NAME   "gotekomega"  // FLEET master name -> gotekomega.local
+#define MDNS_NAME   "gotek"      // WEBBY: -> gotek.local
 
 // ESP-NOW packet types (unchanged from base)
 #define PKT_PAIR_HELLO  0x05
@@ -771,7 +771,7 @@ static void handleRoot(){ server.send_P(200, "text/html", PAGE_HTML); }
 static String discoId(){ uint8_t m[6]; WiFi.macAddress(m);
   char b[13]; snprintf(b,sizeof(b),"%02X%02X%02X%02X%02X%02X",m[0],m[1],m[2],m[3],m[4],m[5]); return String(b); }
 static String discoName(){ uint8_t m[6]; WiFi.macAddress(m);
-  char b[24]; snprintf(b,sizeof(b),"gotekomega-%02x%02x",m[4],m[5]); return String(b); }
+  char b[16]; snprintf(b,sizeof(b),"gotek-%02x%02x",m[4],m[5]); return String(b); }
 // ── FLEET: "I'm alive" discovery beacon — home-WiFi (STA) only, every 12 s ──
 // JSON per the Fleet Discovery design; consumed by the app (direct listen) and
 // the browser-master (/api/fleet). NOT sent in AP/ESP-NOW mode (no LAN to serve).
@@ -793,66 +793,6 @@ static void sendAliveBeacon(){
   IPAddress sub = ip; sub[3] = 255;   // subnet-directed + global broadcast (APs vary)
   _disco.beginPacket(sub, GTI_DISCO_PORT);                         _disco.write((const uint8_t*)j.c_str(), j.length()); _disco.endPacket();
   _disco.beginPacket(IPAddress(255,255,255,255), GTI_DISCO_PORT);  _disco.write((const uint8_t*)j.c_str(), j.length()); _disco.endPacket();
-}
-
-// ── FLEET: peer roster (from beacons) + lowest-MAC master election ──────────
-struct FleetPeer { String id, name, ip, fw; bool hd; bool loaded; uint32_t seen; };
-static FleetPeer g_peers[16]; static int g_peer_n = 0;
-static bool      g_is_master = false;
-static uint32_t  g_next_elect_ms = 0;
-#define FLEET_STALE_MS 40000   // drop a peer unheard for >40 s (~3 missed beacons)
-
-static String jf(const String& s, const char* key){   // tiny "key":"val" / "key":val extractor
-  String k = String("\"") + key + "\":";
-  int i = s.indexOf(k); if (i < 0) return "";
-  i += k.length(); if (i >= (int)s.length()) return "";
-  if (s[i]=='"'){ int e=s.indexOf('"', i+1); return e<0 ? String("") : s.substring(i+1, e); }
-  int e=i; while(e<(int)s.length() && s[e]!=',' && s[e]!='}') e++;
-  return s.substring(i, e);
-}
-static void fleetUpsert(const String& id,const String& name,const String& ip,const String& fw,bool hd,bool loaded){
-  for(int i=0;i<g_peer_n;i++) if(g_peers[i].id==id){ g_peers[i].name=name; g_peers[i].ip=ip; g_peers[i].fw=fw; g_peers[i].hd=hd; g_peers[i].loaded=loaded; g_peers[i].seen=millis(); return; }
-  if(g_peer_n<16){ g_peers[g_peer_n].id=id; g_peers[g_peer_n].name=name; g_peers[g_peer_n].ip=ip; g_peers[g_peer_n].fw=fw; g_peers[g_peer_n].hd=hd; g_peers[g_peer_n].loaded=loaded; g_peers[g_peer_n].seen=millis(); g_peer_n++; }
-}
-static void fleetPrune(){
-  uint32_t now=millis(); int w=0;
-  for(int i=0;i<g_peer_n;i++) if(now-g_peers[i].seen < FLEET_STALE_MS){ if(w!=i) g_peers[w]=g_peers[i]; w++; }
-  g_peer_n=w;
-}
-static void pollDisco(){   // read sibling beacons off the discovery socket
-  for(int guard=0; guard<8; guard++){
-    int sz=_disco.parsePacket(); if(sz<=0) return;
-    char buf[600]; int n=_disco.read((uint8_t*)buf, sizeof(buf)-1); if(n<=0) return; buf[n]=0;
-    String s(buf); if(s.indexOf("\"gti\":1")<0) continue;
-    String id=jf(s,"id"); if(id.length()==0 || id==discoId()) continue;   // ignore self
-    fleetUpsert(id, jf(s,"name"), jf(s,"ip"), jf(s,"fw"), jf(s,"hd")=="true", jf(s,"loaded")=="true");
-  }
-}
-static void doElection(){   // lowest MAC among alive devices wears the gotekomega hat
-  fleetPrune();
-  String me=discoId(); bool master=true;
-  for(int i=0;i<g_peer_n;i++) if(g_peers[i].id < me){ master=false; break; }
-  if(master!=g_is_master){
-    g_is_master=master;
-    MDNS.end();
-    if(master) MDNS.begin(MDNS_NAME); else MDNS.begin(discoName().c_str());
-    MDNS.addService("http","tcp",80);
-    Serial.printf("[FLEET] now %s -> %s.local\n", master?"MASTER":"slave", master?MDNS_NAME:discoName().c_str());
-  }
-}
-static void apiFleet(){
-  fleetPrune();
-  String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
-  String j = "{\"master\":\""; j += (g_is_master ? discoId() : String("")); j += "\",\"self\":\""; j += discoId(); j += "\",\"devices\":[";
-  j += "{\"id\":\""; j+=discoId(); j+="\",\"name\":\""; j+=discoName(); j+="\",\"ip\":\""; j+=ip;
-  j += "\",\"fw\":\""; j+=FW_VERSION; j+="\",\"hd\":true,\"self\":true,\"master\":"; j+=(g_is_master?"true":"false"); j+="}";
-  for(int i=0;i<g_peer_n;i++){
-    j += ",{\"id\":\""; j+=g_peers[i].id; j+="\",\"name\":\""; j+=jsonEsc(g_peers[i].name);
-    j += "\",\"ip\":\""; j+=g_peers[i].ip; j+="\",\"fw\":\""; j+=jsonEsc(g_peers[i].fw);
-    j += "\",\"hd\":"; j+=(g_peers[i].hd?"true":"false"); j+=",\"self\":false,\"master\":false}";
-  }
-  j += "]}";
-  server.send(200,"application/json", j);
 }
 
 static void startWebServer(){
@@ -877,7 +817,6 @@ static void startWebServer(){
   server.on("/api/system/reboot",HTTP_POST, apiReboot);
   // PANEL: theme gallery (built-in presets, no card needed)
   server.on("/api/themes/list", HTTP_GET,  apiThemesList);
-  server.on("/api/fleet",       HTTP_GET,  apiFleet);        // FLEET roster
   // API misses -> clean 404 JSON (SPA tolerates it); everything else -> captive portal to /
   server.onNotFound([](){
     String u = server.uri();
@@ -1002,12 +941,10 @@ void setup() {
     digitalWrite(LED_RED, LOW);
     if (WiFi.status() == WL_CONNECTED) {
       g_webmode = 1;
-      g_is_master = false;
-      if (MDNS.begin(discoName().c_str())) MDNS.addService("http","tcp",80);   // start as self; election may promote to gotekomega.local
+      if (MDNS.begin(MDNS_NAME)) MDNS.addService("http","tcp",80);
       _tcpServer.begin();        // app can reach us over the LAN too
       _disco.begin(GTI_DISCO_PORT);   // FLEET: open discovery socket
       g_next_alive_ms = 0;            // FLEET: beacon on the next loop tick
-      g_next_elect_ms = millis() + 2000;   // FLEET: first election shortly after join
       setLeds(false, true);      // blue = connected/ready
       Serial.printf("[WIFI] joined %s  IP %s  host %s  (gotek.local)\n", g_ssid.c_str(), WiFi.localIP().toString().c_str(), discoName().c_str());
     }
@@ -1037,8 +974,6 @@ void loop() {
   if (dirtyWaiting && millis() > g_next_beacon_ms) { sendDirtyBeacon(); g_next_beacon_ms = millis()+SAVE_BEACON_MS; }
   if (millis() > g_next_status_ms) { sendStatusBeacon(); g_next_status_ms = millis()+STATUS_BEACON_MS; }
   if (g_webmode==1 && millis() > g_next_alive_ms) { sendAliveBeacon(); g_next_alive_ms = millis()+ALIVE_BEACON_MS; }   // FLEET beacon
-  if (g_webmode==1) pollDisco();                                                                                       // FLEET listen
-  if (g_webmode==1 && millis() > g_next_elect_ms) { doElection(); g_next_elect_ms = millis()+4000; }                    // FLEET elect
 
   if (!serviceBootButton()) {
     if (dirtyWaiting)          setLeds(true, true);
