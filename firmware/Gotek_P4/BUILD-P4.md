@@ -12,7 +12,7 @@ Compiles clean under **arduino-esp32 3.3.11** (`esp32:esp32:esp32p4`): 29% flash
 | Setting | Value |
 |---|---|
 | Board | **ESP32P4 Dev Module** |
-| Flash Size | **match the actual chip** — confirm with `esptool --chip esp32p4 flash_id` (spec = 16MB NOR; the module's 32MB is PSRAM, not flash) |
+| Flash Size | **16MB** — use 16MB even on a 32MB-flash unit: a 16MB layout boots on a 32MB chip, but a 32MB layout does **not** boot on a 16MB chip. (The module's 32MB is PSRAM, not flash. Confirm the flash chip with `esptool --chip esp32p4 flash_id` if unsure.) |
 | PSRAM | **Enabled** — 32 MB HP PSRAM (framebuffers + ramdisk live here) |
 | CPU Frequency | **360 MHz** — leave default. ⛔ do **not** force 400 MHz: confirmed unstable on this v1.3 silicon. |
 | USB Mode | **USB-OTG (TinyUSB)** — required for the USB-MSC floppy |
@@ -29,7 +29,7 @@ driven by the **app image + OTA**, *not* by how big the flash chip is — any su
 simply unused. 3 MB app slots give large headroom (app is ~0.9 MB today).
 
 Drop one of these as `partitions.csv` in this folder (arduino-esp32 uses a sketch-local CSV
-when present). Pick the one matching the flash size `flash_id` reports:
+when present). Use the **16MB** table below (safe on both 16MB and 32MB flash). Only use the 32MB table if `flash_id` confirms 32MB **and** you want the extra unused FAT reserve:
 
 **16 MB flash** (validated 26-Aug layout):
 ```
