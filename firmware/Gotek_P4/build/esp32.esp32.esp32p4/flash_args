@@ -1,0 +1,5 @@
+--flash-mode dio --flash-freq 80m --flash-size 32MB  
+0x2000 Gotek_P4.ino.bootloader.bin  
+0x8000 Gotek_P4.ino.partitions.bin  
+0xe000 boot_app0.bin  
+0x10000 Gotek_P4.ino.bin 

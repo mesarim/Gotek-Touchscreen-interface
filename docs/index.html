@@ -559,6 +559,18 @@
       </div>
     </div>
 
+    <div class="device-card" data-manifest="firmware/p4-beta/manifest.json" onclick="selectDevice(this)">
+      <div class="selected-indicator"></div>
+      <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC4880 ESP32-P4 4.3-inch touchscreen" loading="lazy">
+      <div class="device-name">Guition JC4880 (ESP32-P4) &mdash; BETA</div>
+      <div class="device-chip">ESP32-P4 &middot; 4.3&Prime; 480×800 MIPI-DSI &middot; 5.8.6-P4 &middot; first P4 bring-up (experimental)</div>
+      <div class="device-desc"><b>Experimental first flash for the ESP32-P4</b> (Guition JC4880P443C) &mdash; feedback essential. This is the entire <b>5.8.6 interface</b> (categories, recurse-flatten library, cover art, carousel, saves, SD library, USB-MSC) running on the P4&rsquo;s <b>480×800 MIPI-DSI</b> panel for the very first time. <b>What should work:</b> the UI renders in portrait. <b>Still being validated on real hardware:</b> touch pins/calibration, USB-MSC enumeration, and SD browsing &mdash; so expect rough edges. <b>Wireless is not active yet</b> (the P4 reaches dongles over WiFi/TCP, folded in a later build). If you have a JC4880 board, flash it and tell us what draws, what responds to touch, and whether it mounts &mdash; <b>a photo of the screen helps most</b>.</div>
+      <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span></div>
+      <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
+        USB web-flash only (no SD-update path yet). <b>Won&rsquo;t connect?</b> Hold <b>BOOT</b>, tap <b>RESET</b>, release <b>BOOT</b>, then try again &mdash; and use the USB-C port that talks to the PC.
+      </div>
+    </div>
+
     <div class="device-card" data-manifest="firmware/jc4827-beta/manifest.json" onclick="selectDevice(this)">
       <div class="selected-indicator"></div>
       <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC4827W543 4.3-inch touchscreen" loading="lazy">
@@ -1151,6 +1163,7 @@ relayout();bootCracktro();requestAnimationFrame(frame);
   const deviceInfo = {
     'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware 5.5.5' },
     'firmware/jc3248-beta/manifest.json':{ name: 'Guition JC3248 BETA', version: 'Firmware 5.9.1-beta (On-screen Home WiFi setup · fast reel on 1000+ libraries · big-library scan fix · sharded thumb cache)' },
+    'firmware/p4-beta/manifest.json':{ name: 'Guition JC4880 (ESP32-P4) BETA', version: 'Firmware 5.8.6-P4 (first ESP32-P4 bring-up · full 5.8.6 UI on 480×800 DSI · touch/USB/SD being validated · wireless stubbed)' },
     'firmware/jc4827-beta/manifest.json':{ name: 'Guition JC4827W543 4.3" BETA', version: 'Firmware 5.8.4-beta (4.3" · Recurse-flatten · self-healing config · pill buttons · matrix saver)' },
     'firmware/waveshare7/manifest.json': { name: 'Waveshare 7" BETA',  version: 'Firmware v5.0.0-7IN BETA (Recurse-flatten · Desert cracktro · Self-healing config · 3×2 grid · Categories · Favourites)' },
     'firmware/waveshare7b-beta/manifest.json': { name: 'Waveshare 7B BETA', version: 'Firmware v5.0.0-7B BETA (1024×600 · Recurse-flatten · Desert cracktro · Self-healing config · 3×2 grid · perf-tuned)' },
