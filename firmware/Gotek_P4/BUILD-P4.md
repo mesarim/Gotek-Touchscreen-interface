@@ -75,3 +75,15 @@ use the USB port that flashes (USB-Serial-JTAG), supply >=600 mA.
 
 ## Report back for the next iteration
 1) `flash_id` size, 2) touch working y/n + real pins, 3) which USB-C enumerates, 4) a photo of the UI.
+
+## Board notes — confirmed on hardware (Sep 4)
+- **USB-C ports:** the one **furthest from the BOOT/RESET buttons** is the **flashing** port
+  (USB-Serial-JTAG). The near port is USB-OTG (the disk / USB-MSC side).
+- **Reflashing a running GTi build** needs manual download mode: **hold BOOT, tap RESET, release
+  BOOT**, then pick the serial port that appears (CDC is off, so a running build shows as a USB
+  drive, not a port, and won't auto-reset).
+- **Touch (GT911):** I2C **SDA=7 / SCL=8**; **RST and INT are NOT connected** to the MCU on this
+  board (vendor BSP `esp32_p4_function_ev_board`: `BSP_LCD_TOUCH_RST/INT = GPIO_NUM_NC`). Do **not**
+  drive GPIO21/22 — that was a wrong community guess. The chip powers up on the I2C bus; address is
+  0x5D (0x14 fallback). Fixed in 5.8.6-P4.2.
+- Backlight = GPIO23, panel = ST7701 480x800 DSI (matches the benchmark config).
