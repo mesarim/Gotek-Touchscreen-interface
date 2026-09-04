@@ -43,10 +43,9 @@
 #include <WebServer.h>     // WEBBY: built-in (ESP32 core) — no external lib
 #include <ESPmDNS.h>       // WEBBY: gotek.local
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
-#include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-0.6-disco"
+#define FW_VERSION     "Webby-0.5-OMEGA"
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -90,9 +89,6 @@
 #define CMD_GET_STATUS  0x02
 #define CMD_EJECT       0x03
 #define CMD_EJECT_FORCE 0x04
-// ── FLEET: UDP discovery beacon (shared port: dongle, app, JC, browser-master) ──
-#define GTI_DISCO_PORT   51703
-#define ALIVE_BEACON_MS  12000   // "I'm alive" cadence, home-WiFi only
 
 #pragma pack(push,1)
 struct PktHello  { uint8_t type; uint8_t mac[6]; char ip[16]; uint8_t pad[227]; };
@@ -397,8 +393,6 @@ static void setModeEspnow() {
 
 // ── base TCP save/eject/status handlers (unchanged) ─────────────────────────
 static WiFiServer _tcpServer(TCP_PORT);
-static WiFiUDP    _disco;                // FLEET: discovery beacon socket
-static uint32_t   g_next_alive_ms = 0;   // FLEET: next "I'm alive" broadcast
 static inline void wrLE32(uint8_t*p,uint32_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);p[2]=(uint8_t)(v>>16);p[3]=(uint8_t)(v>>24);}
 static inline void wrLE16(uint8_t*p,uint16_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);}
 static void doEject(WiFiClient& client, bool force){
@@ -767,34 +761,6 @@ static void handleWebUI(){
 
 static void handleRoot(){ server.send_P(200, "text/html", PAGE_HTML); }
 
-// ── FLEET: per-device identity from the STA MAC ─────────────────────────────
-static String discoId(){ uint8_t m[6]; WiFi.macAddress(m);
-  char b[13]; snprintf(b,sizeof(b),"%02X%02X%02X%02X%02X%02X",m[0],m[1],m[2],m[3],m[4],m[5]); return String(b); }
-static String discoName(){ uint8_t m[6]; WiFi.macAddress(m);
-  char b[16]; snprintf(b,sizeof(b),"gotek-%02x%02x",m[4],m[5]); return String(b); }
-// ── FLEET: "I'm alive" discovery beacon — home-WiFi (STA) only, every 12 s ──
-// JSON per the Fleet Discovery design; consumed by the app (direct listen) and
-// the browser-master (/api/fleet). NOT sent in AP/ESP-NOW mode (no LAN to serve).
-static void sendAliveBeacon(){
-  if (g_webmode != 1 || WiFi.status() != WL_CONNECTED) return;
-  IPAddress ip = WiFi.localIP();
-  String j = "{\"gti\":1";
-  j += ",\"id\":\"";    j += discoId();      j += "\"";
-  j += ",\"name\":\"";  j += discoName();    j += "\"";
-  j += ",\"ip\":\"";    j += ip.toString();  j += "\"";
-  j += ",\"board\":\"supermini\"";
-  j += ",\"fw\":\"";    j += FW_VERSION;     j += "\"";
-  j += ",\"hd\":true";
-  j += ",\"port\":80";
-  j += ",\"tcp\":";     j += String(TCP_PORT);
-  j += ",\"loaded\":";  j += (g_disk_loaded?"true":"false");
-  j += ",\"disk\":\"";  j += jsonEsc(g_loaded_name); j += "\"";
-  j += "}";
-  IPAddress sub = ip; sub[3] = 255;   // subnet-directed + global broadcast (APs vary)
-  _disco.beginPacket(sub, GTI_DISCO_PORT);                         _disco.write((const uint8_t*)j.c_str(), j.length()); _disco.endPacket();
-  _disco.beginPacket(IPAddress(255,255,255,255), GTI_DISCO_PORT);  _disco.write((const uint8_t*)j.c_str(), j.length()); _disco.endPacket();
-}
-
 static void startWebServer(){
   // PANEL: Dimmy's SPA is the front door; the old simple page stays at /classic.
   server.on("/", HTTP_GET, handleWebUI);
@@ -930,23 +896,16 @@ void setup() {
   g_webmode = 0;
   if (tryWifi) {
     WiFi.mode(WIFI_STA);
-    WiFi.setHostname(discoName().c_str());   // FLEET: router table shows gotek-xxxx, not "espressif"
-    // Two attempts: ESP32 STA frequently misses the first join and takes the retry.
-    for (int attempt = 0; attempt < 2 && WiFi.status() != WL_CONNECTED; attempt++) {
-      if (attempt) { WiFi.disconnect(true); delay(400); }
-      WiFi.begin(g_ssid.c_str(), g_pass.c_str());
-      uint32_t t0 = millis();
-      while (WiFi.status() != WL_CONNECTED && millis()-t0 < 12000) { digitalWrite(LED_RED, ((millis()/200)&1)?HIGH:LOW); delay(50); }
-    }
+    WiFi.begin(g_ssid.c_str(), g_pass.c_str());
+    uint32_t t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis()-t0 < 12000) { digitalWrite(LED_RED, ((millis()/200)&1)?HIGH:LOW); delay(50); }
     digitalWrite(LED_RED, LOW);
     if (WiFi.status() == WL_CONNECTED) {
       g_webmode = 1;
       if (MDNS.begin(MDNS_NAME)) MDNS.addService("http","tcp",80);
       _tcpServer.begin();        // app can reach us over the LAN too
-      _disco.begin(GTI_DISCO_PORT);   // FLEET: open discovery socket
-      g_next_alive_ms = 0;            // FLEET: beacon on the next loop tick
       setLeds(false, true);      // blue = connected/ready
-      Serial.printf("[WIFI] joined %s  IP %s  host %s  (gotek.local)\n", g_ssid.c_str(), WiFi.localIP().toString().c_str(), discoName().c_str());
+      Serial.printf("[WIFI] joined %s  IP %s  (gotek.local)\n", g_ssid.c_str(), WiFi.localIP().toString().c_str());
     }
   }
   if (g_webmode == 0) {
@@ -973,7 +932,6 @@ void loop() {
   bool dirtyWaiting = (g_dirty_count > 0 && g_last_write_ms && (millis()-g_last_write_ms) > SAVE_SETTLE_MS);
   if (dirtyWaiting && millis() > g_next_beacon_ms) { sendDirtyBeacon(); g_next_beacon_ms = millis()+SAVE_BEACON_MS; }
   if (millis() > g_next_status_ms) { sendStatusBeacon(); g_next_status_ms = millis()+STATUS_BEACON_MS; }
-  if (g_webmode==1 && millis() > g_next_alive_ms) { sendAliveBeacon(); g_next_alive_ms = millis()+ALIVE_BEACON_MS; }   // FLEET beacon
 
   if (!serviceBootButton()) {
     if (dirtyWaiting)          setLeds(true, true);
