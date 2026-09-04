@@ -1,6 +1,6 @@
 {
-  "name": "Gotek Touchscreen Interface — JC4880 P4 BETA (5.8.6-P4 — first ESP32-P4 bring-up: full 5.8.6 UI on the 480×800 MIPI-DSI panel)",
-  "version": "5.8.6-P4",
+  "name": "Gotek Touchscreen Interface — JC4880 P4 BETA (5.8.6-P4.1 — landscape UI on the 480×800 MIPI-DSI panel; first ESP32-P4 bring-up)",
+  "version": "5.8.6-P4.1",
   "new_install_prompt_erase": true,
   "builds": [
     {
