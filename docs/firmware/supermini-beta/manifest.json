@@ -1,6 +1,6 @@
 {
-  "name": "Gotek SuperMini — Webby BETA (OMEGA UI + ESP-NOW + home WiFi + fleet discovery)",
-  "version": "Webby-0.7-fleet",
+  "name": "Gotek SuperMini — Webby BETA (OMEGA UI + ESP-NOW + home WiFi + fleet)",
+  "version": "Webby-0.7-fleetUI",
   "new_install_prompt_erase": true,
   "builds": [ { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_SuperMini_Webby.ino.merged.bin", "offset": 0 } ] } ]
 }
