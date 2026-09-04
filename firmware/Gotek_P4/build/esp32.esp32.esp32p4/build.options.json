@@ -3,7 +3,7 @@
   "builtInLibrariesFolders": "C:\\Users\\mesar\\AppData\\Local\\Arduino15\\libraries",
   "compiler.optimization_flags": "-Os",
   "customBuildProperties": "",
-  "fqbn": "esp32:esp32:esp32p4:UploadSpeed=921600,USBMode=default,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,FlashFreq=80,FlashMode=qio,FlashSize=32M,PartitionScheme=app5M_fat24M_32MB,DebugLevel=none,PSRAM=enabled,EraseFlash=none,JTAGAdapter=default,ChipVariant=prev3",
+  "fqbn": "esp32:esp32:esp32p4:UploadSpeed=921600,USBMode=default,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,FlashFreq=80,FlashMode=qio,FlashSize=16M,PartitionScheme=app5M_fat24M_32MB,DebugLevel=none,PSRAM=enabled,EraseFlash=none,JTAGAdapter=default,ChipVariant=prev3",
   "hardwareFolders": "C:\\Users\\mesar\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.11,C:\\Users\\mesar\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.11",
   "otherLibrariesFolders": "c:\\Users\\mesar\\OneDrive\\Documents\\Arduino\\libraries",
   "sketchLocation": "D:\\GitClone\\Gotek-Touchscreen-interface\\firmware\\Gotek_P4"

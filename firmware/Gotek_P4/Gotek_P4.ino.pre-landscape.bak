@@ -46,8 +46,8 @@ extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect
 #define LCD_HEIGHT 800
 // Virtual canvas + rotation. g_rot: 0=landscape, 1=portrait, 2=landscape-flipped,
 // 3=portrait-flipped. Each ROTATE tap advances 90 degrees. gW/gH swap for portrait.
-static int gW=800, gH=480;
-static int g_rot=0;   // P4: default LANDSCAPE (panel mounted landscape); ROTATE cycles 0/1/2/3
+static int gW=480, gH=800;
+static int g_rot=1;   // P4: portrait, identity pixel map
 static bool g_compact=false;
 #define g_portrait (g_rot==1||g_rot==3)
 // Disk-selector grid geometry — declared up here so the Arduino auto-prototype
@@ -1376,7 +1376,7 @@ static void applyFont(int f){if(f<0||f>2)f=1;g_font=f;g_name_sz=(f==0?1:f==2?3:2
 static const char* fontName(int f){return f==0?T(L_FONT_SMALL):f==2?T(L_FONT_LARGE):T(L_FONT_NORMAL);}
 static const char* fontKey(int f){return f==0?"SMALL":f==2?"LARGE":"NORMAL";}   // canonical CONFIG.TXT token — NEVER localized (load parser matches these)
 static void relayout(){
-  if(g_portrait){gW=480;gH=800;}else{gW=800;gH=480;}   // P4: rotation-aware canvas (panel is 480x800 physical; landscape composes 800x480 and fb_setPixel rotates it in)
+  gW=480;gH=800;   // P4: fixed native portrait canvas
   // Reset the clip window to the new canvas. The clip statics init to the
   // landscape 320 height; with an EMPTY game list drawFileList() early-returns
   // before its usual set/reset, so in portrait everything below y=320 —
