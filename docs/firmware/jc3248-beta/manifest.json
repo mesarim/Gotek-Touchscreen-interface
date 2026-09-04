@@ -1,6 +1,6 @@
 {
-  "name": "Gotek Touchscreen Interface — JC3248 BETA (5.9.0 — fast reel on 1000+ game libraries: sharded thumb cache + folded micro-thumbs, carrying the big-library scan fix)",
-  "version": "5.9.0-beta",
+  "name": "Gotek Touchscreen Interface — JC3248 BETA (5.9.1 — on-screen Home WiFi setup: enter SSID/password on the touchscreen; carries the fast big-library reel + scan fix)",
+  "version": "5.9.1-beta",
   "new_install_prompt_erase": true,
   "builds": [
     {

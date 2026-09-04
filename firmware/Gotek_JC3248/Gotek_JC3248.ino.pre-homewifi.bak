@@ -35,7 +35,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.1-JC3248"
+#define FW_VERSION "5.9.0-JC3248"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -1875,7 +1875,7 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK };
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
 static InfoItem g_ii[20]; static int g_ii_n=0;
 struct InfoRect { int x,y,w,h; uint8_t act; };
@@ -1902,7 +1902,6 @@ static void drawInfoPanel(){
   if(g_wireless_mode){
     add(espnowIsPaired()?String(T(L_SWITCH_DONGLE)):String(T(L_SCAN_DONGLES)), espnowIsPaired()?COL_GREEN:COL_AMBER, TFT_BLACK, IA_DONGLE);
     add(String("LINK: ")+(g_link_home?"HOME WIFI":"ESP-NOW"), g_link_home?COL_BLUE:COL_BAR, g_link_home?TFT_WHITE:COL_LIT, IA_LINK);   // 5.8.6: transport picker
-    add(String("HOME WIFI: ")+(g_home_ssid.length()?g_home_ssid:String("set up")), COL_ACCENT, TFT_WHITE, IA_HOMEWIFI);   // on-screen home-wifi credential entry
     uint8_t mm[64][6]; int mcN=enumMuCaDongles(mm,g_dongle_cap);
     if(mcN>0) add(String(T(L_CFG_HIVEMIND))+": "+(g_hivemind?T(L_ON):T(L_OFF)), g_hivemind?COL_ACCENT:COL_BAR, g_hivemind?TFT_WHITE:COL_LIT, IA_HIVEMIND);
   }
@@ -3412,129 +3411,6 @@ static void doRescan(){
 //    result row to jump the list straight to it. Returns true if a game was chosen
 //    (g_sel + scroll set), false on CLOSE. Reached from the magnifier atop the A-Z
 //    rail. v4.8.2. ──
-// ════════════════════════════════════════════════════════════════════════════
-// HOME-WIFI ON-SCREEN SETUP (Increment 1a: keyboard + manual entry + save).
-// No WiFi/ESP-NOW radio use here — pure text entry + CONFIG.TXT save, so it can
-// never disturb an active dongle link. Scan-and-pick (radio) is Increment 1b.
-// ════════════════════════════════════════════════════════════════════════════
-
-// Full on-screen keyboard. Edits `io` in place (starts from its current text).
-// Case-sensitive: SHIFT toggles letter case; ?123/ABC toggles alpha<->symbols.
-// Returns true on OK, false on CANCEL. Blocking modal, same idiom as doSearch().
-static bool kbInput(const char* title, String& io, int maxlen){
-  String q = io;
-  bool shift = false, sym = false;
-  const char* AL[4] = {"1234567890","qwertyuiop","asdfghjkl","zxcvbnm"};
-  const char* SY[4] = {"1234567890","!@#$%^&*()","-_=+.,:;?/","'[]{}<>~|`"};   // no backslash / doublequote
-  const int gap = 4, kh = 34, bm = 6;
-  const int kbBlock = 5*kh + 4*gap;          // 4 char rows + 1 control row
-  const int kbTop = VH - bm - kbBlock;
-  bool dirty = true, pressed = false; int rel = 0;
-  { uint32_t t0 = millis(); while (Touch_ReadFrame() && millis()-t0 < 600) delay(10); }  // drain entering tap
-
-  while (true) {
-    if (dirty) { dirty = false;
-      gfx_fillScreen(COL_BG);
-      bool liteBar = (inkFor(COL_BAR) == TFT_BLACK);
-      gfx_fillRect(0,0,VW,22,COL_BAR);
-      gfx_setTextSize(1); gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER, COL_BAR);
-      gfx_setCursor(6,7); gfx_print(title);
-      // input box
-      gfx_fillRoundRect(8,26,VW-16,32,6,COL_PANEL); gfx_drawRoundRect(8,26,VW-16,32,6,COL_AMBER);
-      gfx_setTextSize(2); gfx_setTextColor(inkFor(COL_PANEL), COL_PANEL);
-      String shown = q; while (gfx_textWidth(shown) > VW-52 && shown.length() > 0) shown = shown.substring(1);
-      gfx_setCursor(18,34); gfx_print(shown); gfx_print("_");
-      // char rows
-      const char** ROWS = sym ? SY : AL;
-      int ky = kbTop;
-      for (int r=0; r<4; r++) {
-        int n = strlen(ROWS[r]); int kw = (VW-gap)/10 - gap; int kx = gap + ((10-n)*(kw+gap))/2;
-        for (int i=0; i<n; i++) {
-          char ch = ROWS[r][i];
-          if (!sym && shift && ch>='a' && ch<='z') ch -= 32;
-          gfx_fillRoundRect(kx,ky,kw,kh,5,COL_BAR);
-          gfx_setTextSize(2); gfx_setTextColor(inkFor(COL_BAR), COL_BAR);
-          char lb[2] = { ch, 0 }; gfx_setCursor(kx+(kw-gfx_textWidth(lb))/2, ky+(kh-16)/2); gfx_print(lb);
-          kx += kw+gap;
-        }
-        ky += kh+gap;
-      }
-      // control row: SHIFT | ?123/ABC | SPACE | DEL | OK
-      const char* CTL[5];
-      CTL[0] = sym ? "" : (shift ? "shift*" : "shift");
-      CTL[1] = sym ? "ABC" : "?123";
-      CTL[2] = "space"; CTL[3] = "del"; CTL[4] = "OK";
-      uint16_t cc[5] = { COL_BAR, COL_BAR, COL_BAR, (uint16_t)0x8000, COL_SEL };
-      int cw = (VW - 6*gap)/5, cx = gap;
-      for (int i=0; i<5; i++) {
-        gfx_fillRoundRect(cx,ky,cw,kh,6,cc[i]);
-        gfx_setTextSize(1); gfx_setTextColor(inkFor(cc[i]), cc[i]);
-        gfx_setCursor(cx+(cw-gfx_textWidth(CTL[i]))/2, ky+(kh-8)/2); gfx_print(CTL[i]);
-        cx += cw+gap;
-      }
-      gfx_flush();
-    }
-
-    uint16_t tx=0, ty=0; bool have = Touch_ReadFrame() && getTouchXY(&tx,&ty);
-    if (have) { rel = 0;
-      if (!pressed) { pressed = true; bool handled = false;
-        const char** ROWS = sym ? SY : AL;
-        int ky = kbTop;
-        for (int r=0; r<4 && !handled; r++) {
-          int n = strlen(ROWS[r]); int kw = (VW-gap)/10 - gap; int kx0 = gap + ((10-n)*(kw+gap))/2;
-          if (ty>=ky && ty<ky+kh) {
-            int i = ((int)tx - kx0)/(kw+gap); int within = ((int)tx - kx0) - i*(kw+gap);
-            if ((int)tx>=kx0 && i>=0 && i<n && within<kw) {
-              char ch = ROWS[r][i];
-              if (!sym && shift && ch>='a' && ch<='z') ch -= 32;
-              if ((int)q.length() < maxlen) q += ch;
-              dirty = true; handled = true;
-            }
-          }
-          ky += kh+gap;
-        }
-        if (!handled && ty>=ky && ty<ky+kh) {
-          int cw = (VW - 6*gap)/5; int i = ((int)tx - gap)/(cw+gap); int cxi = gap + i*(cw+gap);
-          if (i>=0 && i<5 && (int)tx>=cxi && (int)tx<cxi+cw) {
-            if (i==0) { if (!sym) shift = !shift; dirty = true; }
-            else if (i==1) { sym = !sym; if (sym) shift = false; dirty = true; }
-            else if (i==2) { if ((int)q.length()<maxlen) q += ' '; dirty = true; }
-            else if (i==3) { if (q.length()) q.remove(q.length()-1); dirty = true; }
-            else if (i==4) { io = q; return true; }
-          }
-        }
-      }
-    } else { if (pressed && ++rel>=3) pressed = false; }
-    delay(12);
-  }
-}
-
-// A tiny centred message screen (save confirmation etc.), auto-dismiss after ms.
-static void hwMsg(const char* l1, const char* l2, uint16_t col, uint32_t ms){
-  gfx_fillScreen(COL_BG);
-  gfx_setTextSize(2); gfx_setTextColor(col, COL_BG);
-  gfx_setCursor((VW - gfx_textWidth(l1))/2, VH/2 - 20); gfx_print(l1);
-  if (l2 && l2[0]) { gfx_setTextSize(1); gfx_setTextColor(COL_DIM, COL_BG);
-    gfx_setCursor((VW - gfx_textWidth(l2))/2, VH/2 + 6); gfx_print(l2); }
-  gfx_flush(); delay(ms);
-}
-
-// The Home-WiFi setup flow: enter SSID, enter password, save + enable HOMEWIFI.
-// Reached from the settings screen (IA_HOMEWIFI).
-static void doHomeWifiSetup(){
-  String ssid = g_home_ssid, pass = g_home_pass;
-  if (!kbInput("Home WiFi: network name (SSID)", ssid, 32)) return;     // cancel
-  ssid.trim();
-  if (ssid.length() == 0) { hwMsg("No SSID", "nothing saved", COL_AMBER, 1200); return; }
-  if (!kbInput("Home WiFi: password (blank = open)", pass, 63)) return; // cancel
-
-  g_home_ssid = ssid; g_home_pass = pass; g_link_home = true;
-  saveConfigKey("HOME_SSID", ssid);
-  saveConfigKey("HOME_PASS", pass);
-  saveConfigKey("LINK", "HOMEWIFI");
-  hwMsg("Home WiFi saved", ("SSID: " + ssid).c_str(), COL_ACCENT, 1600);
-}
-
 static bool doSearch(){
   String q="";
   static const char* SROWS[4]={"1234567890","QWERTYUIOP","ASDFGHJKL-","ZXCVBNM'."};
@@ -4324,7 +4200,6 @@ static void infoAction(uint8_t act){
     case IA_DONGLE: doPairNow();drawInfoFull();break;
     case IA_HIVEMIND: g_hivemind=!g_hivemind;saveConfigKey("HIVEMIND",g_hivemind?"ON":"OFF");drawInfoFull();break;
     case IA_LINK: g_link_home=!g_link_home;saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW");drawInfoFull();break;   // 5.8.6: ESP-NOW <-> HOME WIFI transport
-    case IA_HOMEWIFI: doHomeWifiSetup(); drawInfoFull(); break;   // on-screen SSID/password entry
     case IA_RESCAN: doRescan();break;
     case IA_RESET: {gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0xE8C4,COL_BG);const char*m=T(L_RESETTING);gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();delay(700);ESP.restart();}break;
     case IA_DIAG: if(g_loaded&&g_loaded_name=="AMIGA TEST KIT"){g_info_showing=false;doUnload();drawFullUI();gfx_flush();}else doLoadDiag();break;

@@ -488,7 +488,7 @@ bool espnowSendDiskHome(const String& ssid, const String& pass, String& ioIp, ui
     Serial.printf("[HOME] Joined. IP %s\n", WiFi.localIP().toString().c_str());
     String ip = ioIp;                                  // cached IP is the fallback
     if (MDNS.begin("gti-remote")) {
-      IPAddress r = MDNS.queryHost("gotek", 2500);     // Webby advertises gotek.local in WiFi mode
+      IPAddress r = MDNS.queryHost("gotekomega", 2500);     // Webby advertises gotekomega.local in WiFi mode
       if ((uint32_t)r != 0) { ip = r.toString(); ioIp = ip; Serial.printf("[HOME] gotek.local -> %s\n", ip.c_str()); }
       MDNS.end();
     }
