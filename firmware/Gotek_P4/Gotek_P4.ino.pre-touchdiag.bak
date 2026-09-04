@@ -32,7 +32,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.8.6-P4.3"
+#define FW_VERSION "5.8.6-P4.2"
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
@@ -352,44 +352,6 @@ static bool Touch_ReadFrame(){
   gTouchPts=1; return true;
 }
 static bool getTouchXY(uint16_t*x,uint16_t*y){if(!gTouchPts)return false;*x=constrain(gTouchX,0,gW-1);*y=constrain(gTouchY,0,gH-1);return true;}
-
-// ── Boot touch diagnostic (visible; P4 has no serial with CDC off) ──────────────
-// Probes both GT911 addresses, then for ~10s shows raw coords + a marker so we can
-// see if touch is alive and how it maps. Remove once touch is dialed in.
-static void touchCheck(){
-  Wire.begin(GT_SDA,GT_SCL,400000); delay(60);
-  Wire.beginTransmission(0x5D); bool a5d=(Wire.endTransmission()==0);
-  Wire.beginTransmission(0x14); bool a14=(Wire.endTransmission()==0);
-  uint8_t addr=a5d?0x5D:(a14?0x14:0);
-  char l[90]; uint32_t t0=millis();
-  while(millis()-t0 < 10000){
-    gfx_fillScreen(TFT_BLACK);
-    gfx_setTextSize(2); gfx_setTextColor(0xFD20,TFT_BLACK); gfx_setCursor(10,8); gfx_print("TOUCH CHECK");
-    gfx_setTextSize(1); gfx_setTextColor(TFT_WHITE,TFT_BLACK);
-    snprintf(l,sizeof l,"GT911  0x5D:%s  0x14:%s   using:0x%02X", a5d?"ACK":"--", a14?"ACK":"--", addr);
-    gfx_setCursor(10,36); gfx_print(l);
-    gfx_setCursor(10,52); gfx_print("tap the 4 corners; auto-continues in 10s");
-    if(addr){
-      uint8_t st=0;
-      Wire.beginTransmission(addr);Wire.write(0x81);Wire.write(0x4E);
-      if(Wire.endTransmission(false)==0 && Wire.requestFrom((int)addr,1)==1) st=Wire.read();
-      int pts=st&0x0F;
-      if((st&0x80)&&pts>0){
-        uint8_t b[8]={0};
-        Wire.beginTransmission(addr);Wire.write(0x81);Wire.write(0x50);
-        if(Wire.endTransmission(false)==0){int g=Wire.requestFrom((int)addr,8);for(int i=0;i<8&&i<g;i++)b[i]=Wire.read();}
-        Wire.beginTransmission(addr);Wire.write(0x81);Wire.write(0x4E);Wire.write((uint8_t)0);Wire.endTransmission();
-        uint16_t rx=b[1]|(b[2]<<8), ry=b[3]|(b[4]<<8);
-        gfx_setTextSize(2); gfx_setTextColor(0x07FF,TFT_BLACK);
-        snprintf(l,sizeof l,"raw x=%u  y=%u  pts=%d", rx, ry, pts); gfx_setCursor(10,84); gfx_print(l);
-        // marker at our current landscape transform (g_rot=0): vx=799-ry, vy=rx
-        int vx=799-(int)ry, vy=(int)rx;
-        if(vx>=0&&vx<gW&&vy>=0&&vy<gH) gfx_fillCircle(vx,vy,9,0x07E0);
-      } else { gfx_setTextSize(2); gfx_setTextColor(0x8410,TFT_BLACK); gfx_setCursor(10,84); gfx_print("(no touch yet)"); }
-    } else { gfx_setTextSize(2); gfx_setTextColor((uint16_t)0xF800,TFT_BLACK); gfx_setCursor(10,84); gfx_print("GT911 NOT FOUND on I2C SDA7/SCL8"); }
-    gfx_flush(); delay(20);
-  }
-}
 
 // ════════════════════════════════════════════════════════════════════════════
 // MSC RAM DISK
@@ -3885,7 +3847,7 @@ void setup(){
   // (cold power-on => reset reason POWERON => never a false trigger from RTC garbage).
   bool sdAccessReq=(g_sdaccess_magic==SDACCESS_MAGIC && esp_reset_reason()==ESP_RST_SW);
   Serial.printf("[BOOT] rst=%d magic=%08X sdAccess=%d\n",(int)esp_reset_reason(),(unsigned)g_sdaccess_magic,(int)sdAccessReq);
-  applyTheme(0);displayInit();touchInit();touchCheck();
+  applyTheme(0);displayInit();touchInit();
   gfx_fillScreen(TFT_BLACK);gfx_flush();
   g_disk=(uint8_t*)ps_malloc(TOTAL_SECTORS*512);if(!g_disk){gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,160);gfx_print("RAM ALLOC FAILED");gfx_flush();while(1)delay(1000);}
   build_volume(getOutputFilename(),g_mode==MODE_ADF?ADF_DEFAULT_SIZE:64);
