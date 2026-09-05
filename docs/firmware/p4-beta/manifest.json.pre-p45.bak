@@ -1,6 +1,6 @@
 {
-  "name": "Gotek Touchscreen Interface \u2014 JC4880 P4 BETA (5.8.6-P4.5 \u2014 WiFi-direct wireless: scan/select dongles + load over WiFi \u00b7 landscape UI + touch)",
-  "version": "5.8.6-P4.5",
+  "name": "Gotek Touchscreen Interface — JC4880 P4 BETA (5.8.6-P4.2 — landscape UI + working touch on the 480×800 MIPI-DSI panel)",
+  "version": "5.8.6-P4.2",
   "new_install_prompt_erase": true,
   "builds": [
     {

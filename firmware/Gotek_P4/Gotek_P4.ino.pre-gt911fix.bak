@@ -32,10 +32,8 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.8.6-P4.5"
+#define FW_VERSION "5.8.6-P4.3"
 #include "espnow_server.h"
-#include <WiFi.h>          // P4: brings up the C6 co-processor link (esp-hosted over SDIO)
-#include <esp_hosted.h>     // P4: C6 firmware version query + slave OTA (self-update)
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
 
@@ -339,7 +337,7 @@ static bool Touch_ReadFrame(){
   if(!(st&0x80)||(st&0x0F)==0){ if(st&0x80)gtWr8(0x814E,0); gTouchPts=0; return false; }
   uint8_t buf[8]; bool ok=gtRd(0x8150,buf,8); gtWr8(0x814E,0);
   if(!ok){gTouchPts=0;return false;}
-  uint16_t rx=buf[0]|(buf[1]<<8), ry=buf[2]|(buf[3]<<8);   // GT911 raw = native panel coords (480x800)
+  uint16_t rx=buf[1]|(buf[2]<<8), ry=buf[3]|(buf[4]<<8);   // GT911 raw = native panel coords (480x800)
   if(rx>=LCD_WIDTH||ry>=LCD_HEIGHT){gTouchPts=0;return false;}
   // Map physical touch -> virtual canvas per g_rot (inverse of fb_setPixel), so touch tracks the
   // rotated display. Without this, landscape touches land 90 deg off.
@@ -381,7 +379,7 @@ static void touchCheck(){
         Wire.beginTransmission(addr);Wire.write(0x81);Wire.write(0x50);
         if(Wire.endTransmission(false)==0){int g=Wire.requestFrom((int)addr,8);for(int i=0;i<8&&i<g;i++)b[i]=Wire.read();}
         Wire.beginTransmission(addr);Wire.write(0x81);Wire.write(0x4E);Wire.write((uint8_t)0);Wire.endTransmission();
-        uint16_t rx=b[0]|(b[1]<<8), ry=b[2]|(b[3]<<8);
+        uint16_t rx=b[1]|(b[2]<<8), ry=b[3]|(b[4]<<8);
         gfx_setTextSize(2); gfx_setTextColor(0x07FF,TFT_BLACK);
         snprintf(l,sizeof l,"raw x=%u  y=%u  pts=%d", rx, ry, pts); gfx_setCursor(10,84); gfx_print(l);
         // marker at our current landscape transform (g_rot=0): vx=799-ry, vy=rx
@@ -3881,87 +3879,13 @@ static void doFirmwareUpdate(){
   gfx_fillScreen(COL_BG);fwupMsg(VH/2-8,"UPDATE OK - REBOOTING",COL_GREEN,COL_BG,2);gfx_flush();delay(900);ESP.restart();
 }
 
-
-// ════════════════════════════════════════════════════════════════════════════
-// C6 (WiFi co-processor) SELF-UPDATE  (P4 only)
-// The P4 has no radio of its own; WiFi/ESP-NOW live on the ESP32-C6 reached over
-// SDIO (esp-hosted). The factory C6 ships esp-hosted ~2.3.x, far behind this
-// Arduino core's 2.12.x host -> WiFi doesn't work. If a matching slave image is
-// present on the SD card and the C6 is behind, offer to flash it via the
-// esp-hosted slave-OTA API. Tap-gated. Absent file => skipped entirely.
-// OTA writes the INACTIVE C6 slot and only switches on activate(), so an
-// interrupted flash leaves the old C6 firmware intact (no brick).
-// ════════════════════════════════════════════════════════════════════════════
-static void c6SelfUpdate(){
-  const char* C6BIN = "/c6_network_adapter_2.12.13.bin";
-  if(!SD_MMC.exists(C6BIN)) return;                         // no image -> normal boot
-
-  WiFi.mode(WIFI_STA); delay(150);                          // spin up the hosted link to reach the C6
-  esp_hosted_coprocessor_fwver_t v; memset(&v,0,sizeof v);
-  bool haveVer = (esp_hosted_get_coprocessor_fwversion(&v)==ESP_OK);
-  if(haveVer && (v.major1>2 || (v.major1==2 && v.minor1>=12))){ WiFi.mode(WIFI_OFF); return; } // already current
-
-  auto msg=[&](const char*l1,const char*l2,uint16_t col){
-    gfx_fillScreen(COL_BG);
-    gfx_setTextSize(2); gfx_setTextColor(col,COL_BG);
-    gfx_setCursor((VW-gfx_textWidth(l1))/2, VH/2-20); gfx_print(l1);
-    if(l2&&l2[0]){ gfx_setTextSize(1); gfx_setTextColor(COL_LIT,COL_BG);
-      gfx_setCursor((VW-gfx_textWidth(l2))/2, VH/2+8); gfx_print(l2); }
-    gfx_flush();
-  };
-
-  // confirm screen
-  char sub[72]; snprintf(sub,sizeof sub,"C6 is v%d.%d.%d  ->  update to 2.12.13  (enables WiFi)", v.major1, v.minor1, v.patch1);
-  gfx_fillScreen(COL_BG);
-  gfx_setTextSize(2); gfx_setTextColor(COL_AMBER,COL_BG);
-  { const char*t="WiFi CO-PROCESSOR UPDATE"; gfx_setCursor((VW-gfx_textWidth(t))/2,VH/2-70); gfx_print(t); }
-  gfx_setTextSize(1); gfx_setTextColor(COL_LIT,COL_BG);
-  { gfx_setCursor((VW-gfx_textWidth(sub))/2,VH/2-34); gfx_print(sub); }
-  { const char*t="TAP the screen to update   -   wait 25s to skip"; gfx_setTextColor(COL_ACCENT,COL_BG); gfx_setCursor((VW-gfx_textWidth(t))/2,VH/2+2); gfx_print(t); }
-  gfx_flush();
-
-  { uint32_t d0=millis(); while(Touch_ReadFrame()&&millis()-d0<600) delay(10); }  // drain any held touch
-  bool go=false; uint32_t t0=millis();
-  while(millis()-t0<25000){ uint16_t tx,ty; if(Touch_ReadFrame()&&getTouchXY(&tx,&ty)){ go=true; break; } delay(20); }
-  if(!go){ WiFi.mode(WIFI_OFF); return; }
-
-  File fw=SD_MMC.open(C6BIN,"r");
-  if(!fw){ msg("SD read failed","",TFT_RED); delay(2500); WiFi.mode(WIFI_OFF); return; }
-  size_t total=fw.size(), done=0;
-  if(esp_hosted_slave_ota_begin()!=ESP_OK){ fw.close(); msg("C6 OTA begin failed","power-cycle & retry",TFT_RED); delay(3000); WiFi.mode(WIFI_OFF); return; }
-  static uint8_t buf[1400]; bool ok=true; uint32_t last=0;
-  while(done<total){
-    int n=fw.read(buf,sizeof buf); if(n<=0) break;
-    if(esp_hosted_slave_ota_write(buf,(size_t)n)!=ESP_OK){ ok=false; break; }
-    done+=n;
-    if(millis()-last>120){ last=millis();
-      gfx_fillScreen(COL_BG);
-      gfx_setTextSize(2); gfx_setTextColor(COL_AMBER,COL_BG);
-      { const char*t="UPDATING C6 - DO NOT POWER OFF"; gfx_setCursor((VW-gfx_textWidth(t))/2,VH/2-40); gfx_print(t); }
-      int bw=VW-160,bx=80,by=VH/2; gfx_drawRect(bx,by,bw,16,COL_LIT);
-      gfx_fillRect(bx+2,by+2,(int)((long)(bw-4)*done/(total?total:1)),12,COL_SEL);
-      char pc[16]; snprintf(pc,sizeof pc,"%u%%",(unsigned)(done*100/(total?total:1)));
-      gfx_setTextSize(1); gfx_setTextColor(COL_LIT,COL_BG); gfx_setCursor((VW-gfx_textWidth(pc))/2,by+24); gfx_print(pc);
-      gfx_flush();
-    }
-    yield();
-  }
-  fw.close();
-  esp_hosted_slave_ota_end();
-  if(!ok){ msg("C6 OTA write failed","power-cycle & retry",TFT_RED); delay(3000); ESP.restart(); }
-  msg("C6 updated - activating","rebooting...",COL_ACCENT);
-  esp_hosted_slave_ota_activate();
-  delay(3000);
-  ESP.restart();   // reboot the P4 so the host re-links to the freshly-updated C6
-}
-
 void setup(){
   Serial.begin(115200);delay(200);
   // v5.1: SD-access is requested only when our NOINIT flag survived a *software* restart
   // (cold power-on => reset reason POWERON => never a false trigger from RTC garbage).
   bool sdAccessReq=(g_sdaccess_magic==SDACCESS_MAGIC && esp_reset_reason()==ESP_RST_SW);
   Serial.printf("[BOOT] rst=%d magic=%08X sdAccess=%d\n",(int)esp_reset_reason(),(unsigned)g_sdaccess_magic,(int)sdAccessReq);
-  applyTheme(0);displayInit();touchInit();
+  applyTheme(0);displayInit();touchInit();touchCheck();
   gfx_fillScreen(TFT_BLACK);gfx_flush();
   g_disk=(uint8_t*)ps_malloc(TOTAL_SECTORS*512);if(!g_disk){gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,160);gfx_print("RAM ALLOC FAILED");gfx_flush();while(1)delay(1000);}
   build_volume(getOutputFilename(),g_mode==MODE_ADF?ADF_DEFAULT_SIZE:64);
@@ -3980,7 +3904,6 @@ void setup(){
     }
     espnowSetScanCap(g_dongle_cap);
     relayout();                 // apply ROTATE/COMPACT from config before first draw
-    c6SelfUpdate();             // P4: one-time C6 WiFi-firmware self-update (tap-gated; skips if no image on SD)
     listImages(SD_MMC,g_files);
     if(!readGameCache()){buildGameList();buildThumbs();}   // fresh card: build reel thumbs up-front
     applyStats();
