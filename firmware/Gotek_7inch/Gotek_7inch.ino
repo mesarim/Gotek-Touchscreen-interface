@@ -2956,6 +2956,15 @@ static void doManual(const String& path){
 //    result row to jump the list straight to it. Returns true if a game was chosen
 //    (g_sel + scroll set), false on CLOSE. Big keys + big text for low-vision use.
 //    Ported from JC v4.8.2 (gfx_* -> UG->, sized up for 800x480). ──
+// Wait for a CLEAN finger release before returning from a keyboard: require several
+// consecutive no-touch frames, so a single dropped touch frame (common on these panels)
+// can't be read as a lift. Without this, tapping a keyboard button bleeds through to the
+// next screen (the touch 'jumps past' bug).
+static void kbWaitRelease(uint32_t maxMs=900){
+  int up=0; uint32_t t0=millis();
+  while (up<4 && millis()-t0<maxMs){ if(Touch_ReadFrame()) up=0; else up++; delay(10); }
+}
+
 static bool doSearch(){
   String q="";
   static const char* SROWS[4]={"1234567890","QWERTYUIOP","ASDFGHJKL-","ZXCVBNM'."};
@@ -2967,7 +2976,7 @@ static bool doSearch(){
   int resMax=(sepY-resTop)/resRowH; if(resMax<3)resMax=3; if(resMax>6)resMax=6;
   int matches[6]; int nMatch=0,totalMatch=0;
   bool dirty=true,pressed=false; int rel=0;
-  { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<600) delay(10); }   // drain the entering tap
+  kbWaitRelease(600);   // drain the entering tap
   auto recompute=[&](){ nMatch=0; totalMatch=0; if(!q.length())return; String ql=q; ql.toLowerCase();
     for(int i=0;i<(int)g_games.size();i++){ String nm=g_games[i].name; nm.toLowerCase();
       if(nm.indexOf(ql)>=0){ if(nMatch<resMax)matches[nMatch++]=i; totalMatch++; } } };
@@ -3017,7 +3026,7 @@ static bool doSearch(){
             g_sel=t; g_disk_sel=0; g_scroll=t;
             int maxOff=(int)g_games.size()-ITEMS_VIS; if(maxOff<0)maxOff=0; if(g_scroll>maxOff)g_scroll=maxOff;
             g_scrollPx=(float)(g_scroll*LIST_ITEM_H); g_inertia_on=false;
-            return true; } }
+            kbWaitRelease(); return true; } }
         int ky=kbTop;
         for(int r=0;r<4&&!handled;r++){ int n=strlen(SROWS[r]); int kw=(LCD_WIDTH-gap)/10-gap; int kx0=gap+((10-n)*(kw+gap))/2;
           if(ty>=ky&&ty<ky+kh){ int i=((int)tx-kx0)/(kw+gap); int within=((int)tx-kx0)-i*(kw+gap);
@@ -3027,7 +3036,7 @@ static bool doSearch(){
           if(i>=0&&i<3&&(int)tx>=cxi&&(int)tx<cxi+cw){
             if(i==0){ if(q.length()){ q.remove(q.length()-1); recompute(); } dirty=true; }
             else if(i==1){ if(q.length()<24){ q+=' '; recompute(); } dirty=true; }
-            else if(i==2){ return false; } } }
+            else if(i==2){ kbWaitRelease(); return false; } } }
       }
     } else { if(pressed&&++rel>=3)pressed=false; }
     delay(12);

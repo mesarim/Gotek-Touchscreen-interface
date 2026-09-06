@@ -32,7 +32,8 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.8.6-P4.5"
+#define FW_VERSION "5.9.2-P4"
+#include "retro_assets.h"
 #include "espnow_server.h"
 #include <WiFi.h>          // P4: brings up the C6 co-processor link (esp-hosted over SDIO)
 #include <esp_hosted.h>     // P4: C6 firmware version query + slave OTA (self-update)
@@ -262,44 +263,50 @@ int png_buf_cb(PNGDRAW*pDraw){   // PNGdec's PNG_DRAW_CALLBACK returns int
   pngdec.getLineAsRGB565(pDraw,&jpeg_tmp_buf[row*jpeg_tmp_w],PNG_RGB565_LITTLE_ENDIAN,0x00000000);
   return 1;
 }
-static void gfx_drawJpgFile(const String&path,int x,int y,int maxW,int maxH){
+static int g_covermin=140;   // COVERMIN: skip covers whose short side < this many px (0=off, SD-editable)
+static bool g_reelfilter=false;   // v5.9.2 REELFILTER: reel shows only covers that pass COVERMIN (A-Z list stays full)
+static bool g_cover_flags_ready=false; static int g_cover_flags_n=-1;
+static void ensureCoverFlags();   // fwd: set each game cover_ok from its cached thumb
+static bool gfx_drawJpgFile(const String&path,int x,int y,int maxW,int maxH){
   // Use VFS to get real file size (SD_MMC f.size() returns 0 for subdirectory files)
   String vfsPath="/sdcard"+path;
   struct stat st;
-  if(stat(vfsPath.c_str(),&st)!=0||st.st_size==0||st.st_size>500000) return;
+  if(stat(vfsPath.c_str(),&st)!=0||st.st_size==0||st.st_size>500000) return false;
   size_t sz=(size_t)st.st_size;
-  File f=SD_MMC.open(path.c_str(),"r"); if(!f){return;}
-  uint8_t*buf=(uint8_t*)ps_malloc(sz); if(!buf){f.close();return;}
+  File f=SD_MMC.open(path.c_str(),"r"); if(!f){return false;}
+  uint8_t*buf=(uint8_t*)ps_malloc(sz); if(!buf){f.close();return false;}
   f.read(buf,sz); f.close();
   int jw=0,jh=0;
   if(coverIsPng(path)){
-    if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){free(buf);return;}
+    if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){free(buf);return false;}
     jw=pngdec.getWidth();jh=pngdec.getHeight();
-    if(jw<=0||jh<=0||jw>2000||jh>2000){pngdec.close();free(buf);return;}
+    if(jw<=0||jh<=0||jw>2000||jh>2000){pngdec.close();free(buf);return false;}
+    if(g_covermin>0&&(jw<g_covermin||jh<g_covermin)){pngdec.close();free(buf);return false;}   // COVERMIN gate
     jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)jw*jh*2);
-    if(!jpeg_tmp_buf){pngdec.close();free(buf);return;}
+    if(!jpeg_tmp_buf){pngdec.close();free(buf);return false;}
     memset(jpeg_tmp_buf,0,(size_t)jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
     pngdec.decode(NULL,0); pngdec.close(); free(buf);
   } else {
-    if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return;}
+    if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return false;}
     jw=jpegdec.getWidth();jh=jpegdec.getHeight();
-    if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return;}
+    if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return false;}
+    if(g_covermin>0&&(jw<g_covermin||jh<g_covermin)){jpegdec.close();free(buf);return false;}   // COVERMIN gate
     jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)jw*jh*2);
-    if(!jpeg_tmp_buf){jpegdec.close();free(buf);return;}
+    if(!jpeg_tmp_buf){jpegdec.close();free(buf);return false;}
     memset(jpeg_tmp_buf,0,(size_t)jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
     jpegdec.decode(0,0,0); jpegdec.close(); free(buf);
   }
   float scX=(float)maxW/jw,scY=(float)maxH/jh,sc=min(scX,scY);
   if(sc>1.0f)sc=1.0f;
   int dw=(int)(jw*sc),dh=(int)(jh*sc);
-  if(dw<=0||dh<=0){free(jpeg_tmp_buf);jpeg_tmp_buf=NULL;return;}
+  if(dw<=0||dh<=0){free(jpeg_tmp_buf);jpeg_tmp_buf=NULL;return false;}
   int ox=x+(maxW-dw)/2,oy=y+(maxH-dh)/2;
   for(int r=0;r<dh;r++){int srcY=(int)(r/sc);if(srcY>=jh)srcY=jh-1;
     for(int c=0;c<dw;c++){int srcX=(int)(c/sc);if(srcX>=jw)srcX=jw-1;
       int vx=ox+c,vy=oy+r;
       if(vx>=0&&vx<gW&&vy>=0&&vy<gH) fb_setPixel(vx,vy,jpeg_tmp_buf[srcY*jw+srcX]);}
     if(r%20==0)yield();}
-  free(jpeg_tmp_buf); jpeg_tmp_buf=NULL;
+  free(jpeg_tmp_buf); jpeg_tmp_buf=NULL; return true;
 }
 
 // ── Display init (from Dimi) ──
@@ -906,7 +913,7 @@ static bool g_hotswap=false;    // ON = tapping another disk while loaded swaps 
 static bool g_forceswap=false;  // ON = swap disk bytes in place without the USB eject/re-attach cycle
 static int g_info_x=0,g_info_w=150,g_info_bottom=0;
 static String g_manual_path=""; static int g_manual_bx=0,g_manual_by=0,g_manual_bw=0,g_manual_bh=0;  // v4.9.2 .rtfm book button rect
-struct GameEntry{String name;int first_file_idx;int disk_count;String jpg_path;std::vector<int>disk_indices;bool fav=false;uint16_t plays=0;};
+struct GameEntry{String name;int first_file_idx;int disk_count;String jpg_path;std::vector<int>disk_indices;bool fav=false;uint16_t plays=0;bool cover_ok=false;};
 static std::vector<String>g_files;static std::vector<GameEntry>g_games;
 static int g_sel=0,g_scroll=0,g_disk_sel=0,g_loaded_game_idx=-1,g_loaded_disk_idx=-1;
 static int g_disk_page=0;  // current page of disk selector (6 disks/page)
@@ -1233,7 +1240,7 @@ static void generateDefaultConfig(){
   f.println("");
   f.println("# Boot cracktro style: 0=random each boot, or pick one:");
   f.println("#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER");
-  f.println("#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE  7=DENISE  8=WRANGLER");
+  f.println("#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE");
   f.println("CRACKTRO=0");
   f.println("");
   f.println("# Font size: SMALL, NORMAL, LARGE");
@@ -1324,10 +1331,12 @@ static void selfHealConfig(){
     {"MODE",     "\n# Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW to dongle)\nMODE=STANDALONE\n"},
     {"CAROUSEL", "\n# CAROUSEL: default boot view. OFF=game list, ON=cover reel, LAST=restore last view.\nCAROUSEL=OFF\n"},
     {"LOOP",     "\n# Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s\nLOOP=0\n"},
-    {"CRACKTRO", "\n# Boot cracktro style: 0=random each boot, or pick one:\n#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER\n#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE  7=DENISE  8=WRANGLER\nCRACKTRO=0\n"},
+    {"CRACKTRO", "\n# Boot cracktro style: 0=random each boot, or pick one:\n#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER\n#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE\nCRACKTRO=0\n"},
     {"FONT",     "\n# Font size: SMALL, NORMAL, LARGE\nFONT=NORMAL\n"},
     {"LANG",     "\n# Language: EN, FR, IT, ES, DE  (pull the SD and edit this line if you get stuck)\nLANG=EN\n"},
     {"ROTATE",   "\n# Screen rotation in degrees: 0 or 180 = landscape, 90 or 270 = portrait.\nROTATE=0\n"},
+    {"COVERMIN", "\n# COVERMIN: hide covers whose short side is under N px (0 = show all) - keeps the reel + panel clean.\nCOVERMIN=140\n"},
+    {"REELFILTER", "\n# REELFILTER: ON = the reel (cover carousel) shows only games whose cover passes COVERMIN;\n#             the A-Z list still shows every game. OFF = reel shows all games.\nREELFILTER=OFF\n"},
     {"COMPACT",  "\n# COMPACT: OFF = cover art + list, ON = maximise the game list (cover collapses to a strip)\nCOMPACT=OFF\n"},
     {"BTNSTYLE", "\n# BTNSTYLE: reel button style. PILL=rounded coloured buttons (default), FLAT=flat bar.\nBTNSTYLE=PILL\n"},
     {"CAP",      "\n# CAP: max wireless dongles the scan will list (default 32, up to 64)\nCAP=32\n"},
@@ -1373,6 +1382,8 @@ static void loadConfig(){
     else if(k=="FONT"){int f=1;if(v=="SMALL")f=0;else if(v=="LARGE")f=2;applyFont(f);}
     else if(k=="LANG"){String lu=v;lu.toUpperCase();for(int i=0;i<LANG_N;i++)if(lu==LANG_NAMES[i]){g_lang=i;break;}}
     else if(k=="ROTATE"){g_rot=((v.toInt()/90)%4+4)%4;}
+    else if(k=="COVERMIN"){g_covermin=v.toInt();if(g_covermin<0)g_covermin=0;}
+    else if(k=="REELFILTER"){String ru=v;ru.trim();ru.toUpperCase();g_reelfilter=(ru=="ON"||ru=="1"||ru=="YES");}
     else if(k=="COMPACT"){g_compact=(v=="ON"||v=="1");}
     else if(k=="SCREENSAVER"){g_ss_enabled=(v!="OFF"&&v!="0");}
     else if(k=="SS_IDLE"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_idle_ms=s*1000UL;}
@@ -1385,7 +1396,7 @@ static void loadConfig(){
     else if(k=="SSTIME"){uint32_t s=(uint32_t)v.toInt(); if(s<2)s=2; if(s>120)s=120; g_ss_time_ms=s*1000UL;}
     else if(k=="SSFAV"){g_ss_fav=(v!="OFF"&&v!="0");}
     else if(k=="CAP"){int c=v.toInt(); if(c>=1&&c<=64)g_dongle_cap=c;}
-    else if(k=="CRACKTRO"){String cu=v;cu.trim();cu.toUpperCase(); if(cu=="DENISE")g_cracktro=7; else if(cu=="WRANGLER")g_cracktro=8; else{int c=v.toInt(); if(c>=0&&c<=6)g_cracktro=c;}}
+    else if(k=="CRACKTRO"){String cu=v;cu.trim();cu.toUpperCase(); if(cu=="DENISE")g_cracktro=7; else if(cu=="WRANGLER")g_cracktro=8; else if(cu=="RETRONAUT")g_cracktro=9; else{int c=v.toInt(); if(c>=0&&c<=6)g_cracktro=c;}}
     else if(k=="SAVES"){v.toUpperCase(); g_saves_mode=(v=="OVERWRITE")?2:(v=="OFF"||v=="0")?0:1;}
     else if(k=="SDSPEED"){int hz=v.toInt(); g_sd_freq=(hz>=40||hz>=40000)?40000:20000;}
     else if(k=="HIVEMIND"){g_hivemind=(v=="OFF"||v=="0")?0:1;}
@@ -1403,11 +1414,11 @@ static void loadConfig(){
 // ════════════════════════════════════════════════════════════════════════════
 #define VW gW
 #define VH gH
-#define STATUS_H   20
-#define MODE_BAR_H 18
-#define NOW_PLAY_H 22
-#define BOTTOM_H   40
-#define AZ_W       30
+#define STATUS_H   28
+#define MODE_BAR_H 24
+#define NOW_PLAY_H 30
+#define BOTTOM_H   54
+#define AZ_W       42
 // Layout is computed by relayout() for the current rotation + compact mode.
 static int AZ_X=450, COVER_W=150, COVER_X=0, COVER_Y=20, COVER_H=260;
 static int COVER_ART_X=4, COVER_ART_Y=24, COVER_ART_W=142, COVER_ART_H=116;
@@ -1419,8 +1430,8 @@ static bool COVER_ON=true, STRIP_ON=false, NOW_ON=true;
 static int g_font=1, g_item_h=55, g_items_vis=4, g_name_sz=2;
 #define LIST_ITEM_H g_item_h
 #define ITEMS_VIS   g_items_vis
-static void applyFont(int f){if(f<0||f>2)f=1;g_font=f;g_name_sz=(f==0?1:f==2?3:2);
-  int target=(f==0?34:f==2?70:50),listH=LIST_BOTTOM-LIST_TOP,rows=listH/target;
+static void applyFont(int f){if(f<0||f>2)f=1;g_font=f;g_name_sz=(f==0?2:f==2?4:3);
+  int target=(f==0?50:f==2?100:74),listH=LIST_BOTTOM-LIST_TOP,rows=listH/target;
   if(listH%target>=target/2)rows++; if(rows<1)rows=1;
   g_item_h=listH/rows; g_items_vis=rows;}
 static const char* fontName(int f){return f==0?T(L_FONT_SMALL):f==2?T(L_FONT_LARGE):T(L_FONT_NORMAL);}
@@ -1436,12 +1447,12 @@ static void relayout(){
   AZ_X=VW-AZ_W; int mb=STATUS_H+MODE_BAR_H;
   if(!g_compact){
     if(!g_portrait){
-      COVER_ON=true;COVER_X=0;COVER_Y=STATUS_H;COVER_W=150;COVER_H=VH-STATUS_H-BOTTOM_H;
-      COVER_ART_X=4;COVER_ART_Y=STATUS_H+4;COVER_ART_W=142;COVER_ART_H=116;
+      COVER_ON=true;COVER_X=0;COVER_Y=STATUS_H;COVER_W=292;COVER_H=VH-STATUS_H-BOTTOM_H;
+      COVER_ART_X=8;COVER_ART_Y=STATUS_H+8;COVER_ART_W=276;COVER_ART_H=214;
       LIST_X=COVER_W;LIST_TOP=mb;LIST_W=AZ_X-COVER_W;
       NOW_ON=true;NOW_Y=VH-BOTTOM_H-NOW_PLAY_H;LIST_BOTTOM=NOW_Y;
       AZ_TOP=LIST_TOP;AZ_H=(VH-BOTTOM_H)-LIST_TOP;
-      INS_X=4;INS_W=COVER_W-8;INS_H=28;INS_Y=VH-BOTTOM_H-36;STRIP_ON=false;
+      INS_X=8;INS_W=COVER_W-16;INS_H=40;INS_Y=VH-BOTTOM_H-52;STRIP_ON=false;
     }else{
       COVER_ON=true;COVER_X=0;COVER_Y=mb+2;COVER_W=VW;COVER_H=190;
       COVER_ART_X=8;COVER_ART_Y=COVER_Y+8;COVER_ART_W=108;COVER_ART_H=108;
@@ -1637,11 +1648,51 @@ static void crkWrangler(float t){
   crk_txtC(gW/2, py+8, "A GENUINE GAMECHANGER",1,CRK_RGB(240,224,192));
   crk_scrollerT(t,CRK_SCROLL_WRANGLER,CRK_RGB(244,164,78),7,false);
 }
+// -- P4.9: hidden Retronaut cracktro (CRACKTRO=RETRONAUT) -- spins his colour logo.
+//    Exclusive tie-in for the Retronaut video; logo used with permission.
+static const char* CRK_SCROLL_RETRO="        OMEGAWARE x RETRONAUT ...  AN EXCLUSIVE FIRST LOOK FOR THE CHANNEL ...  CHEERS FOR THE VIDEO, LEGEND ...  LOGO FLOWN WITH PERMISSION ...  NOW GO LOAD A GAME ...        ";
+static uint16_t* g_retro_buf=NULL; static int g_retro_w=0,g_retro_h=0;
+static void retroLogoFree(){ if(g_retro_buf){free(g_retro_buf);g_retro_buf=NULL;} g_retro_w=g_retro_h=0; }
+static bool retroLogoLoad(){
+  if(g_retro_buf)return true;
+  size_t sz=RETRO_LOGO_JPG_LEN;
+  uint8_t* tmp=(uint8_t*)malloc(sz); if(!tmp)return false;
+  memcpy_P(tmp,RETRO_LOGO_JPG,sz);
+  if(!jpegdec.openRAM(tmp,sz,jpeg_buf_cb)){free(tmp);return false;}
+  int jw=jpegdec.getWidth(),jh=jpegdec.getHeight();
+  if(jw<=0||jh<=0){jpegdec.close();free(tmp);return false;}
+  jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)jw*jh*2);
+  if(!jpeg_tmp_buf){jpegdec.close();free(tmp);return false;}
+  memset(jpeg_tmp_buf,0,(size_t)jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
+  jpegdec.decode(0,0,0); jpegdec.close(); free(tmp);
+  g_retro_buf=jpeg_tmp_buf; g_retro_w=jw; g_retro_h=jh; jpeg_tmp_buf=NULL;
+  return true;
+}
+static void crkRetronaut(float t){
+  gfx_fillScreen(TFT_BLACK);
+  if(g_retro_buf&&g_retro_w>0&&g_retro_h>0){
+    float ang=t*0.0026f;
+    float sw=fabsf(cosf(ang)); if(sw<0.05f)sw=0.05f;
+    int baseW=(int)(gW*0.84f);
+    int dh=(int)((float)g_retro_h*baseW/g_retro_w);
+    if(dh>gH-96){dh=gH-96; baseW=(int)((float)g_retro_w*dh/g_retro_h);}
+    int dw=(int)(baseW*sw); if(dw<2)dw=2;
+    int x0=gW/2-dw/2, y0=gH/2-dh/2-14;
+    for(int yy=0;yy<dh;yy++){int sy=yy*g_retro_h/dh; if(sy>=g_retro_h)sy=g_retro_h-1;
+      int vy=y0+yy; if(vy<0||vy>=gH)continue; const uint16_t* srow=&g_retro_buf[sy*g_retro_w];
+      for(int xx=0;xx<dw;xx++){int sx=xx*g_retro_w/dw; if(sx>=g_retro_w)sx=g_retro_w-1;
+        int vx=x0+xx; if(vx>=0&&vx<gW)fb_setPixel(vx,vy,srow[sx]);}}
+  } else {
+    crk_txtC(gW/2,gH/2-8,"RETRONAUT",4,CRK_RGB(95,224,255));
+  }
+  crk_scrollerT(t,CRK_SCROLL_RETRO,CRK_RGB(255,150,40),8,false);
+}
 // Boot cracktro runner. style: 1..6 forces a style, 0 = random pick each boot.
 static void drawCracktro(int style){
-  bool denise=(style==7), wrangler=(style==8);   // 5.4.0: hidden custom themes
+  bool denise=(style==7), wrangler=(style==8), retronaut=(style==9);   // 5.4.0/P4.9: hidden custom themes
   int s=(style>=1&&style<=6)?(style-1):(int)(esp_random()%6);
   initStars();
+  if(retronaut)retroLogoLoad();
   unsigned long startMs=millis();
   gfx_fillScreen(TFT_BLACK);gfx_flush();
   while(true){
@@ -1650,11 +1701,13 @@ static void drawCracktro(int style){
     float t=(float)(millis()-startMs);
     if(denise)crkDenise(t);
     else if(wrangler)crkWrangler(t);
+    else if(retronaut)crkRetronaut(t);
     else switch(s){case 0:crkCopper(t);break;case 1:crkStarfield(t);break;case 2:crkRaster(t);break;
       case 3:crkPlasma(t);break;case 4:crkBoing(t);break;default:crkSynth(t);break;}
     if(((int)(t/450.0f))%2) crk_txtC(gW/2,gH-46,"TAP TO CONTINUE",1,CRK_RGB(150,168,200));
     gfx_flush();delay(6);
   }
+  if(retronaut)retroLogoFree();
   gfx_fillScreen(TFT_BLACK);gfx_flush();
 }
 
@@ -1782,8 +1835,9 @@ static void drawCoverPanel(){
   // Cover art
   gfx_fillRoundRect(COVER_ART_X,COVER_ART_Y,COVER_ART_W,COVER_ART_H,5,COL_BAR);
   gfx_drawRoundRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,6,COL_ACCENT);
-  if(game.jpg_path.length()>0&&game.jpg_path!="?")gfx_drawJpgFile(game.jpg_path,COVER_ART_X+2,COVER_ART_Y+2,COVER_ART_W-4,COVER_ART_H-4);
-  else{char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setCursor(COVER_ART_X+COVER_ART_W/2-6,COVER_ART_Y+COVER_ART_H/2-8);gfx_print(ib);}
+  bool drewCover=false;
+  if(game.jpg_path.length()>0&&game.jpg_path!="?")drewCover=gfx_drawJpgFile(game.jpg_path,COVER_ART_X+2,COVER_ART_Y+2,COVER_ART_W-4,COVER_ART_H-4);
+  if(!drewCover){char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setCursor(COVER_ART_X+COVER_ART_W/2-6,COVER_ART_Y+COVER_ART_H/2-8);gfx_print(ib);}
   // v4.8.0: floppy icon — this game has a save-copy (INSERT will boot the save)
   if(cachedHasSav)drawSaveFloppy(COVER_ART_X+3,COVER_ART_Y+3);
   if(cachedHD){drawHDChip(COVER_ART_X+COVER_ART_W-23,COVER_ART_Y+3);drawNoA500(COVER_ART_X+15,COVER_ART_Y+COVER_ART_H-15,13,TFT_RED);}   // v4.9 HD markers
@@ -1797,9 +1851,10 @@ static void drawCoverPanel(){
     int cb;
     if(game.disk_count>1){DiskGrid L=diskGrid(game.disk_count);cb=L.labelY-2;}
     else cb=INS_Y-2;
-    int ty=COVER_ART_Y+COVER_ART_H+4;gfx_setTextSize(1);
-    ty=drawWrapped(4,ty,game.name,COVER_W-8,10,2,cb,COL_LIT,COL_PANEL);
-    if(cachedNfoBlurb.length()>0)drawWrapped(4,ty,cachedNfoBlurb,COVER_W-8,9,12,cb,COL_DIM,COL_PANEL);
+    int psz=g_font+1;int bsz=(psz>1?psz-1:1);int ty=COVER_ART_Y+COVER_ART_H+6;gfx_setTextSize(psz);   // title tracks FONT; blurb one step smaller
+    ty=drawWrapped(6,ty,game.name,COVER_W-12,10*psz,2,cb,COL_LIT,COL_PANEL);
+    gfx_setTextSize(bsz);
+    if(cachedNfoBlurb.length()>0)drawWrapped(6,ty+2,cachedNfoBlurb,COVER_W-12,9*bsz+1,16,cb,COL_DIM,COL_PANEL);
     if(game.disk_count>1)drawDiskGrid(game.disk_count);
   }else{
     int rx=COVER_ART_X+COVER_ART_W+8,rw=VW-rx-6;int ty=COVER_ART_Y;gfx_setTextSize(1);
@@ -2072,8 +2127,8 @@ static uint32_t g_car_die_rest_ms=0;   // v5.4.2: millis() when the die settled 
 static int g_car_ins_x=0,g_car_ins_y=0,g_car_ins_w=0,g_car_ins_h=0;   // INSERT button rect (set by drawCarousel)
 static int g_car_disk_n=0,g_car_disk_x=0,g_car_disk_y=0,g_car_disk_bw=0,g_car_disk_h=0;   // v5.7.x: reel multi-disk button row rect
 static void runScreensaver();   // defined below; the reel's idle tick can summon it
-#define CAR_TILE  150                            // decoded cover tile size (px)
-#define CAR_SLOTS 16                             // LRU tile cache entries (PSRAM, ~720 KB)
+#define CAR_TILE  220                            // decoded cover tile size (px)
+#define CAR_SLOTS 48                             // LRU tile cache entries (PSRAM ~4.6 MB @ 220px on the P4's 32MB — smooth scroll)
 static uint16_t* car_buf[CAR_SLOTS]={0};
 static int      car_game[CAR_SLOTS]={-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
 static uint32_t car_stamp[CAR_SLOTS]={0};
@@ -2096,6 +2151,12 @@ static void carBuildList(){
       if(g_games[a].plays!=g_games[b].plays)return g_games[a].plays>g_games[b].plays;
       String al=g_games[a].name,bl=g_games[b].name;al.toLowerCase();bl.toLowerCase();return al<bl;});}
   else{for(int i=0;i<n;i++)g_car_list.push_back(i);}   // ALL and RND share A-Z order
+  if(g_reelfilter){   // v5.9.2 REELFILTER: keep only good-cover games; never empty the reel
+    ensureCoverFlags();
+    std::vector<int> keep;
+    for(size_t k=0;k<g_car_list.size();k++)if(g_games[g_car_list[k]].cover_ok)keep.push_back(g_car_list[k]);
+    if(!keep.empty())g_car_list.swap(keep);
+  }
 }
 
 // Decode a game's cover into a CAR_TILE x CAR_TILE tile (aspect-fit, COL_BAR letterbox).
@@ -2115,6 +2176,7 @@ static bool carDecodeTile(int gi,uint16_t*dst){
     if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){free(buf);return false;}
     int jw=pngdec.getWidth(),jh=pngdec.getHeight();
     if(jw<=0||jh<=0||jw>2000||jh>2000){pngdec.close();free(buf);return false;}
+    if(g_covermin>0&&(jw<g_covermin||jh<g_covermin)){pngdec.close();free(buf);return false;}   // COVERMIN: skip low-res cover
     djw=jw;djh=jh;                          // PNGdec has no built-in downscale -> full decode, then shrink
     jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)djw*djh*2);
     if(!jpeg_tmp_buf){pngdec.close();free(buf);return false;}
@@ -2124,6 +2186,7 @@ static bool carDecodeTile(int gi,uint16_t*dst){
     if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return false;}
     int jw=jpegdec.getWidth(),jh=jpegdec.getHeight();
     if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return false;}
+    if(g_covermin>0&&(jw<g_covermin||jh<g_covermin)){jpegdec.close();free(buf);return false;}   // COVERMIN: skip low-res cover
     // Use JPEGDEC's built-in downscale: decoding a big cover at 1/2, 1/4 or 1/8
     // is up to 16x less work than full-decode-then-shrink (the "slow covers" fix).
     int opt=0,div=1;
@@ -2205,6 +2268,22 @@ static uint16_t* carTile(int gi,bool mayDecode){
 // (Michael's call: one predictable pass with a progress bar, never live jank).
 // Fresh thumbs are stat-checked and skipped, so a re-run over a built card is
 // seconds, not minutes. v4.8.5: carousel is first-class, so thumbs always build.
+// v5.9.2: mark which games have a real cover (cached thumb present = passed COVERMIN).
+// Derived from the persistent .tnl cache so it works even when buildThumbs is skipped
+// on a cache-hit boot. Only ever called when REELFILTER is ON. Recomputed when the
+// library size changes (different card / rescan).
+static void ensureCoverFlags(){
+  if(g_cover_flags_ready && g_cover_flags_n==(int)g_games.size()) return;
+  for(size_t i=0;i<g_games.size();i++){
+    auto&g=g_games[i]; bool ok=false;
+    if(g.jpg_path.length()>0&&g.jpg_path!="?"){
+      String vT="/sdcard"+carThumbPath((int)i); struct stat st;
+      ok=(stat(vT.c_str(),&st)==0 && st.st_size==(long)((size_t)CAR_TILE*CAR_TILE*2));
+    }
+    g.cover_ok=ok;
+  }
+  g_cover_flags_ready=true; g_cover_flags_n=(int)g_games.size();
+}
 static void buildThumbs(){
   int n=(int)g_games.size(); if(!n)return;
   uint16_t*tmp=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2);
@@ -2398,7 +2477,7 @@ static void drawCarousel(){
       int gi=g_car_list[carWrap(ci+off)];
       float rel=(float)off-frac;
       float ar=fabsf(rel);if(ar>2.6f)continue;
-      int x=ccx+(int)(rel*110.0f*(1.0f-min(ar,1.0f)*0.22f));
+      int x=ccx+(int)(rel*161.0f*(1.0f-min(ar,1.0f)*0.22f));
       float scale=1.0f-ar*0.28f;if(scale<0.42f)scale=0.42f;
       float squash=1.0f-ar*0.20f;if(squash<0.55f)squash=0.55f;
       int h=(int)(CAR_TILE*scale),w=(int)(CAR_TILE*scale*squash);
@@ -2952,6 +3031,22 @@ static void ssBlit(int x,int y){ if(!g_ss_buf)return;
   for(int r=0;r<g_ss_h;r++){int vy=y+r; if(vy<0||vy>=gH)continue;
     for(int c=0;c<g_ss_w;c++){int vx=x+c; if(vx<0||vx>=gW)continue;
       fb_setPixel(vx,vy,g_ss_buf[r*g_ss_w+c]);}}}
+// P4.9: decode the embedded Retronaut helmet into the bounce buffer (no SD file needed).
+static bool retroHelmDecode(){
+  ssFree();
+  size_t sz=RETRO_HELM_JPG_LEN;
+  uint8_t* tmp=(uint8_t*)malloc(sz); if(!tmp)return false;
+  memcpy_P(tmp,RETRO_HELM_JPG,sz);
+  if(!jpegdec.openRAM(tmp,sz,jpeg_buf_cb)){free(tmp);return false;}
+  int jw=jpegdec.getWidth(),jh=jpegdec.getHeight();
+  if(jw<=0||jh<=0){jpegdec.close();free(tmp);return false;}
+  jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)jw*jh*2);
+  if(!jpeg_tmp_buf){jpegdec.close();free(tmp);return false;}
+  memset(jpeg_tmp_buf,0,(size_t)jw*jh*2); jpeg_tmp_w=jw; jpeg_tmp_h=jh;
+  jpegdec.decode(0,0,0); jpegdec.close(); free(tmp);
+  g_ss_buf=jpeg_tmp_buf; g_ss_w=jw; g_ss_h=jh; jpeg_tmp_buf=NULL;
+  return true;
+}
 static void scanScreensaver(){                               // arm iff /screensaver/ exists
   g_ss_paths.clear(); g_ss_have=false; g_ss_claude=false;
   File dir=SD_MMC.open("/screensaver"); if(!dir){ g_ss_claude=true; g_ss_have=true; return; }   // v5.5.1: no folder -> default bouncing sprites (that flip to contributor names)
@@ -2973,6 +3068,7 @@ static void scanScreensaver(){                               // arm iff /screens
   g_ss_have=!g_ss_paths.empty()||g_ss_claude;
   if(g_cracktro==7)g_ss_have=true;   // 5.4.0: Denise theme arms the saver even with no /screensaver folder
   if(g_cracktro==8)g_ss_have=true;   // v5.5.2: Wrangler theme (CRACKTRO=WRANGLER) arms it too
+  if(g_cracktro==9)g_ss_have=true;   // P4.9: Retronaut helmet screensaver
 }
 // Procedurally draw the Claude starburst into the bounce buffer (no JPEG needed):
 // 12 tapered coral rays around a solid hub. It's math, not a bitmap — so it
@@ -3267,7 +3363,8 @@ static void runScreensaver(){                                // blocking bounce 
   bool deniseMode=(g_cracktro==7);                          // 5.4.0: hidden Denise theme
   bool vincent=false;
   bool wranglerMode=(g_cracktro==8);                        // v5.5.2: bounce the @wrangler_amiga wordmark
-  bool claudeMode=(!deniseMode)&&(!wranglerMode)&&g_ss_paths.empty();
+  bool retronautMode=(g_cracktro==9);                       // P4.9: bounce the Retronaut helmet
+  bool claudeMode=(!deniseMode)&&(!wranglerMode)&&(!retronautMode)&&g_ss_paths.empty();
   int ssForm=0;                                              // v4.8.1 ghost + v4.9.6 lolly: cycles on every wall hit
   bool showName=false; const char* curName=NAMES[0]; int nameSz=3;   // v5.5.1: bounce can flip to a contributor name
   float ph=0;
@@ -3277,6 +3374,8 @@ static void runScreensaver(){                                // blocking bounce 
     curName="@wrangler_amiga"; nameSz=3; gfx_setTextSize(nameSz);
     while(nameSz>1&&gfx_textWidth(curName)>gW-8){nameSz--;gfx_setTextSize(nameSz);}
     if(!ssMakeClaude(0)){g_ss_have=false;return;}   // v5.5.5: start on a sprite; wall hits flip @wrangler_amiga <-> sprite
+  } else if(retronautMode){
+    if(!retroHelmDecode()){g_ss_have=false;return;}
   } else if(claudeMode){
     // Empty /screensaver/ folder: bounce the (slowly spinning) Claude starburst
     if(!g_ss_claude||!ssMakeClaude(0)){g_ss_have=false;return;}
@@ -3286,7 +3385,7 @@ static void runScreensaver(){                                // blocking bounce 
     if(!ok){ssFree();g_ss_have=false;return;}   // no decodable image -> disarm, back to UI
   }
   int x,y,vx,vy;
-  if(deniseMode||wranglerMode){                             // 5.4.0/5.5.2: random start pos + direction (no two-corner lock)
+  if(deniseMode||wranglerMode||retronautMode){             // 5.4.0/5.5.2/P4.9: random start pos + direction (no two-corner lock)
     x=(int)(esp_random()%(uint32_t)(gW-g_ss_w>0?gW-g_ss_w:1));
     y=(int)(esp_random()%(uint32_t)(gH-g_ss_h>0?gH-g_ss_h:1));
     vx=1+(int)(esp_random()%3); if(esp_random()&1)vx=-vx;
@@ -3322,6 +3421,7 @@ static void runScreensaver(){                                // blocking bounce 
 // ════════════════════════════════════════════════════════════════════════════
 static void doRescan(){
   g_info_showing=false;
+  g_cover_flags_ready=false;   // v5.9.2: covers may have changed -> recompute reel-filter flags
   // Delete all cache files
   SD_MMC.remove("/ADF/.index");SD_MMC.remove("/DSK/.index");
   SD_MMC.remove("/ADF/.gamecache");SD_MMC.remove("/DSK/.gamecache");
@@ -3345,6 +3445,15 @@ static void doRescan(){
 //    result row to jump the list straight to it. Returns true if a game was chosen
 //    (g_sel + scroll set), false on CLOSE. Reached from the magnifier atop the A-Z
 //    rail. v4.8.2. ──
+// Wait for a CLEAN finger release before returning from a keyboard: require several
+// consecutive no-touch frames, so a single dropped touch frame (common on these panels)
+// can't be read as a lift. Without this, tapping a keyboard button bleeds through to the
+// next screen (the touch 'jumps past' bug).
+static void kbWaitRelease(uint32_t maxMs=900){
+  int up=0; uint32_t t0=millis();
+  while (up<4 && millis()-t0<maxMs){ if(Touch_ReadFrame()) up=0; else up++; delay(10); }
+}
+
 static bool doSearch(){
   String q="";
   static const char* SROWS[4]={"1234567890","QWERTYUIOP","ASDFGHJKL-","ZXCVBNM'."};
@@ -3363,7 +3472,7 @@ static bool doSearch(){
   int matches[8];int nMatch=0,totalMatch=0;
   bool dirty=true,pressed=false;int rel=0;
   // drain the entering tap so it doesn't fire a key on the first frame
-  {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<600)delay(10);}
+  kbWaitRelease(600);
   auto recompute=[&](){nMatch=0;totalMatch=0;if(!q.length())return;String ql=q;ql.toLowerCase();
     for(int i=0;i<(int)g_games.size();i++){String nm=g_games[i].name;nm.toLowerCase();
       if(nm.indexOf(ql)>=0){if(nMatch<resMax)matches[nMatch++]=i;totalMatch++;}}};
@@ -3403,7 +3512,7 @@ static bool doSearch(){
         for(int i=0;i<nMatch&&!handled;i++){int ry=resTop+i*resRowH;
           if(ty>=ry&&ty<ry+resBoxH&&tx>=8&&tx<VW-8){int t=matches[i];
             g_sel=t;g_disk_sel=0;g_disk_page=0;g_scrollPx=min((float)(t*LIST_ITEM_H),(float)maxScrollPx());g_inertia_on=false;
-            setActiveLetter(bucketOf(g_games[t].name));return true;}}
+            setActiveLetter(bucketOf(g_games[t].name));kbWaitRelease();return true;}}
         int ky=kbTop;
         for(int r=0;r<4&&!handled;r++){int n=strlen(SROWS[r]);int kw=(VW-gap)/10-gap;int kx0=gap+((10-n)*(kw+gap))/2;
           if(ty>=ky&&ty<ky+kh){int i=((int)tx-kx0)/(kw+gap);int within=((int)tx-kx0)-i*(kw+gap);
@@ -3413,7 +3522,7 @@ static bool doSearch(){
           if(i>=0&&i<3&&(int)tx>=cxi&&(int)tx<cxi+cw){
             if(i==0){if(q.length()){q.remove(q.length()-1);recompute();}dirty=true;}
             else if(i==1){if(q.length()<24){q+=' ';recompute();}dirty=true;}
-            else if(i==2){return false;}}}
+            else if(i==2){kbWaitRelease();return false;}}}
       }
     } else { if(pressed&&++rel>=3)pressed=false; }
     delay(12);
@@ -3568,6 +3677,7 @@ static bool onScreenKeyboard(const String&macLabel,const String&initial,String&o
   const int kh=42,gap=4;
   bool dirty=true;
   bool kbPressed=false;int kbRelease=0;   // press-edge de-dupe: one key per finger-down
+  kbWaitRelease(600);   // drain the tap that opened this keyboard (bleed-through fix)
   while(true){
     if(dirty){dirty=false;
       gfx_fillScreen(COL_BG);
@@ -3602,8 +3712,8 @@ static bool onScreenKeyboard(const String&macLabel,const String&initial,String&o
           if(i>=0&&i<4&&(int)tx>=cxi&&(int)tx<cxi+cw){
             if(i==0){if(out.length())out.remove(out.length()-1);dirty=true;}
             else if(i==1){if(out.length()<24)out+=' ';dirty=true;}
-            else if(i==2){return false;}
-            else if(i==3){out.trim();return true;}}
+            else if(i==2){kbWaitRelease();return false;}
+            else if(i==3){out.trim();kbWaitRelease();return true;}}
         }
       }
     } else {

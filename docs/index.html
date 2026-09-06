@@ -1,1201 +1,605 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Gotek Touchscreen Interface — Web Flasher</title>
-  <script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GTi Flasher — OMEGAWARE</title>
+<script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap">
+<style>
+  :root{
+    --bg:#12131b; --panel:#191b28; --panel2:#1f2233; --border:#2c2f47;
+    --copper1:#ff8a3c; --copper2:#ffc061; --green:#46d68f; --dim:#9096ba;
+    --text:#e2e4f3; --bright:#fff; --blue:#6aa6ff; --red:#ff6060;
+    --mono:'Share Tech Mono',ui-monospace,monospace; --display:'Orbitron',var(--mono);
+  }
+  *{box-sizing:border-box}
+  [hidden]{display:none!important}
+  html{color-scheme:dark}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);line-height:1.5;-webkit-font-smoothing:antialiased}
+  body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,.04) 3px,rgba(0,0,0,.04) 4px);pointer-events:none;z-index:1000}
+  img{max-width:100%}
 
-    :root {
-      --bg:       #12131b;   /* lifted off pure-black so neon contrast is softer */
-      --panel:    #191b28;
-      --border:   #2c2f47;   /* card edges actually visible now */
-      --copper1:  #ff8a3c;   /* copper accents, a touch softer */
-      --copper2:  #ffc061;
-      --green:    #46d68f;   /* calmer than the old neon #00ff88 */
-      --dim:      #9096ba;   /* secondary text — was near-invisible #3a3a5c */
-      --text:     #e2e4f3;   /* brighter body text for clean legibility */
-      --bright:   #ffffff;
-      --blue:     #6aa6ff;
-      --red:      #ff6060;
-    }
+  .copper-top{height:6px;background:linear-gradient(90deg,#f00,#ff6b00,#fa0,#ff0,#0f8,#08f,#80f,#f08,#f00);background-size:200% 100%;animation:cs 3s linear infinite}
+  @keyframes cs{from{background-position:0 0}to{background-position:200% 0}}
+  @media (prefers-reduced-motion:reduce){.copper-top{animation:none}*{transition:none!important}}
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+  header{text-align:center;padding:2rem 1rem 1.3rem;border-bottom:1px solid var(--border)}
+  .eyebrow{font-size:.68rem;letter-spacing:.4em;color:var(--copper1);text-transform:uppercase;margin-bottom:.5rem}
+  h1{font-family:var(--display);font-weight:900;font-size:clamp(1.3rem,4.2vw,2.3rem);color:var(--bright);letter-spacing:.04em;line-height:1.1;margin:0;text-wrap:balance}
+  h1 b{color:var(--copper2);font-weight:900}
+  .tagline{margin-top:.55rem;font-size:.72rem;color:var(--dim);letter-spacing:.18em;text-transform:uppercase}
 
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'Share Tech Mono', monospace;
-      min-height: 100vh;
-      overflow-x: hidden;
-    }
+  main{max-width:820px;margin:0 auto;padding:1.4rem 1rem 4rem}
 
-    /* Scanline overlay — dialed right back so it's a hint, not a hindrance */
-    body::before {
-      content: '';
-      position: fixed;
-      inset: 0;
-      background: repeating-linear-gradient(
-        0deg,
-        transparent,
-        transparent 3px,
-        rgba(0,0,0,0.035) 3px,
-        rgba(0,0,0,0.035) 4px
-      );
-      pointer-events: none;
-      z-index: 1000;
-    }
+  .prompt{font-family:var(--display);font-weight:700;font-size:1rem;color:var(--bright);letter-spacing:.02em;margin:.2rem 0 1.1rem}
+  .lanes{display:grid;grid-template-columns:repeat(2,1fr);gap:.9rem}
+  @media(max-width:620px){.lanes{grid-template-columns:1fr}}
+  .lane{text-align:left;background:var(--panel);border:1px solid var(--border);border-radius:5px;padding:1.3rem 1.2rem 1.15rem;cursor:pointer;color:var(--text);font-family:var(--mono);position:relative;overflow:hidden;transition:border-color .15s,background .15s,transform .15s}
+  .lane:hover{border-color:var(--copper2);background:#1b1832;transform:translateY(-2px)}
+  .lane:focus-visible{outline:2px solid var(--copper2);outline-offset:2px}
+  .lane .ico{width:38px;height:38px;margin-bottom:.7rem;color:var(--copper1)}
+  .lane h3{font-family:var(--display);font-weight:700;font-size:1rem;color:var(--bright);margin:0 0 .32rem;letter-spacing:.01em}
+  .lane p{font-size:.77rem;color:var(--dim);line-height:1.45;margin:0}
+  .lane .go{position:absolute;right:1rem;top:1.15rem;color:var(--copper2);font-size:1.05rem;opacity:.45;transition:opacity .15s,transform .15s}
+  .lane:hover .go{opacity:1;transform:translateX(3px)}
 
-    /* Copper bar top */
-    .copper-top {
-      height: 6px;
-      background: linear-gradient(90deg,
-        #ff0000, #ff6b00, #ffaa00, #ffff00, #00ff88, #0088ff, #8800ff, #ff0088, #ff0000);
-      background-size: 200% 100%;
-      animation: copper-scroll 3s linear infinite;
-    }
-    @keyframes copper-scroll {
-      from { background-position: 0% 0%; }
-      to   { background-position: 200% 0%; }
-    }
+  .subdoors{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1rem}
+  .subdoor{flex:1 1 240px;text-align:left;background:none;border:1px dashed var(--border);border-radius:5px;padding:.75rem .9rem;cursor:pointer;color:var(--dim);font-family:var(--mono);font-size:.76rem;transition:border-color .15s,color .15s}
+  .subdoor:hover{border-color:var(--dim);color:var(--text)}
+  .subdoor b{color:var(--text);font-family:var(--display);font-weight:700;font-size:.82rem;display:block;margin-bottom:.15rem}
+  .subdoor:hover b{color:var(--copper2)}
 
-    header {
-      text-align: center;
-      padding: 2.5rem 1rem 1.5rem;
-      border-bottom: 1px solid var(--border);
-      position: relative;
-    }
+  .view{display:none}
+  .view.on{display:block}
+  .back{display:inline-flex;align-items:center;gap:.4rem;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:.74rem;letter-spacing:.12em;text-transform:uppercase;cursor:pointer;padding:.3rem 0;margin-bottom:1.1rem}
+  .back:hover{color:var(--copper2)}
 
-    .logo-sub {
-      font-family: 'Share Tech Mono', monospace;
-      font-size: 0.7rem;
-      letter-spacing: 0.4em;
-      color: var(--copper1);
-      text-transform: uppercase;
-      margin-bottom: 0.5rem;
-    }
+  .vh{font-family:var(--display);font-weight:700;font-size:1.15rem;color:var(--bright);letter-spacing:.02em;margin-bottom:.2rem}
+  .vsub{font-size:.78rem;color:var(--dim);margin-bottom:1.4rem}
 
-    h1 {
-      font-family: 'Orbitron', monospace;
-      font-size: clamp(1.4rem, 4vw, 2.4rem);
-      font-weight: 900;
-      color: var(--bright);
-      letter-spacing: 0.05em;
-      line-height: 1.1;
-    }
+  .steps{display:flex;align-items:center;justify-content:center;margin:0 0 1.6rem;flex-wrap:wrap;gap:.3rem 0}
+  .st{display:flex;align-items:center;gap:.5rem;font-size:.64rem;letter-spacing:.14em;color:var(--dim);text-transform:uppercase}
+  .st .n{width:22px;height:22px;border:1px solid currentColor;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.66rem;flex-shrink:0}
+  .st.active{color:var(--copper2)}
+  .st.done{color:var(--green)}
+  .st.done .n{background:var(--green);color:#0d1f16;border-color:var(--green)}
+  .stln{width:34px;height:1px;background:var(--border);margin:0 .35rem}
 
-    h1 span {
-      color: var(--copper2);
-    }
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:5px;padding:1.1rem 1.15rem;margin-bottom:1rem}
+  .card.muted{opacity:.45;pointer-events:none}
+  .card-h{display:flex;align-items:center;gap:.6rem;font-size:.66rem;letter-spacing:.22em;text-transform:uppercase;color:var(--copper1);margin-bottom:.9rem}
+  .card-h .num{width:20px;height:20px;border:1px solid var(--copper1);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.62rem;flex-shrink:0}
+  .card.done .card-h{color:var(--green)} .card.done .card-h .num{border-color:var(--green);background:var(--green);color:#0d1f16}
 
-    .tagline {
-      margin-top: 0.6rem;
-      font-size: 0.75rem;
-      color: var(--dim);
-      letter-spacing: 0.2em;
-    }
+  .seg{display:inline-flex;border:1px solid var(--border);border-radius:4px;overflow:hidden;margin-bottom:1rem}
+  .seg button{background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;padding:.46rem .95rem;cursor:pointer;transition:background .12s,color .12s}
+  .seg button.on{background:var(--panel2);color:var(--copper2)}
+  .seg button:disabled{opacity:.35;cursor:not-allowed}
+  .seg button+button{border-left:1px solid var(--border)}
 
-    .stars {
-      position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
-      overflow: hidden;
-      pointer-events: none;
-    }
-    .star {
-      position: absolute;
-      width: 2px; height: 2px;
-      background: var(--bright);
-      border-radius: 50%;
-      opacity: 0;
-      animation: twinkle var(--d, 3s) var(--delay, 0s) infinite;
-    }
-    @keyframes twinkle {
-      0%, 100% { opacity: 0; }
-      50% { opacity: var(--bright, 0.8); }
-    }
+  .devgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:.7rem}
+  @media(max-width:620px){.devgrid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:400px){.devgrid{grid-template-columns:1fr}}
+  .dev{display:flex;flex-direction:column;text-align:left;background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:.6rem .6rem .75rem;cursor:pointer;color:var(--text);font-family:var(--mono);transition:border-color .12s,background .12s,transform .12s;position:relative}
+  .dev:hover{border-color:var(--dim);transform:translateY(-2px)}
+  .dev.sel{border-color:var(--copper2);background:#1c1630}
+  .dev:focus-visible{outline:2px solid var(--copper2);outline-offset:2px}
+  .dev .pic{background:#0a0b12;border:1px solid var(--border);border-radius:4px;padding:.4rem;margin-bottom:.6rem;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center}
+  .dev.sel .pic{border-color:#4a3a5e}
+  .dev .pic svg{width:100%;height:100%}
+  .dev .sz{position:absolute;top:.85rem;right:.85rem;font-family:var(--display);font-weight:700;font-size:.68rem;color:var(--copper2);background:#0a0b12cc;border:1px solid var(--border);border-radius:3px;padding:.1rem .35rem}
+  .dev .nm{font-family:var(--display);font-weight:700;font-size:.8rem;color:var(--bright);line-height:1.2}
+  .dev .meta{font-size:.68rem;color:var(--dim);margin-top:.22rem}
+  .dev .spot{font-size:.68rem;color:var(--blue);margin-top:.28rem;line-height:1.35}
+  .dev .tagrow{display:flex;flex-wrap:wrap;gap:.25rem;margin-top:.5rem}
 
-    main {
-      max-width: 860px;
-      margin: 0 auto;
-      padding: 2rem 1rem 4rem;
-    }
+  .legacy-toggle{width:100%;margin-top:.8rem;background:none;border:1px dashed var(--border);border-radius:4px;color:var(--dim);font-family:var(--mono);font-size:.74rem;letter-spacing:.06em;padding:.6rem;cursor:pointer;transition:border-color .12s,color .12s}
+  .legacy-toggle:hover{border-color:var(--dim);color:var(--text)}
+  .legacy-wrap{margin-top:.7rem}
 
-    /* Step indicator */
-    .steps {
-      display: flex;
-      align-items: center;
-      gap: 0;
-      margin-bottom: 2.5rem;
-      justify-content: center;
-    }
-    .step {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: 0.68rem;
-      letter-spacing: 0.15em;
-      color: var(--dim);
-      text-transform: uppercase;
-    }
-    .step.active { color: var(--copper2); }
-    .step.done   { color: var(--green); }
-    .step-num {
-      width: 22px; height: 22px;
-      border: 1px solid currentColor;
-      border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 0.65rem;
-      flex-shrink: 0;
-    }
-    .step-line {
-      width: 40px; height: 1px;
-      background: var(--border);
-      margin: 0 0.3rem;
-    }
+  .tag{display:inline-block;font-size:.58rem;letter-spacing:.08em;text-transform:uppercase;padding:.14rem .4rem;border-radius:3px;border:1px solid;white-space:nowrap}
+  .t-rec{color:var(--copper2);border-color:var(--copper2)}
+  .t-stand{color:var(--green);border-color:#2f6b4e}
+  .t-wifi{color:var(--blue);border-color:#345b8f}
+  .t-beta{color:var(--red);border-color:#7a3838}
+  .t-dongle{color:var(--copper2);border-color:#7a5a2a}
 
-    /* Device selector */
-    .section-label {
-      font-size: 0.65rem;
-      letter-spacing: 0.3em;
-      color: var(--copper1);
-      text-transform: uppercase;
-      margin-bottom: 0.8rem;
-      display: flex;
-      align-items: center;
-      gap: 0.6rem;
-    }
-    .section-label::after {
-      content: '';
-      flex: 1;
-      height: 1px;
-      background: var(--border);
-    }
+  .prep{font-size:.79rem;color:var(--text);background:#12101c;border:1px solid var(--border);border-radius:4px;padding:.8rem .9rem;margin-bottom:.9rem;min-height:2rem}
+  .prep b{color:var(--copper2)}
+  .prep .muted{color:var(--dim)}
+  .mode-note{font-size:.76rem;color:var(--dim);background:#101722;border:1px solid #24405e;border-left:3px solid var(--blue);border-radius:4px;padding:.7rem .85rem;margin:-.2rem 0 .9rem;line-height:1.5}
+  .mode-note b{color:var(--text)}
+  .dl{display:inline-flex;align-items:center;gap:.45rem;font-size:.75rem;color:var(--blue);border:1px solid #345b8f;border-radius:4px;padding:.4rem .7rem;background:#0e1626;text-decoration:none;margin:.1rem 0 .9rem;cursor:pointer}
+  .dl:hover{background:#132038}
+  .chk{display:flex;gap:.6rem;align-items:flex-start;font-size:.79rem;color:var(--text);cursor:pointer;user-select:none;margin-bottom:1rem}
+  .chk input{margin-top:.2rem;accent-color:var(--copper1);width:16px;height:16px;flex-shrink:0}
+  .trouble{font-size:.74rem;color:var(--dim);border:1px solid var(--border);border-radius:4px;padding:.7rem .85rem;margin-top:.2rem;line-height:1.55}
+  .trouble summary{cursor:pointer;color:var(--copper2);font-family:var(--display);font-weight:700;font-size:.72rem;letter-spacing:.04em}
+  .trouble a{color:var(--blue)}
+  .trouble b{color:var(--text)}
 
-    .device-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 1rem;
-      margin-bottom: 2.5rem;
-    }
+  .btn{font-family:var(--display);font-weight:700;font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;padding:.7rem 1.3rem;border-radius:4px;border:1px solid;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn-confirm{background:none;color:var(--copper2);border-color:var(--copper2)}
+  .btn-confirm:not(:disabled):hover{background:var(--copper2);color:#1a1206}
+  .status{font-size:.76rem;color:var(--dim);margin-top:.7rem;min-height:1.1rem}
+  .status .ok{color:var(--green)} .status .work{color:var(--copper2)}
 
-    .device-card {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 1.2rem;
-      cursor: pointer;
-      transition: border-color 0.15s, background 0.15s;
-      position: relative;
-      overflow: hidden;
-    }
-    .device-card::before {
-      content: '';
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: 2px;
-      background: var(--copper1);
-      opacity: 0;
-      transition: opacity 0.15s;
-    }
-    .device-card:hover {
-      border-color: var(--dim);
-      background: #12121f;
-    }
-    .device-card.selected {
-      border-color: var(--copper2);
-      background: #15120a;
-    }
-    .device-card.selected::before {
-      opacity: 1;
-    }
+  .betabox{display:flex;gap:.5rem;align-items:center;font-size:.75rem;color:var(--dim);cursor:pointer;user-select:none;margin:-.1rem 0 .9rem}
+  .betabox input{accent-color:var(--red);width:15px;height:15px}
+  .betabox .lab b{color:var(--red)}
+  .fwline{font-size:.82rem;color:var(--text);margin:.2rem 0 1rem;line-height:1.5}
+  .fwline b{color:var(--copper2)}
+  .fwline .v{color:var(--dim);font-size:.75rem}
 
-    .device-photo {
-      width: 100%;
-      height: 130px;
-      object-fit: cover;
-      border-radius: 4px;
-      margin-bottom: 0.7rem;
-      background: #0a0a12;
-      border: 1px solid var(--border);
-    }
-    .board-ref {
-      display: block;
-      width: 100%;
-      max-width: 480px;
-      margin: 0.4rem auto 0;
-      border-radius: 4px;
-      border: 1px solid var(--border);
-    }
-    .board-ref-cap {
-      font-size: 0.62rem;
-      color: var(--dim);
-      text-align: center;
-      margin-top: 0.5rem;
-      letter-spacing: 0.05em;
-    }
-    .device-name {
-      font-family: 'Orbitron', monospace;
-      font-size: 0.8rem;
-      font-weight: 700;
-      color: var(--bright);
-      margin-bottom: 0.3rem;
-    }
-    .device-chip {
-      font-size: 0.62rem;
-      color: var(--blue);
-      letter-spacing: 0.1em;
-      margin-bottom: 0.6rem;
-    }
-    .device-desc {
-      font-size: 0.68rem;
-      color: var(--dim);
-      line-height: 1.5;
-    }
-    .device-badge {
-      display: inline-block;
-      font-size: 0.55rem;
-      padding: 0.15rem 0.4rem;
-      border-radius: 2px;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      margin-top: 0.5rem;
-    }
-    .badge-standalone { background: #1a2a1a; color: var(--green); border: 1px solid #2a4a2a; }
-    .badge-dongle     { background: #1a1a2a; color: var(--blue);  border: 1px solid #2a2a4a; }
-    .badge-wireless   { background: #2a1a0a; color: var(--copper2); border: 1px solid #4a2a0a; }
-    .badge-current    { background: #2a2410; color: #ffd75e; border: 1px solid #6a5a1a; }
-    .badge-beta       { background: #2a1015; color: #ff6e8a; border: 1px solid #5a1a2a; }
-    .beta-note {
-      background: #1a1015; border: 1px solid #4a2a35; border-radius: 8px;
-      padding: 0.8rem 1rem; margin-bottom: 1rem; font-size: 0.85rem;
-      color: #d0a0b0; line-height: 1.5;
-    }
-    .beta-note b { color: #ff6e8a; }
+  /* esp-web-tools install button — themed to match */
+  esp-web-install-button{--esp-tools-button-color:var(--green);--esp-tools-button-text-color:#0d1f16}
+  esp-web-install-button::part(button){font-family:var(--display);font-weight:700;font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;padding:.7rem 1.4rem;border-radius:4px;border:1px solid var(--green);background:var(--green);color:#0d1f16;cursor:pointer}
+  esp-web-install-button::part(button):hover{background:#5fe6a1;border-color:#5fe6a1}
+  esp-web-install-button[install-unsupported]{display:block;font-size:.78rem;color:var(--red)}
 
-    .selected-indicator {
-      position: absolute;
-      top: 0.5rem; right: 0.5rem;
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: var(--copper2);
-      display: none;
-      animation: pulse 1.5s ease-in-out infinite;
-    }
-    .device-card.selected .selected-indicator { display: block; }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50%       { opacity: 0.5; transform: scale(1.3); }
-    }
+  .opt{background:var(--panel);border:1px solid var(--border);border-radius:5px;padding:1.05rem 1.1rem;margin-bottom:.9rem}
+  .opt h3{font-family:var(--display);font-weight:700;font-size:.92rem;color:var(--bright);margin:0 0 .35rem}
+  .opt p{font-size:.79rem;color:var(--dim);line-height:1.5;margin:0}
+  .opt .path{font-size:.74rem;color:var(--blue);margin-top:.5rem}
+  .beat{border-left:2px solid var(--border);padding:0 0 1.3rem 1.1rem;position:relative}
+  .beat::before{content:'';position:absolute;left:-5px;top:.2rem;width:8px;height:8px;border-radius:50%;background:var(--copper1)}
+  .beat:last-child{padding-bottom:0}
+  .beat .w{font-size:.64rem;letter-spacing:.2em;text-transform:uppercase;color:var(--copper1);margin-bottom:.3rem}
+  .beat h3{font-family:var(--display);font-weight:700;font-size:.9rem;color:var(--bright);margin:0 0 .35rem}
+  .beat p{font-size:.79rem;color:var(--dim);line-height:1.55;margin:0}
+  .beat b{color:var(--text)}
 
-    /* Flash panel */
-    .flash-panel {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 1.5rem;
-      margin-bottom: 2rem;
-      min-height: 120px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 1rem;
-      text-align: center;
-    }
+  .tree{font-family:var(--mono);font-size:.73rem;line-height:1.65;color:var(--text);background:#0c0d15;border:1px solid var(--border);border-radius:4px;padding:.85rem 1rem;overflow-x:auto;white-space:pre;margin:.7rem 0 .3rem}
+  .tree .c{color:var(--dim)} .tree .f{color:var(--copper2)}
+  .ref{display:grid;grid-template-columns:auto 1fr;gap:.4rem .9rem;font-size:.78rem;margin:.5rem 0 .1rem}
+  .ref dt{font-family:var(--display);font-weight:700;color:var(--copper2);white-space:nowrap}
+  .ref dd{margin:0;color:var(--dim)} .ref dd b{color:var(--text)}
+  .callout{font-size:.77rem;color:var(--dim);background:#101722;border:1px solid #24405e;border-left:3px solid var(--blue);border-radius:4px;padding:.7rem .85rem;margin:.75rem 0 .1rem;line-height:1.55}
+  .callout b{color:var(--text)}
+  .opt code,.prep code,.mode-note code{font-family:var(--mono);color:var(--green);background:#0c0d15;border:1px solid var(--border);border-radius:3px;padding:.03rem .3rem;font-size:.76rem}
+  .inlink{border:none;background:none;color:var(--blue);padding:0;cursor:pointer;text-decoration:underline;font-family:var(--mono);font-size:inherit}
 
-    .flash-panel.no-selection {
-      border-style: dashed;
-    }
-
-    .no-sel-text {
-      color: var(--dim);
-      font-size: 0.72rem;
-      letter-spacing: 0.15em;
-    }
-
-    .flash-device-name {
-      font-family: 'Orbitron', monospace;
-      font-size: 1rem;
-      font-weight: 700;
-      color: var(--copper2);
-    }
-
-    .flash-version {
-      font-size: 0.65rem;
-      color: var(--dim);
-      letter-spacing: 0.1em;
-      margin-top: -0.5rem;
-    }
-
-    esp-web-install-button {
-      --esp-tools-button-color: var(--copper1);
-      --esp-tools-button-text-color: var(--bright);
-    }
-
-    esp-web-install-button::part(button) {
-      font-family: 'Orbitron', monospace;
-      font-size: 0.8rem;
-      font-weight: 700;
-      letter-spacing: 0.15em;
-      text-transform: uppercase;
-      background: transparent;
-      border: 2px solid var(--copper1);
-      color: var(--copper2);
-      padding: 0.7rem 2rem;
-      border-radius: 2px;
-      cursor: pointer;
-      transition: background 0.15s, color 0.15s;
-    }
-    esp-web-install-button::part(button):hover {
-      background: var(--copper1);
-      color: #000;
-    }
-
-    /* Instructions */
-    .instructions {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 1.5rem;
-      margin-bottom: 2rem;
-    }
-
-    .instructions ol {
-      padding-left: 1.5rem;
-      font-size: 0.73rem;
-      line-height: 2;
-      color: var(--text);
-    }
-
-    .instructions li { margin-bottom: 0.1rem; }
-    .instructions li strong { color: var(--copper2); }
-    .instructions li code {
-      background: #1a1a2e;
-      padding: 0.1rem 0.3rem;
-      border-radius: 2px;
-      color: var(--green);
-      font-size: 0.7rem;
-    }
-
-    .warn-box {
-      background: #1a0a0a;
-      border: 1px solid #3a1a1a;
-      border-radius: 4px;
-      padding: 0.8rem 1rem;
-      font-size: 0.68rem;
-      color: #cc8888;
-      margin-top: 1rem;
-      line-height: 1.6;
-    }
-    .warn-box strong { color: var(--red); }
-
-    /* Browser warning */
-    .browser-warn {
-      background: #1a1200;
-      border: 1px solid #3a2800;
-      border-radius: 4px;
-      padding: 0.8rem 1rem;
-      font-size: 0.68rem;
-      color: #cc9900;
-      margin-bottom: 1.5rem;
-      display: none;
-    }
-
-    /* Footer */
-    footer {
-      text-align: center;
-      padding: 1.5rem;
-      border-top: 1px solid var(--border);
-      font-size: 0.62rem;
-      color: var(--dim);
-      letter-spacing: 0.15em;
-    }
-    footer a { color: var(--copper1); text-decoration: none; }
-    footer a:hover { color: var(--copper2); }
-
-    .scrolltext {
-      overflow: hidden;
-      white-space: nowrap;
-      border-top: 1px solid var(--border);
-      padding: 0.4rem 0;
-      font-size: 0.6rem;
-      color: var(--copper1);
-      letter-spacing: 0.2em;
-    }
-    .scrolltext-inner {
-      display: inline-block;
-      animation: scroll-text 30s linear infinite;
-    }
-    @keyframes scroll-text {
-      from { transform: translateX(100vw); }
-      to   { transform: translateX(-100%); }
-    }
-  </style>
+  footer{max-width:820px;margin:0 auto;padding:1.5rem 1rem 3rem;border-top:1px solid var(--border);font-size:.72rem;color:var(--dim);text-align:center;line-height:1.8}
+  footer a{color:var(--blue);text-decoration:none} footer a:hover{text-decoration:underline}
+  footer .eng b{color:var(--green)}
+</style>
 </head>
 <body>
 
 <div class="copper-top"></div>
 
 <header>
-  <div class="stars" id="stars"></div>
-  <div class="logo-sub">OmegaWare 2026</div>
-  <h1>GOTEK <span>TOUCHSCREEN</span> INTERFACE</h1>
-  <div class="tagline">WEB FLASHER &nbsp;·&nbsp; NO ARDUINO IDE REQUIRED &nbsp;·&nbsp; CHROME / EDGE ONLY</div>
-  <div class="tagline">💬 Need help? Join the <a href="https://discord.gg/7gY4PKUnnf" style="color:inherit;text-decoration:underline;">OMEGAWARE Discord</a></div>
+  <div class="eyebrow">OMEGAWARE</div>
+  <h1>GOTEK <b>TOUCHSCREEN</b> INTERFACE</h1>
+  <div class="tagline">Web Flasher · No Arduino IDE · Chrome / Edge on desktop</div>
 </header>
 
 <main>
-
-  <div class="browser-warn" id="browserWarn">
-    ⚠ Web Serial is not supported in this browser. Please use <strong>Chrome</strong> or <strong>Edge</strong>.
-  </div>
-
-  <div class="steps">
-    <div class="step active" id="step1">
-      <div class="step-num">1</div>
-      <div>Choose device</div>
+  <!-- ===== FRONT DOOR ===== -->
+  <section id="door" class="view on">
+    <div class="prompt">What do you want to do?</div>
+    <div class="lanes">
+      <button class="lane" onclick="openFlow('touch')">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="1.5"/><path d="M3 8h18"/><path d="M8 21h8"/><path d="M12 17v4"/><circle cx="6.2" cy="6" r=".6" fill="currentColor" stroke="none"/></svg>
+        <span class="go">→</span>
+        <h3>Flash a touchscreen</h3>
+        <p>Put the GTi interface onto a screen board — 3.5″, 4.3″, the P4 flagship, or a 7″ panel. Standalone after setup.</p>
+      </button>
+      <button class="lane" onclick="openFlow('dongle')">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="12" height="6" rx="1.5"/><path d="M15 10.5h3a2 2 0 0 1 0 3h-3"/><path d="M6 9V7.5"/><path d="M9 9V7.5"/><path d="M18.5 12h1.5"/></svg>
+        <span class="go">→</span>
+        <h3>Flash a wireless dongle</h3>
+        <p>Flash the little board that plugs into the Gotek and loads disks over the air — Super Mini or XIAO.</p>
+      </button>
     </div>
-    <div class="step-line"></div>
-    <div class="step" id="step2">
-      <div class="step-num">2</div>
-      <div>Connect USB</div>
+    <div class="subdoors">
+      <button class="subdoor" onclick="go('howto')"><b>How to use the GTi</b>First boot, loading games, covers, settings — the full guide.</button>
+      <button class="subdoor" onclick="go('web')"><b>Already have a dongle?</b>Load disks over WiFi from your phone or the app — nothing to flash.</button>
+      <button class="subdoor" onclick="go('story')"><b>What is the GTi?</b>The 60-second story: where it came from and where it's headed.</button>
     </div>
-    <div class="step-line"></div>
-    <div class="step" id="step3">
-      <div class="step-num">3</div>
-      <div>Flash</div>
+  </section>
+
+  <!-- ===== UNIFIED FLASH FLOW ===== -->
+  <section id="flow" class="view">
+    <button class="back" onclick="go('door')">‹ Start over</button>
+    <div class="vh" id="flow-h">Flash a touchscreen</div>
+    <div class="vsub" id="flow-sub">Three steps, in order — each one unlocks the next.</div>
+
+    <div class="steps" id="steps">
+      <div class="st active" data-s="1"><span class="n">1</span><span id="lbl1">Device</span></div><div class="stln"></div>
+      <div class="st" data-s="2"><span class="n">2</span><span id="lbl2">Get ready</span></div><div class="stln" id="stln2"></div>
+      <div class="st" data-s="3" id="step3-dot"><span class="n">3</span>Flash</div>
     </div>
-  </div>
 
-  <div class="hw-note" style="background:var(--panel);border:1px solid var(--border);border-left:3px solid #cc9900;border-radius:6px;padding:0.9rem 1.1rem;margin:0 0 1.5rem;font-size:0.8rem;line-height:1.65;color:var(--text);">
-    <strong style="color:#e0b93a;letter-spacing:.4px;">A quick note on hardware.</strong>
-    Everything on this page is a board I've personally tested and was happy with, so you can flash it knowing it'll just work. If a board isn't listed, it's simply one I haven't tested yet &mdash; so it sits outside what I'm able to help with.
-    One thing worth knowing: the <strong>Super&nbsp;Mini dongle</strong> &mdash; the piece that plugs into the Gotek and presents the disk over USB &mdash; <strong>must be an ESP32-S3 (or newer) with PSRAM</strong>, since it needs the native USB and the room to hold the disk.
-    A board that only acts as a <em>wireless screen</em> and beams disks across to that dongle is lighter and doesn't need PSRAM &mdash; that's how the CYD does it.
-    Other S3-with-PSRAM boards may well run it if you enjoy tinkering (unsupported, so you'd be on your own), while something like a Raspberry&nbsp;Pi&nbsp;Pico won't run it at all. For the smoothest ride, grab one of the listed boards. &#128578;
-  </div>
+    <!-- step 1: device -->
+    <div class="card" id="s1">
+      <div class="card-h"><span class="num">1</span><span id="s1h">Choose your device</span></div>
+      <div class="devgrid" id="dev-main"></div>
+      <button class="legacy-toggle" id="legacy-btn" onclick="toggleLegacy()">＋ Legacy boards — 2.8″ &amp; CYD</button>
+      <div class="legacy-wrap" id="legacy-wrap" hidden><div class="devgrid" id="dev-legacy"></div></div>
+    </div>
 
-  <div class="section-label">Select your device</div>
-
-  <div class="device-grid">
-
-    <div class="device-card" data-manifest="firmware/jc3248/manifest.json" onclick="selectDevice(this)">
-      <div class="selected-indicator"></div>
-      <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC3248 3.5-inch touchscreen" loading="lazy">
-      <div class="device-name">Guition JC3248</div>
-      <div class="device-chip">ESP32-S3 · 3.5" 480×320 &middot; 5.5.5 &middot; SD Access + GEN + SD firmware-update</div>
-      <div class="device-desc">The complete interface: cover art (JPEG/PNG), six themes, carousel/reel, type-to-search, TOSEC multi-disk grouping, save-game persistence, HD (1.76MB) over the cable, in-game <b>.rtfm</b> manuals, and create-your-own user-disks. Now also <b>SD Access</b> (add games over USB &mdash; no case-opening), <b>GEN mode</b> (a generic library that mounts any disk image, for non-Amiga machines), and cable-free <b>SD firmware-update</b>. Optional wireless via a Super Mini dongle.</div>
-      <div><span class="device-badge badge-current">Recommended</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
-      <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
-        <b>Already on 5.3.0 or later?</b> Update over the SD card &mdash; no re-flash:
-        <a href="firmware/jc3248/GTi-JC35-5.5.5-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-JC35-5.5.5-update.bin</a> &mdash; drop it on the SD card root (5.5.3+ auto-detects it; older builds: rename to <b>GTi_update.bin</b>), then on the GTi tap <b>INFO &#9656; FW&nbsp;UPDATE</b>. (Coming from the old A.5.0.0 build? Web-flash above once first &mdash; that&rsquo;s the one-time USB step onto the OTA layout.)
+    <!-- step 2: get ready -->
+    <div class="card muted" id="s2">
+      <div class="card-h"><span class="num">2</span>Get it ready</div>
+      <div class="seg" id="mode-seg">
+        <button class="on" id="mode-fresh" onclick="setMode('fresh')">Fresh flash</button>
+        <button id="mode-sd" onclick="setMode('sd')">SD access</button>
       </div>
+      <div class="mode-note" id="mode-note" hidden></div>
+      <div class="prep" id="prep">Pick a device first.</div>
+      <a class="dl" id="sd-dl" hidden target="_blank" rel="noopener">⬇ Download <span id="sd-name">update.bin</span></a>
+      <label class="chk" id="ready-row"><input type="checkbox" id="ready-chk" onchange="onReady()"> <span id="ready-lbl">My board is plugged in via a USB data cable and in bootloader mode.</span></label>
+      <button class="btn btn-confirm" id="btn-confirm" disabled onclick="doConfirm()">Confirm</button>
+      <div class="status" id="confirm-status"></div>
+      <details class="trouble" id="trouble">
+        <summary>Board not showing up when you flash?</summary>
+        <p style="margin:.5rem 0 0">If nothing appears in the serial-port picker, your board is likely using a <b>CH340 / CH341</b> USB-serial chip and the driver isn't loaded — so no port exists yet. Install it once, replug, and try again:</p>
+        <p style="margin:.4rem 0 0"><b>Windows:</b> <a href="https://www.wch-ic.com/downloads/CH341SER_ZIP.html" target="_blank" rel="noopener">CH341SER driver</a> · <b>macOS:</b> <a href="https://www.wch-ic.com/downloads/CH34XSER_MAC_ZIP.html" target="_blank" rel="noopener">CH34xSER_MAC</a> (often already built in).</p>
+        <p style="margin:.4rem 0 0"><b>Bootloader mode:</b> hold <code>BOOT</code>, tap <code>RESET</code>, release <code>BOOT</code>. <b>XIAO:</b> plug the WiFi antenna in before powering on.</p>
+      </details>
     </div>
 
-    <div class="device-card" data-manifest="firmware/waveshare28/manifest.json" onclick="selectDevice(this)">
-      <div class="selected-indicator"></div>
-      <div class="device-name">Waveshare 2.8"</div>
-      <div class="device-chip">ESP32-S3 · 320×240 SPI</div>
-      <div class="device-desc">Compact standalone controller with 2.8" touchscreen, cover art browser, and WiFi web server.</div>
-      <div><span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
-    </div>
-
-    <div class="device-card" data-manifest="firmware/supermini/manifest.json" onclick="selectDevice(this)">
-      <div class="selected-indicator"></div>
-      <img class="device-photo" src="img/supermini.jpg" alt="Generic ESP32-S3 Super Mini board" loading="lazy">
-      <div class="device-name">Super Mini Dongle</div>
-      <div class="device-chip">Generic ESP32-S3 · Super Mini (FH4R2)</div>
-      <div class="device-desc">The recommended wireless dongle. Plugs into the Gotek's USB port and loads disks over WiFi from the touchscreen. Generic ESP32-S3 Super Mini — the wider board with two side buttons.</div>
-      <div><span class="device-badge badge-current">Preferred dongle</span> <span class="device-badge badge-dongle">USB Dongle</span></div>
-    </div>
-
-    <div class="device-card" data-manifest="firmware/xiao/manifest.json" onclick="selectDevice(this)">
-      <div class="selected-indicator"></div>
-      <img class="device-photo" src="img/xiao.jpg" alt="Seeed Studio XIAO ESP32-S3 board" loading="lazy">
-      <div class="device-name">XIAO Dongle</div>
-      <div class="device-chip">Seeed XIAO ESP32-S3 · 21×17mm</div>
-      <div class="device-desc">Alternative wireless dongle. The Seeed Studio XIAO ESP32-S3 — the smaller board with the metal-shielded module marked “seeed studio”. Same wireless loading as the Super Mini.</div>
-      <div><span class="device-badge badge-dongle">USB Dongle</span></div>
-    </div>
-
-    <div class="device-card" data-manifest="firmware/cyd/manifest.json" onclick="selectDevice(this)">
-      <div class="selected-indicator"></div>
-      <div class="device-name">CYD</div>
-      <div class="device-chip">ESP32 · 320×240 ILI9341</div>
-      <div class="device-desc">Cheap Yellow Display (~£10). Wireless remote — pairs with XIAO dongle over ESP-NOW.</div>
-      <div><span class="device-badge badge-wireless">Wireless Remote</span></div>
-    </div>
-
-  </div>
-
-  <div class="section-label">Fresh off the press — beta builds</div>
-
-  <div class="beta-note">
-    <b>&#9888; Experimental — for testers.</b> These builds carry the new <b>save-game era</b>:
-    writes the Amiga makes to the floppy are persisted onto the GTi's SD card as
-    <b>GameName.sav.adf</b> beside the untouched master — standalone <i>and</i> wireless
-    ("FLING in reverse"). INSERT automatically boots the save when one exists (green floppy
-    badge on the cover); delete the .sav file to factory-reset a game. Configure with
-    <b>SAVES=OFF/COPY/OVERWRITE</b> in CONFIG.TXT (default COPY). The <b>5.6.1</b> JC BETA now serves <b>high-density (HD, 1.76MB)</b> disk images both over the cable <i>and wirelessly</i> to an <b>HD-capable XIAO dongle</b> (below) &mdash; HD disks get an HD badge and a &ldquo;no A500&rdquo; marker (HD needs an A3000/A4000-class Amiga). To test wireless saves,
-    flash <i>both</i> the JC BETA and the Super Mini BETA below. Bench-verified, not yet
-    field-proven — please report results (good or broken) via GitHub issues.
-    The save era &mdash; and everything after it (SD Access, GEN mode, cable-free SD firmware-update) &mdash; has graduated to the stable <b>5.5.5</b> build above, proven on a real Amiga. The <b>JC3248 BETA</b> is back for the next experiment &mdash; <b>Library Categories</b> (browse large collections by folder: OS / Apps / Games, or by machine) &mdash; alongside the wireless dongle betas.
-  </div>
-
-  <div class="device-grid">
-
-    <div class="device-card" data-manifest="firmware/jc3248-beta/manifest.json" onclick="selectDevice(this)">
-      <div class="selected-indicator"></div>
-      <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC3248 3.5-inch touchscreen" loading="lazy">
-      <div class="device-name">Guition JC3248 &mdash; BETA</div>
-      <div class="device-chip">ESP32-S3 &middot; 3.5" 480×320 &middot; 5.9.1-beta &middot; On-screen Home WiFi setup + Fast reel on 1000+ game libraries + Big-library scan fix + Recurse-flatten library + Self-healing config + Coloured pill buttons + Matrix screensaver + Fully translated menus + Instant cover art + Library toggle + Saves + GEN + SD Access + Categories + RTFM reader</div>
-      <div class="device-desc"><b>Test build (5.9.1) &mdash; feedback wanted.</b> <b>New in 5.9.1:</b> you can now <b>set up Home WiFi right on the touchscreen</b> &mdash; tap <b>INFO &#9656; HOME&nbsp;WIFI</b>, type your network name and password on the on-screen keyboard, and save. No more hand-editing <code>CONFIG.TXT</code> on the SD card to get the GTi onto your home network and talking to the Super Mini dongle. <b>Carries everything from 5.9.0:</b> the cover <b>reel is fast again on big libraries</b> (the thumbnail cache is <b>sharded into buckets</b> so it stops slowing as the collection grows, tiny placeholder covers are <b>built in the same pass</b> as the full ones, and the on-screen cache holds more covers), plus the big 5.8.5&ndash;5.8.9 fixes: <b>1000+ game cards scan without rebooting</b> (library data lives in PSRAM) and an optional <b>on-SD log</b> (<code>LOG</code> in <code>CONFIG.TXT</code>). <b>First boot after updating</b> rebuilds the cover cache once &mdash; a few minutes with a progress bar, then it&rsquo;s quick. Everything from the 5.8.x line comes along: recurse-flatten library, self-healing <code>CONFIG.TXT</code>, pill reel bar, Matrix screensaver, fully translated menus, Categories, Saves, GEN, SD Access, <code>.rtfm</code> reader and HD-over-wireless. Testers very welcome via GitHub / Discord.</div>
-      <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
-      <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
-        <b>Already on 5.3.0 or later?</b> Update over the SD card &mdash; no re-flash:
-        <a href="firmware/jc3248-beta/GTi-JC35-5.9.1-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-JC35-5.9.1-update.bin</a> &mdash; drop it on the SD card root (5.5.3+ auto-detects it; older builds: rename to <b>GTi_update.bin</b>), then on the GTi tap <b>INFO &#9656; FW&nbsp;UPDATE</b>. (First move onto 5.3.0 with the web-flash above &mdash; that&rsquo;s the one-time USB step.)
-      </div>
-    </div>
-
-    <div class="device-card" data-manifest="firmware/p4-beta/manifest.json" onclick="selectDevice(this)">
-      <div class="selected-indicator"></div>
-      <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC4880 ESP32-P4 4.3-inch touchscreen" loading="lazy">
-      <div class="device-name">Guition JC4880 (ESP32-P4) &mdash; BETA</div>
-      <div class="device-chip">ESP32-P4 &middot; 4.3&Prime; 480×800 MIPI-DSI &middot; 5.8.6-P4.5 &middot; WiFi wireless · landscape UI · touch</div>
-      <div class="device-desc"><b>Experimental first flash for the ESP32-P4</b> (Guition JC4880P443C) &mdash; feedback essential. This is the entire <b>5.8.6 interface</b> (categories, recurse-flatten library, cover art, carousel, saves, SD library, USB-MSC) running on the P4&rsquo;s <b>480×800 MIPI-DSI</b> panel for the very first time. <b>What should work:</b> the UI renders in portrait. <b>Still being validated on real hardware:</b> touch pins/calibration, USB-MSC enumeration, and SD browsing &mdash; so expect rough edges. <b>Wireless is now active</b> &mdash; on first boot the P4 self-updates its WiFi co-processor from the SD card, then scans/selects dongles and loads ADFs to them over WiFi. If you have a JC4880 board, flash it and tell us what draws, what responds to touch, and whether it mounts &mdash; <b>a photo of the screen helps most</b>.</div>
-      <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span></div>
-      <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
-        USB web-flash only (no SD-update path yet). <b>Won&rsquo;t connect?</b> Hold <b>BOOT</b>, tap <b>RESET</b>, release <b>BOOT</b>, then try again &mdash; and use the USB-C port that talks to the PC.
-      </div>
-    </div>
-
-    <div class="device-card" data-manifest="firmware/jc4827-beta/manifest.json" onclick="selectDevice(this)">
-      <div class="selected-indicator"></div>
-      <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC4827W543 4.3-inch touchscreen" loading="lazy">
-      <div class="device-name">Guition JC4827W543 4.3&Prime; &mdash; BETA</div>
-      <div class="device-chip">ESP32-S3 &middot; 4.3" 480×272 &middot; 5.8.4-beta &middot; NV3041A QSPI + Recurse-flatten library + Self-healing config + Coloured pill buttons + Matrix screensaver + Fully translated menus + Instant cover art + Library toggle + Categories + RTFM reader</div>
-      <div class="device-desc"><b>The 4.3-inch GTi &mdash; test build (5.8.4), feedback wanted.</b> Everything the JC3248 beta does on a roomier 4.3&Prime; QSPI screen (smooth-rotating, no RGB jank), dual-role standalone <i>and</i> wireless. <b>New in 5.8.4:</b> <b>recurse-and-flatten</b> (games nested in sub-folders fold into the one flat list &mdash; organise the card freely, the screen looks the same) and a <b>self-healing <code>CONFIG.TXT</code></b>. <b>From 5.8.3:</b> the <b>coloured pill reel bar</b>, a <b>Matrix screensaver</b> (<code>SAVER: MATRIX</code>), and <b>fully translated settings menus</b> (EN / FR / IT / ES / DE). Carries the 5.8.2 cover-art fix and CATEGORIES toggle plus the rest of the prior beta. 4&nbsp;MB / OTA layout, so SD firmware-updates work out of the box.</div>
-      <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
-      <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
-        <b>Already on 5.3.x?</b> Update over the SD card &mdash; no re-flash:
-        <a href="firmware/jc4827-beta/GTi-JC43-5.8.4-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-JC43-5.8.4-update.bin</a> &mdash; drop it on the SD card root (5.5.3+ auto-detects it; older builds: rename to <b>GTi_update.bin</b>), then tap <b>INFO &#9656; FW&nbsp;UPDATE</b>.
-      </div>
-    </div>
-
-    <div class="device-card" data-manifest="firmware/waveshare7/manifest.json" onclick="selectDevice(this)">
-      <div class="selected-indicator"></div>
-      <div class="device-name">Waveshare 7&Prime; &mdash; BETA</div>
-      <div class="device-chip">ESP32-S3 &middot; 7" 800×480 RGB &middot; v5.0.0-7IN-beta &middot; Recurse-flatten + Desert cracktro + Self-healing config + SD Access + Search + GEN + Saves + 3×2 Grid + Categories + Favourites + Most-played + User-disks + RTFM reader + Languages + Font sizing</div>
-      <div class="device-desc"><b>The big-screen GTi &mdash; now near feature-parity with the JC boards.</b> The full interface on a 7-inch panel &mdash; cover-art browser, <b>SD Access</b>, cable-free <b>SD firmware-update</b>, type-to-search, GEN library and standalone save-writeback &mdash; plus <b>large-font &amp; high-visibility accessibility modes</b>. <b>NEW in v5.0.0:</b> <b>recurse-and-flatten</b> &mdash; games nested inside letter/label sub-folders now appear in the flat grid, so you can tidy the SD card any way you like and the screen looks identical; an optional <b>Arizona-desert &ldquo;cracktro&rdquo; boot intro</b> (set <code>CRACKTRO=ON</code>); and a <b>self-healing <code>CONFIG.TXT</code></b> that fills in any missing settings on boot. <b>From v4.14.12:</b> the cover browser is a clean <b>3&times;2 grid</b> &mdash; six covers a page, page forward/back, no moving parts &mdash; plus multi-disk cover-art fixes, two-line titles for readability, and a cached boot-scan for faster start-up. Earlier v4.12.2 added a dongle scan-and-pair picker (INFO &#9656; SCAN DONGLES &#9656; USE / DEL) with owner-lock support and bigger nav buttons; earlier v4.10.x added on-screen font sizing &mdash; independent controls for the main UI (INFO &#9656; FONT) and the manual reader. Recent additions: Library Categories, Favourites &amp; Most-played, a blank-disk maker (User Disks), the on-device <code>.rtfm</code> manual reader, and a <b>5-language UI</b> (EN/FR/IT/ES/DE &mdash; switch it live in INFO). Dual-role (standalone <i>and</i> wireless). Ships an A/B OTA layout so SD firmware-updates work out of the box. Actively developed &mdash; testers welcome via GitHub.</div>
-      <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
-      <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
-        <b>Already on an older 7&Prime; build?</b> Update over the SD card &mdash; no re-flash:
-        <a href="firmware/waveshare7/GTi-7in-5.0.0-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-7in-5.0.0-update.bin</a> &mdash; save it as <b>GTi_update.bin</b>,
-        drop it on the SD card root, then tap <b>INFO &#9656; FW&nbsp;UPDATE</b>.
-      </div>
-    </div>
-
-    <div class="device-card" data-manifest="firmware/waveshare7b-beta/manifest.json" onclick="selectDevice(this)">
-      <div class="selected-indicator"></div>
-      <div class="device-name">Waveshare 7B &mdash; BETA</div>
-      <div class="device-chip">ESP32-S3 &middot; 7" 1024×600 RGB &middot; v5.0.0-7B-beta &middot; perf-tuned &middot; Recurse-flatten + Desert cracktro + Self-healing config + SD Access + Search + GEN + Saves + 3×2 Grid + RTFM reader + Font sizing</div>
-      <div class="device-desc"><b>The higher-res 1024×600 sibling of the 7".</b> <b>NEW in v5.0.0:</b> <b>recurse-and-flatten</b> (nested folders fold into the flat grid &mdash; organise the card freely, the screen looks the same), an optional <b>Arizona-desert cracktro</b> boot intro (<code>CRACKTRO=ON</code>), and a <b>self-healing <code>CONFIG.TXT</code></b>. <b>From v4.14.12:</b> the <b>3&times;2 cover grid</b> (six a page, no moving parts), multi-disk cover-art fixes, two-line titles and a cached boot-scan. A <b>performance-tuned</b> build for the 1024×600 panel (custom RGB timing + partial-flush engine). Now with the on-device <code>.rtfm</code> <b>manual reader</b> and <b>on-screen font sizing</b> (main UI and reader), on top of SD Access, cable-free SD firmware-update, type-to-search, GEN library, save-writeback and high-visibility accessibility modes. Feature parity with the 7" is in progress &mdash; favourites, most-played, categories, user-disks and languages land next. Dual-role (standalone <i>and</i> wireless); testers welcome via GitHub.</div>
-      <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-standalone">Standalone</span> <span class="device-badge badge-wireless">Wireless</span></div>
-      <div style="margin-top:.7rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.78rem;color:var(--text);opacity:.9;line-height:1.5;" onclick="event.stopPropagation();">
-        <b>Already on a 7B build?</b> Update over the SD card &mdash; no re-flash:
-        <a href="firmware/waveshare7b-beta/GTi-7B-5.0.0-update.bin" download style="color:var(--blue);text-decoration:none;font-weight:600;">&#11015; Download GTi-7B-5.0.0-update.bin</a> &mdash; save it as <b>GTi_update.bin</b>,
-        drop it on the SD card root, then tap <b>INFO &#9656; FW&nbsp;UPDATE</b>.
-      </div>
-    </div>
-
-    <div class="device-card" data-manifest="firmware/supermini-beta/manifest.json" onclick="selectDevice(this)">
-      <div class="selected-indicator"></div>
-      <div class="device-name">Super Mini Dongle &mdash; Webby BETA</div>
-      <div class="device-chip">ESP32-S3 Super Mini &middot; Webby-0.7-fleetUI &middot; OMEGA web UI + ESP-NOW + home WiFi</div>
-      <div class="device-desc"><b>The Super Mini, now with a built-in web page.</b> Plug it into the Gotek and load Amiga disks straight from your phone's browser &mdash; drag an <b>.adf</b> onto the page and it's in the drive: no SD card, no app. <b>Two modes, flipped from the page:</b> its own access point (<b>GotekOMEGA</b> &rarr; <b>192.168.4.1</b>) running ESP-NOW so a GTi touchscreen drives it exactly like the classic dongle, or <b>your home WiFi</b> (then reach it at <b>gotek.local</b> from any browser on the network). <b>Security is opt-in</b> &mdash; it ships open so it just works, and you lock it to your GTi from the touchscreen's <b>Manage Dongles</b> screen (no BOOT-button dance), with an optional web-page password on top. Keeps the full <b>save-writeback + owner-lock</b> protocol, so JC / 7&Prime; GTis work with it exactly as before. DD (~880&nbsp;KB) images, one disk at a time. Needs an ESP32-S3 Super Mini with PSRAM.</div>
-      <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge badge-dongle">USB Dongle</span></div>
-    </div>
-
-    <div class="device-card" data-manifest="firmware/xiao-beta/manifest.json" onclick="selectDevice(this)">
-      <div class="selected-indicator"></div>
-      <div class="device-name">XIAO Dongle &mdash; BETA</div>
-      <div class="device-chip">Seeed XIAO ESP32-S3 &middot; v3.6.0-beta &middot; HD-capable (2MB ramdisk) &middot; UNTESTED</div>
-      <div class="device-desc"><b>Now HD-capable (v3.6.0).</b> The XIAO wireless dongle with a 2MB ramdisk, so the <b>5.6.1</b> JC BETA can fling <b>high-density (1.76MB)</b> images to it wirelessly &mdash; the Super Mini (2MB PSRAM) stays double-density. Also carries the save-era protocol (saves + eject). <b>Compiled but not yet bench-verified</b> &mdash; flash at your own risk and please report back. Plug in the external WiFi antenna before powering on.</div>
-      <div><span class="device-badge badge-beta">BETA</span> <span class="device-badge" style="background:#3a2a10;color:#ffcc66;border:1px solid #5a4a1a;">UNTESTED</span> <span class="device-badge badge-dongle">USB Dongle</span></div>
-    </div>
-
-  </div>
-
-  <div class="section-label" id="troubleshooting">Troubleshooting</div>
-
-  <div class="beta-note">
-    <b>&#128295; Diagnostic tools</b> &mdash; these are <i>not</i> the firmware. Flash one only to
-    test hardware; it temporarily replaces your GTi build. When you&rsquo;re done, just web-flash
-    the normal build above again to restore it &mdash; your SD card is left untouched.
-  </div>
-
-  <div class="device-grid">
-
-    <div class="device-card" data-manifest="firmware/jc3248-touchtest/manifest.json" onclick="selectDevice(this)">
-      <div class="selected-indicator"></div>
-      <img class="device-photo" src="img/jc3248.jpg" alt="Guition JC3248 3.5-inch touchscreen" loading="lazy">
-      <div class="device-name">JC3248 &mdash; Touch Test</div>
-      <div class="device-chip">ESP32-S3 &middot; 3.5" 480×320 &middot; diagnostic &middot; AXS15231B touch @ 0x3B</div>
-      <div class="device-desc"><b>Touch not registering, or landing in the wrong spot?</b> This standalone checker uses the <i>exact</i> display init and touch read from the real firmware, so a wiring or controller fault can&rsquo;t hide as a software bug. You get four corner target boxes, a crosshair drawn wherever the panel thinks your finger is, and a live <b>RAW / MAP / status</b> readout (also streamed to Serial at 115200). <b>Tap each corner:</b> if the crosshair lands under your finger and the box turns green, the touch hardware is <b>fine</b> &mdash; so a fresh-install tap problem is the firmware, not the panel. If the crosshair jumps, sticks, shows junk, or you get <b>&ldquo;I2C&nbsp;ERR&rdquo;</b>, the touch controller or its flex cable is <b>faulty</b>. Flashing this replaces your GTi build &mdash; re-flash the normal JC3248 above when you&rsquo;re finished.</div>
-      <div><span class="device-badge" style="background:#3a2a10;color:#ffcc66;border:1px solid #5a4a1a;">DIAGNOSTIC</span> <span class="device-badge badge-standalone">Touch test</span></div>
-    </div>
-
-  </div>
-
-  <div class="section-label">Flash firmware</div>
-
-  <div class="flash-panel no-selection" id="flashPanel">
-    <div class="no-sel-text" id="noSelText">← SELECT A DEVICE ABOVE TO BEGIN</div>
-    <div id="flashContent" style="display:none; flex-direction:column; align-items:center; gap:0.8rem;">
-      <div class="flash-device-name" id="flashDeviceName"></div>
-      <div class="flash-version" id="flashVersion"></div>
+    <!-- step 3: flash -->
+    <div class="card muted" id="s3">
+      <div class="card-h"><span class="num">3</span><span id="s3h">Choose firmware &amp; flash</span></div>
+      <label class="betabox" id="betabox" hidden><input type="checkbox" id="beta-chk" onchange="onBeta()"> <span class="lab">Show the <b>beta / testing</b> build</span></label>
+      <div class="fwline" id="fwline"></div>
       <esp-web-install-button id="installBtn" manifest="" hide-progress></esp-web-install-button>
+      <div class="status" id="flash-status">The flasher opens its own window — pick your board’s port there, then it installs. Don’t unplug until it finishes.</div>
     </div>
-  </div>
+  </section>
 
-  <div class="section-label">How to flash</div>
+  <!-- ===== HOW TO USE ===== -->
+  <section id="howto" class="view">
+    <button class="back" onclick="go('door')">‹ Back</button>
+    <div class="vh">How to use the GTi</div>
+    <div class="vsub">You've flashed a board — here's the path from an empty SD card to a full library, plus every setting worth knowing.</div>
 
-  <div class="instructions">
-    <ol>
-      <li><strong>Select your device</strong> from the cards above.</li>
-      <li><strong>Connect your ESP32</strong> to this computer via USB. Use a data cable, not a charge-only cable.</li>
-      <li>If prompted, put the device in <strong>bootloader mode</strong>: hold <code>BOOT</code>, tap <code>RESET</code>, release <code>BOOT</code>.</li>
-      <li>Click <strong>Install</strong> and select the correct COM port when asked.</li>
-      <li>Wait for flashing to complete — typically 30–60 seconds.</li>
-      <li><strong>After flashing:</strong> insert a blank FAT32 SD card and power on. The device will auto-generate <code>CONFIG.TXT</code> and create the <code>/ADF</code> and <code>/DSK</code> folders.</li>
-    </ol>
-    <div class="warn-box" style="margin-top:0.5rem;">
-      <strong>⚠ Board not showing up when you click Install?</strong> If nothing appears in the serial/COM-port picker, your board is almost certainly using a <strong>CH340 / CH341</strong> USB-to-serial chip and your computer hasn't loaded its driver &mdash; so no port exists for the flasher to talk to. Install the driver once, unplug and replug the board, then try again:
-      <ul style="margin:.4rem 0 .3rem 1.1rem;padding:0;">
-        <li><strong>Windows:</strong> <a href="https://www.wch-ic.com/downloads/CH341SER_ZIP.html" target="_blank" rel="noopener" style="color:var(--blue);">CH341SER driver (WCH, official)</a> &mdash; run the installer, click <em>Install</em>, then reboot if asked.</li>
-        <li><strong>macOS:</strong> <a href="https://www.wch-ic.com/downloads/CH34XSER_MAC_ZIP.html" target="_blank" rel="noopener" style="color:var(--blue);">CH34xSER_MAC (WCH, official)</a> &mdash; recent macOS often has this built in; install it only if the port still won&rsquo;t appear. (<a href="https://learn.adafruit.com/how-to-install-drivers-for-wch-usb-to-serial-chips-ch9102f-ch9102" target="_blank" rel="noopener" style="color:var(--blue);">illustrated guide</a>)</li>
-      </ul>
-      <strong>Already running a GTi build?</strong> The <strong>SD-card update</strong> (the per-device link on each card) uses no USB and needs no driver &mdash; that path keeps working regardless.
+    <div class="opt">
+      <h3>1 · Get your SD card ready</h3>
+      <p>Format a microSD as <b style="color:var(--text)">FAT32</b> and make an <code>/ADF</code> folder for Amiga disk images (add <code>/DSK</code> for Atari&nbsp;ST / PC <code>.dsk</code> if you use them). Drop a folder per game, or loose images — the GTi reads both.</p>
+      <div class="tree">/ <span class="c">(SD root)</span>
+├─ <span class="f">ADF/</span>
+│  ├─ <span class="f">Turrican/</span>
+│  │  ├─ Turrican.adf        <span class="c">← the disk image</span>
+│  │  ├─ Turrican.jpg        <span class="c">← cover art (same name)</span>
+│  │  ├─ Turrican.nfo        <span class="c">← Title: / Blurb: (optional)</span>
+│  │  └─ Turrican.rtfm       <span class="c">← how-to-play text (optional)</span>
+│  └─ <span class="f">Bard's Tale/</span>
+│     ├─ BardsTale-1.adf     <span class="c">← multi-disk: -1, -2, -3…</span>
+│     ├─ BardsTale-2.adf
+│     └─ BardsTale.jpg
+├─ <span class="f">DSK/</span>                      <span class="c">← Atari ST / PC .dsk, .img…</span>
+├─ <span class="f">GENERIC/</span>                  <span class="c">← GEN mode: mount any file format</span>
+├─ <span class="f">screensaver/</span>              <span class="c">← drop .jpg here for a slideshow</span>
+└─ CONFIG.TXT                <span class="c">← all your settings (see §7)</span></div>
+      <div class="callout"><b>Multi-disk games:</b> name the images <code>Name-1.adf</code>, <code>Name-2.adf</code>… and the GTi collapses them into one entry with a disk stepper.</div>
     </div>
-    <div class="warn-box">
-      <strong>⚠ XIAO only:</strong> Make sure the external WiFi antenna is plugged in before powering on. Without it, wireless range will be very poor.
+
+    <div class="opt">
+      <h3>2 · Cover art &amp; game info</h3>
+      <p>Name the cover to match the game — <code>Turrican.jpg</code> beside <code>Turrican.adf</code>. <b style="color:var(--text)">JPG is best</b> (it decodes fast and downscales on the fly); PNG works but keep it under ~1400&nbsp;px or it can run the panel out of memory. Two optional sidecars: a <code>.nfo</code> with <code>Title:</code> and <code>Blurb:</code> lines fills the info panel, and a <code>.rtfm</code> text file becomes an in-device manual.</p>
+      <div class="callout"><b>Clean covers:</b> <code>COVERMIN</code> hides tiny low-res art, and <code>REELFILTER</code> keeps the cover reel to good art only while the A-Z list still shows every game. Both are CONFIG.TXT switches.</div>
     </div>
-    <div class="warn-box" style="margin-top:0.5rem;">
-      <strong>⚠ All devices:</strong> USB CDC On Boot must be <strong>Disabled</strong> — this is already set in the pre-built firmware. If you rebuild from source, ensure this setting is correct or the Gotek will not recognise the device.
+
+    <div class="opt">
+      <h3>3 · First boot</h3>
+      <p>Insert the SD and power up. The first boot builds a one-off <b style="color:var(--text)">cover-thumbnail cache</b> — let it finish. Every boot after that is instant, and USB floppy emulation runs underneath the whole time.</p>
+      <div class="callout"><b>Use an A1/A2 card.</b> Random-read speed is everything here — a rated card scans roughly <b>300 games/sec vs ~9/sec</b> on a cheap one. It's the single biggest difference for a large library.</div>
     </div>
-  </div>
 
-  <div class="section-label">JC3248 board reference</div>
-
-  <div class="instructions">
-    <p style="margin-bottom:0.6rem;">Back of the Guition JC3248 with every button and connector labelled — including the <code>Boot</code> and <code>Reset</code> buttons used to enter bootloader mode for flashing, the Type-C port, the battery switch, and the JST IO / power / speaker connectors.</p>
-    <img class="board-ref" src="img/jc3248-back.jpg" alt="Guition JC3248W535 back, with Boot, Reset, Type-C, battery switch and JST connectors labelled">
-    <div class="board-ref-cap">Guition JC3248W535 — reverse side, buttons and connectors labelled</div>
-  </div>
-
-  <div class="section-label">After flashing</div>
-
-  <div class="instructions">
-    <ol>
-      <li><strong>One folder per game.</strong> Give every game its own folder inside <code>/ADF</code> (or <code>/DSK</code>), with the disk image inside it: <code>/ADF/Game&nbsp;Name/Game&nbsp;Name.adf</code>. The folder is what the browser sorts and groups by — files dropped loose in <code>/ADF</code> are <em>not</em> picked up.</li>
-      <li>Optionally drop <code>Game&nbsp;Name.jpg</code> (cover art) and <code>Game&nbsp;Name.nfo</code> (info text) into that same game folder.</li>
-      <li><strong>Multi-disk games:</strong> put every disk in the one folder, named <code>Game&nbsp;Name-1.adf</code>, <code>Game&nbsp;Name-2.adf</code>, … — they collapse into a single entry with a disk selector.</li>
-      <li>Connect the device to your Gotek via USB and power on your retro machine.</li>
-      <li>Tap a game and press <strong>INSERT</strong>. Your retro machine sees a freshly loaded floppy.</li>
-    </ol>
-  </div>
-
-
-  <div class="section-label" id="pairing">Pairing a wireless dongle</div>
-
-  <div class="instructions">
-    <p style="margin-bottom:0.6rem;">Pairing links the touchscreen to a Super&nbsp;Mini / XIAO dongle so it can load disks over WiFi. The steps depend on the dongle firmware.</p>
-    <p style="margin:0.6rem 0 0.2rem;"><strong style="color:var(--green);">Release / stable dongle &mdash; auto-pair</strong></p>
-    <ol>
-      <li>Flash the dongle and plug it into the Gotek's USB; power the Gotek on.</li>
-      <li>On the GTi, open <strong>INFO</strong> and set <strong>MODE = WIRELESS</strong>.</li>
-      <li><strong>INFO &rarr; SCAN DONGLES</strong>, tap your dongle, tap <strong>USE</strong>. Done &mdash; no button needed.</li>
-    </ol>
-    <p style="margin:0.8rem 0 0.2rem;"><strong style="color:var(--copper2);">Beta dongle &mdash; &ldquo;owner-lock&rdquo; (Super&nbsp;Mini v3.5+, XIAO v3.6.1+)</strong></p>
-    <p style="margin:0 0 0.3rem;">The dongle only obeys GTis you enrol, so it can't be paired or stolen over the air.</p>
-    <ol>
-      <li><strong>Pair:</strong> hold the dongle's <code>BOOT</code> for <strong>~5&nbsp;s</strong> and release (opens a 30-second window), then <strong>INFO &rarr; SCAN DONGLES &rarr; USE</strong> on the GTi. Up to 4 GTis per dongle.</li>
-      <li><strong>Forget:</strong> on the GTi, <strong>SCAN DONGLES &rarr; select &rarr; DEL</strong> (unpairs over the air + forgets locally); or hold the dongle's <code>BOOT</code> for <strong>~15&nbsp;s</strong> to wipe all owners (fires automatically at 15&nbsp;s, no release).</li>
-      <li><strong>Rename:</strong> JC screens &mdash; <strong>SCAN DONGLES &rarr; RENAME</strong>.</li>
-    </ol>
-    <div class="warn-box" style="margin-top:0.5rem;">
-      <strong>No lights?</strong> Most dongle boards have no status LEDs and no screen &mdash; go by the timings above, not the colours. If a beta dongle doesn't appear in <strong>SCAN DONGLES</strong>, it's locked to another GTi: BOOT-hold it ~5&nbsp;s to open enrolment, then scan again.
+    <div class="opt">
+      <h3>4 · Day to day — the controls</h3>
+      <p>Two ways to browse: <b style="color:var(--text)">LIST</b> (A-Z with a jump rail) or <b style="color:var(--text)">REEL</b> (spinning cover flow). Tap a game, then <b style="color:var(--text)">INSERT</b> to load it into the drive; <b style="color:var(--text)">EJECT</b> to pull it back out.</p>
+      <dl class="ref">
+        <dt>LIST / REEL</dt><dd>Switch between the A-Z list and the cover carousel.</dd>
+        <dt>SEARCH</dt><dd>The magnifier — type to filter the whole library live.</dd>
+        <dt>A-Z rail</dt><dd>Jump to a letter; only letters you actually own show up.</dd>
+        <dt>★ Favourite</dt><dd>Star a game. The reel's source cycles <b>ALL → FAV → MOST</b> (most-played).</dd>
+        <dt>ROLL</dt><dd>The dice — spin to a random game within the current source.</dd>
+        <dt>INFO</dt><dd>Cover, blurb, disk details, and the settings / maintenance actions.</dd>
+        <dt>THEME</dt><dd>Cycle the six palettes: Navy, Ember, Matrix, Paper, Synth, Gold.</dd>
+      </dl>
     </div>
-    <p style="margin-top:0.5rem;font-size:0.8rem;opacity:.85;">Full guide &amp; troubleshooting: <a href="https://github.com/mesarim/Gotek-Touchscreen-interface/blob/main/docs/PAIRING.md" target="_blank" rel="noopener" style="color:var(--blue);">Pairing guide</a>.</p>
-  </div>
 
-  <div class="section-label">Try the interface &mdash; live preview</div>
+    <div class="opt">
+      <h3>5 · Add games without opening the case</h3>
+      <p>From the <b style="color:var(--text)">INFO</b> tab: <b style="color:var(--text)">SD ACCESS</b> mounts the card as a USB drive over the data cable, so you copy games and covers straight on — no card removal. <b style="color:var(--text)">FW UPDATE</b> applies a firmware <code>.bin</code> left at the SD root (the SD-access path in this flasher). <b style="color:var(--text)">RESCAN SD</b> rebuilds the library after you've added files.</p>
+    </div>
 
-  <div style="text-align:center;margin-bottom:1rem;">
-    <a href="guide.html" style="display:inline-block;background:#e8905a;color:#111;font-weight:700;text-decoration:none;border-radius:8px;padding:11px 20px;font-size:0.9rem;">&#128214; Open the Interactive Guide &mdash; the screen, annotated, with pop-up how-tos &rarr;</a>
-  </div>
+    <div class="opt">
+      <h3>6 · Go wireless</h3>
+      <p>With a paired dongle you can load disks over the air — from a GTi panel (<b style="color:var(--text)">Scan Dongles → Select</b>), from the dongle's own <b style="color:var(--text)">GotekOMEGA</b> web page, or the GTi phone app. <button class="inlink" onclick="go('web')">See the wireless page →</button></p>
+    </div>
 
-  <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:1.25rem;margin-bottom:1.5rem;">
-    <p style="font-size:0.8rem;color:var(--text);opacity:.8;margin-bottom:1rem;line-height:1.5;">
-      A pixel-faithful preview of the on-device UI &mdash; the real font, the six themes, the cracktro, multi-disk pagination.
-      Tap a game to select, tap again or <strong>INSERT</strong> to mount; the A&ndash;Z strip jumps by letter; <strong>THEME</strong>
-      cycles palettes; tap <strong>INFO</strong> then <strong>FONT</strong> to resize the list (Small/Normal/Large); try <strong>Monkey Island 2</strong>
-      for the 11-disk selector. This is a UI preview only &mdash; it doesn't talk to hardware.
-    </p>
-    <div style="display:flex;flex-direction:column;align-items:center;gap:0.75rem;">
-      <canvas id="gtkDemoCanvas" width="480" height="320"
-        style="image-rendering:pixelated;border-radius:6px;box-shadow:0 0 0 2px #000,0 0 24px rgba(68,136,255,.18);cursor:pointer;touch-action:none;background:#000;"></canvas>
-      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;justify-content:center;">
-        <button id="gtkDemoReset" style="background:var(--panel);color:var(--copper2);border:1px solid var(--dim);border-radius:7px;padding:6px 13px;font-family:'Share Tech Mono',monospace;font-size:0.75rem;cursor:pointer;letter-spacing:.5px;">&#8635; REBOOT</button>
-        <button id="gtkDemoSkip"  style="background:var(--panel);color:var(--blue);border:1px solid var(--dim);border-radius:7px;padding:6px 13px;font-family:'Share Tech Mono',monospace;font-size:0.75rem;cursor:pointer;letter-spacing:.5px;">SKIP INTRO</button>
-        <button id="gtkDemoRotate" style="background:var(--panel);color:var(--green);border:1px solid var(--dim);border-radius:7px;padding:6px 13px;font-family:'Share Tech Mono',monospace;font-size:0.75rem;cursor:pointer;letter-spacing:.5px;">&#10226; ROTATE</button>
+    <div class="opt">
+      <h3>7 · Settings — CONFIG.TXT</h3>
+      <p>Everything is tunable from a plain <code>CONFIG.TXT</code> at the SD root — pull the card, edit a line, done. New keys self-heal in on a firmware update, so you never lose your settings. The ones worth knowing:</p>
+      <dl class="ref">
+        <dt>THEME</dt><dd>0–5 · Navy / Ember / Matrix / Paper / Synth / Gold.</dd>
+        <dt>FONT</dt><dd>SMALL / LARGE / BIG — text scale, low-vision friendly.</dd>
+        <dt>LANG</dt><dd>EN / FR / IT / ES / DE.</dd>
+        <dt>ROTATE</dt><dd>0 / 90 / 180 / 270 — screen orientation.</dd>
+        <dt>CAROUSEL</dt><dd>OFF / ON / LAST — default boot view (list, reel, or last used).</dd>
+        <dt>COMPACT</dt><dd>ON maximises the list; the cover collapses to a strip.</dd>
+        <dt>COVERMIN</dt><dd>Hide covers whose short side is under N px (0 = show all).</dd>
+        <dt>REELFILTER</dt><dd>ON = reel shows only good covers; the list is untouched.</dd>
+        <dt>CATEGORIES</dt><dd>ON = browse by folder buckets (Games / Apps / OS…).</dd>
+        <dt>SCREENSAVER</dt><dd>ON / OFF · SSMODE = BOUNCE / SLIDES / MATRIX.</dd>
+        <dt>SAVES</dt><dd>Save-game write-back to the SD card.</dd>
+      </dl>
+      <div class="callout">Most features ship <b>OFF</b> by default — your GTi stays exactly as it is until you turn one on.</div>
+    </div>
+  </section>
+
+  <!-- ===== WEB / APP ===== -->
+  <section id="web" class="view">
+    <button class="back" onclick="go('door')">‹ Back</button>
+    <div class="vh">Load over WiFi — nothing to flash</div>
+    <div class="vsub">If you already have a flashed dongle, you don't need this flasher at all. Load disks like this:</div>
+    <div class="opt">
+      <h3>From your phone — the dongle's own web page</h3>
+      <p>The dongle makes its own WiFi network, <b style="color:var(--text)">GotekOMEGA</b>. Join it, open the page, drag an <b style="color:var(--text)">.adf</b> onto it, and it's in the drive. No SD card, no app, no cloud.</p>
+      <div class="path">Join <b>GotekOMEGA</b> → open <b>192.168.4.1</b> → drop a disk</div>
+    </div>
+    <div class="opt">
+      <h3>From the GTi mobile app</h3>
+      <p>Scan for dongles on your network, tap one, push a disk. Handy when several dongles share the house WiFi.</p>
+      <div class="path">Open app → Scan → pick your dongle → load</div>
+    </div>
+    <div class="opt">
+      <h3>From a GTi touchscreen</h3>
+      <p>Any flashed panel can pair with a dongle and fling disks to it wirelessly — <b style="color:var(--text)">Scan Dongles → Select → load</b>. That's the whole point of the wireless side.</p>
+    </div>
+  </section>
+
+  <!-- ===== STORY ===== -->
+  <section id="story" class="view">
+    <button class="back" onclick="go('door')">‹ Back</button>
+    <div class="vh">What is the GTi?</div>
+    <div class="vsub">A touchscreen front-end for the Gotek floppy emulator. In 60 seconds:</div>
+    <div style="padding:.3rem 0">
+      <div class="beat">
+        <div class="w">Where it came from</div>
+        <h3>A Gotek deserves better than three seven-segment digits</h3>
+        <p>The Gotek replaces an Amiga's (or Atari's, PC's, synth's) floppy drive with a USB stick full of disk images — but you pick them by a tiny number readout. The GTi bolts a proper <b>touchscreen</b> on the front: see your games, tap to load.</p>
+      </div>
+      <div class="beat">
+        <div class="w">Where it is now</div>
+        <h3>Cover art, categories, saves, and wireless</h3>
+        <p>A full library browser with <b>cover art</b>, six themes, a spinning carousel, type-to-search, and <b>save-game write-back</b> to the SD card. Multiple screen sizes from 2.8″ to 7″, plus <b>wireless dongles</b> so the disk lives on a tiny board in the Gotek and the screen drives it over the air.</p>
+      </div>
+      <div class="beat">
+        <div class="w">Where it's going</div>
+        <h3>The P4 flagship, bigger panels, and the web</h3>
+        <p>A new <b>ESP32-P4</b> board (the 4.3″ 480×800 flagship) that self-updates its own WiFi co-processor from the SD card; 7-inch panels; a browser + phone-app path for people who never want to flash anything; and a fleet mode to drive several dongles at once.</p>
       </div>
     </div>
-  </div>
-
+  </section>
 </main>
 
-<script>
-
-const cv=document.getElementById('gtkDemoCanvas'), ctx0=cv.getContext('2d');
-let VW=480,VH=320;
-const FONT=[0,0,0,0,0,0,0,0,79,0,0,0,0,7,0,7,0,0,20,127,20,127,20,0,36,42,127,42,18,0,98,100,8,19,35,0,54,73,73,54,80,0,0,4,3,0,0,0,0,28,34,65,0,0,0,65,34,28,0,0,20,8,62,8,20,0,8,8,62,8,8,0,0,80,48,0,0,0,8,8,8,8,8,0,0,96,96,0,0,0,32,16,8,4,2,0,62,81,73,69,62,0,0,66,127,64,0,0,66,97,81,73,70,0,33,65,69,75,49,0,24,20,18,127,16,0,39,69,69,69,57,0,60,74,73,73,48,0,1,113,9,5,3,0,54,73,73,73,54,0,6,73,73,41,30,0,0,54,54,0,0,0,0,86,54,0,0,0,8,20,34,65,0,0,20,20,20,20,20,0,0,65,34,20,8,0,2,1,81,9,6,0,50,73,121,65,62,0,126,17,17,17,126,0,127,73,73,73,54,0,62,65,65,65,34,0,127,65,65,65,62,0,127,73,73,73,65,0,127,9,9,9,1,0,62,65,73,73,58,0,127,8,8,8,127,0,0,65,127,65,0,0,32,64,65,63,1,0,127,8,20,34,65,0,127,64,64,64,64,0,127,2,12,2,127,0,127,4,8,16,127,0,62,65,65,65,62,0,127,9,9,9,6,0,62,65,65,33,94,0,127,9,25,41,70,0,70,73,73,73,49,0,1,1,127,1,1,0,63,64,64,64,63,0,31,32,64,32,31,0,63,64,56,64,63,0,99,20,8,20,99,0,7,8,112,8,7,0,97,81,73,69,67,0,0,127,65,0,0,0,2,4,8,16,32,0,0,65,127,0,0,0,4,2,1,2,4,0,64,64,64,64,64,0,0,1,2,4,0,0,32,84,84,84,120,0,127,72,68,68,56,0,56,68,68,68,32,0,56,68,68,72,127,0,56,84,84,84,24,0,8,126,9,1,2,0,24,164,164,156,120,0,127,8,4,4,120,0,0,68,125,64,0,0,32,64,68,61,0,0,127,16,40,68,0,0,0,65,127,64,0,0,124,4,120,4,120,0,124,8,4,4,120,0,56,68,68,68,56,0,124,20,20,20,8,0,8,20,20,24,124,0,124,8,4,4,8,0,72,84,84,84,32,0,4,63,68,64,32,0,60,64,64,32,124,0,28,32,64,32,28,0,60,64,48,64,60,0,68,40,16,40,68,0,28,160,160,156,12,0,68,100,84,76,68,0,0,8,54,65,0,0,0,0,127,0,0,0,0,65,54,8,0,0,8,4,8,16,8,0];
-function rgb(c){ return [ ((c>>11)&0x1F)*255/31|0, ((c>>5)&0x3F)*255/63|0, (c&0x1F)*255/31|0 ]; }
-const WHITE=0xFFFF,BLACK=0x0000,CYAN=0x07FF,YELLOW=0xFFE0;
-const THEMES=[
- {name:"NAVY",  v:[0x1082,0x18C3,0x2104,0x2945,0x2103,0x4A8A,0x6B6D,0x9BD6,0x2D6B,0xFC60,0xFD00,0x4C5F,0x0B26,0x5D1F,0x3186,0xFFFF]},
- {name:"EMBER", v:[0x0800,0x1000,0x1800,0x5820,0x1000,0x5820,0x8440,0xC8A0,0x0560,0xFF40,0xFC00,0x4A9F,0x1000,0x7800,0x3800,0xFFFF]},
- {name:"MATRIX",v:[0x0020,0x0040,0x0060,0x0340,0x0040,0x0340,0x0580,0x07C0,0x07E0,0x07E0,0x0FE0,0x07FF,0x0060,0x0380,0x0300,0x07C0]},
- {name:"PAPER", v:[0xEF5C,0xF7BE,0xFFFF,0x39E7,0xCE59,0x8C51,0x6B4D,0x2124,0x0680,0xE880,0xFD00,0x0C5F,0x0A44,0x4810,0xC618,0x2124]},
- {name:"SYNTH", v:[0x1001,0x2003,0x3005,0x5008,0x2003,0x600C,0x900F,0xC09F,0x4BE0,0xFC1F,0xE81F,0xA01F,0x2003,0x8010,0x5008,0xE81F]},
- {name:"GOLD",  v:[0x1000,0x1800,0x2000,0x4200,0x1800,0x5240,0x7440,0xC5A0,0x0560,0xFCA0,0xFCC0,0xFCA0,0x1800,0x3200,0x3200,0xFCC0]},
-];
-let TI=0;const C={};const NAMES=["bg","panel","bar","sel","sep","dim","mid","lit","green","orange","amber","blue","now","accent","circ","circ_text"];
-function applyTheme(i){TI=(i%THEMES.length+THEMES.length)%THEMES.length;THEMES[TI].v.forEach((c,k)=>C[NAMES[k]]=c);}
-applyTheme(0);
-// framebuffer
-let imgData,fb,clipY0=0,clipY1=VH,clipX0=0,clipX1=VW;
-function allocFB(){imgData=ctx0.createImageData(VW,VH);fb=new Uint8ClampedArray(VW*VH*4);clipY0=0;clipY1=VH;clipX0=0;clipX1=VW;}
-function px(x,y,c){if(x<clipX0||x>=clipX1||y<clipY0||y>=clipY1)return;const o=(y*VW+x)*4,r=rgb(c);fb[o]=r[0];fb[o+1]=r[1];fb[o+2]=r[2];fb[o+3]=255;}
-function fillRect(x,y,w,h,c){const r=rgb(c);for(let yy=Math.max(clipY0,y);yy<Math.min(clipY1,y+h);yy++){let o=(yy*VW+Math.max(clipX0,x))*4;for(let xx=Math.max(clipX0,x);xx<Math.min(clipX1,x+w);xx++){fb[o]=r[0];fb[o+1]=r[1];fb[o+2]=r[2];fb[o+3]=255;o+=4;}}}
-function fillScreen(c){const s0=clipX0,s1=clipX1;clipX0=0;clipX1=VW;fillRect(0,0,VW,VH,c);clipX0=s0;clipX1=s1;}
-function hline(x,y,w,c){fillRect(x,y,w,1,c);}
-function vline(x,y,h,c){fillRect(x,y,1,h,c);}
-function drawRect(x,y,w,h,c){hline(x,y,w,c);hline(x,y+h-1,w,c);vline(x,y,h,c);vline(x+w-1,y,h,c);}
-function fillCircle(cx,cy,rad,c){for(let y=-rad;y<=rad;y++){const w=Math.sqrt(rad*rad-y*y)|0;fillRect(cx-w,cy+y,2*w+1,1,c);}}
-function drawCircle(cx,cy,rad,c){let x=0,y=rad,d=3-2*rad;while(x<=y){[[x,y],[-x,y],[x,-y],[-x,-y],[y,x],[-y,x],[y,-x],[-y,-x]].forEach(p=>px(cx+p[0],cy+p[1],c));if(d<0)d+=4*x+6;else{d+=4*(x-y)+10;y--;}x++;}}
-function fillRound(x,y,w,h,r,c){fillRect(x+r,y,w-2*r,h,c);fillRect(x,y+r,r,h-2*r,c);fillRect(x+w-r,y+r,r,h-2*r,c);fillCircle(x+r,y+r,r,c);fillCircle(x+w-r-1,y+r,r,c);fillCircle(x+r,y+h-r-1,r,c);fillCircle(x+w-r-1,y+h-r-1,r,c);}
-function drawRound(x,y,w,h,r,c){hline(x+r,y,w-2*r,c);hline(x+r,y+h-1,w-2*r,c);vline(x,y+r,h-2*r,c);vline(x+w-1,y+r,h-2*r,c);}
-let tsize=1;function setSize(s){tsize=s;}function textW(s){return s.length*6*tsize;}
-function text(x,y,s,fg,bg){for(let i=0;i<s.length;i++){let ch=s.charCodeAt(i);if(ch<32||ch>126){x+=6*tsize;continue;}const base=(ch-32)*6;for(let col=0;col<6;col++){const bits=FONT[base+col];for(let row=0;row<8;row++){const on=bits&(1<<row);const c=on?fg:bg;if(c===null&&!on)continue;for(let dy=0;dy<tsize;dy++)for(let dx=0;dx<tsize;dx++)px(x+col*tsize+dx,y+row*tsize+dy,c);}}x+=6*tsize;}}
-function wrapText(s,wpx,maxlines){const words=s.split(' ');let lines=[],cur='';for(const w of words){const t=cur?cur+' '+w:w;if(textW(t)>wpx&&cur){lines.push(cur);cur=w;if(lines.length>=maxlines)return lines;}else cur=t;}if(cur&&lines.length<maxlines)lines.push(cur);return lines;}
-function blit(){imgData.data.set(fb);ctx0.putImageData(imgData,0,0);}
-
-// ---- game data ----
-const RAW=[["1943",1],["4D Sports Boxing",1],["720 Degrees",1],["Arcade Pool",1],["Barbarian",1],["Cannon Fodder",1],["Chaos Engine",2],["Dune II - Battle for Arrakis",3],["Elite",1],["Eye of the Beholder",4],["Flashback",4],["Gods",1],["Hired Guns",4],["IK+",1],["James Pond 2",2],["Kick Off 2",1],["Lemmings",1],["Lotus Turbo Challenge 2",1],["Monkey Island 2 - LeChuck's Revenge",11],["Moonstone",1],["North & South",1],["Out Run",1],["Pinball Dreams",2],["Populous",1],["Qix",1],["R-Type",1],["Sensible World of Soccer",1],["Speedball 2 - Brutal Deluxe",1],["Syndicate",4],["Turrican II",2],["UFO Enemy Unknown",4],["Vroom",1],["Worms",1],["Xenon 2 Megablast",1],["Yo! Joe!",1],["Zool",1]];
-const BLURBS={"Monkey Island 2 - LeChuck's Revenge":"Guybrush hunts the treasure of Big Whoop. LucasArts SCUMM classic, eleven disks of pirate adventure.","Speedball 2 - Brutal Deluxe":"Ice hockey meets handball with a spiked metal ball. Bitmap Brothers. Ice cream! Ice cream!","Cannon Fodder":"War has never been so much fun. Sensible Software's darkly comic top-down shooter.","Lemmings":"Guide the suicidal little fellows to safety. DMA Design. Let's go!","Worms":"Turn-based artillery mayhem. Team17. Holy hand grenade incoming."};
-function bucket(n){const c=n[0].toUpperCase();return(c>="A"&&c<="Z")?c:"#";}
-const games=RAW.map(([name,dc])=>({name,disk_count:dc,letter:bucket(name),blurb:BLURBS[name]||""}));
-const letters=[...new Set(games.map(g=>g.letter))].sort();
-const DISKS_PER_PAGE=6;
-
-// ---- state ----
-let mode="ADF",sel=0,scroll=0,diskSel=0,diskPage=0,azPage=0,scrollPx=0;
-let drag=null,inertiaV=0,inertiaOn=false;
-let marqueeOff=0,marqueeSel=-1,marqueeDir=1,marqueePause=0;
-let activeLetter=games.length?games[0].letter:"A";
-let loaded=false,loadedIdx=-1,loadedDisk=-1,loadedName="";
-let infoShowing=false,wireless=false;
-let orient='L',compact=false,fontMode=1,nameSz=2;
-let screen="cracktro";
-let infoFontY=0,infoRotY=0,infoCompY=0,infoModeY=0,infoBH=22,infoRescanY=0,infoResetY=0;
-
-// ---- layout ----
-let STATUS_H,BOTTOM_H,MODE_BAR_H,NOW_PLAY_H,AZ_W,AZ_X;
-let COVER_ON,COVER_X,COVER_Y,COVER_W,COVER_H,ART_X,ART_Y,ART_W,ART_H;
-let LIST_X,LIST_TOP,LIST_W,LIST_BOTTOM,LIST_ITEM_H,ITEMS_VIS;
-let AZ_TOP,AZ_H;
-let STRIP_ON,STRIP_Y,STRIP_H,NOW_ON,NOW_Y;
-let INS_X,INS_Y,INS_W,INS_H;
-const AZ_TOG_H=28;
-function setActiveLetter(l){activeLetter=l;azPage=(l<="M")?0:1;marqueeOff=0;}
-function relayout(){
-  VW=(orient==='P')?320:480; VH=(orient==='P')?480:320;
-  cv.width=VW; cv.height=VH; {const _d=600/Math.max(VW,VH); cv.style.width=(VW*_d)+'px'; cv.style.height=(VH*_d)+'px';} allocFB();
-  STATUS_H=20;BOTTOM_H=40;MODE_BAR_H=18;NOW_PLAY_H=22;AZ_W=30;AZ_X=VW-AZ_W;
-  const mb=STATUS_H+MODE_BAR_H;
-  if(!compact){
-    if(orient==='L'){
-      COVER_ON=true;COVER_X=0;COVER_Y=STATUS_H;COVER_W=150;COVER_H=VH-STATUS_H-BOTTOM_H;
-      ART_X=4;ART_Y=STATUS_H+4;ART_W=142;ART_H=116;
-      LIST_X=COVER_W;LIST_TOP=mb;LIST_W=AZ_X-COVER_W;
-      NOW_ON=true;NOW_Y=VH-BOTTOM_H-NOW_PLAY_H;LIST_BOTTOM=NOW_Y;
-      AZ_TOP=LIST_TOP;AZ_H=(VH-BOTTOM_H)-LIST_TOP;
-      INS_X=4;INS_W=COVER_W-8;INS_H=28;INS_Y=VH-BOTTOM_H-36;STRIP_ON=false;
-    }else{
-      COVER_ON=true;COVER_X=0;COVER_Y=mb+2;COVER_W=VW;COVER_H=190;
-      ART_X=8;ART_Y=COVER_Y+8;ART_W=108;ART_H=108;
-      LIST_X=0;LIST_TOP=COVER_Y+COVER_H+4;LIST_W=AZ_X;
-      NOW_ON=true;NOW_Y=VH-BOTTOM_H-NOW_PLAY_H;LIST_BOTTOM=NOW_Y;
-      AZ_TOP=LIST_TOP;AZ_H=(VH-BOTTOM_H)-LIST_TOP;
-      INS_X=8;INS_W=VW-16;INS_H=28;INS_Y=COVER_Y+COVER_H-32;STRIP_ON=false;
-    }
-  }else{
-    COVER_ON=false;STRIP_ON=true;STRIP_H=(orient==='P')?46:44;STRIP_Y=VH-BOTTOM_H-STRIP_H;
-    LIST_X=0;LIST_TOP=mb+(orient==='P'?2:0);LIST_W=AZ_X;LIST_BOTTOM=STRIP_Y;
-    AZ_TOP=LIST_TOP;AZ_H=STRIP_Y-LIST_TOP;NOW_ON=false;
-    INS_W=(orient==='P')?66:80;INS_H=26;INS_X=VW-INS_W-6;INS_Y=STRIP_Y+((STRIP_H-INS_H)/2|0);
-  }
-  applyFont(fontMode);
-  const mp=maxScrollPx(); if(scrollPx>mp)scrollPx=mp;
-}
-function applyFont(f){fontMode=f;nameSz=(f===0?1:f===2?3:2);const target=(f===0?34:f===2?70:50),listH=LIST_BOTTOM-LIST_TOP;let rows=Math.max(1,Math.round(listH/target));LIST_ITEM_H=Math.floor(listH/rows);ITEMS_VIS=rows;}
-function fontName(f){return f===0?"SMALL":f===2?"LARGE":"NORMAL";}
-function maxScrollPx(){return Math.max(0,games.length*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP));}
-
-// ---- cracktro (v4.4.0 — 6-style boot engine, mirrors the CRACKTRO= config) ----
-let stars=[],craStyle=0,craStyleStart=0,craStart=0;
-const SCROLLTEXT="        OMEGAWARE PRESENTS ... THE GOTEK TOUCHSCREEN INTERFACE ... CODED BY MEZ & DIMMY ... A LITTLE TRIBUTE TO THE AMIGA CRACKTRO LEGENDS ... GREETINGS TO EVERYONE KEEPING THE SCENE ALIVE ... NOW GO LOAD A GAME ...        ";
-function c565(r,g,b){return((r&0xF8)<<8)|((g&0xFC)<<3)|(b>>3);}
-function hsl565(h,s,l){h=((h%360)+360)%360;s/=100;l/=100;const c=(1-Math.abs(2*l-1))*s,x=c*(1-Math.abs((h/60)%2-1)),m=l-c/2;let r,g,b;const seg=(h/60|0)%6;
-  if(seg===0){r=c;g=x;b=0;}else if(seg===1){r=x;g=c;b=0;}else if(seg===2){r=0;g=c;b=x;}else if(seg===3){r=0;g=x;b=c;}else if(seg===4){r=x;g=0;b=c;}else{r=c;g=0;b=x;}
-  return c565((r+m)*255|0,(g+m)*255|0,(b+m)*255|0);}
-function lerp565(r1,g1,b1,r2,g2,b2,k){k=k<0?0:k>1?1:k;return c565(r1+(r2-r1)*k|0,g1+(g2-g1)*k|0,b1+(b2-b1)*k|0);}
-function craLine(x0,y0,x1,y1,c){x0|=0;y0|=0;x1|=0;y1|=0;let dx=Math.abs(x1-x0),dy=-Math.abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1,err=dx+dy;for(let gd=0;gd<4000;gd++){px(x0,y0,c);if(x0===x1&&y0===y1)break;const e2=2*err;if(e2>=dy){err+=dy;x0+=sx;}if(e2<=dx){err+=dx;y0+=sy;}}}
-function initStars(){stars=[];for(let i=0;i<70;i++)stars.push({x:Math.random()*VW|0,y:Math.random()*VH|0,s:1+(Math.random()*3|0)});}
-function craStars(){for(const st of stars){st.x-=st.s*0.6;if(st.x<0){st.x=VW-1;st.y=Math.random()*(VH-30)|0;}const c=st.s===3?WHITE:st.s===2?c565(159,180,214):c565(66,80,110);const z=st.s>2?2:1;fillRect(st.x|0,st.y|0,z,z,c);}}
-function craBar(cy,h,hue){for(let i=-h/2;i<h/2;i++){const l=62-Math.abs(i)/(h/2)*56;fillRect(0,cy+i|0,VW,1,hsl565(hue,100,l));}}
-function craTextC(cx,y,s,sz,col){setSize(sz);text((cx-textW(s)/2)|0,y,s,col,null);}
-function craShadowC(cx,y,s,sz,col){setSize(sz);const xx=(cx-textW(s)/2)|0;text(xx+2,y+2,s,c565(5,6,12),null);text(xx,y,s,col,null);}
-function craScroller(t,col,amp,rainbow){const cw=12,cs=t*0.13|0,sc=cs/cw|0,pxo=cs%cw;fillRect(0,VH-30,VW,30,c565(5,7,15));setSize(2);
-  for(let c=0;c<VW/cw+3;c++){const ch=SCROLLTEXT[((sc+c)%SCROLLTEXT.length+SCROLLTEXT.length)%SCROLLTEXT.length];const x=-pxo+c*cw;const y=(VH-26+Math.sin(x*0.035+t*0.004)*amp)|0;text(x,y,ch,rainbow?hsl565(x*1.2+t*0.2,100,55):col,null);}}
-const CRA_STYLES=[
- {name:"COPPER CLASSIC",draw(t){fillScreen(c565(4,6,13));craStars();
-   for(let b=0;b<3;b++){const cy=(150+b*34+Math.sin(t*0.0022+b*1.4)*26)|0;craBar(cy,30,t*0.06+b*70);}
-   craTextC(VW/2,34,"OMEGAWARE",4,hsl565(t*0.12,100,55));craTextC(VW/2,82,"* MEZ & DIMMY *",2,c565(174,187,208));craScroller(t,c565(255,224,0),13,false);}},
- {name:"STARFIELD",draw(t){fillScreen(c565(2,3,10));craStars();craStars();
-   const bx=(VW/2+Math.sin(t*0.0016)*150)|0,by=(120+Math.sin(t*0.0025)*54)|0;
-   craShadowC(bx,by,"OMEGAWARE",3,hsl565(t*0.1,100,60));craTextC(bx,by+34,"INTO THE VOID",1,c565(127,208,255));craScroller(t,0,10,true);}},
- {name:"RAINBOW RASTER",draw(t){for(let y=0;y<VH-30;y++)fillRect(0,y,VW,1,hsl565(y*1.4+t*0.16,100,50));
-   fillRect(48,104,VW-96,92,c565(6,8,18));drawRect(48,104,VW-96,92,WHITE);
-   craTextC(VW/2,124,"OMEGAWARE",4,WHITE);craTextC(VW/2,172,"CRACKED - TRAINED - LOADED",1,c565(255,233,168));craScroller(t,WHITE,10,false);}},
- {name:"PLASMA",draw(t){const bs=8;for(let y=0;y<VH-30;y+=bs)for(let x=0;x<VW;x+=bs){const v=Math.sin(x*0.035+t*0.003)+Math.sin(y*0.05+t*0.0042)+Math.sin((x+y)*0.028+t*0.002);fillRect(x,y,bs,bs,hsl565(v*60+t*0.12,90,56));}
-   craShadowC(VW/2,54,"OMEGAWARE",4,WHITE);craTextC(VW/2,104,"MELT YOUR EYES",2,c565(10,10,20));craScroller(t,WHITE,12,false);}},
- {name:"BOING BALL",draw(t){fillScreen(c565(12,12,22));const grd=c565(70,36,96);
-   for(let x=0;x<=VW;x+=32)vline(x,60,VH-30-60,grd);for(let y=60;y<=VH-30;y+=28)hline(0,y,VW,grd);
-   const bx=(VW/2+Math.sin(t*0.0016)*150)|0,gy=VH-70,by=(gy-Math.abs(Math.sin(t*0.004))*120)|0,r=46;
-   for(let yy=-6;yy<=6;yy++){const w=(r*0.9*Math.sqrt(1-(yy/6)*(yy/6)))|0;fillRect(bx-w,gy+6+yy,2*w+1,1,c565(8,8,14));}
-   const cell=r/3.2,ph=(t*0.06)%(cell*2);
-   for(let yy=-r;yy<=r;yy++){const hw=Math.sqrt(r*r-yy*yy)|0;for(let xx=-hw;xx<=hw;xx++){const cc=(Math.floor((xx+ph)/cell)+Math.floor(yy/cell))&1;px(bx+xx,by+yy,cc?c565(255,38,38):c565(242,242,242));}}
-   drawCircle(bx,by,r,c565(122,0,0));craTextC(VW/2,26,"OMEGAWARE",3,c565(255,59,59));craScroller(t,c565(255,102,102),9,false);}},
- {name:"SYNTHWAVE",draw(t){for(let y=0;y<VH;y++){const f=y/VH;fillRect(0,y,VW,1,f<0.52?lerp565(24,11,51,90,26,110,f/0.52):lerp565(11,10,26,4,4,12,(f-0.53)/0.47));}
-   for(let i=0;i<26;i++)px((i*53+7)%VW,(i*29)%150,WHITE);
-   const sunx=VW/2,suny=168,sr=58;for(let yy=-sr;yy<=0;yy++){const w=Math.sqrt(sr*sr-yy*yy)|0;fillRect(sunx-w,suny+yy,2*w,1,c565(255,91,138));}
-   for(let i=0;i<6;i++){const yy=118+i*8;fillRect(sunx-60,yy,120,3+i,c565(24,11,51));}
-   const grc=c565(0,229,255),hz=176;for(let i=0;i<8;i++){const yy=(hz+i*i*2.4)|0;if(yy<VH)hline(0,yy,VW,grc);}
-   for(let x=-6;x<=12;x++){const p2=VW/2+x*70,x0=(VW/2+(p2-VW/2)*0.18)|0;craLine(x0,hz,p2,VH,grc);}
-   craShadowC(VW/2,40,"OMEGAWARE",3,c565(49,232,255));craTextC(VW/2,74,"RETRO FUTURE",1,c565(255,122,176));craScroller(t,c565(255,79,160),8,false);}},
-];
-function bootCracktro(){screen="cracktro";craStyle=Math.random()*CRA_STYLES.length|0;craStyleStart=performance.now();initStars();infoShowing=false;}
-function drawCracktro(){const now=performance.now();
-  if(now-craStyleStart>6500){craStyle=(craStyle+1)%CRA_STYLES.length;craStyleStart=now;initStars();}
-  const t=now-craStyleStart;CRA_STYLES[craStyle].draw(t);
-  setSize(1);text(4,4,(craStyle+1)+"/"+CRA_STYLES.length+" "+CRA_STYLES[craStyle].name,c565(143,224,255),null);
-  if(((now/450|0)%2))craTextC(VW/2,VH-46,"TAP TO CONTINUE",1,c565(150,168,200));
-  blit();}
-
-// ---- draw ----
-function drawStatusBar(){fillRect(0,0,VW,STATUS_H,C.bar);setSize(1);text(6,6,"OMEGAWARE",C.orange,C.bar);text(6+textW("OMEGAWARE"),6," v5.2.0",C.mid,C.bar);const t=wireless?"WIRELESS":"STANDALONE";text((VW-textW(t))/2|0,6,t,wireless?0xFD20:0x07FF,C.bar);fillCircle(VW-8,STATUS_H/2,3,loaded?0xE8C4:C.green);}
-let reel=false,reelInsX=0,reelInsW=0,reelListX=0,reelListW=0;
-function drawModeBar(){const mx=(COVER_ON&&orient==='L'&&!reel)?COVER_W:0,mw=VW-mx;fillRect(mx,STATUS_H,mw,MODE_BAR_H,C.bar);setSize(1);const isA=mode==="ADF",isD=mode==="DSK",isG=mode==="GEN";
-  fillRound(mx+4,STATUS_H+2,32,14,7,isA?C.accent:C.bg);text(mx+9,STATUS_H+6,"ADF",isA?C.amber:C.dim,isA?C.accent:C.bg);
-  fillRound(mx+40,STATUS_H+2,32,14,7,isD?C.accent:C.bg);text(mx+45,STATUS_H+6,"DSK",isD?C.amber:C.dim,isD?C.accent:C.bg);
-  fillRound(mx+76,STATUS_H+2,32,14,7,isG?C.accent:C.bg);text(mx+81,STATUS_H+6,"GEN",isG?C.amber:C.dim,isG?C.accent:C.bg);
-  fillRound(mx+112,STATUS_H+2,40,14,7,reel?C.blue:C.bg);text(mx+117,STATUS_H+6,"REEL",reel?WHITE:C.dim,reel?C.blue:C.bg);
-  text(mx+mw-textW(games.length+" games")-6,STATUS_H+6,games.length+" games",C.mid,C.bar);}
-function coverArt(x,y,w,h,ib){fillRound(x,y,w,h,5,C.bar);drawRound(x-1<0?0:x-1,y-1<0?0:y-1,w+2,h+2,6,C.accent);
-  const st=(h-20)/5|0;for(let i=0;i<5;i++)fillRect(x+8,y+12+i*st,w-16,3,[C.accent,C.blue,C.amber,C.green,C.orange][i]);
-  const cr=Math.min(26,(w/3)|0);fillCircle(x+w/2,y+h/2,cr,C.bar);drawCircle(x+w/2,y+h/2,cr,C.lit);setSize(2);text(x+w/2-6,y+h/2-8,ib,C.lit,null);}
-function drawCover(){if(!COVER_ON||!games.length)return;const g=games[sel];fillRect(COVER_X,COVER_Y,COVER_W,COVER_H,C.panel);
-  coverArt(ART_X,ART_Y,ART_W,ART_H,g.name[0].toUpperCase());
-  const isL=loaded&&loadedIdx===sel;
-  if(orient==='L'){
-    let ty=ART_Y+ART_H+4;setSize(2);const cb=(g.disk_count>1)?(diskLayout(g).labelY-2):(INS_Y-4);
-    for(const l of wrapText(g.name,COVER_W-8,2)){if(ty+16>cb)break;text(4,ty,l,C.lit,C.panel);ty+=18;}
-    if(g.blurb){setSize(1);for(const l of wrapText(g.blurb,COVER_W-8,12)){if(ty+8>cb)break;text(4,ty,l,C.dim,C.panel);ty+=9;}}
-  }else{
-    const rx=ART_X+ART_W+8,rw=VW-rx-6;let ty=ART_Y;setSize(2);
-    for(const l of wrapText(g.name,rw,3)){text(rx,ty,l,WHITE,C.panel);ty+=18;}
-    if(g.blurb){setSize(1);ty+=3;const bb=ART_Y+ART_H+2;for(const l of wrapText(g.blurb,rw,6)){if(ty+8>bb)break;text(rx,ty,l,C.dim,C.panel);ty+=10;}}
-    if(g.disk_count>1)dsStepper(8,COVER_Y+COVER_H-70,VW-16,26,g);
-    else{setSize(1);text(12,COVER_Y+COVER_H-58,"Single disk  -  ADF 880KB",C.dim,C.panel);}
-  }
-  if(g.disk_count>1&&orient==='L')drawDiskSelector(g);
-  fillRound(INS_X,INS_Y,INS_W,INS_H,8,isL?0x4000:0x0340);drawRound(INS_X,INS_Y,INS_W,INS_H,8,isL?0xE8C4:C.green);
-  const lbl=isL?"EJECT":"INSERT";setSize(2);text(INS_X+(INS_W-textW(lbl))/2|0,INS_Y+(INS_H-16)/2|0,lbl,WHITE,isL?0x4000:0x0340);}
-function diskLayout(g){const nd=g.disk_count,pages=Math.ceil(nd/DISKS_PER_PAGE);
-  const COLS=3,dbw=((COVER_W-8-2*4)/3)|0,dbh=20,dgap=4,gridW=COLS*dbw+(COLS-1)*dgap,gx=Math.max(4,(COVER_W-gridW)/2|0);
-  const insertY=INS_Y,multi=pages>1,pageBtnH=multi?16:0,pageGap=multi?4:0;
-  const gridH=2*dbh+dgap,labelY=insertY-gridH-pageBtnH-pageGap-12,gridY=labelY+10;
-  return{nd,pages,COLS,dbw,dbh,dgap,gridW,gx,insertY,multi,pageBtnH,pageGap,gridH,labelY,gridY};}
-function drawDiskSelector(g){const L=diskLayout(g);if(diskPage>=L.pages)diskPage=0;const start=diskPage*DISKS_PER_PAGE,end=Math.min(start+DISKS_PER_PAGE,L.nd);
-  setSize(1);text(4,L.labelY,L.multi?`DISK (${diskPage+1}/${L.pages}):`:"DISK:",C.dim,C.panel);
-  for(let d=start;d<end;d++){const slot=d-start,col=slot%L.COLS,row=slot/L.COLS|0;const bx=L.gx+col*(L.dbw+L.dgap),by=L.gridY+row*(L.dbh+L.dgap);
-    const isSel=d===diskSel,isLd=(loadedIdx===sel&&loadedDisk===d),bc=isLd?C.green:(isSel?C.amber:C.bar);
-    fillRound(bx,by,L.dbw,L.dbh,4,bc);drawRound(bx,by,L.dbw,L.dbh,4,isSel?C.amber:C.dim);const dl="D"+(d+1);text(bx+(L.dbw-textW(dl))/2|0,by+(L.dbh-8)/2|0,dl,(isLd||isSel)?BLACK:C.lit,bc);}
-  if(L.multi){const pby=L.gridY+L.gridH+L.pageGap;fillRound(L.gx,pby,L.gridW,L.pageBtnH,4,C.accent);const pl=(diskPage+1<L.pages)?`MORE D${end+1}+  >`:"<  BACK TO D1";text(L.gx+(L.gridW-textW(pl))/2|0,pby+(L.pageBtnH-8)/2|0,pl,WHITE,C.accent);}}
-let stepOn=false,stepX=0,stepY=0,stepW=0,stepH=0;
-function dsStepper(x,y,w,h,g){stepOn=true;stepX=x;stepY=y;stepW=w;stepH=h;const bw=w/4|0;
-  fillRound(x,y,w,h,6,C.bar);
-  fillRound(x,y,bw,h,6,C.accent);setSize(3);text(x+(bw-18)/2|0,y+(h-24)/2|0,"<",WHITE,C.accent);
-  fillRound(x+w-bw,y,bw,h,6,C.accent);text(x+w-bw+(bw-18)/2|0,y+(h-24)/2|0,">",WHITE,C.accent);
-  setSize(2);const lbl="Disk "+(diskSel+1)+" of "+g.disk_count;text(x+(w-textW(lbl))/2|0,y+(h-16)/2|0,lbl,C.lit,C.bar);}
-function drawList(){fillRect(LIST_X,LIST_TOP,LIST_W,LIST_BOTTOM-LIST_TOP,C.bg);
-  if(scrollPx<0)scrollPx=0;const mp=maxScrollPx();if(scrollPx>mp)scrollPx=mp;
-  const first=Math.floor(scrollPx/LIST_ITEM_H),off=scrollPx-first*LIST_ITEM_H;scroll=first;clipY0=LIST_TOP;clipY1=LIST_BOTTOM;
-  for(let vi=0;vi<=ITEMS_VIS+1;vi++){const gi=first+vi;if(gi>=games.length)break;const g=games[gi];
-    const isS=gi===sel,isL=loaded&&loadedIdx===gi,y=LIST_TOP-off+vi*LIST_ITEM_H;if(y>=LIST_BOTTOM)break;
-    if(isS){fillRound(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,4,C.sel);drawRound(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,4,C.amber);}else fillRound(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,3,C.panel);
-    fillRect(LIST_X+3,y+3,3,LIST_ITEM_H-4,isL?C.green:(isS?C.amber:C.accent));
-    const r=8+nameSz*3,cx=LIST_X+6+r,cy=y+(LIST_ITEM_H>>1);fillCircle(cx,cy,r,isS?C.amber:(isL?C.green:C.circ));
-    const ib=g.name[0].toUpperCase();setSize(nameSz);text(cx-textW(ib)/2|0,cy-4*nameSz,ib,(isS||isL)?BLACK:C.circ_text,isS?C.amber:C.circ);
-    const nx=cx+r+6;setSize(nameSz);const maxNW=LIST_W-(nx-LIST_X)-8-(g.disk_count>1?36:0),fg=isS?WHITE:C.lit,bg=isS?C.sel:C.panel;
-    if(isS&&textW(g.name)>maxNW){clipX0=nx;clipX1=nx+maxNW;text(nx-marqueeOff,cy-4*nameSz,g.name,fg,bg);clipX0=0;clipX1=VW;}
-    else{let nm=g.name;while(textW(nm)>maxNW&&nm.length>3)nm=nm.slice(0,-1);text(nx,cy-4*nameSz,nm,fg,bg);}
-    if(g.disk_count>1){setSize(1);fillRound(LIST_X+LIST_W-38,cy-6,34,12,4,C.accent);text(LIST_X+LIST_W-34,cy-4,g.disk_count+"DSK",WHITE,C.accent);}}
-  clipY0=0;clipY1=VH;}
-function drawNowPlaying(){if(!NOW_ON)return;const y=NOW_Y;if(loaded&&loadedName){fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,C.now);drawRect(LIST_X,y,LIST_W,NOW_PLAY_H,C.green);fillCircle(LIST_X+8,y+NOW_PLAY_H/2,3,C.green);setSize(1);text(LIST_X+16,y+3,"NOW PLAYING",C.green,C.now);let n=loadedName;while(textW(n)>LIST_W-24&&n.length>3)n=n.slice(0,-1);text(LIST_X+16,y+12,n,WHITE,C.now);}else{fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,C.bg);setSize(1);text(LIST_X+8,y+NOW_PLAY_H/2-4,games.length+" games - tap INSERT",C.mid,C.bg);}}
-function drawActionStrip(){if(!STRIP_ON||!games.length)return;const g=games[sel],isL=loaded&&loadedIdx===sel;fillRect(0,STRIP_Y,VW,STRIP_H,C.panel);hline(0,STRIP_Y,VW,C.sep);
-  const th=STRIP_H-12;fillRound(6,STRIP_Y+6,th,th,4,C.bg);drawRound(6,STRIP_Y+6,th,th,4,C.accent);setSize(3);text(6+(th-textW(g.name[0].toUpperCase()))/2|0,STRIP_Y+6+(th-24)/2|0,g.name[0].toUpperCase(),C.accent,C.bg);
-  setSize(2);let nm=g.name,maxw=INS_X-(th+16)-6;while(textW(nm)>maxw&&nm.length>3)nm=nm.slice(0,-1);text(th+16,STRIP_Y+8,nm,WHITE,C.panel);
-  setSize(1);text(th+16,STRIP_Y+8+18,g.disk_count>1?("disk "+(diskSel+1)+"/"+g.disk_count+"  tap art to change"):"1 disk \x1a ADF 880KB",C.dim,C.panel);
-  fillRound(INS_X,INS_Y,INS_W,INS_H,6,isL?0x4000:C.green);drawRound(INS_X,INS_Y,INS_W,INS_H,6,isL?0xE8C4:C.green);const lbl=isL?"EJECT":"INSERT";setSize(2);text(INS_X+(INS_W-textW(lbl))/2|0,INS_Y+(INS_H-16)/2|0,lbl,isL?WHITE:BLACK,isL?0x4000:C.green);}
-function drawAZ(){if(!letters.length)return;const togY=AZ_TOP+AZ_H-AZ_TOG_H,barH=togY-AZ_TOP;fillRect(AZ_X,AZ_TOP,AZ_W,AZ_H,C.panel);
-  const p0=letters.filter(l=>l<="M"),p1=letters.filter(l=>l>="N"),half=azPage===0?p0:p1,SLOTS=Math.max(13,p0.length,p1.length),lh=Math.max(7,(barH/SLOTS)|0),lsz=(lh>=15)?2:1;setSize(lsz);
-  half.forEach((ltr,i)=>{const ly=AZ_TOP+i*lh;if(ly+lh>togY)return;const lx=AZ_X+(AZ_W-6*lsz)/2|0,lyy=ly+(lh-8*lsz)/2|0;if(ltr===activeLetter){fillRect(AZ_X,ly,AZ_W,lh,C.amber);text(lx,lyy,ltr,BLACK,C.amber);}else text(lx,lyy,ltr,C.dim,C.panel);});
-  fillRound(AZ_X+1,togY+1,AZ_W-2,(AZ_TOP+AZ_H)-togY-2,5,C.accent);setSize(1);const blbl=azPage===0?"N-Z":"A-M";text(AZ_X+(AZ_W-textW(blbl))/2|0,togY+(AZ_TOG_H-8)/2|0,blbl,WHITE,C.accent);
-  const maxOff=games.length-ITEMS_VIS;if(maxOff>0){const th=Math.max(4,barH*ITEMS_VIS/games.length|0),tyy=AZ_TOP+(barH-th)*scroll/maxOff|0;fillRect(AZ_X-2,tyy,2,th,C.blue);}}
-function drawBottom(){const y=VH-BOTTOM_H;fillRect(0,y,VW,BOTTOM_H,C.bar);hline(0,y,VW,C.sep);const bw=VW/4|0;const btns=[["<","PREV",C.orange],[">","NEXT",C.blue],["#","THEME",C.amber],["i","INFO",C.mid]];
-  btns.forEach((b,i)=>{const bx=i*bw;if(i>0)vline(bx,y+3,BOTTOM_H-6,C.sep);const cx=bx+bw/2|0,cy=y+10;fillCircle(cx,cy,8,b[2]>>2);drawCircle(cx,cy,8,b[2]);setSize(1);text(cx-textW(b[0])/2|0,cy-4,b[0],b[2],b[2]>>2);text(bx+(bw-textW(b[1]))/2|0,y+22,b[1],C.dim,C.bar);});
-  setSize(1);const tn=THEMES[TI].name;text(2*bw+(bw-textW(tn))/2|0,y+33,tn,C.amber>>1,C.bar);}
-function btn(x,y,w,h,label,col,txtcol){fillRound(x,y,w,h,6,col);setSize(1);text(x+(w-textW(label))/2|0,y+(h-8)/2|0,label,txtcol,col);}
-function drawInfo(){
-  // INFO panel: left column in landscape, full browse area in portrait
-  let ix,iy,iw,ih;
-  if(orient==='L'){ix=0;iy=STATUS_H;iw=150;ih=VH-STATUS_H-BOTTOM_H;}
-  else{ix=0;iy=STATUS_H+MODE_BAR_H;iw=VW;ih=(VH-BOTTOM_H)-iy;}
-  fillRect(ix,iy,iw,ih,C.panel);
-  const isz=(orient==='P')?2:1, bh=(orient==='P')?28:22, lh=(orient==='P')?17:9, btn=bh+3, tyo=((bh-8*isz)/2)|0; infoBH=bh;
-  let y=iy+4,pw=iw-8,x=ix+4;setSize(1);text(x+2,y,"SETTINGS",C.dim,C.panel);y+=11;
-  infoModeY=y;{const mc=wireless?C.blue:C.green,ml="MODE: "+(wireless?"WIRELESS":"STANDALONE");fillRound(x,y,pw,bh,6,mc);setSize(isz);text(x+(pw-textW(ml))/2|0,y+tyo,ml,BLACK,mc);}y+=btn;
-  infoFontY=y;{fillRound(x,y,pw,bh,6,C.amber);setSize(isz);const fl="FONT: "+fontName(fontMode);text(x+(pw-textW(fl))/2|0,y+tyo,fl,BLACK,C.amber);}y+=btn;
-  infoRotY=y;{fillRound(x,y,pw,bh,6,C.blue);setSize(isz);const rl="ROTATE: "+(orient==='P'?"PORTRAIT":"LANDSCAPE");text(x+(pw-textW(rl))/2|0,y+tyo,rl,WHITE,C.blue);}y+=btn;
-  infoCompY=y;{const cc=compact?C.green:C.bar;fillRound(x,y,pw,bh,6,cc);setSize(isz);const cl="COMPACT: "+(compact?"ON":"OFF");text(x+(pw-textW(cl))/2|0,y+tyo,cl,compact?BLACK:C.lit,cc);}y+=btn;
-  hline(x+2,y,pw-4,C.sep);y+=4;
-  setSize(1);text(x+2,y,"Heap:212K  PSRAM:2048K",C.lit,C.panel);y+=lh;text(x+2,y,"Games: "+games.length,C.lit,C.panel);y+=lh+2;
-  infoRescanY=y;{fillRound(x,y,pw,bh,6,C.blue);setSize(isz);text(x+(pw-textW("RESCAN SD"))/2|0,y+tyo,"RESCAN SD",WHITE,C.blue);}y+=btn;
-  infoResetY=y;{const gap=4,hw=(pw-gap)/2|0,dx=x+hw+gap;setSize(isz);
-    fillRound(x,y,hw,bh,6,0x8000);text(x+(hw-textW("SOFT RESET"))/2|0,y+tyo,"SOFT RESET",WHITE,0x8000);
-    fillRound(dx,y,hw,bh,6,C.accent);text(dx+(hw-textW("LOAD DIAG"))/2|0,y+tyo,"LOAD DIAG",WHITE,C.accent);}}
-function drawReel(){const top=STATUS_H+MODE_BAR_H,bot=VH-BOTTOM_H,midY=(top+bot)/2-8|0;
-  fillRect(0,top,VW,bot-top,C.bg);setSize(1);text(6,top+5,"REEL",C.amber,C.bg);{const h="tap a cover  ·  PREV / NEXT to spin";text(VW-textW(h)-6,top+5,h,C.dim,C.bg);}
-  const step=Math.min(74,(VW/5)|0),tw=step-14,th=(tw*1.35)|0;
-  for(let off=-2;off<=2;off++){const gi=sel+off;if(gi<0||gi>=games.length)continue;const g=games[gi],center=off===0;
-    const cx=(VW/2+off*step)|0,w=center?tw+10:tw,h=center?th+12:th,tx=(cx-w/2)|0,ty=(midY-h/2)|0;
-    coverArt(tx,ty,w,h,g.name[0].toUpperCase());
-    if(center)drawRound(tx-2,ty-2,w+4,h+4,7,C.amber);
-    setSize(center?2:1);let nm=g.name;const mw=w+26;while(textW(nm)>mw&&nm.length>3)nm=nm.slice(0,-1);
-    text((cx-textW(nm)/2)|0,ty+h+6,nm,center?WHITE:C.dim,C.bg);}
-  const bY=bot-30,isL=loaded&&loadedIdx===sel;
-  reelInsX=(VW/2-68)|0;reelInsW=90;fillRound(reelInsX,bY,reelInsW,24,7,isL?0x4000:0x0340);drawRound(reelInsX,bY,reelInsW,24,7,isL?0xE8C4:C.green);setSize(2);{const il=isL?"EJECT":"INSERT";text(reelInsX+(reelInsW-textW(il))/2|0,bY+4,il,WHITE,isL?0x4000:0x0340);}
-  reelListX=(VW/2+28)|0;reelListW=44;fillRound(reelListX,bY,reelListW,24,7,C.blue);setSize(1);text(reelListX+(reelListW-textW("LIST"))/2|0,bY+8,"LIST",WHITE,C.blue);}
-function drawUI(){fillScreen(C.bg);drawStatusBar();if(infoShowing){drawModeBar();drawList();if(STRIP_ON)drawActionStrip();drawNowPlaying();drawAZ();drawInfo();}else if(reel){drawModeBar();drawReel();}else{drawModeBar();drawCover();drawList();drawActionStrip();drawNowPlaying();drawAZ();}drawBottom();blit();}
-
-// ---- interaction ----
-function load(i,d){loaded=true;loadedIdx=i;loadedDisk=d;loadedName=games[i].name;}
-function unload(){loaded=false;loadedIdx=-1;loadedDisk=-1;loadedName="";}
-function insHit(x,y){return x>=INS_X&&x<INS_X+INS_W&&y>=INS_Y&&y<INS_Y+INS_H;}
-function doInsert(){const g=games[sel];if(loaded&&loadedIdx===sel)unload();else load(sel,g.disk_count>1?diskSel:0);}
-function hit(mx,my){
-  if(screen==="cracktro"){screen="ui";drawUI();return;}
-  if(reel&&!infoShowing&&my>=STATUS_H+MODE_BAR_H&&my<VH-BOTTOM_H){const bot=VH-BOTTOM_H,bY=bot-30;
-    if(my>=bY&&my<bY+24&&mx>=reelListX&&mx<reelListX+reelListW){reel=false;drawUI();return;}
-    if(my>=bY&&my<bY+24&&mx>=reelInsX&&mx<reelInsX+reelInsW){doInsert();drawUI();return;}
-    const step=Math.min(74,(VW/5)|0),off=Math.round((mx-VW/2)/step),gi=sel+off;
-    if(gi>=0&&gi<games.length){if(off===0)doInsert();else{sel=gi;setActiveLetter(games[sel].letter);diskSel=0;diskPage=0;}drawUI();return;}
-    return;}
-  const g=games[sel];
-  if(infoShowing){
-    const ix=0,iw=(orient==='L')?150:VW,bh=infoBH;
-    if(mx<ix+iw){
-      if(my>=infoModeY&&my<infoModeY+bh){wireless=!wireless;drawUI();return;}
-      if(my>=infoFontY&&my<infoFontY+bh){applyFont((fontMode+1)%3);relayout();drawUI();return;}
-      if(my>=infoRotY&&my<infoRotY+bh){orient=(orient==='P')?'L':'P';relayout();drawUI();return;}
-      if(my>=infoCompY&&my<infoCompY+bh){compact=!compact;relayout();drawUI();return;}
-      if(my>=infoRescanY&&my<infoRescanY+bh){drawUI();return;}
-      if(my>=infoResetY&&my<infoResetY+bh){const pw2=iw-8,hw=(pw2-4)/2|0,dx=ix+4+hw+4;
-        if(mx>=dx){loaded=true;loadedIdx=-1;loadedDisk=-1;loadedName="AMIGA TEST KIT";infoShowing=false;drawUI();return;}
-        bootCracktro();return;}
-      return;
-    }
-  }
-  // A-Z
-  if(mx>=AZ_X&&my>=AZ_TOP&&my<AZ_TOP+AZ_H&&letters.length){const togY=AZ_TOP+AZ_H-AZ_TOG_H;if(my>=togY){azPage=azPage?0:1;drawUI();return;}
-    const barH=togY-AZ_TOP,p0=letters.filter(l=>l<="M"),p1=letters.filter(l=>l>="N"),half=azPage===0?p0:p1;if(!half.length){azPage=azPage?0:1;drawUI();return;}
-    const SLOTS=Math.max(13,p0.length,p1.length),lh=Math.max(7,(barH/SLOTS)|0),r=Math.min(half.length-1,Math.max(0,((my-AZ_TOP)/lh)|0)),L=half[r];let target=0;for(let i=0;i<games.length;i++){if(games[i].letter>=L){target=i;break;}}
-    setActiveLetter(L);sel=target;scrollPx=Math.min(target*LIST_ITEM_H,maxScrollPx());diskSel=0;diskPage=0;inertiaOn=false;drawUI();return;}
-  // INSERT/EJECT (cover or strip)
-  if(insHit(mx,my)&&!infoShowing){doInsert();drawUI();return;}
-  // disk stepper (portrait cover)
-  if(stepOn&&COVER_ON&&orient==='P'&&g.disk_count>1&&!infoShowing&&mx>=stepX&&mx<stepX+stepW&&my>=stepY&&my<stepY+stepH){if(mx<stepX+stepW/2)diskSel=(diskSel-1+g.disk_count)%g.disk_count;else diskSel=(diskSel+1)%g.disk_count;if(loaded&&loadedIdx===sel)load(sel,diskSel);drawUI();return;}
-  // disk selector grid (landscape cover)
-  if(COVER_ON&&orient==='L'&&g.disk_count>1&&!infoShowing){const L=diskLayout(g);
-    if(L.multi){const pby=L.gridY+L.gridH+L.pageGap;if(my>=pby&&my<pby+L.pageBtnH&&mx>=L.gx&&mx<L.gx+L.gridW){diskPage=(diskPage+1)%L.pages;drawUI();return;}}
-    const start=diskPage*DISKS_PER_PAGE,end=Math.min(start+DISKS_PER_PAGE,L.nd);
-    for(let d=start;d<end;d++){const slot=d-start,col=slot%L.COLS,row=slot/L.COLS|0,bx=L.gx+col*(L.dbw+L.dgap),by=L.gridY+row*(L.dbh+L.dgap);if(mx>=bx&&mx<bx+L.dbw&&my>=by&&my<by+L.dbh){diskSel=d;if(loaded&&loadedIdx===sel)load(sel,d);drawUI();return;}}}
-  // compact strip: tap art thumbnail to cycle disk (multi)
-  if(STRIP_ON&&g.disk_count>1&&!infoShowing&&mx<STRIP_H&&my>=STRIP_Y){diskSel=(diskSel+1)%g.disk_count;if(loaded&&loadedIdx===sel)load(sel,diskSel);drawUI();return;}
-  // mode bar
-  const mbx=(COVER_ON&&orient==='L'&&!reel)?COVER_W:0;
-  if(my>=STATUS_H&&my<STATUS_H+MODE_BAR_H&&mx>=mbx&&!infoShowing){if(mx<mbx+38)mode="ADF";else if(mx<mbx+74)mode="DSK";else if(mx<mbx+110)mode="GEN";else if(mx<mbx+156)reel=!reel;drawUI();return;}
-  // file list
-  if(mx>=LIST_X&&mx<AZ_X&&my>=LIST_TOP&&my<LIST_BOTTOM){infoShowing=false;const gi=Math.floor((scrollPx+(my-LIST_TOP))/LIST_ITEM_H);
-    if(gi>=0&&gi<games.length){if(gi===sel){if(loaded&&loadedIdx===sel)unload();else load(sel,g.disk_count>1?diskSel:0);}else{sel=gi;setActiveLetter(games[gi].letter);diskSel=0;diskPage=0;}drawUI();}return;}
-  // bottom bar
-  if(my>=VH-BOTTOM_H){const bw=VW/4|0,b=mx/bw|0;
-    if(b===0&&sel>0){sel--;setActiveLetter(games[sel].letter);diskSel=0;diskPage=0;if(sel*LIST_ITEM_H<scrollPx)scrollPx=sel*LIST_ITEM_H;}
-    else if(b===1&&sel<games.length-1){sel++;setActiveLetter(games[sel].letter);diskSel=0;diskPage=0;if((sel+1)*LIST_ITEM_H>scrollPx+(LIST_BOTTOM-LIST_TOP))scrollPx=(sel+1)*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP);}
-    else if(b===2){applyTheme(TI+1);}else if(b===3){infoShowing=!infoShowing;}
-    drawUI();return;}}
-function evtXY(e){const r=cv.getBoundingClientRect();const t=e.touches&&e.touches[0]?e.touches[0]:(e.changedTouches&&e.changedTouches[0]?e.changedTouches[0]:e);return[(t.clientX-r.left)*VW/r.width|0,(t.clientY-r.top)*VH/r.height|0];}
-const DRAG_THRESH=5;
-function pDown(x,y){inertiaOn=false;inertiaV=0;drag={x0:x,y0:y,px0:scrollPx,lastY:y,lastT:performance.now(),v:0,moved:false,inList:(screen==="ui"&&!infoShowing&&x>=LIST_X&&x<AZ_X&&y>=LIST_TOP&&y<LIST_BOTTOM)};}
-function pMove(x,y){if(!drag)return;if(Math.abs(y-drag.y0)>DRAG_THRESH||Math.abs(x-drag.x0)>DRAG_THRESH)drag.moved=true;
-  if(drag.inList&&drag.moved){scrollPx=drag.px0-(y-drag.y0);if(scrollPx<0)scrollPx=0;const mp=maxScrollPx();if(scrollPx>mp)scrollPx=mp;const now=performance.now(),dt=now-drag.lastT;if(dt>0)drag.v=(drag.lastY-y)/dt*16;drag.lastY=y;drag.lastT=now;syncScroll();drawUI();}}
-function pUp(){if(!drag)return;const d=drag;drag=null;if(d.moved&&d.inList){inertiaV=Math.max(-40,Math.min(40,d.v));if(Math.abs(inertiaV)>1)inertiaOn=true;}else if(!d.moved){hit(d.x0,d.y0);}}
-function syncScroll(){if(games.length){const ti=Math.floor(scrollPx/LIST_ITEM_H);setActiveLetter(games[Math.max(0,Math.min(games.length-1,ti))].letter);}}
-
-// ---- controls + frame loop ----
-document.getElementById('gtkDemoReset').onclick=()=>{bootCracktro();};
-document.getElementById('gtkDemoSkip').onclick=()=>{if(screen==="cracktro"){screen="ui";drawUI();}};
-{const _gr=document.getElementById('gtkDemoRotate');if(_gr)_gr.onclick=()=>{if(screen==="cracktro"){screen="ui";}orient=(orient==='P')?'L':'P';relayout();drawUI();};}
-cv.addEventListener('mousedown',e=>{const[x,y]=evtXY(e);pDown(x,y);});
-window.addEventListener('mousemove',e=>{if(!drag)return;const[x,y]=evtXY(e);pMove(x,y);});
-window.addEventListener('mouseup',()=>pUp());
-cv.addEventListener('touchstart',e=>{e.preventDefault();const[x,y]=evtXY(e);pDown(x,y);},{passive:false});
-cv.addEventListener('touchmove',e=>{e.preventDefault();const[x,y]=evtXY(e);pMove(x,y);},{passive:false});
-window.addEventListener('touchend',()=>pUp());
-let lastMq=0;
-function frame(now){
-  if(screen==="cracktro"){drawCracktro();}
-  else{
-    if(inertiaOn){scrollPx+=inertiaV;inertiaV*=0.92;if(scrollPx<0){scrollPx=0;inertiaOn=false;}const mp=maxScrollPx();if(scrollPx>mp){scrollPx=mp;inertiaOn=false;}if(Math.abs(inertiaV)<0.6)inertiaOn=false;syncScroll();drawUI();}
-    else if(!drag&&!infoShowing&&selOverflows()){
-      if(marqueeSel!==sel){marqueeSel=sel;marqueeOff=0;marqueeDir=1;marqueePause=now;}
-      if(marqueePause){if(now-marqueePause>=1000){marqueePause=0;marqueeDir=(marqueeOff<=0)?1:-1;lastMq=now;}}
-      else if(now-lastMq>=45){lastMq=now;marqueeOff+=marqueeDir*5;const mx=marqueeMax();if(marqueeOff>=mx){marqueeOff=mx;marqueePause=now;}else if(marqueeOff<=0){marqueeOff=0;marqueePause=now;}drawUI();}
-    }
-  }
-  requestAnimationFrame(frame);
-}
-function selOverflows(){if(sel<0||sel>=games.length)return false;const g=games[sel];setSize(nameSz);const r=8+nameSz*3,nx=LIST_X+6+r+r+6,maxNW=LIST_W-(nx-LIST_X)-8-(g.disk_count>1?36:0);return textW(g.name)>maxNW;}
-function marqueeMax(){const g=games[sel];setSize(nameSz);const r=8+nameSz*3,nx=LIST_X+6+r+r+6,maxNW=LIST_W-(nx-LIST_X)-8-(g.disk_count>1?36:0);return Math.max(0,textW(g.name)-maxNW+8);}
-relayout();bootCracktro();requestAnimationFrame(frame);
-
-</script>
-
-
-<div class="scrolltext">
-  <span class="scrolltext-inner">
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-    GOTEK TOUCHSCREEN INTERFACE &nbsp;*&nbsp;
-    CODED BY MEZ AND DIMMY OF OMEGAWARE &nbsp;*&nbsp;
-    THE ULTIMATE RETRO DISK LOADER FOR AMIGA · CPC · ZX SPECTRUM &nbsp;*&nbsp;
-    FAT12 USB RAM DISK · ESP-NOW WIRELESS · TOUCHSCREEN UI &nbsp;*&nbsp;
-    GREETINGS TO THE GREENFORD COMPUTER CLUB &nbsp;*&nbsp;
-    KEEP THE SCENE ALIVE &nbsp;*&nbsp;
-    OMEGAWARE 2026 &nbsp;*&nbsp;
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  </span>
-</div>
-
 <footer>
-  <a href="https://github.com/mesarim/Gotek-Touchscreen-interface">GitHub</a>
-  &nbsp;·&nbsp;
-  <a href="https://discord.gg/7gY4PKUnnf">Discord</a>
-  &nbsp;·&nbsp;
-  <a href="guide.html">Guide</a>
-  &nbsp;·&nbsp;
-  <a href="FLASHING-MAC.md">Flash on Mac</a>
-  &nbsp;·&nbsp;
-  <a href="contributors.html">Contributors</a>
-  &nbsp;·&nbsp;
-  <a href="https://ko-fi.com/mesarim">Donate &#9829;</a>
-  &nbsp;·&nbsp;
-  MIT Licence
-  &nbsp;·&nbsp;
-  Requires Chrome or Edge for Web Serial
-  <div style="margin-top:0.7rem;opacity:0.65;font-size:0.85em;">Built by Mez &amp; Dimmy — OMEGAWARE · with Retronaut &amp; Claude (Anthropic)</div>
+  Same flasher engine under the hood — <span class="eng"><b>esp-web-tools</b> over Web Serial, Chrome / Edge on desktop.</span><br>
+  Need help? Join the <a href="https://discord.gg/" target="_blank" rel="noopener">OMEGAWARE Discord</a> · <a href="help.html">Help &amp; guides</a> · <a href="contributors.html">Contributors</a>
 </footer>
 
 <script>
-  // Scatter stars in header
-  const starsEl = document.getElementById('stars');
-  for (let i = 0; i < 40; i++) {
-    const s = document.createElement('div');
-    s.className = 'star';
-    s.style.left = Math.random() * 100 + '%';
-    s.style.top  = Math.random() * 100 + '%';
-    s.style.setProperty('--d',     (2 + Math.random() * 4) + 's');
-    s.style.setProperty('--delay', (Math.random() * 4) + 's');
-    s.style.setProperty('--bright', 0.3 + Math.random() * 0.7);
-    starsEl.appendChild(s);
-  }
-
-  // Browser check
-  if (!('serial' in navigator)) {
-    document.getElementById('browserWarn').style.display = 'block';
-  }
-
-  // Device versions — update these when you build new firmware
-  const deviceInfo = {
-    'firmware/jc3248/manifest.json':     { name: 'Guition JC3248', version: 'Firmware 5.5.5' },
-    'firmware/jc3248-beta/manifest.json':{ name: 'Guition JC3248 BETA', version: 'Firmware 5.9.1-beta (On-screen Home WiFi setup · fast reel on 1000+ libraries · big-library scan fix · sharded thumb cache)' },
-    'firmware/p4-beta/manifest.json':{ name: 'Guition JC4880 (ESP32-P4) BETA', version: 'Firmware 5.8.6-P4.5 (landscape UI + touch · full 5.8.6 feature set on 480×800 DSI · WiFi-direct wireless)' },
-    'firmware/jc4827-beta/manifest.json':{ name: 'Guition JC4827W543 4.3" BETA', version: 'Firmware 5.8.4-beta (4.3" · Recurse-flatten · self-healing config · pill buttons · matrix saver)' },
-    'firmware/waveshare7/manifest.json': { name: 'Waveshare 7" BETA',  version: 'Firmware v5.0.0-7IN BETA (Recurse-flatten · Desert cracktro · Self-healing config · 3×2 grid · Categories · Favourites)' },
-    'firmware/waveshare7b-beta/manifest.json': { name: 'Waveshare 7B BETA', version: 'Firmware v5.0.0-7B BETA (1024×600 · Recurse-flatten · Desert cracktro · Self-healing config · 3×2 grid · perf-tuned)' },
-    'firmware/waveshare28/manifest.json':{ name: 'Waveshare 2.8"', version: 'Firmware v3.4.7' },
-    'firmware/supermini/manifest.json':  { name: 'Super Mini Dongle', version: 'Firmware v3.2.0' },
-    'firmware/xiao/manifest.json':       { name: 'XIAO Dongle',   version: 'Firmware v3.2.0' },
-    'firmware/cyd/manifest.json':        { name: 'CYD',           version: 'Firmware v3.9.0' },
-    'firmware/supermini-beta/manifest.json': { name: 'Super Mini Dongle — Webby BETA', version: 'Webby-0.7-fleetUI (OMEGA web UI · ESP-NOW · home WiFi · lock)' },
-    'firmware/xiao-beta/manifest.json':      { name: 'XIAO Dongle BETA',      version: 'Firmware v3.5.0-beta (untested)' },
+  // ── real device data: manifests + versions + SD-update bins from docs/firmware/ ──
+  const TOUCH = {
+    main:[
+      {id:'jc3248', nm:'Guition JC3248', sz:'3.5″', ar:480/320, meta:'ESP32-S3 · 480×320',
+        spot:'Guition 3.5-inch capacitive panel', tags:[['RECOMMENDED','t-rec'],['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
+        prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, then release BOOT. <span class="muted">The screen stays dark in flash mode — that\'s normal.</span>',
+        stable:{man:'firmware/jc3248/manifest.json', ver:'Firmware 5.5.5', sd:'firmware/jc3248/GTi-JC35-5.5.5-update.bin'},
+        beta:{man:'firmware/jc3248-beta/manifest.json', ver:'Firmware 5.9.1-beta — on-screen Home-WiFi setup, fast big-library reel, sharded thumb cache', sd:'firmware/jc3248-beta/GTi-JC35-5.9.1-update.bin'}},
+      {id:'jc4827', nm:'Guition JC4827W543', sz:'4.3″', ar:480/272, meta:'ESP32-S3 · 480×272',
+        spot:'4.3-inch QSPI, single USB-C', tags:[['BETA','t-beta'],['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
+        prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release BOOT.',
+        stable:null,
+        beta:{man:'firmware/jc4827-beta/manifest.json', ver:'Firmware 5.8.4-beta — recurse-flatten library, self-healing config, matrix screensaver', sd:'firmware/jc4827-beta/GTi-JC43-5.8.4-update.bin'}},
+      {id:'p4', nm:'Guition JC4880 · P4', sz:'4.3″', ar:800/480, meta:'ESP32-P4 + C6 · 480×800 DSI',
+        spot:'The flagship — TWO USB-C ports', tags:[['BETA','t-beta'],['FLAGSHIP','t-rec'],['WIRELESS','t-wifi']],
+        prep:'Use the USB-C port <b>furthest from the buttons</b>, with a <b>data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release. <span class="muted">First boot self-updates its WiFi co-processor from the SD card.</span>',
+        stable:null,
+        beta:{man:'firmware/p4-beta/manifest.json', ver:'Firmware 5.8.6-P4.5 — landscape UI + touch on the 480×800 DSI panel, WiFi-direct to dongles', sd:null}},
+      {id:'ws7b', nm:'Waveshare 7B', sz:'7″', ar:1024/600, meta:'ESP32-S3 · 7″ 1024×600 RGB',
+        spot:'Waveshare ESP32-S3-Touch-LCD-7B', tags:[['BETA','t-beta'],['STANDALONE','t-stand']],
+        prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release BOOT.',
+        stable:null,
+        beta:{man:'firmware/waveshare7b-beta/manifest.json', ver:'Firmware v5.0.0-7B — 1024×600, recurse-flatten library, 3×2 cover grid, dirty-rect perf engine', sd:'firmware/waveshare7b-beta/GTi-7B-5.0.0-update.bin'}},
+      {id:'ws7', nm:'Waveshare 7″', sz:'7″', ar:800/480, meta:'ESP32-S3 · 7″ 800×480 RGB',
+        spot:'The original Waveshare 7-inch RGB panel', tags:[['BETA','t-beta'],['STANDALONE','t-stand']],
+        prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release BOOT.',
+        stable:null,
+        beta:{man:'firmware/waveshare7/manifest.json', ver:'Firmware v5.0.0-7 — 800×480, ADF/DSK browser, cover art, USB-MSC RAM disk', sd:'firmware/waveshare7/GTi-7in-5.0.0-update.bin'}},
+    ],
+    legacy:[
+      {id:'cyd', nm:'CYD', sz:'2.8″', ar:320/240, meta:'ESP32 · 320×240 ILI9341',
+        spot:'The “cheap yellow display” · ~£10', tags:[['WIRELESS REMOTE','t-wifi']],
+        prep:'Connect via USB. It usually just connects — if not, hold <b>BOOT</b> and tap <b>RESET</b>.',
+        stable:{man:'firmware/cyd/manifest.json', ver:'Firmware v3.9.0 — wireless remote, pairs with a XIAO dongle over ESP-NOW', sd:null}, beta:null},
+      {id:'ws28', nm:'Waveshare 2.8″', sz:'2.8″', ar:320/240, meta:'ESP32-S3 · 320×240 SPI',
+        spot:'Waveshare-branded, 2.8-inch', tags:[['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
+        prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release BOOT.',
+        stable:{man:'firmware/waveshare28/manifest.json', ver:'Firmware v3.4.7 — compact standalone browser with cover art + WiFi web server', sd:null}, beta:null},
+    ]
+  };
+  const DONGLE = {
+    main:[
+      {id:'supermini', nm:'Super Mini', sz:'', dongle:true, meta:'ESP32-S3 Super Mini + PSRAM',
+        spot:'The wider board with two side buttons', tags:[['PREFERRED','t-dongle'],['USB DONGLE','t-wifi']],
+        prep:'Plug the Super Mini into your PC with a <b>USB data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release.',
+        stable:{man:'firmware/supermini/manifest.json', ver:'Firmware v3.2.0 — ESP-NOW + WiFi transport, owner-lock, save write-back', sd:null},
+        beta:{man:'firmware/supermini-beta/manifest.json', ver:'Webby-0.7-fleetUI — built-in multi-dongle web console (WebDAV / FTP)', sd:null}},
+      {id:'xiao', nm:'Seeed XIAO', sz:'', dongle:true, meta:'Seeed XIAO ESP32-S3 · 21×17mm',
+        spot:'Tiny board, “seeed studio” metal shield — plug the antenna in first', tags:[['USB DONGLE','t-wifi']],
+        prep:'Plug the XIAO into your PC with a <b>USB data cable</b> — and its <b>WiFi antenna</b> before powering on. Hold <b>BOOT</b>, tap <b>RESET</b>, release.',
+        stable:{man:'firmware/xiao/manifest.json', ver:'Firmware v3.2.0 — ESP-NOW + WiFi transport tuned for the tiny footprint', sd:null},
+        beta:{man:'firmware/xiao-beta/manifest.json', ver:'Firmware v3.5.0-beta (untested)', sd:null}},
+    ],
+    legacy:[]
   };
 
-  function selectDevice(card) {
-    document.querySelectorAll('.device-card').forEach(c => c.classList.remove('selected'));
-    card.classList.add('selected');
+  // ── SVG device pictures (aspect-correct bezels; real photos drop in later) ──
+  function screenSVG(ar,accent){
+    const BW=200,BH=125,pad=13; let w=BW-2*pad,h=w/ar; if(h>BH-2*pad){h=BH-2*pad;w=h*ar;}
+    const x=(BW-w)/2,y=(BH-h)/2,bz=6, sx=x+bz,sy=y+bz,sw=w-2*bz,sh=h-2*bz;
+    const cols=3,rows=2,gap=3,cp=4;
+    const cw=(sw-2*cp-(cols-1)*gap)/cols, ch=(sh-2*cp-(rows-1)*gap)/rows;
+    let cells='';
+    for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
+      const cx=sx+cp+c*(cw+gap), cy=sy+cp+r*(ch+gap), k=(r*cols+c)%3;
+      const col=k===0?accent:k===1?'#5fe0ff':'#3a3f5e';
+      cells+='<rect x="'+cx.toFixed(1)+'" y="'+cy.toFixed(1)+'" width="'+cw.toFixed(1)+'" height="'+ch.toFixed(1)+'" rx="1.4" fill="'+col+'" opacity=".9"/>';
+    }
+    return '<svg viewBox="0 0 '+BW+' '+BH+'" xmlns="http://www.w3.org/2000/svg">'
+      +'<rect x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+w.toFixed(1)+'" height="'+h.toFixed(1)+'" rx="8" fill="#0c0d15" stroke="#454a6a" stroke-width="1.4"/>'
+      +'<rect x="'+sx.toFixed(1)+'" y="'+sy.toFixed(1)+'" width="'+sw.toFixed(1)+'" height="'+sh.toFixed(1)+'" rx="2.5" fill="#06070d"/>'+cells+'</svg>';
+  }
+  function dongleSVG(accent){
+    return '<svg viewBox="0 0 200 125" xmlns="http://www.w3.org/2000/svg">'
+      +'<rect x="26" y="46" width="30" height="33" rx="2" fill="#c9cde0"/>'
+      +'<rect x="30" y="52" width="22" height="7" rx="1" fill="#0a0b12"/><rect x="30" y="63" width="22" height="7" rx="1" fill="#0a0b12"/>'
+      +'<rect x="54" y="40" width="104" height="45" rx="4" fill="#12331f" stroke="#2f6b4e" stroke-width="1.4"/>'
+      +'<rect x="92" y="52" width="26" height="22" rx="2" fill="#0a1a10" stroke="#3a7a58"/>'
+      +'<text x="105" y="66" font-family="monospace" font-size="7" fill="'+accent+'" text-anchor="middle">S3</text>'
+      +'<path d="M132 50 q10 -8 20 0 M136 55 q7 -5 12 0 M140 60 q3 -2 4 0" fill="none" stroke="'+accent+'" stroke-width="1.4" stroke-linecap="round"/>'
+      +'<circle cx="142" cy="64" r="1.4" fill="'+accent+'"/>'
+      +'<rect x="62" y="88" width="8" height="4" rx="1" fill="#454a6a"/><rect x="80" y="88" width="8" height="4" rx="1" fill="#454a6a"/></svg>';
+  }
+  function devPic(d){ return d.dongle?dongleSVG('#ffc061'):screenSVG(d.ar,'#ff8a3c'); }
+  function tagHtml(tags){return tags.map(t=>'<span class="tag '+t[1]+'">'+t[0]+'</span>').join('');}
 
-    const manifest = card.dataset.manifest;
-    const info = deviceInfo[manifest];
+  let kind='touch', sel=null, mode='fresh', beta=false;
+  const $=id=>document.getElementById(id);
 
-    document.getElementById('installBtn').setAttribute('manifest', manifest);
-    document.getElementById('flashDeviceName').textContent = info.name;
-    document.getElementById('flashVersion').textContent    = info.version;
+  function go(id){
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
+    $(id).classList.add('on'); window.scrollTo({top:0,behavior:'smooth'});
+  }
+  function openFlow(k){
+    kind=k; go('flow'); resetFlow();
+    $('flow-h').textContent = k==='touch'?'Flash a touchscreen':'Flash a wireless dongle';
+    $('flow-sub').textContent = k==='touch'
+      ? 'Three steps, in order — each one unlocks the next.'
+      : 'The dongle plugs into the Gotek and presents the disk. Three steps, same as a panel.';
+    $('lbl1').textContent = k==='touch'?'Device':'Dongle';
+    $('s1h').textContent = k==='touch'?'Choose your device':'Choose your dongle';
+    $('legacy-btn').hidden = (k!=='touch');
+    $('mode-seg').hidden = (k!=='touch');
+    renderDevices();
+  }
+  function curSet(){ return kind==='touch'?TOUCH:DONGLE; }
+  function renderDevices(){
+    $('dev-main').innerHTML = curSet().main.map(devCard).join('');
+    $('dev-legacy').innerHTML = curSet().legacy.map(devCard).join('');
+    $('legacy-wrap').hidden = true;
+    $('legacy-btn').textContent='＋ Legacy boards — 2.8″ & CYD';
+  }
+  function devCard(d){
+    const szBadge = d.sz?'<span class="sz">'+d.sz+'</span>':'';
+    return '<button class="dev '+(sel&&sel.id===d.id?'sel':'')+'" onclick="pickDev(\''+d.id+'\')">'
+      +szBadge+'<span class="pic">'+devPic(d)+'</span>'
+      +'<span class="nm">'+d.nm+'</span><span class="meta">'+d.meta+'</span>'
+      +'<span class="spot">'+d.spot+'</span><span class="tagrow">'+tagHtml(d.tags)+'</span></button>';
+  }
+  function toggleLegacy(){
+    const w=$('legacy-wrap'); w.hidden=!w.hidden;
+    $('legacy-btn').textContent=(w.hidden?'＋':'－')+' Legacy boards — 2.8″ & CYD';
+  }
+  function findDev(id){const s=curSet(); return s.main.concat(s.legacy).find(d=>d.id===id);}
+  function hasBeta(d){ return !!(d.stable && d.beta); }              // toggle only when there are two channels
+  function curBuild(){ if(!sel) return null; return (beta && sel.beta) ? sel.beta : (sel.stable || sel.beta); }
 
-    document.getElementById('noSelText').style.display    = 'none';
-    document.getElementById('flashContent').style.display = 'flex';
-    document.getElementById('flashPanel').classList.remove('no-selection');
+  function pickDev(id){
+    sel=findDev(id); renderDevices();
+    mode='fresh'; beta=false;
+    $('s2').classList.remove('muted'); $('s2').classList.remove('done');
+    applyMode(); setStep(2);
+    $('ready-chk').checked=false; $('btn-confirm').disabled=true; $('confirm-status').innerHTML='';
+    $('s3').classList.add('muted'); $('s3').classList.remove('done');
+    $('s2').scrollIntoView({behavior:'smooth',block:'center'});
+  }
 
-    // Update steps
-    document.getElementById('step1').classList.add('done');
-    document.getElementById('step1').classList.remove('active');
-    document.getElementById('step2').classList.add('active');
+  function setMode(m){
+    if(m==='sd' && !(curBuild()&&curBuild().sd)) return;
+    mode=m; applyMode();
+    $('ready-chk').checked=false; $('btn-confirm').disabled=true; $('confirm-status').innerHTML='';
+    $('s2').classList.remove('done'); $('s3').classList.add('muted'); $('s3').classList.remove('done');
+    setStep(2);
+  }
+  function applyMode(){
+    const b=curBuild();
+    $('mode-fresh').classList.toggle('on',mode==='fresh');
+    $('mode-sd').classList.toggle('on',mode==='sd');
+    $('mode-sd').disabled = !(b && b.sd);
+    if(mode==='sd' && b && b.sd){
+      $('mode-note').hidden=false;
+      $('mode-note').innerHTML='<b>SD access</b> updates the firmware straight from the SD card — no bootloader mode, no serial port. The GTi mounts its own SD over USB, so you just drop the file on and reboot.';
+      $('prep').innerHTML='<b>Firmware 5.4.0 or newer:</b>'
+        +'<ol style="margin:.55rem 0 0;padding-left:1.15rem;line-height:1.75">'
+        +'<li>On the GTi, open the <b>Config / Info</b> tab and turn on <b>SD access</b>.</li>'
+        +'<li>Make sure a <b>USB-C data cable</b> runs from the device to your PC — the SD card mounts as a drive.</li>'
+        +'<li>Copy the <b>.bin</b> below to the <b>root of the SD card</b>, then reboot.</li>'
+        +'</ol>';
+      $('ready-lbl').textContent='I’ve copied the .bin to the SD card root.';
+      $('sd-dl').hidden=false; $('sd-dl').setAttribute('href', b.sd); $('sd-name').textContent=b.sd.split('/').pop();
+      $('trouble').hidden=true;
+    } else {
+      $('mode-note').hidden=true; $('sd-dl').hidden=true; $('trouble').hidden=false;
+      $('prep').innerHTML = sel?sel.prep:'Pick a device first.';
+      $('ready-lbl').textContent='My board is plugged in via a USB data cable and in bootloader mode.';
+    }
+    const sd=(mode==='sd');
+    $('s3').hidden=sd; $('stln2').hidden=sd; $('step3-dot').hidden=sd;
+    $('ready-row').hidden=sd; $('btn-confirm').hidden=sd; $('confirm-status').hidden=sd;
+    $('lbl2').textContent = sd?'Copy to SD':'Get ready';
+  }
+  function onReady(){ $('btn-confirm').disabled=!$('ready-chk').checked; }
+
+  function doConfirm(){
+    $('btn-confirm').disabled=true;
+    $('confirm-status').innerHTML='<span class="ok">✓ Ready. Pick your firmware below — the flasher opens its own window when you hit Install.</span>';
+    $('s2').classList.add('done'); $('s3').classList.remove('muted');
+    renderStep3(); setStep(3);
+    $('s3').scrollIntoView({behavior:'smooth',block:'center'});
+  }
+
+  function renderStep3(){
+    $('betabox').hidden = !hasBeta(sel);
+    $('beta-chk').checked = beta;
+    applyBuild();
+  }
+  function onBeta(){ beta=$('beta-chk').checked; applyBuild(); }
+  function applyBuild(){
+    const b=curBuild(); if(!b) return;
+    $('installBtn').setAttribute('manifest', b.man);
+    const betaTag = (beta && sel.beta) ? ' <span class="v">· beta / testing</span>' : '';
+    $('fwline').innerHTML = '<b>'+b.ver.split(' — ')[0]+'</b>'+betaTag+(b.ver.includes(' — ')?'<br><span class="v">'+b.ver.split(' — ').slice(1).join(' — ')+'</span>':'');
+  }
+
+  function setStep(n){document.querySelectorAll('#steps .st').forEach(st=>{const s=+st.dataset.s;
+    st.classList.toggle('active',s===n); st.classList.toggle('done',s<n);});}
+  function resetFlow(){
+    sel=null; mode='fresh'; beta=false;
+    $('s2').classList.add('muted'); $('s3').classList.add('muted');
+    $('s2').classList.remove('done'); $('s3').classList.remove('done');
+    $('prep').innerHTML='Pick a device first.'; $('mode-note').hidden=true; $('sd-dl').hidden=true;
+    $('mode-fresh').classList.add('on'); $('mode-sd').classList.remove('on');
+    $('ready-chk').checked=false; $('btn-confirm').disabled=true;
+    $('confirm-status').innerHTML='';
+    $('betabox').hidden=true; $('beta-chk').checked=false; $('fwline').innerHTML=''; $('installBtn').setAttribute('manifest','');
+    $('legacy-wrap').hidden=true; $('trouble').hidden=false;
+    $('s3').hidden=false; $('stln2').hidden=false; $('step3-dot').hidden=false;
+    $('ready-row').hidden=false; $('btn-confirm').hidden=false; $('confirm-status').hidden=false;
+    $('lbl2').textContent='Get ready'; $('ready-lbl').textContent='My board is plugged in via a USB data cable and in bootloader mode.';
+    setStep(1); $('steps').querySelectorAll('.st').forEach(s=>s.classList.remove('done'));
   }
 </script>
-
 </body>
 </html>
