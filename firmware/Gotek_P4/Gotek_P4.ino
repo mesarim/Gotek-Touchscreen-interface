@@ -37,6 +37,7 @@
 #include "espnow_server.h"
 #include <WiFi.h>          // P4: brings up the C6 co-processor link (esp-hosted over SDIO)
 #include <esp_hosted.h>     // P4: C6 firmware version query + slave OTA (self-update)
+#include <esp_partition.h> // P4: read the embedded C6 image from the c6fw partition
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
 
@@ -2082,16 +2083,28 @@ static void drawCarouselIcon(int cx,int cy,uint16_t col){
 static void drawBottomBar(){
   const uint16_t bg=TFT_BLACK, ink=TFT_WHITE;
   int y=VH-BOTTOM_H;gfx_fillRect(0,y,VW,BOTTOM_H,bg);gfx_hline(0,y,VW,COL_SEP);
-  // Vince test: single bar split by divider lines (no separate key rectangles).
-  // 4 slots (was 5): PREV, NEXT, REEL, CONFIG. THEME moved into CONFIG; INFO->CONFIG.
   const int nb=4;int bw=VW/nb;
   String blbl[4]={String("< ")+T(L_PREV),String(T(L_NEXT))+" >",String(T(L_REEL)),String(T(L_INFO))};
-  for(int i=1;i<nb;i++)gfx_vline(i*bw,y+8,BOTTOM_H-16,ink);          // slot dividers
+  if(g_btn_pill){                                                   // 5.9.x: coloured pill buttons (matches the reel bar)
+    static const uint16_t cols[4]={COL_BLUE,COL_BLUE,COL_AMBER,COL_GREEN};
+    int pad=5, bh=BOTTOM_H-2*pad, r=bh/2, by=y+pad;
+    int ts=2; for(int i=0;i<nb;i++){gfx_setTextSize(2); if(gfx_textWidth(blbl[i])>bw-2*pad-18){ts=1;break;}}
+    gfx_setTextSize(ts);
+    for(int i=0;i<nb;i++){
+      uint16_t bc=cols[i], ic=inkFor(bc); int bx=i*bw+pad, w=bw-2*pad, tw=gfx_textWidth(blbl[i]), th=8*ts;
+      gfx_fillRoundRect(bx,by,w,bh,r,bc);
+      if(i==2){ int total=16+tw,sx=bx+(w-total)/2; drawCarouselIcon(sx+7,by+bh/2,ic);
+        gfx_setTextColor(ic,bc); gfx_setCursor(sx+16,by+(bh-th)/2); gfx_print(blbl[i]); }
+      else { gfx_setTextColor(ic,bc); gfx_setCursor(bx+(w-tw)/2,by+(bh-th)/2); gfx_print(blbl[i]); }
+    }
+    return;
+  }
+  for(int i=1;i<nb;i++)gfx_vline(i*bw,y+8,BOTTOM_H-16,ink);          // slot dividers (FLAT)
   int ts=2; for(int i=0;i<nb;i++){gfx_setTextSize(2); if(gfx_textWidth(blbl[i])>bw-12){ts=1;break;}}
   gfx_setTextSize(ts);gfx_setTextColor(ink,bg);
   for(int i=0;i<nb;i++){
     int bx=i*bw,tw=gfx_textWidth(blbl[i]),th=8*ts;
-    if(i==2){ int total=16+tw,sx=bx+(bw-total)/2;                    // REEL: glyph + word, centred together
+    if(i==2){ int total=16+tw,sx=bx+(bw-total)/2;
       drawCarouselIcon(sx+7,y+BOTTOM_H/2,ink);
       gfx_setCursor(sx+16,y+(BOTTOM_H-th)/2);gfx_print(blbl[i]);
     } else {
@@ -4004,12 +4017,27 @@ static void doFirmwareUpdate(){
 // ════════════════════════════════════════════════════════════════════════════
 static void c6SelfUpdate(){
   const char* C6BIN = "/c6_network_adapter_2.12.13.bin";
-  if(!SD_MMC.exists(C6BIN)) return;                         // no image -> normal boot
 
   WiFi.mode(WIFI_STA); delay(150);                          // spin up the hosted link to reach the C6
   esp_hosted_coprocessor_fwver_t v; memset(&v,0,sizeof v);
   bool haveVer = (esp_hosted_get_coprocessor_fwversion(&v)==ESP_OK);
-  if(haveVer && (v.major1>2 || (v.major1==2 && v.minor1>=12))){ WiFi.mode(WIFI_OFF); return; } // already current
+  // Skip only if the C6 is already at 2.12.13 or newer; anything lower is offered the update.
+  auto c6AtLeast=[&](int a,int b,int c){ if(v.major1!=a)return v.major1>a; if(v.minor1!=b)return v.minor1>b; return v.patch1>=c; };
+  if(haveVer && c6AtLeast(2,12,13)){ WiFi.mode(WIFI_OFF); return; }
+
+  // Image source: an SD override wins (drop a newer c6_network_adapter_*.bin on the card),
+  // otherwise the embedded 'c6fw' flash partition baked in at build time. Header = "C6FW" + u32 LE length.
+  bool useSD = SD_MMC.exists(C6BIN);
+  const esp_partition_t* c6part=NULL; size_t c6off=0, c6len=0;
+  if(!useSD){
+    c6part=esp_partition_find_first(ESP_PARTITION_TYPE_ANY,ESP_PARTITION_SUBTYPE_ANY,"c6fw");
+    if(c6part){ uint8_t h[8];
+      if(esp_partition_read(c6part,0,h,8)==ESP_OK && h[0]=='C'&&h[1]=='6'&&h[2]=='F'&&h[3]=='W'){
+        c6len=(uint32_t)h[4]|((uint32_t)h[5]<<8)|((uint32_t)h[6]<<16)|((uint32_t)h[7]<<24); c6off=8;
+      }
+    }
+  }
+  if(!useSD && c6len==0){ WiFi.mode(WIFI_OFF); return; }     // no SD image, no embedded image -> normal boot
 
   auto msg=[&](const char*l1,const char*l2,uint16_t col){
     gfx_fillScreen(COL_BG);
@@ -4020,7 +4048,6 @@ static void c6SelfUpdate(){
     gfx_flush();
   };
 
-  // confirm screen
   char sub[72]; snprintf(sub,sizeof sub,"C6 is v%d.%d.%d  ->  update to 2.12.13  (enables WiFi)", v.major1, v.minor1, v.patch1);
   gfx_fillScreen(COL_BG);
   gfx_setTextSize(2); gfx_setTextColor(COL_AMBER,COL_BG);
@@ -4030,18 +4057,23 @@ static void c6SelfUpdate(){
   { const char*t="TAP the screen to update   -   wait 25s to skip"; gfx_setTextColor(COL_ACCENT,COL_BG); gfx_setCursor((VW-gfx_textWidth(t))/2,VH/2+2); gfx_print(t); }
   gfx_flush();
 
-  { uint32_t d0=millis(); while(Touch_ReadFrame()&&millis()-d0<600) delay(10); }  // drain any held touch
+  { uint32_t d0=millis(); while(Touch_ReadFrame()&&millis()-d0<600) delay(10); }
   bool go=false; uint32_t t0=millis();
   while(millis()-t0<25000){ uint16_t tx,ty; if(Touch_ReadFrame()&&getTouchXY(&tx,&ty)){ go=true; break; } delay(20); }
   if(!go){ WiFi.mode(WIFI_OFF); return; }
 
-  File fw=SD_MMC.open(C6BIN,"r");
-  if(!fw){ msg("SD read failed","",TFT_RED); delay(2500); WiFi.mode(WIFI_OFF); return; }
-  size_t total=fw.size(), done=0;
-  if(esp_hosted_slave_ota_begin()!=ESP_OK){ fw.close(); msg("C6 OTA begin failed","power-cycle & retry",TFT_RED); delay(3000); WiFi.mode(WIFI_OFF); return; }
+  File fw; size_t total, done=0;
+  if(useSD){ fw=SD_MMC.open(C6BIN,"r"); if(!fw){ msg("SD read failed","",TFT_RED); delay(2500); WiFi.mode(WIFI_OFF); return; } total=fw.size(); }
+  else total=c6len;
+
+  if(esp_hosted_slave_ota_begin()!=ESP_OK){ if(useSD)fw.close(); msg("C6 OTA begin failed","power-cycle & retry",TFT_RED); delay(3000); WiFi.mode(WIFI_OFF); return; }
   static uint8_t buf[1400]; bool ok=true; uint32_t last=0;
   while(done<total){
-    int n=fw.read(buf,sizeof buf); if(n<=0) break;
+    size_t want=total-done; if(want>sizeof buf) want=sizeof buf;
+    int n;
+    if(useSD) n=fw.read(buf,want);
+    else n=(esp_partition_read(c6part,c6off+done,buf,want)==ESP_OK)?(int)want:-1;
+    if(n<=0) break;
     if(esp_hosted_slave_ota_write(buf,(size_t)n)!=ESP_OK){ ok=false; break; }
     done+=n;
     if(millis()-last>120){ last=millis();
@@ -4056,13 +4088,13 @@ static void c6SelfUpdate(){
     }
     yield();
   }
-  fw.close();
+  if(useSD) fw.close();
   esp_hosted_slave_ota_end();
   if(!ok){ msg("C6 OTA write failed","power-cycle & retry",TFT_RED); delay(3000); ESP.restart(); }
   msg("C6 updated - activating","rebooting...",COL_ACCENT);
   esp_hosted_slave_ota_activate();
   delay(3000);
-  ESP.restart();   // reboot the P4 so the host re-links to the freshly-updated C6
+  ESP.restart();
 }
 
 void setup(){

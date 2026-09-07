@@ -2019,16 +2019,28 @@ static void drawCarouselIcon(int cx,int cy,uint16_t col){
 static void drawBottomBar(){
   const uint16_t bg=TFT_BLACK, ink=TFT_WHITE;
   int y=VH-BOTTOM_H;gfx_fillRect(0,y,VW,BOTTOM_H,bg);gfx_hline(0,y,VW,COL_SEP);
-  // Vince test: single bar split by divider lines (no separate key rectangles).
-  // 4 slots (was 5): PREV, NEXT, REEL, CONFIG. THEME moved into CONFIG; INFO->CONFIG.
   const int nb=4;int bw=VW/nb;
   String blbl[4]={String("< ")+T(L_PREV),String(T(L_NEXT))+" >",String(T(L_REEL)),String(T(L_INFO))};
-  for(int i=1;i<nb;i++)gfx_vline(i*bw,y+8,BOTTOM_H-16,ink);          // slot dividers
+  if(g_btn_pill){                                                   // 5.9.x: coloured pill buttons (matches the reel bar)
+    static const uint16_t cols[4]={COL_BLUE,COL_BLUE,COL_AMBER,COL_GREEN};
+    int pad=5, bh=BOTTOM_H-2*pad, r=bh/2, by=y+pad;
+    int ts=2; for(int i=0;i<nb;i++){gfx_setTextSize(2); if(gfx_textWidth(blbl[i])>bw-2*pad-18){ts=1;break;}}
+    gfx_setTextSize(ts);
+    for(int i=0;i<nb;i++){
+      uint16_t bc=cols[i], ic=inkFor(bc); int bx=i*bw+pad, w=bw-2*pad, tw=gfx_textWidth(blbl[i]), th=8*ts;
+      gfx_fillRoundRect(bx,by,w,bh,r,bc);
+      if(i==2){ int total=16+tw,sx=bx+(w-total)/2; drawCarouselIcon(sx+7,by+bh/2,ic);
+        gfx_setTextColor(ic,bc); gfx_setCursor(sx+16,by+(bh-th)/2); gfx_print(blbl[i]); }
+      else { gfx_setTextColor(ic,bc); gfx_setCursor(bx+(w-tw)/2,by+(bh-th)/2); gfx_print(blbl[i]); }
+    }
+    return;
+  }
+  for(int i=1;i<nb;i++)gfx_vline(i*bw,y+8,BOTTOM_H-16,ink);          // slot dividers (FLAT)
   int ts=2; for(int i=0;i<nb;i++){gfx_setTextSize(2); if(gfx_textWidth(blbl[i])>bw-12){ts=1;break;}}
   gfx_setTextSize(ts);gfx_setTextColor(ink,bg);
   for(int i=0;i<nb;i++){
     int bx=i*bw,tw=gfx_textWidth(blbl[i]),th=8*ts;
-    if(i==2){ int total=16+tw,sx=bx+(bw-total)/2;                    // REEL: glyph + word, centred together
+    if(i==2){ int total=16+tw,sx=bx+(bw-total)/2;
       drawCarouselIcon(sx+7,y+BOTTOM_H/2,ink);
       gfx_setCursor(sx+16,y+(BOTTOM_H-th)/2);gfx_print(blbl[i]);
     } else {
