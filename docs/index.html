@@ -106,6 +106,9 @@
   .t-wifi{color:var(--blue);border-color:#345b8f}
   .t-beta{color:var(--red);border-color:#7a3838}
   .t-dongle{color:var(--copper2);border-color:#7a5a2a}
+  .t-diag{color:#ffcc66;border-color:#5a4a1a}
+  .diag-note{font-size:.72rem;color:var(--dim);line-height:1.6;margin:.2rem 0 .7rem;padding:.55rem .7rem;border:1px solid #3a2f12;border-left:3px solid #ffcc66;border-radius:5px;background:#1a160c}
+  .diag-note b{color:#ffcc66}
 
   .prep{font-size:.79rem;color:var(--text);background:#12101c;border:1px solid var(--border);border-radius:4px;padding:.8rem .9rem;margin-bottom:.9rem;min-height:2rem}
   .prep b{color:var(--copper2)}
@@ -221,6 +224,11 @@
       <div class="devgrid" id="dev-main"></div>
       <button class="legacy-toggle" id="legacy-btn" onclick="toggleLegacy()">＋ Legacy boards — 2.8″ &amp; CYD</button>
       <div class="legacy-wrap" id="legacy-wrap" hidden><div class="devgrid" id="dev-legacy"></div></div>
+      <button class="legacy-toggle" id="diag-btn" onclick="toggleDiag()" hidden>🔧 Diagnostics — panel test</button>
+      <div class="legacy-wrap" id="diag-wrap" hidden>
+        <div class="diag-note">🔧 <b>Diagnostic — not the firmware.</b> This flashes a touch-panel tester onto a JC3248. Use it only to check the touch digitiser (AXS15231B), then re-flash the real firmware afterwards.</div>
+        <div class="devgrid" id="dev-diag"></div>
+      </div>
     </div>
 
     <!-- step 2: get ready -->
@@ -387,7 +395,7 @@
 
 <footer>
   Same flasher engine under the hood — <span class="eng"><b>esp-web-tools</b> over Web Serial, Chrome / Edge on desktop.</span><br>
-  Need help? Join the <a href="https://discord.gg/" target="_blank" rel="noopener">OMEGAWARE Discord</a> · <a href="help.html">Help &amp; guides</a> · <a href="c6-update.html">C6 update path</a> · <a href="contributors.html">Contributors</a>
+  Need help? Join the <a href="https://discord.gg/" target="_blank" rel="noopener">OMEGAWARE Discord</a> · <a href="help.html">Help &amp; guides</a> · <a href="features.html">Feature list</a> (<a href="GTi-Features.pdf">PDF</a>) · <a href="c6-update.html">C6 update path</a> · <a href="contributors.html">Contributors</a>
 </footer>
 
 <script>
@@ -419,6 +427,12 @@
         prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release BOOT.',
         stable:null,
         beta:{man:'firmware/waveshare7/manifest.json', ver:'Firmware v5.0.0-7 — 800×480, ADF/DSK browser, cover art, USB-MSC RAM disk', sd:'firmware/waveshare7/GTi-7in-5.0.0-update.bin'}},
+    ],
+    diag:[
+      {id:'jc3248-touchtest', nm:'JC3248 — Touch Test', sz:'3.5″', ar:480/320, meta:'ESP32-S3 · 480×320 · AXS15231B touch @ 0x3B',
+        spot:'Diagnostic — verifies the touch panel, not the firmware', tags:[['DIAGNOSTIC','t-diag'],['TOUCH TEST','t-stand']],
+        prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, then release BOOT. <span class="muted">Flashes a touch-panel tester — re-flash the real firmware when you\'re done.</span>',
+        stable:{man:'firmware/jc3248-touchtest/manifest.json', ver:'Touch-panel diagnostic — reports touch coordinates (not GTi firmware)', sd:null}, beta:null},
     ],
     legacy:[
       {id:'cyd', nm:'CYD', sz:'2.8″', ar:320/240, meta:'ESP32 · 320×240 ILI9341',
@@ -500,6 +514,11 @@
   function renderDevices(){
     $('dev-main').innerHTML = curSet().main.map(devCard).join('');
     $('dev-legacy').innerHTML = curSet().legacy.map(devCard).join('');
+    const _diag = curSet().diag||[];
+    $('dev-diag').innerHTML = _diag.map(devCard).join('');
+    $('diag-btn').hidden = !(kind==='touch' && _diag.length);
+    $('diag-wrap').hidden = true;
+    $('diag-btn').textContent='🔧 Diagnostics — panel test';
     $('legacy-wrap').hidden = true;
     $('legacy-btn').textContent='＋ Legacy boards — 2.8″ & CYD';
   }
@@ -514,7 +533,11 @@
     const w=$('legacy-wrap'); w.hidden=!w.hidden;
     $('legacy-btn').textContent=(w.hidden?'＋':'－')+' Legacy boards — 2.8″ & CYD';
   }
-  function findDev(id){const s=curSet(); return s.main.concat(s.legacy).find(d=>d.id===id);}
+  function toggleDiag(){
+    const w=$('diag-wrap'); w.hidden=!w.hidden;
+    $('diag-btn').textContent=(w.hidden?'🔧':'－')+' Diagnostics — panel test';
+  }
+  function findDev(id){const s=curSet(); return s.main.concat(s.legacy, s.diag||[]).find(d=>d.id===id);}
   function hasBeta(d){ return !!(d.stable && d.beta); }              // toggle only when there are two channels
   function curBuild(){ if(!sel) return null; return (beta && sel.beta) ? sel.beta : (sel.stable || sel.beta); }
 

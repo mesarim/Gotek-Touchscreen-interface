@@ -31,7 +31,7 @@
 #define ESPNOW_CHANNEL 6
 #define LED_RED        1   // GP1 — status/attention
 #define LED_BLUE       2   // GP2 — activity
-#define BOOT_PIN       0   // GP0 = BOOT button — owner-lock gesture (hold 5-15s pair, 15s+ wipe)
+#define PAIR_BTN       0   // GP0 = BOOT button — owner-lock gesture (hold 5-15s pair, 15s+ wipe)
 
 // AP settings — XIAO hosts this for file transfer
 #define AP_SSID     "GotekOMEGA"
@@ -601,7 +601,7 @@ void setup() {
   delay(200);
   pinMode(LED_RED, OUTPUT);
   pinMode(LED_BLUE, OUTPUT);
-  pinMode(BOOT_PIN, INPUT_PULLUP);   // owner-lock gesture button
+  pinMode(PAIR_BTN, INPUT_PULLUP);   // owner-lock gesture button
   digitalWrite(LED_RED, LOW);
   digitalWrite(LED_BLUE, LOW);
 
@@ -714,7 +714,7 @@ static bool serviceBootButton(){
   static bool     held_prev = false;
   static uint32_t held_t0   = 0;
   static uint8_t  upCount   = 8;     // consecutive "released" reads (debounce); starts released
-  bool raw   = (digitalRead(BOOT_PIN) == LOW);
+  bool raw   = (digitalRead(PAIR_BTN) == LOW);
   // Debounce: a real release needs ~40ms of continuous HIGH. A brief contact blip
   // mid-hold no longer commits early — that blip past 5s was committing PAIR and
   // resetting the timer, which made a clean 15s WIPE hold nearly impossible.

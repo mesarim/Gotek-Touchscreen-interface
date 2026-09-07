@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GTi Feature Reference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@700;900&display=swap">
+<style>
+  :root{
+    --bg:#12131b; --panel:#191b28; --panel2:#1f2233; --border:#2c2f47; --copper:#ffc061; --copper2:#ff8a3c;
+    --cyan:#5fe0ff; --green:#46d68f; --red:#ff6060; --dim:#9096ba; --text:#e2e4f3;
+    --mono:'Share Tech Mono',ui-monospace,monospace; --disp:'Orbitron',var(--mono);
+  }
+  *{box-sizing:border-box}
+  html{color-scheme:dark}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);line-height:1.55}
+  .top{height:5px;background:linear-gradient(90deg,#f00,#ff6b00,#fa0,#ff0,#0f8,#08f,#80f,#f08,#f00);background-size:200% 100%;animation:sc 3s linear infinite}
+  @keyframes sc{to{background-position:200% 0}}
+  @media(prefers-reduced-motion:reduce){.top{animation:none}}
+  header{text-align:center;padding:1.8rem 1rem .3rem}
+  .eyebrow{font-size:.64rem;letter-spacing:.38em;color:var(--copper2);text-transform:uppercase;margin-bottom:.45rem}
+  h1{font-family:var(--disp);font-weight:900;font-size:clamp(1.3rem,3.6vw,2rem);color:#fff;letter-spacing:.03em;margin:0}
+  .sub{color:var(--dim);font-size:.78rem;letter-spacing:.06em;margin-top:.5rem}
+  main{max-width:900px;margin:0 auto;padding:1rem 1rem 3rem}
+  .backrow{display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem;gap:1rem;flex-wrap:wrap}
+  .back{color:var(--dim);font-size:.74rem;letter-spacing:.1em;text-transform:uppercase;text-decoration:none}
+  .back:hover{color:var(--copper)}
+  .count{font-size:.72rem;color:var(--dim)}
+
+  .searchwrap{position:sticky;top:0;z-index:5;background:linear-gradient(180deg,var(--bg) 70%,transparent);padding:.5rem 0 .8rem}
+  #q{width:100%;background:#0c0d15;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:.75rem 1rem;font-family:var(--mono);font-size:.9rem;outline:none}
+  #q:focus{border-color:var(--copper2)}
+  #q::placeholder{color:var(--dim)}
+  .chips{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.55rem}
+  .chip{font-size:.66rem;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);border:1px solid var(--border);border-radius:999px;padding:.22rem .6rem;background:none;cursor:pointer;font-family:var(--mono)}
+  .chip:hover{color:var(--text);border-color:var(--dim)}
+  .chip.on{color:#0d1f16;background:var(--copper);border-color:var(--copper)}
+
+  .grp{margin:1.4rem 0 0}
+  .grp h2{font-family:var(--disp);font-weight:700;font-size:.92rem;color:#fff;letter-spacing:.02em;margin:0 0 .6rem;padding-bottom:.4rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.5rem}
+  .grp h2 .g{width:8px;height:8px;border-radius:2px;background:var(--copper)}
+  .feat{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:.75rem .9rem;margin-bottom:.5rem}
+  .feat .n{font-family:var(--disp);font-weight:700;font-size:.82rem;color:var(--copper);letter-spacing:.01em}
+  .feat .d{font-size:.79rem;color:var(--dim);margin-top:.28rem;line-height:1.5}
+  .feat .d b{color:var(--text)}
+  .feat .cfg{margin-top:.45rem;font-size:.72rem;color:var(--cyan)}
+  .feat .cfg code{background:#0c0d15;border:1px solid var(--border);border-radius:3px;padding:.03rem .3rem;color:var(--green)}
+  .feat .cfg .v{color:var(--dim)}
+  .beta{display:inline-block;font-size:.56rem;letter-spacing:.08em;text-transform:uppercase;color:var(--red);border:1px solid #7a3838;border-radius:3px;padding:.05rem .35rem;margin-left:.4rem;vertical-align:middle}
+
+  table{width:100%;border-collapse:collapse;font-size:.76rem;margin-top:.3rem}
+  th,td{text-align:left;padding:.42rem .55rem;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--copper2);font-size:.64rem;letter-spacing:.14em;text-transform:uppercase;font-weight:400}
+  td.k{font-family:var(--disp);font-weight:700;color:var(--copper);white-space:nowrap}
+  td.vals{color:var(--text);white-space:nowrap} td.def{color:var(--green);white-space:nowrap} td.dsc{color:var(--dim)}
+  tr.crow[hidden]{display:none}
+
+  .empty{display:none;text-align:center;color:var(--dim);font-size:.82rem;padding:2rem}
+  .empty.on{display:block}
+  footer{max-width:900px;margin:0 auto;padding:1.4rem 1rem 3rem;border-top:1px solid var(--border);font-size:.72rem;color:var(--dim);text-align:center;line-height:1.8}
+  footer a{color:#6aa6ff;text-decoration:none}footer a:hover{text-decoration:underline}
+
+  /* print / PDF */
+  @media print{
+    .top,.searchwrap,.backrow,.chips{display:none!important}
+    body{background:#fff;color:#111}
+    .feat,.grp h2,table,th,td{border-color:#ccc}
+    .feat{background:#fff;break-inside:avoid}
+    .feat .n{color:#b25a00}.feat .d,.feat .d b,td.dsc{color:#222}
+    .feat .cfg{color:#0a6}.feat .cfg code{background:#f2f2f2;border-color:#ddd;color:#0a6}
+    .grp h2{color:#000;break-after:avoid} td.k{color:#b25a00} td.def{color:#0a6}
+    .grp{break-inside:auto} main{max-width:none}
+    header .sub{color:#444} h1{color:#000}
+  }
+</style>
+</head>
+<body>
+<div class="top"></div>
+<header>
+  <div class="eyebrow">OMEGAWARE · Gotek Touchscreen Interface</div>
+  <h1>Feature Reference</h1>
+  <div class="sub" id="hsub">Every feature and CONFIG.TXT setting, in one searchable list.</div>
+</header>
+<main>
+  <div class="backrow">
+    <a class="back" href="index.html">‹ Back to the flasher</a>
+    <span class="count" id="count"></span>
+  </div>
+  <div class="searchwrap">
+    <input id="q" type="search" placeholder="Search features & settings — e.g. cover, wireless, save, screensaver, BTNSTYLE…" autocomplete="off">
+    <div class="chips" id="chips"></div>
+  </div>
+  <div id="list"></div>
+  <div class="empty" id="empty">No feature matches that. Try a shorter word.</div>
+
+  <div class="grp" id="cfggrp">
+    <h2><span class="g"></span>CONFIG.TXT — full key reference</h2>
+    <div style="overflow-x:auto"><table id="cfgtbl">
+      <thead><tr><th>Key</th><th>Values</th><th>Default</th><th>What it does</th></tr></thead>
+      <tbody id="cfgbody"></tbody>
+    </table></div>
+  </div>
+</main>
+<footer id="foot">
+  <a href="index.html">← GTi Flasher</a> · <a href="c6-update.html">C6 update path</a> · <a href="help.html">Help &amp; guides</a><br>
+  OMEGAWARE · Gotek Touchscreen Interface — feature reference
+</footer>
+
+<script>
+// ── every feature, grouped. cfg = the CONFIG.TXT key(s) that control it (if any). ──
+const F=[
+ ['Views & browsing',[
+   ['List view','The A-Z game list with a jump rail down the side — the classic browse. Tap a game to select, then INSERT to load.','',''],
+   ['Reel view','A spinning cover-flow carousel: the centre cover full-size, neighbours scaled and dimmed. Tap centre to INSERT/EJECT.','CAROUSEL','OFF / ON / LAST — default boot view (list, reel, or last used)'],
+   ['A-Z jump rail','A letter rail beside the list; tap a letter to jump. Only letters you actually own are shown.','',''],
+   ['Type-to-search','The SEARCH magnifier opens an on-screen keyboard and live-filters the whole library as you type.','',''],
+   ['Favourites','Star a game to favourite it. The reel’s source button then cycles ALL → FAV → MOST (most-played).','',''],
+   ['ROLL (dice)','The dice button spins to a random game within the current source. Every tap re-rolls; there’s a 1-in-23 “impossible roll” easter egg.','',''],
+   ['Multi-disk stepper','Disks named Name-1.adf, Name-2.adf… collapse into one entry with a disk stepper. When the game asks for the next disk, tap to step and the GTi loads it on command — no leaving the game to dig through the list.','',''],
+   ['Load / swap behaviour','How a tap loads a disk. All off = safest (select, then press INSERT).','TAPLOAD / HOTSWAP / FORCESWAP','TAPLOAD: tap the highlighted row to load · HOTSWAP: tap another disk to swap instantly · FORCESWAP: swap without the USB eject/re-attach'],
+   ['Compact list','Maximise the game list — the cover art collapses to a thin strip so more titles fit.','COMPACT','OFF / ON'],
+ ]],
+ ['Library & disk formats',[
+   ['ADF mode','Amiga disk images from /ADF. Self-describing geometry — no config needed.','',''],
+   ['DSK mode','Atari ST / PC .dsk / .img and similar from /DSK.','',''],
+   ['GEN mode','The /GENERIC folder mounts ANY file, real name preserved, so FlashFloppy detects the format itself. Add an ff.cfg only for raw/ambiguous images (e.g. an Akai sampler).','',''],
+   ['Categories','Browse the library by folder buckets (Games / Apps / OS…). A top-level folder that holds no disk images — only subfolders — is treated as a category.','CATEGORIES','OFF / ON'],
+   ['Nested categories','Allow sub-categories (folders within category folders), lazy-scanned.','NESTING','OFF / ON'],
+   ['Recurse-flatten','Any operator foldering (A-Z, categories, release subfolders) is flattened into one clean list on screen.','',''],
+   ['TOSEC disk grouping','Recognises “(Disk 1 of 2)” style names as well as -N, so TOSEC sets group into one game.','',''],
+   ['SD card speed','SD clock. 20 MHz works with every card; 40 MHz is ~1.7× faster reads if the card can hold it (auto-falls back).','SDSPEED','20 / 40'],
+ ]],
+ ['Cover art & metadata',[
+   ['Cover art','Name a cover to match the game (Turrican.jpg beside Turrican.adf). JPG decodes fast and downscales on the fly; PNG works under ~1400 px.','',''],
+   ['COVERMIN','Hide low-resolution covers whose short side is under N pixels, keeping the reel and panel clean.','COVERMIN','0 = show all · default 140'],
+   ['Reel-filter','The reel shows only games whose cover passes COVERMIN; the A-Z list still shows every game.','REELFILTER','OFF / ON'],
+   ['.nfo info','A Name.nfo with Title: and Blurb: lines fills the info panel for that game.','',''],
+   ['.rtfm manual','A Name.rtfm plain-text file becomes a full-screen in-device manual, opened by the book button on the cover. Write any line on its own as <b>[Heading]</b> and it becomes an accent section heading — you name them (e.g. [CONTROLS], [STORY], [LOADING], [CHEATS], [CREDITS]) — and a <b>SECTIONS</b> button lists them for one-tap jumping. The SIZE button cycles text SMALL/NORMAL/LARGE live, drag scrolls with flick inertia, and it reopens where you left off. Older firmware just shows the [markers] as plain text, so files stay compatible.','',''],
+   ['Thumbnail cache','First boot builds a one-off cover-thumbnail cache (sharded, with micro-thumbs) so every later boot is instant.','',''],
+ ]],
+ ['Display & personalisation',[
+   ['Themes','Six built-in palettes; readable ink is auto-picked so a theme can’t be unreadable. Cycle via the THEME button.','THEME','0 NAVY · 1 EMBER · 2 MATRIX · 3 PAPER · 4 SYNTH · 5 GOLD'],
+   ['Font size','Text scale, including a large low-vision option.','FONT','SMALL / NORMAL / LARGE'],
+   ['Language','On-screen language.','LANG','EN / FR / IT / ES / DE'],
+   ['Screen rotation','Landscape or portrait; easiest to set with the ROTATE button on the INFO screen (each tap = +90°).','ROTATE','0 / 90 / 180 / 270'],
+   ['Button style','The reel bar AND the main bottom bar draw as rounded coloured pills, or a flat bar.','BTNSTYLE','PILL / FLAT'],
+ ]],
+ ['Boot cracktros',[
+   ['Cracktro styles','An Amiga-style demo plays on boot. Pick one, let it randomise each boot, or set <b>OFF</b> to skip it entirely. (Even when on, LOOP=0 auto-dismisses after ~6&nbsp;s and a tap skips it instantly.)','CRACKTRO','OFF disables · 0 random · 1 COPPER · 2 STARFIELD · 3 RAINBOW RASTER · 4 PLASMA · 5 BOING BALL · 6 SYNTHWAVE'],
+   ['Loop or dismiss','Keep the cracktro looping until you tap, or auto-dismiss after 6 s.','LOOP','0 auto-dismiss · 1 loop'],
+   ['Hidden cracktros','Undocumented themes set by name, plus contributor tributes.','CRACKTRO','DENISE · WRANGLER · RETRONAUT (spinning colour logo)'],
+ ]],
+ ['Screensavers',[
+   ['Screensaver','An idle screensaver kicks in after a few minutes (sooner once a game is loaded). Any touch wakes it; USB floppy keeps running underneath.','SCREENSAVER','ON / OFF'],
+   ['Screensaver mode','Full-screen photo slideshow, a bouncing logo, or falling-code “matrix” rain.','SSMODE','SLIDES / BOUNCE / MATRIX'],
+   ['Slide transitions','How one slide changes to the next.','SSFX','SHUFFLE / FADE / DISSOLVE / SLIDE / CUT'],
+   ['Slide time','Seconds each slide is shown.','SSTIME','2–120 · default 6'],
+   ['Favourites in slideshow','Also slideshow the cover art of favourited games, not just images you drop in /screensaver/.','SSFAV','ON / OFF'],
+   ['Bounce sprites','With BOUNCE (or an empty /screensaver folder) the GTi bounces contributor tributes DVD-logo style — the Retronaut helmet, Denise⇄Vincent, the Wrangler mark, the Claude starburst.','',''],
+ ]],
+ ['Saves & user disks',[
+   ['Save-game write-back','Persist what the Amiga writes to disk. COPY keeps a GameName.sav.adf beside the master (recommended); OVERWRITE patches the master; OFF is classic (writes live until eject).','SAVES','OFF / COPY / OVERWRITE'],
+   ['User disks','Create blank, pre-formatted OFS save disks in /USER-DISKS and rename them on-screen — a clean disk for game saves.','',''],
+ ]],
+ ['Maintenance (INFO screen)',[
+   ['SD access','Mount the SD card as a USB drive over the data cable, so you add games and covers from a PC without opening the case.','',''],
+   ['Firmware update','Flash a firmware .bin left at the SD root — the no-USB, no-driver update path.','',''],
+   ['Rescan SD','Rebuild the library and caches after you’ve added or changed files.','',''],
+   ['Soft reset','Reboot the device from the menu.','',''],
+   ['Diagnostics','Load the bundled Amiga Test Kit ADF straight from the menu (LOAD DIAG / EJECT DIAG).','',''],
+ ]],
+ ['Wireless & fleet',[
+   ['Standalone vs wireless','STANDALONE presents the disk over USB to the Gotek directly. In WIRELESS the same <b>INSERT</b> button sends the disk to your paired dongle over the air instead — there’s no separate “send” step, the mode just changes where INSERT delivers it.','MODE','STANDALONE / WIRELESS'],
+   ['Dongle pairing','Pair a wireless dongle from the INFO screen, give it a friendly name; the MAC is remembered.','XIAO_MAC','auto-filled on pair'],
+   ['Hivemind fan-out','When several dongles are paired, INSERT delivers to every one at once, or just the selected dongle.','HIVEMIND / CAP','HIVEMIND ON=all · CAP=max dongles listed (32, up to 64)'],
+   ['Transport / home WiFi','Reach the dongle over its own AP + ESP-NOW, or route via your home router to a Webby dongle’s gotek.local.','LINK / HOME_SSID / HOME_PASS','ESPNOW / HOMEWIFI'],
+   ['Dongle web page','A flashed dongle serves its own page — join gotekomega.local (home WiFi, preferred) or the GotekOMEGA network at 192.168.4.1, and drop an .adf onto it.','',''],
+   ['Wireless save-writeback','Pull a dongle’s save back over WiFi, CRC-verified, and fold it into the game’s save exactly as a local save does — in COPY mode it writes a <b>GameName.sav.adf</b> patched copy beside the master and leaves the master untouched; only OVERWRITE patches the master itself.','SAVES','COPY = patched copy · OVERWRITE = patches master'],
+ ]],
+ ['ESP32-P4 flagship',[
+   ['C6 self-update','The P4’s WiFi runs on a companion ESP32-C6; the GTi patches the C6 to 2.12.13 itself — from an embedded flash partition (or an SD file), no ESP-IDF needed. See the C6 update-path page.','',''],
+   ['Wireless on the P4','The P4 has no radio of its own — it hands the disk to its companion ESP32-C6 over the internal link and the C6 does all the WiFi. So wireless dongle loading works just as it does on the S3 boards, with nothing extra to set up.','',''],
+ ]],
+ ['Web console & WebDAV (beta, shared web layer)',[
+   ['WebDAV client','Load disks straight from a WebDAV server (e.g. Nextcloud) over HTTPS — browse and insert without the SD card.','DAV_* / DAV=ON','host, port, https, user, pass, path — beta',1],
+   ['Panel web console','The panel serves its own web page: upload disks from a browser, browse WebDAV, flash firmware over the web (OTA), and a Config page that mirrors these settings. Activated with home WiFi.','WEBUI / HOME_SSID','beta — from the shared web layer',1],
+ ]],
+];
+
+// ── full CONFIG.TXT key table (values / default / description) ──
+const CFG=[
+ ['THEME','0–5','0','Colour palette: NAVY / EMBER / MATRIX / PAPER / SYNTH / GOLD.'],
+ ['MODE','STANDALONE / WIRELESS','STANDALONE','Transfer mode: USB to the Gotek, or over the air to a dongle.'],
+ ['CAROUSEL','OFF / ON / LAST','OFF','Default boot view: game list, cover reel, or restore last view.'],
+ ['LOOP','0 / 1','0','Boot cracktro: loop until tapped (1) or auto-dismiss after 6 s (0).'],
+ ['CRACKTRO','OFF / 0–6 (+ hidden)','0','Boot demo style; 0 = random, OFF = no boot demo. Hidden: DENISE, WRANGLER, RETRONAUT.'],
+ ['FONT','SMALL / NORMAL / LARGE','NORMAL','Text scale (LARGE for low vision).'],
+ ['LANG','EN / FR / IT / ES / DE','EN','On-screen language.'],
+ ['ROTATE','0 / 90 / 180 / 270','0','Screen rotation; 0/180 landscape, 90/270 portrait.'],
+ ['COMPACT','OFF / ON','OFF','ON maximises the list; the cover collapses to a strip.'],
+ ['BTNSTYLE','PILL / FLAT','PILL','Button style for the reel and main bottom bar.'],
+ ['COVERMIN','0–N px','140','Hide covers whose short side is under N px (0 = show all).'],
+ ['REELFILTER','OFF / ON','OFF','ON = reel shows only good covers; the list is untouched.'],
+ ['CATEGORIES','OFF / ON','OFF','Browse by folder buckets (Games / Apps / OS…).'],
+ ['NESTING','OFF / ON','OFF','Allow sub-categories (folders within category folders).'],
+ ['SCREENSAVER','ON / OFF','ON','Idle screensaver on/off.'],
+ ['SSMODE','SLIDES / BOUNCE / MATRIX','SLIDES','Screensaver style.'],
+ ['SSFX','SHUFFLE / FADE / DISSOLVE / SLIDE / CUT','SHUFFLE','Slide transition.'],
+ ['SSTIME','2–120','6','Seconds per slide.'],
+ ['SSFAV','ON / OFF','ON','Also slideshow favourited game covers.'],
+ ['SAVES','OFF / COPY / OVERWRITE','COPY','Save-game write-back: keep .sav.adf, patch master, or off.'],
+ ['SDSPEED','20 / 40','20','SD clock MHz (40 is faster, auto-falls back).'],
+ ['TAPLOAD','OFF / ON','OFF','Tap the highlighted row to load (old double-tap).'],
+ ['HOTSWAP','OFF / ON','OFF','Tap another disk while loaded to swap instantly.'],
+ ['FORCESWAP','OFF / ON','OFF','Swap disk contents without the USB eject/re-attach.'],
+ ['HIVEMIND','ON / OFF','ON','Wireless FLING to all paired dongles, or just the selected one.'],
+ ['CAP','1–64','32','Max wireless dongles the scan will list.'],
+ ['LINK','ESPNOW / HOMEWIFI','ESPNOW','Dongle transport: its own AP + ESP-NOW, or via home router.'],
+ ['HOME_SSID','text','(empty)','Home WiFi name (used when LINK=HOMEWIFI). Alias: WIFI_CLIENT_SSID.'],
+ ['HOME_PASS','text','(empty)','Home WiFi password. Alias: WIFI_CLIENT_PASS.'],
+ ['DONGLE_HOME_IP','IP','(auto)','Cached dongle home IP (mDNS gotek.local is primary).'],
+ ['XIAO_MAC','MAC','(auto)','Paired dongle MAC, auto-filled when you pair.'],
+ ['DAV','ON / OFF','OFF','Enable the WebDAV client (beta). Alias: DAV_ENABLED=1.'],
+ ['DAV_HOST / _PORT / _HTTPS / _USER / _PASS / _PATH','—','—','WebDAV server settings (beta shared web layer).'],
+ ['WEBUI','ON / OFF','OFF','Serve the panel web console over home WiFi (beta).'],
+];
+
+const groups=[...new Set(F.map(g=>g[0]))];
+const listEl=document.getElementById('list');
+let html='';
+F.forEach(([g,items])=>{
+  html+='<section class="grp" data-g="'+g+'"><h2><span class="g"></span>'+g+'</h2>';
+  items.forEach(([n,d,cfg,val,beta])=>{
+    const cfgHtml = cfg ? '<div class="cfg">'+cfg.split(' / ').map(c=>'<code>'+c+'</code>').join(' ')+(val?' <span class="v">— '+val+'</span>':'')+'</div>' : '';
+    html+='<div class="feat"><div class="n">'+n+(beta?'<span class="beta">beta</span>':'')+'</div><div class="d">'+d+'</div>'+cfgHtml+'</div>';
+  });
+  html+='</section>';
+});
+listEl.innerHTML=html;
+
+const cfgbody=document.getElementById('cfgbody');
+cfgbody.innerHTML=CFG.map(r=>'<tr class="crow"><td class="k">'+r[0]+'</td><td class="vals">'+r[1]+'</td><td class="def">'+r[2]+'</td><td class="dsc">'+r[3]+'</td></tr>').join('');
+
+// chips = group filters
+const chipsEl=document.getElementById('chips');
+chipsEl.innerHTML='<button class="chip on" data-c="">All</button>'+groups.map(g=>'<button class="chip" data-c="'+g+'">'+g.replace(/ .*/,'')+'</button>').join('');
+let activeGroup='';
+chipsEl.addEventListener('click',e=>{const b=e.target.closest('.chip');if(!b)return;
+  chipsEl.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));b.classList.add('on');activeGroup=b.dataset.c;apply();});
+
+const q=document.getElementById('q'), empty=document.getElementById('empty'), countEl=document.getElementById('count');
+const totalFeat=F.reduce((a,g)=>a+g[1].length,0);
+function apply(){
+  const s=q.value.trim().toLowerCase();
+  let shown=0;
+  document.querySelectorAll('#list .grp').forEach(sec=>{
+    const inGroup = !activeGroup || sec.dataset.g===activeGroup;
+    let any=false;
+    sec.querySelectorAll('.feat').forEach(f=>{
+      const hit = inGroup && (!s || f.textContent.toLowerCase().includes(s));
+      f.hidden=!hit; if(hit){any=true;shown++;}
+    });
+    sec.hidden=!any;
+  });
+  // config table filters by text too; hide the whole config block when a group chip is active
+  const cfgGrp=document.getElementById('cfggrp');
+  if(activeGroup){ cfgGrp.hidden=true; }
+  else{
+    cfgGrp.hidden=false; let cany=false;
+    document.querySelectorAll('#cfgbody .crow').forEach(r=>{
+      const hit=!s||r.textContent.toLowerCase().includes(s); r.hidden=!hit; if(hit)cany=true;
+    });
+    cfgGrp.querySelector('h2').style.display=cany?'':'none';
+    cfgGrp.querySelector('table').style.display=cany?'':'none';
+  }
+  empty.classList.toggle('on', shown===0 && (activeGroup||s));
+  countEl.textContent = s||activeGroup ? shown+' shown' : totalFeat+' features · '+CFG.length+' settings';
+}
+q.addEventListener('input',apply);
+apply();
+</script>
+</body>
+</html>

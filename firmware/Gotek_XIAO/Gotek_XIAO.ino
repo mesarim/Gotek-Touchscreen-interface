@@ -1,8 +1,9 @@
 // Gotek_XIAO.ino — Seeed XIAO ESP32-S3 ramdisk bridge for Gotek
-// v3.5.0-xiao: brought up to the current save-era protocol so it pairs with the
-// JC again. Wire-compatible with the Super Mini v3.4.0 — SAME ESP-NOW/USB/TCP
-// protocol, byte-for-byte; only the board header + version differ.
-// DOUBLE-DENSITY ONLY — HD (1.76MB) is intentionally NOT supported on the dongle.
+// v3.7.0-xiao: owner-lock parity with Super Mini v3.5.3 — multi-owner allowlist +
+// BOOT-hold pair/wipe gesture, TCP eject, load-state heartbeat — while KEEPING the
+// XIAO's HD (1.76MB) support: 2MB ramdisk, 2-sector clusters, pad[1]=1 HD marker.
+// Wire-compatible with the Super Mini — SAME ESP-NOW/USB/TCP protocol, byte-for-byte;
+// only the board header, HD ramdisk, and version differ (the Mini stays DD).
 //
 // Board          : XIAO_ESP32S3
 // USB Mode       : USB-OTG (TinyUSB)
@@ -31,10 +32,11 @@
 #include "esp_wifi.h"
 #include <LittleFS.h>
 
-#define FW_VERSION     "v3.6.2-xiao"   // v3.6.0: HD-capable — 2MB ramdisk (2-sector clusters, like the JC) + pad[1]=1 HD marker so the GTi may fling 1.76MB. Wire-compatible with the Super Mini (which stays DD).
+#define FW_VERSION     "v3.7.0-xiao"   // owner-lock parity w/ Super Mini v3.5.3 (multi-owner allowlist, BOOT-hold pair/wipe, TCP eject, heartbeat) + HD 2MB ramdisk. Wire-compatible w/ the Mini (stays DD).
 #define ESPNOW_CHANNEL 6
 #define LED_RED        1   // GP1 — status/attention
 #define LED_BLUE       2   // GP2 — activity
+#define PAIR_BTN       0   // GP0 = BOOT button — owner-lock gesture (hold 5-15s pair, 15s+ wipe)
 
 // AP settings — XIAO hosts this for file transfer
 #define AP_SSID     "GotekOMEGA"
@@ -46,12 +48,12 @@
 #define PKT_PAIR_HELLO  0x05
 #define PKT_PAIR_REPLY  0x14
 #define PKT_DISK_EJECT  0x02
-#define PKT_UNPAIR      0x16   // v3.6.1: GTi -> dongle: forget me (clear pairing)
 #define PKT_XIAO_READY  0x10
 #define PKT_XIAO_DONE   0x12
 #define PKT_XIAO_ERROR  0x13
 #define PKT_XIAO_DIRTY  0x15   // v3.2.0: settled unsaved writes exist — GTi, come fetch
-#define PKT_XIAO_STATUS 0x17   // v3.6.2: periodic load-state heartbeat {loaded,load_id,image_size}
+#define PKT_XIAO_STATUS 0x17   // v3.5.3: periodic load-state heartbeat {loaded,load_id,image_size}
+#define PKT_UNPAIR      0x16   // v3.5.2: GTi -> dongle: forget me (drop the sender from the owner list)
 
 // ── Save writeback (v3.2.0) ─────────────────────────────────────────────────
 // The Gotek writes save-game sectors onto our RAM disk via USB MSC. We tick a
@@ -61,7 +63,7 @@
 #define SAVE_PROTO_VER  1        // advertised in HELLO/REPLY pad[0]
 #define SAVE_SETTLE_MS  3000     // quiet time after last write before beaconing
 #define SAVE_BEACON_MS  10000    // beacon repeat until serviced
-#define STATUS_BEACON_MS 2500    // v3.6.2: load-state heartbeat cadence
+#define STATUS_BEACON_MS 2500    // v3.5.3: load-state heartbeat cadence
 #define TCP_CMD_ESCAPE  0xFFFFFFFFUL  // size header value that means "command, not disk"
 #define CMD_GET_SAVE    0x01
 #define CMD_GET_STATUS  0x02
@@ -73,15 +75,15 @@ struct PktHello  { uint8_t type; uint8_t mac[6]; char ip[16]; uint8_t pad[227]; 
 struct PktSimple { uint8_t type; uint8_t pad[249]; };
 struct PktDirty  { uint8_t type; uint32_t load_id; uint16_t dirty_count;
                    uint32_t image_size; uint32_t age_ms; uint8_t flags; uint8_t pad[234]; };
-struct PktStatus { uint8_t type; uint8_t loaded; uint32_t load_id; uint32_t image_size; uint8_t pad[240]; };  // v3.6.2
+struct PktStatus { uint8_t type; uint8_t loaded; uint32_t load_id; uint32_t image_size; uint8_t pad[240]; };  // v3.5.3
 #pragma pack(pop)
 
 // FAT12 geometry
 #define SECTOR_SIZE      512
-#define TOTAL_SECTORS    4096          // v3.6.0: 2MB RAM disk so HD (1.76MB) images fit
+#define TOTAL_SECTORS    4096          // HD: 2MB RAM disk so HD (1.76MB) images fit (Mini stays 2048/DD)
+#define SECTORS_PER_CLUSTER 2          // HD: 1KB clusters -> ~2042 clusters, stays FAT12 (limit 4084), keeps DATA_LBA=11
 #define RESERVED_SECTORS 1
 #define SECTORS_PER_FAT  6
-#define SECTORS_PER_CLUSTER 2          // v3.6.0: 1KB clusters -> ~2042 clusters, stays FAT12 (limit 4084), keeps DATA_LBA=11
 #define NUM_FATS         1
 #define ROOT_ENTRIES     64
 #define ROOT_DIR_SECTORS 4
@@ -92,7 +94,7 @@ struct PktStatus { uint8_t type; uint8_t loaded; uint32_t load_id; uint32_t imag
 static uint8_t* g_disk = nullptr;
 
 // ── Save writeback state ────────────────────────────────────────────────────
-#define IMG_MAX_SECTORS (TOTAL_SECTORS - DATA_LBA)      // 4085 (v3.6.0: 2MB disk)
+#define IMG_MAX_SECTORS (TOTAL_SECTORS - DATA_LBA)      // 4085 (HD: 2MB disk)
 static uint8_t  g_dirty[(IMG_MAX_SECTORS+7)/8];         // live map (filled by onWrite)
 static uint8_t  g_snap [(IMG_MAX_SECTORS+7)/8];         // snapshot streamed to the GTi
 static volatile uint16_t g_dirty_count   = 0;
@@ -101,7 +103,7 @@ static volatile uint32_t g_total_writes  = 0;           // includes FAT noise (I
 static uint32_t g_load_id    = 0;                        // bumped per received disk
 static uint32_t g_image_size = ADF_DEFAULT_SIZE;         // size of the mounted image
 static uint32_t g_next_beacon_ms = 0;
-static uint32_t g_next_status_ms = 0;   // v3.6.2: load-state heartbeat timer
+static uint32_t g_next_status_ms = 0;   // v3.5.3: load-state heartbeat timer
 static inline bool dGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void dSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
 static inline void dClr(uint8_t*m,uint32_t i){m[i>>3]&=(uint8_t)~(1u<<(i&7));}
@@ -221,8 +223,15 @@ static String macToStr(const uint8_t* mac) {
 }
 
 // State
-static uint8_t _wave_mac[6] = {0};
+static uint8_t _wave_mac[6] = {0};   // currently-active owner (last GTi we handshook)
 static bool    _paired       = false;
+
+// ── Owner lock (v3.5.0) — the dongle only obeys enrolled GTis ────────────────
+#define MAX_OWNERS 4
+static uint8_t  _owners[MAX_OWNERS][6] = {{0}};
+static uint8_t  _owner_count   = 0;
+static bool     g_enroll_open  = false;   // a BOOT-hold opened a pairing window
+static uint32_t g_enroll_until = 0;       // ms deadline for that window
 
 // ESP-NOW receive queue (FreeRTOS)
 #define RX_PKT_SIZE 250
@@ -261,6 +270,38 @@ static void sendSimple(uint8_t type) {
   if (dst) dst->send_pkt((uint8_t*)&pkt, sizeof(pkt));
 }
 
+// ── Owner-lock helpers (v3.5.0) ─────────────────────────────────────────────
+static bool isOwner(const uint8_t* mac){
+  for(int i=0;i<_owner_count;i++) if(memcmp(_owners[i],mac,6)==0) return true;
+  return false;
+}
+static bool addOwner(const uint8_t* mac){
+  if(isOwner(mac)) return true;
+  if(_owner_count>=MAX_OWNERS) return false;
+  memcpy(_owners[_owner_count],mac,6); _owner_count++;
+  return true;
+}
+static bool removeOwner(const uint8_t* mac){
+  for(int i=0;i<_owner_count;i++) if(memcmp(_owners[i],mac,6)==0){
+    for(int j=i;j<_owner_count-1;j++) memcpy(_owners[j],_owners[j+1],6);
+    _owner_count--; return true;
+  }
+  return false;
+}
+static void saveOwners(){
+  if(!LittleFS.begin(true)) return;
+  File f=LittleFS.open("/XIAO_CONFIG.TXT","w");
+  if(!f) return;
+  for(int i=0;i<_owner_count;i++) f.printf("WAVE_MAC=%s\n", macToStr(_owners[i]).c_str());
+  f.close();
+}
+static void wipeOwners(){
+  _owner_count=0; _paired=false; memset(_wave_mac,0,6);
+  if(_wavePeer){ delete _wavePeer; _wavePeer=nullptr; }
+  if(LittleFS.begin(true)) LittleFS.remove("/XIAO_CONFIG.TXT");
+  oledStatus("Gotek OMEGA " FW_VERSION,"** WIPED **","All owners cleared","Hold BOOT to pair");
+}
+
 // Handle ESP-NOW control packets
 static void handleESPNOW(const uint8_t* data, int len) {
   if (len < 1) return;
@@ -268,6 +309,19 @@ static void handleESPNOW(const uint8_t* data, int len) {
 
   if (type == PKT_PAIR_HELLO) {
     const PktHello* p = (const PktHello*)data;
+    // Owner lock (v3.5.0): only obey enrolled GTis. An unknown GTi is enrolled
+    // ONLY while a BOOT-hold pairing window is open — otherwise ignored silently.
+    bool known = isOwner(p->mac);
+    if (!known) {
+      if (!g_enroll_open) return;                 // locked — stranger ignored
+      if (!addOwner(p->mac)) {                     // allowlist full
+        oledStatus("Gotek OMEGA " FW_VERSION,"OWNERS FULL","Hold BOOT 15s","to wipe & re-pair");
+        return;
+      }
+      saveOwners();
+      g_enroll_open = false;                        // this hold enrolled one GTi
+    }
+
     memcpy(_wave_mac, p->mac, 6);
     _paired = true;
 
@@ -282,26 +336,25 @@ static void handleESPNOW(const uint8_t* data, int len) {
     WiFi.softAPmacAddress(reply.mac);  // use AP MAC
     strncpy(reply.ip, AP_IP, 15);
     reply.pad[0] = SAVE_PROTO_VER;
-    reply.pad[1] = 1;                  // v3.6.0: 1 = HD-capable (2MB ramdisk) — GTi may fling 1.76MB HD
+    reply.pad[1] = 1;                  // HD-capable (2MB ramdisk) — GTi may fling 1.76MB HD
     XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
     if (dst) dst->send_pkt((uint8_t*)&reply, sizeof(reply));
 
-    // Save config
-    if (LittleFS.begin(true)) {
-      File f = LittleFS.open("/XIAO_CONFIG.TXT", "w");
-      if (f) { f.printf("WAVE_MAC=%s\n", macToStr(_wave_mac).c_str()); f.close(); }
-    }
-    oledStatus("Gotek OMEGA " FW_VERSION, "Paired!", macToStr(_wave_mac), "AP: " AP_SSID);
+    oledStatus("Gotek OMEGA " FW_VERSION, known?"Reconnected":"Owner added",
+               macToStr(_wave_mac), String(_owner_count)+" owner(s)");
     return;
   }
 
-  if (type == PKT_UNPAIR) {                       // v3.6.1: paired GTi asked to be forgotten
+  if (type == PKT_UNPAIR) {                        // v3.5.2: an owner GTi asked to be forgotten
     const PktHello* p = (const PktHello*)data;
-    if (_paired && memcmp(_wave_mac, p->mac, 6)==0) {
-      _paired=false; memset(_wave_mac,0,6);
-      if (_wavePeer) { delete _wavePeer; _wavePeer=nullptr; }
-      if (LittleFS.begin(true)) LittleFS.remove("/XIAO_CONFIG.TXT");
-      oledStatus("Gotek OMEGA " FW_VERSION, "Unpaired", "", "Ready to pair");
+    if (removeOwner(p->mac)) {                     // only ever removes a MAC that was enrolled
+      saveOwners();
+      if (memcmp(_wave_mac, p->mac, 6)==0) {        // that was the active link — re-point or clear
+        if (_wavePeer) { delete _wavePeer; _wavePeer=nullptr; }
+        if (_owner_count) memcpy(_wave_mac, _owners[0], 6); else memset(_wave_mac,0,6);
+      }
+      _paired = (_owner_count>0);
+      oledStatus("Gotek OMEGA " FW_VERSION, "Unpaired", String(_owner_count)+" owner(s)", "");
     }
     return;
   }
@@ -326,19 +379,23 @@ static void loadConfig() {
   if (!LittleFS.begin(true)) return;
   File f = LittleFS.open("/XIAO_CONFIG.TXT", "r");
   if (!f) return;
+  _owner_count = 0;
   while (f.available()) {
     String line = f.readStringUntil('\n'); line.trim();
-    if (line.startsWith("WAVE_MAC=")) {
+    if (line.startsWith("WAVE_MAC=")) {          // one line per enrolled owner
+      uint8_t m[6]={0};
       String mac = line.substring(9);
-      sscanf(mac.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-             &_wave_mac[0],&_wave_mac[1],&_wave_mac[2],
-             &_wave_mac[3],&_wave_mac[4],&_wave_mac[5]);
-      bool isZero=true;
-      for(int i=0;i<6;i++) if(_wave_mac[i]) { isZero=false; break; }
-      if (!isZero) _paired=true;
+      if (sscanf(mac.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                 &m[0],&m[1],&m[2],&m[3],&m[4],&m[5]) == 6) {
+        bool isZero=true;
+        for(int i=0;i<6;i++) if(m[i]) { isZero=false; break; }
+        if (!isZero) addOwner(m);
+      }
     }
   }
   f.close();
+  _paired = (_owner_count > 0);
+  if (_paired) memcpy(_wave_mac, _owners[0], 6);   // default active = first owner
 }
 
 // WiFi AP + TCP server
@@ -427,7 +484,7 @@ static void sendDirtyBeacon(){
   if(dst)dst->send_pkt((uint8_t*)&pkt,sizeof(pkt));
 }
 
-// v3.6.2: periodic load-state heartbeat to the paired GTi so its disk indicator
+// v3.5.3: periodic load-state heartbeat to the paired GTi so its disk indicator
 // reflects reality (loaded / empty / offline). Sent only to the active GTi.
 static void sendStatusBeacon(){
   if(!_wavePeer)return;
@@ -525,7 +582,7 @@ static void handleTCPClient(WiFiClient& client) {
     if (g_disk_loaded) hardDetach();
     hardAttach();
     g_disk_loaded = true;
-    g_next_status_ms = 0;                 // v3.6.2: beacon the new loaded state immediately
+    g_next_status_ms = 0;                 // v3.5.3: beacon the new loaded state immediately
     digitalWrite(LED_BLUE, HIGH);
 
     String dispName = (size == 901120) ? "ADF 880KB" : String(size/1024) + "KB";
@@ -551,6 +608,7 @@ void setup() {
   delay(200);
   pinMode(LED_RED, OUTPUT);
   pinMode(LED_BLUE, OUTPUT);
+  pinMode(PAIR_BTN, INPUT_PULLUP);   // owner-lock gesture button
   digitalWrite(LED_RED, LOW);
   digitalWrite(LED_BLUE, LOW);
 
@@ -600,13 +658,15 @@ void setup() {
 
   uint32_t t0 = millis();
   int dots = 0;
-  while (millis()-t0 < 30000) {
+  // Owners reconnect during this window; an unowned dongle bails out fast so the
+  // BOOT-hold pairing gesture (serviced in loop) becomes responsive right away.
+  while (millis()-t0 < (uint32_t)(_paired ? 30000 : 3000)) {
     PktHello hello = {};
     hello.type = PKT_PAIR_HELLO;
     WiFi.softAPmacAddress(hello.mac);
     strncpy(hello.ip, AP_IP, 15);
     hello.pad[0] = SAVE_PROTO_VER;
-    hello.pad[1] = 1;                  // v3.6.0: HD-capable marker
+    hello.pad[1] = 1;                  // HD-capable marker
     if (_bcastPeer) _bcastPeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     if (_wavePeer)  _wavePeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     dots++;
@@ -633,7 +693,7 @@ void setup() {
       WiFi.softAPmacAddress(confirm.mac);
       strncpy(confirm.ip, AP_IP, 15);
       confirm.pad[0] = SAVE_PROTO_VER;
-      confirm.pad[1] = 1;              // v3.6.0: HD-capable marker
+      confirm.pad[1] = 1;              // HD-capable marker
       _wavePeer->send_pkt((uint8_t*)&confirm, sizeof(confirm));
       break;
     }
@@ -644,8 +704,62 @@ void setup() {
     digitalWrite(LED_RED, LOW);
     digitalWrite(LED_BLUE, HIGH);
   } else {
-    oledStatus("Not paired", "AP: " AP_SSID, "Tap PAIR NOW", "on Waveshare");
+    oledStatus("Not paired", "Hold BOOT ~5s", "until BLUE blinks,", "then PAIR on GTi");
   }
+}
+
+// ── BOOT-button owner-lock gesture (v3.5.0) ─────────────────────────────────
+// Hold BOOT, commit on release. The LEDs show what's armed:
+//   0-5s   RED blink  -> release = cancel (accidental-brush guard)
+//   5-15s  BLUE blink -> release = open pairing window (enroll the next GTi)
+//   15s+   RED solid  -> release = WIPE all owners
+// Abort an armed action by unplugging or resetting instead of releasing.
+// Returns true while it owns the LEDs (button held, or a pairing window is open).
+#define BOOT_PAIR_MS   5000
+#define BOOT_WIPE_MS   15000
+#define ENROLL_WIN_MS  30000
+static bool serviceBootButton(){
+  uint32_t now = millis();
+  static bool     held_prev = false;
+  static uint32_t held_t0   = 0;
+  static uint8_t  upCount   = 8;     // consecutive "released" reads (debounce); starts released
+  bool raw   = (digitalRead(PAIR_BTN) == LOW);
+  // Debounce: a real release needs ~40ms of continuous HIGH. A brief contact blip
+  // mid-hold no longer commits early — that blip past 5s was committing PAIR and
+  // resetting the timer, which made a clean 15s WIPE hold nearly impossible.
+  if (raw) upCount = 0; else if (upCount < 250) upCount++;
+  bool down  = (upCount < 8);        // stays down through brief (<~40ms) contact blips
+  bool phase = (now / 180) & 1;                 // blink phase
+  static bool wipedHold = false;     // wipe already fired during this hold
+
+  if (g_enroll_open && now > g_enroll_until) g_enroll_open = false;   // window timed out
+
+  if (down) {
+    if (!held_prev) { held_prev = true; held_t0 = now; wipedHold = false; }
+    uint32_t held = now - held_t0;
+    // This board has no screen and maybe no LEDs, so we can't ask you to judge a
+    // release moment. WIPE auto-fires at 15s WHILE STILL HELD: just hold BOOT ~15s
+    // and it wipes (verify from the GTi — the dongle drops its owner). PAIR still
+    // commits on release in the 5-15s window.
+    if (held >= BOOT_WIPE_MS && !wipedHold) { wipeOwners(); wipedHold = true; }
+    if      (wipedHold)            setLeds(true,  false);   // solid red = wiped (let go to finish)
+    else if (held >= BOOT_PAIR_MS) setLeds(false, phase);   // blue blink = release now to PAIR
+    else                          setLeds(phase, false);    // red blink  = holding
+    return true;
+  }
+
+  if (held_prev) {                               // release edge
+    uint32_t held = now - held_t0;
+    held_prev = false;
+    setLeds(false, false);
+    if (!wipedHold && held >= BOOT_PAIR_MS) {    // 5-15s release = open the pairing window
+      g_enroll_open = true; g_enroll_until = now + ENROLL_WIN_MS;
+    }
+    return true;                                 // (<5s, and post-wipe releases, are no-ops)
+  }
+
+  if (g_enroll_open) { setLeds(false, phase); return true; }   // BLUE blink = pair window open
+  return false;                                                 // idle — let loop drive LEDs
 }
 
 void loop() {
@@ -659,22 +773,24 @@ void loop() {
   if (client) handleTCPClient(client);
 
   // v3.2.0: unsaved writes settled? Raise a hand until the GTi collects them.
-  // v3.6.2: steady load-state heartbeat (independent of dirty writes)
+  bool dirtyWaiting = (g_dirty_count > 0 && g_last_write_ms &&
+                       (millis() - g_last_write_ms) > SAVE_SETTLE_MS);
+  if (dirtyWaiting && millis() > g_next_beacon_ms) {
+    sendDirtyBeacon();
+    g_next_beacon_ms = millis() + SAVE_BEACON_MS;
+  }
+  // v3.5.3: steady load-state heartbeat (independent of dirty writes)
   if (millis() > g_next_status_ms) {
     sendStatusBeacon();
     g_next_status_ms = millis() + STATUS_BEACON_MS;
   }
-  if (g_dirty_count > 0 && g_last_write_ms &&
-      (millis() - g_last_write_ms) > SAVE_SETTLE_MS &&
-      millis() > g_next_beacon_ms) {
-    sendDirtyBeacon();
-    g_next_beacon_ms = millis() + SAVE_BEACON_MS;
-    // Red+blue together = unsaved data waiting (distinct from either alone)
-    setLeds(true, true);
-  }
 
-  // LED blink if not paired
-  if (!_paired) digitalWrite(LED_RED, (millis()/1000)&1 ? HIGH : LOW);
+  // The BOOT owner-lock gesture owns the LEDs while held or while a pairing
+  // window is open; otherwise fall back to status indication.
+  if (!serviceBootButton()) {
+    if (dirtyWaiting)   setLeds(true, true);                  // red+blue = unsaved data waiting
+    else if (!_paired)  setLeds(false, (millis()/1000)&1);    // slow blue blink = unowned ("pair me")
+  }
 
   delay(5);
 }
