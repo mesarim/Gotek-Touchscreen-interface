@@ -1,0 +1,16 @@
+# Normalize all text to LF in the repo; stops the CRLF/LF churn on Windows clones
+* text=auto eol=lf
+
+# Explicit binaries — never touched by EOL normalization
+*.bin  binary
+*.pdf  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.elf  binary
+*.map  binary
+*.zip  binary
+*.woff binary
+*.woff2 binary

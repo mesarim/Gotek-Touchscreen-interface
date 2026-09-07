@@ -1,0 +1,10 @@
+# Backups (session scratch — never commit)
+*.bak
+
+# Arduino compile output (regenerated on every build)
+build/
+**/build/
+
+# OS cruft
+.DS_Store
+Thumbs.db
