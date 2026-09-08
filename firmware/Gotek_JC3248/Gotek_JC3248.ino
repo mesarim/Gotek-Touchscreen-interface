@@ -35,7 +35,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.4-ghost-JC3248"
+#define FW_VERSION "5.9.4-ghost2-JC3248"
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -170,6 +170,20 @@ static esp_lcd_panel_io_handle_t io_handle = NULL;
 static esp_lcd_panel_handle_t panel_handle = NULL;
 static uint16_t *framebuffer = NULL;
 static uint16_t *dma_buffer = NULL;
+// ── GHOST (GHOST=ON): diagnostic liveness beacon, composited into the full-width
+//    flush path below (never a partial-width blit). Declared here so gfx_flush can
+//    overlay it. Rendered/repainted from loop() -> see ghostTick(). ──
+static bool g_ghost=false;
+#define GHOST_W 36
+#define GHOST_H 36
+#define GHOST_X0 (LCD_WIDTH-GHOST_W-4)
+#define GHOST_Y0 4
+static uint16_t g_ghost_buf[GHOST_W*GHOST_H];
+static bool g_ghost_drawn=false;   // set true after first render; gate for the flush overlay
+static inline void ghostOverlay(uint16_t*dma,int sy,int rows){
+  for(int gy=0;gy<GHOST_H;gy++){int py=GHOST_Y0+gy; if(py<sy||py>=sy+rows)continue;
+    memcpy(&dma[(py-sy)*LCD_WIDTH+GHOST_X0], &g_ghost_buf[gy*GHOST_W], GHOST_W*2);}
+}
 static JPEGDEC jpegdec;
 static PNG     pngdec;   // v4.8.4 PNG cover support
 
@@ -245,6 +259,7 @@ static void gfx_flush(){
   for(int sy=0;sy<LCD_HEIGHT;sy+=ROWS_PER_STRIP){
     int rows=min(ROWS_PER_STRIP,LCD_HEIGHT-sy);
     memcpy(dma_buffer,&framebuffer[sy*LCD_WIDTH],LCD_WIDTH*rows*2);
+    if(g_ghost&&g_ghost_drawn)ghostOverlay(dma_buffer,sy,rows);
     esp_lcd_panel_draw_bitmap(panel_handle,0,sy,LCD_WIDTH,sy+rows,dma_buffer);
     delayMicroseconds(500);
   }
@@ -922,7 +937,7 @@ static uint16_t* g_slB=NULL;          // slideshow double-buffer: incoming frame
 static int g_dongle_cap=32;   // CONFIG.TXT CAP= : max wireless dongles to discover/cast (1..64)
 static int g_hivemind=1;      // v4.8.1 (undocumented HIVEMIND=): 1 = FLING fans out to all MuCa dongles (classic), 0 = paired dongle only
 static int g_cracktro=0;      // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or 0 = pick one at random each boot
-static bool g_ghost=false;    // CONFIG.TXT GHOST=ON : loop-liveness ghost (diagnostic) — its eyes move only while loop() runs
+// (g_ghost is declared up near the framebuffer globals.) CONFIG.TXT GHOST=ON : loop-liveness ghost (diagnostic) — its eyes move only while loop() runs
 static int g_car_bootmode=0;  // CONFIG.TXT CAROUSEL= : default boot VIEW — 0/OFF=list, 1/ON=reel, 2=LAST (restore last view, remembered in /.gtiview). v4.8.5+: carousel is ALWAYS available via the flip toggle regardless.
 // ── 5.8.6: home-WiFi dongle transport (LINK=HOMEWIFI) — route the FLING via the home router to a Webby dongle's gotek.local, instead of hopping to the dongle's own AP ──
 static bool   g_link_home=false;                                    // LINK: false=ESP-NOW/AP (default), true=HOME WIFI
@@ -1344,6 +1359,10 @@ static void generateDefaultConfig(){
   f.println("# DONGLE_HOME_IP: auto-filled cache of the dongle's home IP (mDNS gotek.local is primary).");
   f.println("DONGLE_HOME_IP=");
   f.println("");
+  f.println("");
+  f.println("# GHOST: diagnostic liveness beacon. ON = draw a tiny ghost that moves its eyes while the");
+  f.println("#        firmware is running - lets you tell a frozen board from a busy one. OFF = normal (default).");
+  f.println("GHOST=OFF");
   f.println("# Wireless dongle MAC (auto-filled when you pair via INFO screen)");
   f.println("# XIAO_MAC=");
   f.close();
@@ -1389,6 +1408,7 @@ static void selfHealConfig(){
     {"HOME_SSID",      "# HOME_SSID: your home WiFi name (only used when LINK=HOMEWIFI).\nHOME_SSID=\n"},
     {"HOME_PASS",      "# HOME_PASS: your home WiFi password (only used when LINK=HOMEWIFI).\nHOME_PASS=\n"},
     {"DONGLE_HOME_IP", "# DONGLE_HOME_IP: auto-filled cache of the dongle's home-network IP (mDNS gotek.local is the primary lookup).\nDONGLE_HOME_IP=\n"},
+    {"GHOST",    "\n# GHOST: diagnostic liveness beacon. ON = a tiny ghost moves its eyes while the firmware runs\n#        (lets you tell a frozen board from a busy one). OFF = normal (default).\nGHOST=OFF\n"},
   };
   const int NK=sizeof(KEYS)/sizeof(KEYS[0]);
   bool present[NK]; for(int i=0;i<NK;i++)present[i]=false;
@@ -4611,15 +4631,14 @@ static void handleTap(uint16_t px,uint16_t py){
 //   eyes moving       -> loop is alive; the UI is just stuck, not frozen
 //   eyes frozen       -> loop blocked mid-iteration (points at a hung call)
 static void ghostTick(){
-  if(!g_ghost || !panel_handle) return;
+  if(!g_ghost || !framebuffer || !panel_handle) return;
   static uint32_t next=0; if(millis()<next) return; next=millis()+280;
   static uint16_t df=0; df++;
-  const int W=36,H=36; static uint16_t gbuf[36*36];
   const uint16_t BG=swap16(TFT_BLACK), BODY=swap16(TFT_CYAN), EYE=swap16(TFT_WHITE), PUP=swap16(TFT_BLUE);
   static const int8_t LX[8]={-2,-1,0,1,2,1,0,-1}, LY[8]={0,-1,-2,-1,0,1,2,1};
   int d=df&7, dx=LX[d], dy=LY[d]; bool blink=((df%6)==5);
-  const int cx=W/2, ey=14, exL=cx-5, exR=cx+5;
-  for(int y=0;y<H;y++) for(int x=0;x<W;x++){
+  const int cx=GHOST_W/2, ey=14, exL=cx-5, exR=cx+5;
+  for(int y=0;y<GHOST_H;y++) for(int x=0;x<GHOST_W;x++){
     uint16_t c=BG;
     bool dome=((x-cx)*(x-cx)+(y-15)*(y-15)<=13*13) && y<=15;
     bool body=(x>=cx-13 && x<=cx+13 && y>15 && y<=28);
@@ -4629,10 +4648,20 @@ static void ghostTick(){
     if(!blink){
       if((x-exL-dx)*(x-exL-dx)+(y-ey-dy)*(y-ey-dy)<=2 || (x-exR-dx)*(x-exR-dx)+(y-ey-dy)*(y-ey-dy)<=2) c=PUP;
     } else if(y==ey && (abs(x-exL)<=2 || abs(x-exR)<=2)) c=PUP;
-    gbuf[y*W+x]=c;
+    g_ghost_buf[y*GHOST_W+x]=c;
   }
-  int X0=LCD_WIDTH-W-4, Y0=4;
-  esp_lcd_panel_draw_bitmap(panel_handle, X0, Y0, X0+W, Y0+H, gbuf);
+  g_ghost_drawn=true;
+  // Composite the ghost band and push it through the SAME full-width strip path the UI
+  // uses (no partial-width blit -> no smear). Driven from loop(): a live board repaints
+  // here every 280ms (eyes move); a wedged loop stops calling this so the last frame
+  // stays on the panel, frozen (ghost present, not moving).
+  int y1=GHOST_Y0+GHOST_H;
+  for(int sy=0; sy<y1; sy+=ROWS_PER_STRIP){
+    int rows=min(ROWS_PER_STRIP, LCD_HEIGHT-sy);
+    memcpy(dma_buffer,&framebuffer[sy*LCD_WIDTH],LCD_WIDTH*rows*2);
+    ghostOverlay(dma_buffer,sy,rows);
+    esp_lcd_panel_draw_bitmap(panel_handle,0,sy,LCD_WIDTH,sy+rows,dma_buffer);
+  }
 }
 
 void loop(){

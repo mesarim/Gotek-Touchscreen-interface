@@ -1,13 +1,11 @@
 {
-  "name": "GTi — JC3248 GHOST (5.9.4 + liveness ghost — set GHOST=ON in CONFIG.TXT)",
-  "version": "5.9.4-ghost",
+  "name": "GTi — JC3248 GHOST2 (5.9.4 + liveness ghost, set GHOST=ON in CONFIG.TXT)",
+  "version": "5.9.4-ghost2",
   "new_install_prompt_erase": true,
   "builds": [
     {
       "chipFamily": "ESP32-S3",
-      "parts": [
-        { "path": "Gotek_JC3248.ino.merged.bin", "offset": 0 }
-      ]
+      "parts": [ { "path": "Gotek_JC3248.ino.merged.bin", "offset": 0 } ]
     }
   ]
 }
