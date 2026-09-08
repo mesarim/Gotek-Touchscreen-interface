@@ -525,6 +525,12 @@ static void hardAttach(){char r[8];snprintf(r,8,"%lu",(unsigned long)g_rev++);MS
 // the PC holds the card: onReadSD/onWriteSD go straight to raw sectors, bypassing
 // FATFS, so there is only ever ONE master on the volume (the whole-card-corruption trap).
 RTC_NOINIT_ATTR uint32_t g_sdaccess_magic;           // NOINIT (not DATA): DATA is re-inited on a SW restart; NOINIT survives esp_restart(), cleared only on power loss
+// Boot forensics (from Dimmy's omega-skin): a counter that survives a software
+// reset but dies with the RTC domain on power loss. B:1 after POWERON = a clean
+// cold boot; B:>1 = something restarted us since power (e.g. a bench PC's USB-JTAG
+// probe pulsing DTR/RTS). Logged at boot; harmless at a Gotek.
+RTC_NOINIT_ATTR uint32_t g_bootMagic;
+RTC_NOINIT_ATTR uint32_t g_bootCount;
 #define SDACCESS_MAGIC 0x5DACCE55u
 static uint32_t g_sd_sectors=0;                       // real card size, set at SD-access boot
 static volatile uint32_t g_sd_rd=0,g_sd_wr=0;        // sector-op tallies for the activity readout
@@ -4294,6 +4300,7 @@ void setup(){
   // v5.1: SD-access is requested only when our NOINIT flag survived a *software* restart
   // (cold power-on => reset reason POWERON => never a false trigger from RTC garbage).
   bool sdAccessReq=(g_sdaccess_magic==SDACCESS_MAGIC && esp_reset_reason()==ESP_RST_SW);
+  if(g_bootMagic!=0xB007C047u){g_bootMagic=0xB007C047u;g_bootCount=1;}else{g_bootCount++;}   // boot-forensics counter
   Serial.printf("[BOOT] rst=%d magic=%08X sdAccess=%d\n",(int)esp_reset_reason(),(unsigned)g_sdaccess_magic,(int)sdAccessReq);
   applyTheme(0);displayInit();touchInit();
   gfx_fillScreen(TFT_BLACK);gfx_flush();
@@ -4314,7 +4321,7 @@ void setup(){
     }
     espnowSetScanCap(g_dongle_cap);
     relayout();                 // apply ROTATE/COMPACT from config before first draw
-    gLog("\n=== BOOT %s === reset=%d int=%u psram=%u ===\n",FW_VERSION,(int)esp_reset_reason(),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
+    gLog("\n=== BOOT %s === reset=%d boot=%u int=%u psram=%u ===\n",FW_VERSION,(int)esp_reset_reason(),(unsigned)g_bootCount,(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
     heap_caps_malloc_extmem_enable(16);   // 5.8.9: library index/list onto idle PSRAM, off the ~180KB internal SRAM
     uint32_t _tscan=millis();
     listImages(SD_MMC,g_files);
