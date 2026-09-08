@@ -20,7 +20,8 @@
 #include "esp_lcd_axs15231b.h"
 #include "esp_random.h"
 #include "diag_adf.h"
-#include "omega_logo.h"   // the 1991 OMEGAWARE logo, traced from paper      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
+#include "omega_logo.h"   // the 1991 OMEGAWARE logo, traced from paper
+#include "omega_audio.h"  // chiptune for the OMEGA cracktro (NS4168, pins from the barista project)      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 #include <JPEGDEC.h>
 // JPEGDEC and PNGdec both define INTELSHORT/INTELLONG/MOTOSHORT/MOTOLONG; undef
 // after JPEGDEC so PNGdec redefines them cleanly (silences redefinition warnings).
@@ -491,7 +492,13 @@ static void hardAttach(){char r[8];snprintf(r,8,"%lu",(unsigned long)g_rev++);MS
 // re-scans is exactly what the PC left behind. The GTi does NO filesystem work while
 // the PC holds the card: onReadSD/onWriteSD go straight to raw sectors, bypassing
 // FATFS, so there is only ever ONE master on the volume (the whole-card-corruption trap).
-RTC_NOINIT_ATTR uint32_t g_sdaccess_magic;           // NOINIT (not DATA): DATA is re-inited on a SW restart; NOINIT survives esp_restart(), cleared only on power loss
+RTC_NOINIT_ATTR uint32_t g_sdaccess_magic;
+// Boot forensics for the ghost restart during cold-start cracktros: the
+// counter survives software resets, dies with the RTC domain on power loss.
+// Intro #2 reading B:1/R:POWERON again = full supply dip; B:2/R:POWERON =
+// EN-pin glitch (3V3 dipped, RTC held); B:2/R:SW = someone restarts us.
+RTC_NOINIT_ATTR uint32_t g_bootMagic;
+RTC_NOINIT_ATTR uint32_t g_bootCount;           // NOINIT (not DATA): DATA is re-inited on a SW restart; NOINIT survives esp_restart(), cleared only on power loss
 #define SDACCESS_MAGIC 0x5DACCE55u
 static uint32_t g_sd_sectors=0;                       // real card size, set at SD-access boot
 static volatile uint32_t g_sd_rd=0,g_sd_wr=0;        // sector-op tallies for the activity readout
@@ -1802,12 +1809,13 @@ static void drawCracktro(int style){
   bool denise=(style==7), wrangler=(style==8), retronaut=(style==9), omega=(style==10);   // 5.4.0/P4.9: hidden custom themes
   int s=(style>=1&&style<=6)?(style-1):(int)(esp_random()%6);
   initStars();
+  if(omega)omegaAudioStart();   // the intro gets music; his six classics stay as he tuned them
   if(retronaut)retroLogoLoad();
   unsigned long startMs=millis();
   gfx_fillScreen(TFT_BLACK);gfx_flush();
   while(true){
     if(Touch_ReadFrame()){unsigned long t0=millis();while(Touch_ReadFrame()&&millis()-t0<500)delay(10);break;}
-    if(!g_loop_cracktro&&millis()-startMs>=6000)break;
+    if(!g_loop_cracktro&&millis()-startMs>=(unsigned long)(omega?24000:6000))break;
     float t=(float)(millis()-startMs);
     if(omega)crkOmega(t);
     else if(denise)crkDenise(t);
@@ -1816,8 +1824,17 @@ static void drawCracktro(int style){
     else switch(s){case 0:crkCopper(t);break;case 1:crkStarfield(t);break;case 2:crkRaster(t);break;
       case 3:crkPlasma(t);break;case 4:crkBoing(t);break;default:crkSynth(t);break;}
     if(((int)(t/450.0f))%2) crk_txtC(gW/2,gH-46,"TAP TO CONTINUE",1,CRK_RGB(150,168,200));
+    {esp_reset_reason_t rr=esp_reset_reason();
+     const char*rt=rr==ESP_RST_PANIC?"PANIC":rr==ESP_RST_TASK_WDT?"TASKWDT":rr==ESP_RST_INT_WDT?"INTWDT":rr==ESP_RST_BROWNOUT?"BROWNOUT":rr==ESP_RST_WDT?"WDT":rr==ESP_RST_POWERON?"POWERON":rr==ESP_RST_SW?"SW":rr==ESP_RST_USB?"USB":"?";
+     char bl[40];snprintf(bl,sizeof bl,"B:%u R:%s",(unsigned)g_bootCount,rt);
+     // Only speak up when something is off: a crash reason, or a boot that
+     // is not the first since power (the PC's USB-JTAG probe reset, issue
+     // #22 discussion — harmless at a Gotek, visible at a bench PC).
+     bool bad=(rr!=ESP_RST_POWERON&&rr!=ESP_RST_SW)||g_bootCount>1;
+     if(bad)crk_txt(4,gH-40,bl,1,CRK_RGB(255,80,80));}
     gfx_flush();delay(6);
   }
+  omegaAudioStop();             // no-op unless the OMEGA intro started it
   if(retronaut)retroLogoFree();
   gfx_fillScreen(TFT_BLACK);gfx_flush();
 }
@@ -4260,6 +4277,7 @@ void setup(){
   // v5.1: SD-access is requested only when our NOINIT flag survived a *software* restart
   // (cold power-on => reset reason POWERON => never a false trigger from RTC garbage).
   bool sdAccessReq=(g_sdaccess_magic==SDACCESS_MAGIC && esp_reset_reason()==ESP_RST_SW);
+  if(g_bootMagic!=0xB007C047u){g_bootMagic=0xB007C047u;g_bootCount=1;}else{g_bootCount++;}
   Serial.printf("[BOOT] rst=%d magic=%08X sdAccess=%d\n",(int)esp_reset_reason(),(unsigned)g_sdaccess_magic,(int)sdAccessReq);
   applyTheme(THEME_DEFAULT);displayInit();touchInit();
   gfx_fillScreen(TFT_BLACK);gfx_flush();
