@@ -35,7 +35,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.4-ghost2-JC3248"
+#define FW_VERSION "5.9.4-ghost2-tcal-JC3248"
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -410,6 +410,13 @@ static void displayInit(){
 
 // ── Touch (from Dimi) ──
 static uint8_t gTouchPts=0;static uint16_t gTouchX=0,gTouchY=0;
+// ── TOUCH-CAL (ghost2 bench): scale raw digitizer coords -> native pixels ──
+// The old Touch_ReadFrame REJECTED any raw coord >= panel size; digitizer variants
+// that report a WIDER raw range therefore had EVERY touch dropped -> the UI looked
+// frozen while the firmware ran fine (ghost eyes still moved). We now SCALE instead.
+static uint16_t g_txmax=LCD_WIDTH-1, g_tymax=LCD_HEIGHT-1;  // learned raw full-scale (auto-cal), seeded at panel size
+static bool     g_touchcal_fixed=false;                     // TOUCHCAL pinned the range -> stop auto-growing
+static uint16_t g_traw_x=0, g_traw_y=0;                     // last raw read (readout / TOUCHCAL tuning)
 static void touchInit(){Wire.begin(TOUCH_SDA,TOUCH_SCL,400000);}
 static bool Touch_ReadFrame(){
   uint8_t cmd[11]={0xb5,0xab,0xa5,0x5a,0x00,0x00,0x00,0x08,0x00,0x00,0x00};
@@ -419,12 +426,18 @@ static bool Touch_ReadFrame(){
   uint8_t buf[8];for(int i=0;i<8;i++)buf[i]=Wire.read();
   if(buf[1]==0){gTouchPts=0;return false;}
   uint16_t rx=((buf[2]&0x0F)<<8)|buf[3],ry=((buf[4]&0x0F)<<8)|buf[5];
-  if(rx>=LCD_WIDTH||ry>=LCD_HEIGHT){gTouchPts=0;return false;}
+  g_traw_x=rx; g_traw_y=ry;                          // remember raw read (bench)
+  if(rx>4095||ry>4095){gTouchPts=0;return false;}    // 12-bit sanity only (was: reject >=panel -> the "freeze" bug)
+  // TOUCH-CAL: scale raw range -> native pixels instead of rejecting out-of-range.
+  if(!g_touchcal_fixed){ if(rx>g_txmax)g_txmax=rx; if(ry>g_tymax)g_tymax=ry; }
+  uint16_t px=(uint16_t)((uint32_t)rx*(LCD_WIDTH-1)/(g_txmax?g_txmax:1));
+  uint16_t py=(uint16_t)((uint32_t)ry*(LCD_HEIGHT-1)/(g_tymax?g_tymax:1));
+  if(px>=LCD_WIDTH)px=LCD_WIDTH-1; if(py>=LCD_HEIGHT)py=LCD_HEIGHT-1;
   switch(g_rot){                                   // inverse of fb_setPixel mapping
-    case 1: gTouchX=rx; gTouchY=ry; break;
-    case 2: gTouchX=ry; gTouchY=(LCD_WIDTH-1)-rx; break;
-    case 3: gTouchX=(LCD_WIDTH-1)-rx; gTouchY=(LCD_HEIGHT-1)-ry; break;
-    default: gTouchX=(LCD_HEIGHT-1)-ry; gTouchY=rx; break;
+    case 1: gTouchX=px; gTouchY=py; break;
+    case 2: gTouchX=py; gTouchY=(LCD_WIDTH-1)-px; break;
+    case 3: gTouchX=(LCD_WIDTH-1)-px; gTouchY=(LCD_HEIGHT-1)-py; break;
+    default: gTouchX=(LCD_HEIGHT-1)-py; gTouchY=px; break;
   }
   gTouchPts=1; return true;
 }
@@ -1445,6 +1458,7 @@ static void loadConfig(){
     else if(k=="COMPACT"){g_compact=(v=="ON"||v=="1");}
     else if(k=="SCREENSAVER"){g_ss_enabled=(v!="OFF"&&v!="0");}
     else if(k=="GHOST"){String dv=v;dv.toUpperCase();g_ghost=(dv=="ON"||dv=="1");}   // diagnostic loop-liveness ghost
+    else if(k=="TOUCHCAL"){int c=v.indexOf(','); if(c>0){uint16_t mx=(uint16_t)v.substring(0,c).toInt(),my=(uint16_t)v.substring(c+1).toInt(); if(mx>0&&my>0){g_txmax=mx;g_tymax=my;g_touchcal_fixed=true;}}}   // pin digitizer raw full-scale "maxX,maxY"; disables auto-cal
     else if(k=="SS_IDLE"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_idle_ms=s*1000UL;}
     else if(k=="SS_LOAD"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_load_ms=s*1000UL;}
     else if(k=="SSMODE"){String u=v;u.toUpperCase();g_ss_matrix=(u=="MATRIX"||u=="RAIN");g_ss_slides=!(u=="BOUNCE"||u=="0"||u=="SPRITES"||g_ss_matrix);}   // v5.7.2 slideshow; 5.8.3 matrix
