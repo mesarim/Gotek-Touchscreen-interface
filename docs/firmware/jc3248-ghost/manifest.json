@@ -1,11 +1,8 @@
 {
-  "name": "GTi — JC3248 GHOST2 (5.9.4 + liveness ghost, set GHOST=ON in CONFIG.TXT)",
-  "version": "5.9.4-ghost2",
+  "name": "GTi — JC3248 GHOST2 + Touch Fix (5.9.4 — rejects 0xCA/0xFF idle phantom touches; GHOST=ON optional)",
+  "version": "5.9.4-ghost2-tfix",
   "new_install_prompt_erase": true,
   "builds": [
-    {
-      "chipFamily": "ESP32-S3",
-      "parts": [ { "path": "Gotek_JC3248.ino.merged.bin", "offset": 0 } ]
-    }
+    { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_JC3248.ino.merged.bin", "offset": 0 } ] }
   ]
 }

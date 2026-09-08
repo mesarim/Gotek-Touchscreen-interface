@@ -437,10 +437,10 @@
         spot:'Diagnostic — reads the board ID, tests PSRAM/display/digitizer, sweeps clocks', tags:[['DIAGNOSTIC','t-diag'],['CHIP · PSRAM','t-stand']],
         prep:'Connect via <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release BOOT. <span class="muted">After flashing, open a serial monitor at <b>115200</b> for the full board report; drop <a href="firmware/jc3248-hwdiag/config.test">config.test</a> on the SD root to change the test mode or clocks.</span>',
         stable:{man:'firmware/jc3248-hwdiag/manifest.json', ver:'Board ID + PSRAM/display/digitizer test + CPU/QSPI/I2C clock sweep — reports over USB serial (config.test on SD)', sd:null}, beta:null},
-      {id:'jc3248-ghost', nm:'JC3248 — GHOST2 (5.9.4)', sz:'3.5″', ar:480/320, meta:'ESP32-S3 · full firmware + liveness ghost',
-        spot:'Real 5.9.4 firmware with a config-gated liveness ghost — tells frozen from busy', tags:[['DIAGNOSTIC','t-diag'],['5.9.4','t-beta']],
+      {id:'jc3248-ghost', nm:'JC3248 — GHOST2 + Touch Fix', sz:'3.5″', ar:480/320, meta:'ESP32-S3 · touch idle-frame fix + liveness ghost',
+        spot:'5.9.4 with the digitizer idle-frame fix (kills phantom touches) + optional liveness ghost', tags:[['FIX','t-rec'],['DIAGNOSTIC','t-diag']],
         prep:'Connect via <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release BOOT. <span class="muted">Add <b>GHOST=ON</b> to CONFIG.TXT — a small cyan ghost draws in a fixed panel corner: eyes moving = the board is alive, ghost frozen in place = the loop is wedged, no ghost = it died before the loop.</span>',
-        stable:{man:'firmware/jc3248-ghost/manifest.json', ver:'GTi 5.9.4 + GHOST2 liveness ghost (GHOST=ON in CONFIG.TXT) — composited into the flush so it shows on healthy boards too; normal firmware otherwise', sd:'firmware/jc3248-ghost/GTi-JC35-5.9.4-ghost2-update.bin'}, beta:null},
+        stable:{man:'firmware/jc3248-ghost/manifest.json', ver:'GTi 5.9.4-ghost2-tfix — rejects the AXS15231B 0xCA/0xFF idle frames that were read as phantom touches (fixes the “frozen/bouncing” boards); liveness ghost via GHOST=ON', sd:'firmware/jc3248-ghost/GTi-JC35-5.9.4-ghost2-tfix-update.bin'}, beta:null},
     ],
     legacy:[
       {id:'cyd', nm:'CYD', sz:'2.8″', ar:320/240, meta:'ESP32 · 320×240 ILI9341',

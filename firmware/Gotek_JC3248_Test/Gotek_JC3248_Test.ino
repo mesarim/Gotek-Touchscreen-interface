@@ -255,14 +255,31 @@ static bool testPsram(float* fracOut){
   return (bad==0 && done>=want);
 }
 
-// ---- digitizer test: probe 0x3B, read frames, flag garbage / no-ACK / hangs ----
+// ---- I2C bus scan: which addresses ACK (catches a DIFFERENT touch chip, e.g. GT911) ----
+static void i2cScan(){
+  Serial.println("I2C bus scan    :");
+  int n=0;
+  for(uint8_t a=0x08;a<0x78;a++){
+    Wire.beginTransmission(a);
+    if(Wire.endTransmission()==0){
+      const char* note = (a==0x3B)?"  <- AXS15231B (expected)" : (a==0x5D||a==0x14)?"  <- GT911?" : "";
+      Serial.printf("   ACK 0x%02X%s\n",a,note); n++;
+    }
+  }
+  if(!n) Serial.println("   (nothing ACKed - check SDA=4 SCL=8, power)");
+}
+
+// ---- digitizer test: bus scan + full raw-byte dump + coordinate RANGE + TOUCHCAL ----
 static bool testTouch(int khz,int seconds){
   Serial.printf("---- TOUCH / DIGITIZER TEST @ %d kHz ----\n",khz);
   Wire.end(); Wire.begin(TOUCH_SDA,TOUCH_SCL,(uint32_t)khz*1000);
+  i2cScan();
   Wire.beginTransmission(TOUCH_ADDR); uint8_t ack=Wire.endTransmission();
   Serial.printf("I2C probe 0x3B  : %s\n", ack==0?"ACK (present)":"*** NO ACK ***");
   if(ack!=0) return false;
-  uint32_t t0=millis(); int frames=0,valid=0,oor=0,nak=0;
+  Serial.println("Touch the FOUR CORNERS then the CENTRE - watch the raw min/max below:");
+  uint32_t t0=millis(); int frames=0,valid=0,wide=0,nak=0;
+  uint16_t xmin=0xFFFF,xmax=0,ymin=0xFFFF,ymax=0;
   while(millis()-t0 < (uint32_t)seconds*1000){
     uint8_t cmd[11]={0xb5,0xab,0xa5,0x5a,0x00,0x00,0x00,0x08,0x00,0x00,0x00};
     Wire.beginTransmission(TOUCH_ADDR); Wire.write(cmd,11);
@@ -270,15 +287,22 @@ static bool testTouch(int khz,int seconds){
     if(Wire.requestFrom((int)TOUCH_ADDR,8)!=8){ nak++; delay(20); continue; }
     uint8_t b[8]; for(int i=0;i<8;i++) b[i]=Wire.read();
     frames++;
-    if(b[1]){ // a touch is reported
+    if(b[0]==0 && b[1]){ // REAL touch only (vendor rule b[0]==0 && b[1]!=0; rejects 0xCA/0xFF idle fill)
       uint16_t rx=((b[2]&0x0F)<<8)|b[3], ry=((b[4]&0x0F)<<8)|b[5];
-      bool ok=(rx<LCD_WIDTH && ry<LCD_HEIGHT);
-      if(ok) valid++; else oor++;
-      Serial.printf("  touch raw=%u,%u  %s\n",rx,ry, ok?"":"<-- OUT OF RANGE (digitizer glitch)");
+      bool inpanel=(rx<LCD_WIDTH && ry<LCD_HEIGHT);
+      if(inpanel) valid++; else wide++;
+      if(rx<xmin)xmin=rx; if(rx>xmax)xmax=rx; if(ry<ymin)ymin=ry; if(ry>ymax)ymax=ry;
+      Serial.printf("  raw x=%4u y=%4u  bytes= %02X %02X %02X %02X %02X %02X %02X %02X  %s\n",
+        rx,ry, b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7], inpanel?"in-panel":"WIDE(>panel)");
     }
     delay(15);
   }
-  Serial.printf("Frames=%d  valid-touches=%d  out-of-range=%d  bus-naks=%d\n",frames,valid,oor,nak);
+  Serial.printf("Frames=%d valid=%d wide=%d naks=%d\n",frames,valid,wide,nak);
+  if(xmax) Serial.printf("REAL-touch range: X %u..%u   Y %u..%u   (0xCA/0xFF idle frames excluded)\n",xmin,xmax,ymin,ymax);
+  Serial.println("Real touches should sit INSIDE 320x480. The bug was NOT a wide digitizer:");
+  Serial.println("the AXS15231B idle/no-touch frames come back as 0xCA-fill or 0xFF-fill with");
+  Serial.println("b[1]!=0, and the old code read them as phantom touches. The fix is to require");
+  Serial.println("b[0]==0 && b[1]!=0 (vendor rule) - see the ghost2-tfix firmware.");
   return (nak==0);   // a healthy digitizer never NAKs the read
 }
 

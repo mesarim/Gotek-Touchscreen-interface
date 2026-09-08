@@ -35,7 +35,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.4-ghost2-tcal-JC3248"
+#define FW_VERSION "5.9.4-ghost2-tfix-JC3248"
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -410,12 +410,14 @@ static void displayInit(){
 
 // ── Touch (from Dimi) ──
 static uint8_t gTouchPts=0;static uint16_t gTouchX=0,gTouchY=0;
-// ── TOUCH-CAL (ghost2 bench): scale raw digitizer coords -> native pixels ──
-// The old Touch_ReadFrame REJECTED any raw coord >= panel size; digitizer variants
-// that report a WIDER raw range therefore had EVERY touch dropped -> the UI looked
-// frozen while the firmware ran fine (ghost eyes still moved). We now SCALE instead.
-static uint16_t g_txmax=LCD_WIDTH-1, g_tymax=LCD_HEIGHT-1;  // learned raw full-scale (auto-cal), seeded at panel size
-static bool     g_touchcal_fixed=false;                     // TOUCHCAL pinned the range -> stop auto-growing
+// ── TOUCH-CAL (ghost2 bench): OPT-IN raw->pixel scaling for wide-range digitizers ──
+// Default OFF = ORIGINAL behaviour, good boards untouched. Set TOUCHCAL=maxX,maxY in
+// CONFIG.TXT ONLY on a board whose digitizer reports a wider raw range than the panel;
+// then reads are scaled to pixels instead of rejected. Auto-detection was UNSAFE: the
+// finger-lift phantom reads on a good board look identical to a wide-range coord, so
+// auto-cal latched onto them and made a good board bounce/miscalibrate.
+static uint16_t g_txmax=LCD_WIDTH-1, g_tymax=LCD_HEIGHT-1;  // digitizer raw full-scale (set by TOUCHCAL)
+static bool     g_touchcal_fixed=false;                     // true once TOUCHCAL enables scaling
 static uint16_t g_traw_x=0, g_traw_y=0;                     // last raw read (readout / TOUCHCAL tuning)
 static void touchInit(){Wire.begin(TOUCH_SDA,TOUCH_SCL,400000);}
 static bool Touch_ReadFrame(){
@@ -424,15 +426,25 @@ static bool Touch_ReadFrame(){
   if(Wire.endTransmission()!=0){gTouchPts=0;return false;}
   if(Wire.requestFrom((int)TOUCH_ADDR,8)!=8){gTouchPts=0;return false;}
   uint8_t buf[8];for(int i=0;i<8;i++)buf[i]=Wire.read();
-  if(buf[1]==0){gTouchPts=0;return false;}
+  // AXS15231B idle/no-touch frames come back as 0xCA-fill or 0xFF-fill (b[0]!=0).
+  // The vendor driver requires b[0]==0 && b[1]!=0; we only checked b[1], so the idle
+  // fill (b[1]=0xCA/0xFF) was mis-read as a phantom touch -> UI flooded ("bouncing").
+  if(buf[0]!=0 || buf[1]==0){gTouchPts=0;return false;}
   uint16_t rx=((buf[2]&0x0F)<<8)|buf[3],ry=((buf[4]&0x0F)<<8)|buf[5];
-  g_traw_x=rx; g_traw_y=ry;                          // remember raw read (bench)
-  if(rx>4095||ry>4095){gTouchPts=0;return false;}    // 12-bit sanity only (was: reject >=panel -> the "freeze" bug)
-  // TOUCH-CAL: scale raw range -> native pixels instead of rejecting out-of-range.
-  if(!g_touchcal_fixed){ if(rx>g_txmax)g_txmax=rx; if(ry>g_tymax)g_tymax=ry; }
-  uint16_t px=(uint16_t)((uint32_t)rx*(LCD_WIDTH-1)/(g_txmax?g_txmax:1));
-  uint16_t py=(uint16_t)((uint32_t)ry*(LCD_HEIGHT-1)/(g_tymax?g_tymax:1));
-  if(px>=LCD_WIDTH)px=LCD_WIDTH-1; if(py>=LCD_HEIGHT)py=LCD_HEIGHT-1;
+  g_traw_x=rx; g_traw_y=ry;                          // remember raw read (bench readout)
+  uint16_t px,py;
+  if(g_touchcal_fixed){
+    // WIDE-RANGE digitizer (opt-in via TOUCHCAL): drop phantom reads beyond the
+    // calibrated range, then scale the valid range down to native pixels.
+    if(rx>g_txmax||ry>g_tymax){gTouchPts=0;return false;}
+    px=(uint16_t)((uint32_t)rx*(LCD_WIDTH-1)/(g_txmax?g_txmax:1));
+    py=(uint16_t)((uint32_t)ry*(LCD_HEIGHT-1)/(g_tymax?g_tymax:1));
+  } else {
+    // DEFAULT — original behaviour, unchanged: panel-pixel coords, drop out-of-range
+    // (this also filters the finger-lift phantom reads). Good boards untouched.
+    if(rx>=LCD_WIDTH||ry>=LCD_HEIGHT){gTouchPts=0;return false;}
+    px=rx; py=ry;
+  }
   switch(g_rot){                                   // inverse of fb_setPixel mapping
     case 1: gTouchX=px; gTouchY=py; break;
     case 2: gTouchX=py; gTouchY=(LCD_WIDTH-1)-px; break;
