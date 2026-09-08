@@ -32,8 +32,9 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.3-P4"
+#define FW_VERSION "5.9.4-P4"
 #include "retro_assets.h"
+#include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
 #include <WiFi.h>          // P4: brings up the C6 co-processor link (esp-hosted over SDIO)
 #include <esp_hosted.h>     // P4: C6 firmware version query + slave OTA (self-update)
@@ -1056,8 +1057,9 @@ static const Theme THEMES[]={
   {"PAPER", 0xEF5C,0xF7BE,0xFFFF,0x39E7,0xCE59,0x8C51,0x6B4D,0x2124,0x0680,0xE880,0xFD00,0x0C5F,0x0A44,0x4810,0xC618,0x2124},
   {"SYNTH", 0x1001,0x2003,0x3005,0x5008,0x2003,0x600C,0x900F,0xC09F,0x4BE0,0xFC1F,0xE81F,0xA01F,0x2003,0x8010,0x5008,0xE81F},
   {"GOLD",  0x1000,0x1800,0x2000,0x4200,0x1800,0x5240,0x7440,0xC5A0,0x0560,0xFCA0,0xFCC0,0xFCA0,0x1800,0x3200,0x3200,0xFCC0},
+  {"OMEGA", 0x18C5,0x18E6,0x10A5,0x3A2E,0x2968,0x52CE,0x94B4,0xC63A,0x3ED0,0xFC67,0xFE2B,0x46FC,0x1126,0x4557,0x2148,TFT_WHITE},
 };
-static const int NUM_THEMES=6;static int g_theme_idx=0;
+static const int NUM_THEMES=7;static int g_theme_idx=0;
 static uint16_t COL_BG,COL_PANEL,COL_BAR,COL_SEL,COL_SEP,COL_DIM,COL_MID,COL_LIT;
 static uint16_t COL_GREEN,COL_ORANGE,COL_AMBER,COL_BLUE,COL_NOW,COL_ACCENT,COL_CIRC,COL_CIRC_TEXT;
 
@@ -1132,92 +1134,92 @@ static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=
 // (needs a glyph font + multi-byte text), tracked in the roadmap.
 // >>> Translations are a DRAFT — Mez to verify IT, Jan to verify DE, review FR/ES. <<<
 // ============================================================================
-enum { LANG_EN=0, LANG_FR, LANG_IT, LANG_ES, LANG_DE, LANG_N };
+enum { LANG_EN=0, LANG_FR, LANG_IT, LANG_ES, LANG_DE, LANG_NL, LANG_N };
 static int g_lang=0;
-static const char* const LANG_NAMES[LANG_N]={"EN","FR","IT","ES","DE"};
+static const char* const LANG_NAMES[LANG_N]={"EN","FR","IT","ES","DE","NL"};
 enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_CFG_MODE, L_CFG_FONT, L_CFG_LANG, L_CFG_ROTATE, L_CFG_COMPACT, L_CFG_LIBRARY, L_CFG_CATEG, L_CFG_BUTTONS, L_CFG_SAVER, L_CFG_FAVSAVER, L_CFG_HIVEMIND, L_ON, L_OFF, L_PORTRAIT, L_LANDSCAPE, L_FONT_SMALL, L_FONT_NORMAL, L_FONT_LARGE, L_PILL, L_FLAT, L_SLIDES, L_BOUNCE, L_MATRIX, L_SWITCH_DONGLE, L_SCAN_DONGLES, L_STR_N };
 static const char* const LSTR[L_STR_N][LANG_N]={
-  /*L_PREV          */ {"PREV","PREC","PREC","ANT","VORH"},
-  /*L_NEXT          */ {"NEXT","SUIV","SUCC","SIG","WEIT"},
-  /*L_THEME         */ {"THEME","THEME","TEMA","TEMA","THEMA"},
-  /*L_REEL          */ {"REEL","REEL","REEL","REEL","REEL"},
-  /*L_INFO          */ {"CONFIG","CONFIG","CONFIG","CONFIG","CONFIG"},
-  /*L_LIST          */ {"LIST","LISTE","LISTA","LISTA","LISTE"},
-  /*L_ROLL          */ {"ROLL","DES","DADI","DADO","WUERF"},
-  /*L_INSERT        */ {"INSERT","INSERER","INSERISCI","INSERTAR","EINLEGEN"},
-  /*L_EJECT         */ {"EJECT","EJECTER","ESPELLI","EXPULSAR","AUSWERF"},
-  /*L_SEARCH        */ {"SEARCH","RECHERCHE","CERCA","BUSCAR","SUCHE"},
-  /*L_SETTINGS      */ {"SETTINGS","REGLAGES","IMPOSTAZIONI","AJUSTES","OPTIONEN"},
-  /*L_NOW_PLAYING   */ {"NOW PLAYING","EN LECTURE","IN USO","EN USO","LAEUFT"},
-  /*L_NO_GAMES      */ {"NO GAMES","AUCUN JEU","NESSUN GIOCO","SIN JUEGOS","KEINE SPIELE"},
-  /*L_NO_FAVS       */ {"NO FAVOURITES YET","AUCUN FAVORI","NESSUN PREFERITO","SIN FAVORITOS","KEINE FAVORITEN"},
-  /*L_ALL           */ {"ALL","TOUT","TUTTI","TODO","ALLE"},
-  /*L_FAV           */ {"FAV","FAV","PREF","FAV","FAV"},
-  /*L_MOST          */ {"MOST","TOP","TOP","TOP","TOP"},
-  /*L_BUILDING      */ {"BUILDING COVER CACHE","CREATION DU CACHE","CREAZIONE CACHE","CREANDO CACHE","CACHE ERSTELLEN"},
-  /*L_ONEOFF        */ {"one-off: reel thumbnails (first launch / rescan)","unique: vignettes du reel (1er lancement)","una tantum: miniature reel (primo avvio)","una vez: miniaturas del reel (1er inicio)","einmalig: reel-vorschau (erststart)"},
-  /*L_LOADING       */ {"Loading...","Chargement...","Caricamento...","Cargando...","Laedt..."},
-  /*L_LOADING_DIAG  */ {"Loading diag...","Chargement diag...","Caricamento diag...","Cargando diag...","Diag laedt..."},
-  /*L_RESCAN_SD     */ {"RESCAN SD","RELIRE SD","RILEGGI SD","RELEER SD","SD NEU"},
-  /*L_SD_ACCESS     */ {"SD ACCESS","ACCES SD","ACCESSO SD","ACCESO SD","SD ZUGRIFF"},
-  /*L_FW_UPDATE     */ {"FW UPDATE","MAJ FW","AGG. FW","ACT. FW","FW UPDATE"},
-  /*L_SOFT_RESET    */ {"SOFT RESET","REINIT","RIAVVIA","REINICIAR","NEUSTART"},
-  /*L_RESETTING     */ {"RESET...","REINIT...","RIAVVIO...","REINICIO...","NEUSTART..."},
-  /*L_STANDALONE    */ {"STANDALONE","AUTONOME","AUTONOMO","AUTONOMO","STANDALONE"},
-  /*L_WIRELESS      */ {"WIRELESS","SANS FIL","WIRELESS","INALAMB.","FUNK"},
-  /*L_USER_DISKS    */ {"USER DISKS","DISQUES","DISCHI","DISCOS","DISKETTEN"},
-  /*L_RENAME        */ {"RENAME","RENOMMER","RINOMINA","RENOMBRAR","UMBENENN"},
-  /*L_BACK          */ {"BACK","RETOUR","INDIETRO","ATRAS","ZURUECK"},
-  /*L_CANCEL        */ {"CANCEL","ANNULER","ANNULLA","CANCELAR","ABBRECH"},
-  /*L_ACTIVE        */ {"ACTIVE","ACTIF","ATTIVO","ACTIVO","AKTIV"},
-  /*L_MANUAL        */ {"MANUAL","MANUEL","MANUALE","MANUAL","MANUELL"},
-  /*L_PAIRED        */ {"PAIRED","APPAIRE","ABBINATO","VINCULADO","GEKOPPELT"},
-  /*L_NOT_PAIRED    */ {"Not paired","Non appaire","Non abbinato","No vinculado","Nicht gekoppelt"},
-  /*L_NAME_DONGLE   */ {"NAME DONGLE","NOMMER DONGLE","NOMINA DONGLE","NOMBRAR DONGLE","DONGLE NAME"},
-  /*L_DONGLE_LINKED */ {"** DONGLE LINKED **","** DONGLE CONNECTE **","** DONGLE COLLEGATO **","** DONGLE CONECTADO **","** DONGLE VERBUNDEN **"},
-  /*L_CREATE_DISK   */ {"+  CREATE NEW DISK","+  NOUVEAU DISQUE","+  NUOVO DISCO","+  NUEVO DISCO","+  NEUE DISKETTE"},
-  /*L_NONE_YET      */ {"(none yet - tap CREATE NEW DISK)","(aucun - touchez NOUVEAU DISQUE)","(nessuno - tocca NUOVO DISCO)","(ninguno - toca NUEVO DISCO)","(keine - NEUE DISKETTE tippen)"},
-  /*L_PREFMT        */ {"pre-formatted save disks - tap to insert","disques de sauvegarde pre-formates - toucher","dischi di salvataggio pre-formattati - tocca","discos de guardado pre-formateados - toca","vorformatierte speicherdisks - tippen"},
-  /*L_CHECK_DONGLE  */ {"Check dongle is powered","Verifiez l'alim. du dongle","Verifica alim. dongle","Comprueba alim. del dongle","Dongle-Strom pruefen"},
-  /*L_NO_DONGLES    */ {"No dongles found","Aucun dongle trouve","Nessun dongle trovato","No se hallaron dongles","Keine Dongles gefunden"},
-  /*L_NO_WIRELESS_DEV*/ {"No wireless device","Aucun periph. sans fil","Nessun disp. wireless","Sin disp. inalambrico","Kein Funkgeraet"},
-  /*L_USE_CABLE     */ {"Use the cable / standalone.","Utilisez le cable / autonome.","Usa il cavo / autonomo.","Usa el cable / autonomo.","Kabel / Standalone nutzen."},
-  /*L_IN_RANGE      */ {"and in WIRELESS range.","et a portee sans fil.","e nel raggio wireless.","y en rango inalambrico.","und in Funkreichweite."},
-  /*L_AVAIL_HD      */ {"available for HD.","disponible pour HD.","disponibile per HD.","disponible para HD.","verfuegbar fuer HD."},
-  /*L_HD_NO_WIRELESS*/ {"HD - NO WIRELESS","HD - SANS FIL NON","HD - NO WIRELESS","HD - SIN INALAMB.","HD - KEIN FUNK"},
-  /*L_MAX_DD        */ {"Max is DD floppy","Max = disquette DD","Max = floppy DD","Max = disquete DD","Max = DD-Diskette"},
-  /*L_TOO_BIG       */ {"TOO BIG","TROP GROS","TROPPO GRANDE","MUY GRANDE","ZU GROSS"},
-  /*L_SIZE_ERR      */ {"SIZE ERR","ERR TAILLE","ERR DIMENS.","ERR TAMANO","GROESSENFEHL"},
-  /*L_FAILED        */ {"FAILED","ECHEC","FALLITO","FALLIDO","FEHLER"},
-  /*L_SD_MOUNT_FAIL */ {"SD MOUNT FAILED","ECHEC MONTAGE SD","MONTAGGIO SD FALLITO","FALLO MONTAJE SD","SD-MOUNT FEHLER"},
-  /*L_LOAD_DIAG     */ {"LOAD DIAG","CHARGER DIAG","CARICA DIAG","CARGAR DIAG","DIAG LADEN"},
-  /*L_EJECT_DIAG    */ {"EJECT DIAG","EJECTER DIAG","ESPELLI DIAG","EXPULSAR DIAG","DIAG AUSWERF"},
-  /*L_GAMES_TAP     */ {" games - tap INSERT"," jeux - toucher INSERER"," giochi - tocca INSERISCI"," juegos - toca INSERTAR"," Spiele - INSERT tippen"},
-  /*L_CFG_MODE     */ {"MODE","MODE","MODO","MODO","MODUS"},
-  /*L_CFG_FONT     */ {"FONT","POLICE","CARATTERE","FUENTE","SCHRIFT"},
-  /*L_CFG_LANG     */ {"LANG","LANGUE","LINGUA","IDIOMA","SPRACHE"},
-  /*L_CFG_ROTATE   */ {"ROTATE","ROTATION","ROTAZIONE","ROTAR","DREHEN"},
-  /*L_CFG_COMPACT  */ {"COMPACT","COMPACT","COMPATTO","COMPACTO","KOMPAKT"},
-  /*L_CFG_LIBRARY  */ {"LIBRARY","BIBLIO.","LIBRERIA","BIBLIOTECA","BIBLIOTHEK"},
-  /*L_CFG_CATEG    */ {"CATEGORIES","CATEGORIES","CATEGORIE","CATEGORIAS","KATEGORIEN"},
-  /*L_CFG_BUTTONS  */ {"BUTTONS","BOUTONS","PULSANTI","BOTONES","TASTEN"},
-  /*L_CFG_SAVER    */ {"SAVER","VEILLE","SALVASCH.","SALVAPANT.","SCHONER"},
-  /*L_CFG_FAVSAVER */ {"FAV SAVER","FAV VEILLE","FAV SALVASCH","FAV SALVAP.","FAV SCHONER"},
-  /*L_CFG_HIVEMIND */ {"HIVEMIND","HIVEMIND","HIVEMIND","HIVEMIND","HIVEMIND"},
-  /*L_ON           */ {"ON","ON","ON","ON","EIN"},
-  /*L_OFF          */ {"OFF","OFF","OFF","OFF","AUS"},
-  /*L_PORTRAIT     */ {"PORTRAIT","PORTRAIT","VERTICALE","VERTICAL","HOCHFORMAT"},
-  /*L_LANDSCAPE    */ {"LANDSCAPE","PAYSAGE","ORIZZONTALE","HORIZONTAL","QUERFORMAT"},
-  /*L_FONT_SMALL   */ {"SMALL","PETIT","PICCOLO","PEQUENO","KLEIN"},
-  /*L_FONT_NORMAL  */ {"NORMAL","NORMAL","NORMALE","NORMAL","NORMAL"},
-  /*L_FONT_LARGE   */ {"LARGE","GRAND","GRANDE","GRANDE","GROSS"},
-  /*L_PILL         */ {"PILL","ARRONDI","ARROTOND.","REDOND.","RUND"},
-  /*L_FLAT         */ {"FLAT","PLAT","PIATTO","PLANO","FLACH"},
-  /*L_SLIDES       */ {"SLIDES","DIAPO.","DIAPO.","DIAPOS.","DIASHOW"},
-  /*L_BOUNCE       */ {"BOUNCE","REBOND","RIMBALZO","REBOTE","HUEPFEN"},
-  /*L_MATRIX       */ {"MATRIX","MATRIX","MATRIX","MATRIX","MATRIX"},
-  /*L_SWITCH_DONGLE*/ {"SWITCH DONGLE","CHANGER DONGLE","CAMBIA DONGLE","CAMBIAR DONGLE","DONGLE WECHSELN"},
-  /*L_SCAN_DONGLES */ {"SCAN DONGLES","SCAN DONGLES","CERCA DONGLE","BUSCAR DONGLES","DONGLES SUCHEN"},
+  /*L_PREV          */ {"PREV","PREC","PREC","ANT","VORH","VORIG"},
+  /*L_NEXT          */ {"NEXT","SUIV","SUCC","SIG","WEIT","VOLG"},
+  /*L_THEME         */ {"THEME","THEME","TEMA","TEMA","THEMA","THEMA"},
+  /*L_REEL          */ {"REEL","REEL","REEL","REEL","REEL","REEL"},
+  /*L_INFO          */ {"CONFIG","CONFIG","CONFIG","CONFIG","CONFIG","CONFIG"},
+  /*L_LIST          */ {"LIST","LISTE","LISTA","LISTA","LISTE","LIJST"},
+  /*L_ROLL          */ {"ROLL","DES","DADI","DADO","WUERF","DOBBEL"},
+  /*L_INSERT        */ {"INSERT","INSERER","INSERISCI","INSERTAR","EINLEGEN","LADEN"},
+  /*L_EJECT         */ {"EJECT","EJECTER","ESPELLI","EXPULSAR","AUSWERF","UITWERP"},
+  /*L_SEARCH        */ {"SEARCH","RECHERCHE","CERCA","BUSCAR","SUCHE","ZOEKEN"},
+  /*L_SETTINGS      */ {"SETTINGS","REGLAGES","IMPOSTAZIONI","AJUSTES","OPTIONEN","INSTELLINGEN"},
+  /*L_NOW_PLAYING   */ {"NOW PLAYING","EN LECTURE","IN USO","EN USO","LAEUFT","SPEELT NU"},
+  /*L_NO_GAMES      */ {"NO GAMES","AUCUN JEU","NESSUN GIOCO","SIN JUEGOS","KEINE SPIELE","GEEN SPELLEN"},
+  /*L_NO_FAVS       */ {"NO FAVOURITES YET","AUCUN FAVORI","NESSUN PREFERITO","SIN FAVORITOS","KEINE FAVORITEN","NOG GEEN FAVORIETEN"},
+  /*L_ALL           */ {"ALL","TOUT","TUTTI","TODO","ALLE","ALLES"},
+  /*L_FAV           */ {"FAV","FAV","PREF","FAV","FAV","FAV"},
+  /*L_MOST          */ {"MOST","TOP","TOP","TOP","TOP","TOP"},
+  /*L_BUILDING      */ {"BUILDING COVER CACHE","CREATION DU CACHE","CREAZIONE CACHE","CREANDO CACHE","CACHE ERSTELLEN","COVER-CACHE BOUWEN"},
+  /*L_ONEOFF        */ {"one-off: reel thumbnails (first launch / rescan)","unique: vignettes du reel (1er lancement)","una tantum: miniature reel (primo avvio)","una vez: miniaturas del reel (1er inicio)","einmalig: reel-vorschau (erststart)","eenmalig: reel-miniaturen (eerste start)"},
+  /*L_LOADING       */ {"Loading...","Chargement...","Caricamento...","Cargando...","Laedt...","Laden..."},
+  /*L_LOADING_DIAG  */ {"Loading diag...","Chargement diag...","Caricamento diag...","Cargando diag...","Diag laedt...","Diag laden..."},
+  /*L_RESCAN_SD     */ {"RESCAN SD","RELIRE SD","RILEGGI SD","RELEER SD","SD NEU","SD OPNIEUW"},
+  /*L_SD_ACCESS     */ {"SD ACCESS","ACCES SD","ACCESSO SD","ACCESO SD","SD ZUGRIFF","SD-TOEGANG"},
+  /*L_FW_UPDATE     */ {"FW UPDATE","MAJ FW","AGG. FW","ACT. FW","FW UPDATE","FW UPDATE"},
+  /*L_SOFT_RESET    */ {"SOFT RESET","REINIT","RIAVVIA","REINICIAR","NEUSTART","HERSTART"},
+  /*L_RESETTING     */ {"RESET...","REINIT...","RIAVVIO...","REINICIO...","NEUSTART...","HERSTART..."},
+  /*L_STANDALONE    */ {"STANDALONE","AUTONOME","AUTONOMO","AUTONOMO","STANDALONE","STANDALONE"},
+  /*L_WIRELESS      */ {"WIRELESS","SANS FIL","WIRELESS","INALAMB.","FUNK","DRAADLOOS"},
+  /*L_USER_DISKS    */ {"USER DISKS","DISQUES","DISCHI","DISCOS","DISKETTEN","EIGEN DISKS"},
+  /*L_RENAME        */ {"RENAME","RENOMMER","RINOMINA","RENOMBRAR","UMBENENN","HERNOEM"},
+  /*L_BACK          */ {"BACK","RETOUR","INDIETRO","ATRAS","ZURUECK","TERUG"},
+  /*L_CANCEL        */ {"CANCEL","ANNULER","ANNULLA","CANCELAR","ABBRECH","ANNULEER"},
+  /*L_ACTIVE        */ {"ACTIVE","ACTIF","ATTIVO","ACTIVO","AKTIV","ACTIEF"},
+  /*L_MANUAL        */ {"MANUAL","MANUEL","MANUALE","MANUAL","MANUELL","HANDMATIG"},
+  /*L_PAIRED        */ {"PAIRED","APPAIRE","ABBINATO","VINCULADO","GEKOPPELT","GEKOPPELD"},
+  /*L_NOT_PAIRED    */ {"Not paired","Non appaire","Non abbinato","No vinculado","Nicht gekoppelt","Niet gekoppeld"},
+  /*L_NAME_DONGLE   */ {"NAME DONGLE","NOMMER DONGLE","NOMINA DONGLE","NOMBRAR DONGLE","DONGLE NAME","DONGLE NAAM"},
+  /*L_DONGLE_LINKED */ {"** DONGLE LINKED **","** DONGLE CONNECTE **","** DONGLE COLLEGATO **","** DONGLE CONECTADO **","** DONGLE VERBUNDEN **","** DONGLE VERBONDEN **"},
+  /*L_CREATE_DISK   */ {"+  CREATE NEW DISK","+  NOUVEAU DISQUE","+  NUOVO DISCO","+  NUEVO DISCO","+  NEUE DISKETTE","+  NIEUWE DISK"},
+  /*L_NONE_YET      */ {"(none yet - tap CREATE NEW DISK)","(aucun - touchez NOUVEAU DISQUE)","(nessuno - tocca NUOVO DISCO)","(ninguno - toca NUEVO DISCO)","(keine - NEUE DISKETTE tippen)","(nog geen - tik NIEUWE DISK)"},
+  /*L_PREFMT        */ {"pre-formatted save disks - tap to insert","disques de sauvegarde pre-formates - toucher","dischi di salvataggio pre-formattati - tocca","discos de guardado pre-formateados - toca","vorformatierte speicherdisks - tippen","voorgeformatteerde save-disks - tik om te laden"},
+  /*L_CHECK_DONGLE  */ {"Check dongle is powered","Verifiez l'alim. du dongle","Verifica alim. dongle","Comprueba alim. del dongle","Dongle-Strom pruefen","Check voeding van de dongle"},
+  /*L_NO_DONGLES    */ {"No dongles found","Aucun dongle trouve","Nessun dongle trovato","No se hallaron dongles","Keine Dongles gefunden","Geen dongles gevonden"},
+  /*L_NO_WIRELESS_DEV*/ {"No wireless device","Aucun periph. sans fil","Nessun disp. wireless","Sin disp. inalambrico","Kein Funkgeraet","Geen draadloos apparaat"},
+  /*L_USE_CABLE     */ {"Use the cable / standalone.","Utilisez le cable / autonome.","Usa il cavo / autonomo.","Usa el cable / autonomo.","Kabel / Standalone nutzen.","Gebruik de kabel / standalone."},
+  /*L_IN_RANGE      */ {"and in WIRELESS range.","et a portee sans fil.","e nel raggio wireless.","y en rango inalambrico.","und in Funkreichweite.","en binnen draadloos bereik."},
+  /*L_AVAIL_HD      */ {"available for HD.","disponible pour HD.","disponibile per HD.","disponible para HD.","verfuegbar fuer HD.","beschikbaar voor HD."},
+  /*L_HD_NO_WIRELESS*/ {"HD - NO WIRELESS","HD - SANS FIL NON","HD - NO WIRELESS","HD - SIN INALAMB.","HD - KEIN FUNK","HD - NIET DRAADLOOS"},
+  /*L_MAX_DD        */ {"Max is DD floppy","Max = disquette DD","Max = floppy DD","Max = disquete DD","Max = DD-Diskette","Max = DD diskette"},
+  /*L_TOO_BIG       */ {"TOO BIG","TROP GROS","TROPPO GRANDE","MUY GRANDE","ZU GROSS","TE GROOT"},
+  /*L_SIZE_ERR      */ {"SIZE ERR","ERR TAILLE","ERR DIMENS.","ERR TAMANO","GROESSENFEHL","MAATFOUT"},
+  /*L_FAILED        */ {"FAILED","ECHEC","FALLITO","FALLIDO","FEHLER","MISLUKT"},
+  /*L_SD_MOUNT_FAIL */ {"SD MOUNT FAILED","ECHEC MONTAGE SD","MONTAGGIO SD FALLITO","FALLO MONTAJE SD","SD-MOUNT FEHLER","SD MOUNT MISLUKT"},
+  /*L_LOAD_DIAG     */ {"LOAD DIAG","CHARGER DIAG","CARICA DIAG","CARGAR DIAG","DIAG LADEN","DIAG LADEN"},
+  /*L_EJECT_DIAG    */ {"EJECT DIAG","EJECTER DIAG","ESPELLI DIAG","EXPULSAR DIAG","DIAG AUSWERF","DIAG UITWERP"},
+  /*L_GAMES_TAP     */ {" games - tap INSERT"," jeux - toucher INSERER"," giochi - tocca INSERISCI"," juegos - toca INSERTAR"," Spiele - INSERT tippen"," spellen - tik LADEN"},
+  /*L_CFG_MODE     */ {"MODE","MODE","MODO","MODO","MODUS","MODUS"},
+  /*L_CFG_FONT     */ {"FONT","POLICE","CARATTERE","FUENTE","SCHRIFT","LETTER"},
+  /*L_CFG_LANG     */ {"LANG","LANGUE","LINGUA","IDIOMA","SPRACHE","TAAL"},
+  /*L_CFG_ROTATE   */ {"ROTATE","ROTATION","ROTAZIONE","ROTAR","DREHEN","DRAAIEN"},
+  /*L_CFG_COMPACT  */ {"COMPACT","COMPACT","COMPATTO","COMPACTO","KOMPAKT","COMPACT"},
+  /*L_CFG_LIBRARY  */ {"LIBRARY","BIBLIO.","LIBRERIA","BIBLIOTECA","BIBLIOTHEK","BIBLIOTHEEK"},
+  /*L_CFG_CATEG    */ {"CATEGORIES","CATEGORIES","CATEGORIE","CATEGORIAS","KATEGORIEN","CATEGORIEEN"},
+  /*L_CFG_BUTTONS  */ {"BUTTONS","BOUTONS","PULSANTI","BOTONES","TASTEN","KNOPPEN"},
+  /*L_CFG_SAVER    */ {"SAVER","VEILLE","SALVASCH.","SALVAPANT.","SCHONER","SAVER"},
+  /*L_CFG_FAVSAVER */ {"FAV SAVER","FAV VEILLE","FAV SALVASCH","FAV SALVAP.","FAV SCHONER","FAV SAVER"},
+  /*L_CFG_HIVEMIND */ {"HIVEMIND","HIVEMIND","HIVEMIND","HIVEMIND","HIVEMIND","HIVEMIND"},
+  /*L_ON           */ {"ON","ON","ON","ON","EIN","AAN"},
+  /*L_OFF          */ {"OFF","OFF","OFF","OFF","AUS","UIT"},
+  /*L_PORTRAIT     */ {"PORTRAIT","PORTRAIT","VERTICALE","VERTICAL","HOCHFORMAT","STAAND"},
+  /*L_LANDSCAPE    */ {"LANDSCAPE","PAYSAGE","ORIZZONTALE","HORIZONTAL","QUERFORMAT","LIGGEND"},
+  /*L_FONT_SMALL   */ {"SMALL","PETIT","PICCOLO","PEQUENO","KLEIN","KLEIN"},
+  /*L_FONT_NORMAL  */ {"NORMAL","NORMAL","NORMALE","NORMAL","NORMAL","NORMAAL"},
+  /*L_FONT_LARGE   */ {"LARGE","GRAND","GRANDE","GRANDE","GROSS","GROOT"},
+  /*L_PILL         */ {"PILL","ARRONDI","ARROTOND.","REDOND.","RUND","ROND"},
+  /*L_FLAT         */ {"FLAT","PLAT","PIATTO","PLANO","FLACH","VLAK"},
+  /*L_SLIDES       */ {"SLIDES","DIAPO.","DIAPO.","DIAPOS.","DIASHOW","DIA'S"},
+  /*L_BOUNCE       */ {"BOUNCE","REBOND","RIMBALZO","REBOTE","HUEPFEN","STUITER"},
+  /*L_MATRIX       */ {"MATRIX","MATRIX","MATRIX","MATRIX","MATRIX","MATRIX"},
+  /*L_SWITCH_DONGLE*/ {"SWITCH DONGLE","CHANGER DONGLE","CAMBIA DONGLE","CAMBIAR DONGLE","DONGLE WECHSELN","WISSEL DONGLE"},
+  /*L_SCAN_DONGLES */ {"SCAN DONGLES","SCAN DONGLES","CERCA DONGLE","BUSCAR DONGLES","DONGLES SUCHEN","ZOEK DONGLES"},
 };
 static inline const char* T(int id){ return LSTR[id][g_lang]; }
 
@@ -1241,7 +1243,7 @@ static void generateDefaultConfig(){
   f.println("");
   f.println("# Boot cracktro style: 0=random each boot, or pick one:");
   f.println("#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER");
-  f.println("#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE");
+  f.println("#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE  7=OMEGAWARE");
   f.println("CRACKTRO=0");
   f.println("");
   f.println("# Font size: SMALL, NORMAL, LARGE");
@@ -1332,7 +1334,7 @@ static void selfHealConfig(){
     {"MODE",     "\n# Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW to dongle)\nMODE=STANDALONE\n"},
     {"CAROUSEL", "\n# CAROUSEL: default boot view. OFF=game list, ON=cover reel, LAST=restore last view.\nCAROUSEL=OFF\n"},
     {"LOOP",     "\n# Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s\nLOOP=0\n"},
-    {"CRACKTRO", "\n# Boot cracktro style: 0=random each boot, or pick one:\n#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER\n#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE\nCRACKTRO=0\n"},
+    {"CRACKTRO", "\n# Boot cracktro style: 0=random each boot, or pick one:\n#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER\n#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE  7=OMEGAWARE\nCRACKTRO=0\n"},
     {"FONT",     "\n# Font size: SMALL, NORMAL, LARGE\nFONT=NORMAL\n"},
     {"LANG",     "\n# Language: EN, FR, IT, ES, DE  (pull the SD and edit this line if you get stuck)\nLANG=EN\n"},
     {"ROTATE",   "\n# Screen rotation in degrees: 0 or 180 = landscape, 90 or 270 = portrait.\nROTATE=0\n"},
@@ -1378,7 +1380,7 @@ static void loadConfig(){
   File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);if(!f)return;
   while(f.available()){String l=f.readStringUntil('\n');l.trim();if(l.startsWith("#"))continue;
     int eq=l.indexOf('=');if(eq<0)continue;String k=l.substring(0,eq),v=l.substring(eq+1);k.trim();v.trim();
-    if(k=="THEME")applyTheme(v.toInt());else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");else if(k=="CAROUSEL"){String cv=v;cv.toUpperCase();g_car_bootmode=(cv=="LAST")?2:((cv=="1"||cv=="ON"||cv=="TRUE")?1:0);}
+    if(k=="THEME"){int ti=-1;for(int i=0;i<NUM_THEMES;i++)if(v.equalsIgnoreCase(THEMES[i].name)){ti=i;break;}applyTheme(ti>=0?ti:((v.length()&&isDigit(v[0]))?v.toInt():0));}else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");else if(k=="CAROUSEL"){String cv=v;cv.toUpperCase();g_car_bootmode=(cv=="LAST")?2:((cv=="1"||cv=="ON"||cv=="TRUE")?1:0);}
     else if(k=="TAPLOAD")g_tapload=(v=="ON"||v=="1");else if(k=="HOTSWAP")g_hotswap=(v=="ON"||v=="1");else if(k=="FORCESWAP")g_forceswap=(v=="ON"||v=="1");
     else if(k=="FONT"){int f=1;if(v=="SMALL")f=0;else if(v=="LARGE")f=2;applyFont(f);}
     else if(k=="LANG"){String lu=v;lu.toUpperCase();for(int i=0;i<LANG_N;i++)if(lu==LANG_NAMES[i]){g_lang=i;break;}}
@@ -1397,7 +1399,7 @@ static void loadConfig(){
     else if(k=="SSTIME"){uint32_t s=(uint32_t)v.toInt(); if(s<2)s=2; if(s>120)s=120; g_ss_time_ms=s*1000UL;}
     else if(k=="SSFAV"){g_ss_fav=(v!="OFF"&&v!="0");}
     else if(k=="CAP"){int c=v.toInt(); if(c>=1&&c<=64)g_dongle_cap=c;}
-    else if(k=="CRACKTRO"){String cu=v;cu.trim();cu.toUpperCase(); if(cu=="OFF"||cu=="NONE")g_cracktro=-1; else if(cu=="DENISE")g_cracktro=7; else if(cu=="WRANGLER")g_cracktro=8; else if(cu=="RETRONAUT")g_cracktro=9; else{int c=v.toInt(); if(c>=0&&c<=6)g_cracktro=c;}}
+    else if(k=="CRACKTRO"){String cu=v;cu.trim();cu.toUpperCase(); if(cu=="OFF"||cu=="NONE")g_cracktro=-1; else if(cu=="OMEGA"||cu=="OMEGAWARE")g_cracktro=7; else if(cu=="DENISE")g_cracktro=8; else if(cu=="WRANGLER")g_cracktro=9; else if(cu=="RETRONAUT")g_cracktro=10; else{int c=v.toInt(); if(c>=0&&c<=7)g_cracktro=c; /* 7=OMEGAWARE; DENISE/WRANGLER/RETRONAUT hidden, name-only */}}
     else if(k=="SAVES"){v.toUpperCase(); g_saves_mode=(v=="OVERWRITE")?2:(v=="OFF"||v=="0")?0:1;}
     else if(k=="SDSPEED"){int hz=v.toInt(); g_sd_freq=(hz>=40||hz>=40000)?40000:20000;}
     else if(k=="HIVEMIND"){g_hivemind=(v=="OFF"||v=="0")?0:1;}
@@ -1652,6 +1654,7 @@ static void crkWrangler(float t){
 // -- P4.9: hidden Retronaut cracktro (CRACKTRO=RETRONAUT) -- spins his colour logo.
 //    Exclusive tie-in for the Retronaut video; logo used with permission.
 static const char* CRK_SCROLL_RETRO="        OMEGAWARE x RETRONAUT ...  AN EXCLUSIVE FIRST LOOK FOR THE CHANNEL ...  CHEERS FOR THE VIDEO, LEGEND ...  LOGO FLOWN WITH PERMISSION ...  NOW GO LOAD A GAME ...        ";
+static const char* CRK_SCROLL_OMEGA="   OMEGAWARE PRESENTS ... GOTEK TOUCHSCREEN INTERFACE ... THIS LOGO WAS DRAWN ON PAPER IN 1991 AND WAITED 35 YEARS FOR ITS CRACKTRO ... CODE BY MEZ AND DIMMY AND A WHOLE LOT OF CLAUDE ... GREETINGS FLY OUT TO MEZ - THE FLASHFLOPPY CREW - AND EVERYONE STILL SWAPPING DISKS ... KEEP THE AMIGA SPINNING ...      ";
 static uint16_t* g_retro_buf=NULL; static int g_retro_w=0,g_retro_h=0;
 static void retroLogoFree(){ if(g_retro_buf){free(g_retro_buf);g_retro_buf=NULL;} g_retro_w=g_retro_h=0; }
 static bool retroLogoLoad(){
@@ -1688,9 +1691,60 @@ static void crkRetronaut(float t){
   }
   crk_scrollerT(t,CRK_SCROLL_RETRO,CRK_RGB(255,150,40),8,false);
 }
-// Boot cracktro runner. style: 1..6 forces a style, 0 = random pick each boot.
+// Boot cracktro runner. style: 1..7 forces a style, 0 = random pick each boot.
+static void crkOmega(float t){
+  gfx_fillScreen(CRK_RGB(6,8,20));
+  crk_stars();
+  // copper rasterbars, behind everything
+  static const struct { uint8_t r,g,b; float spd, ph; } bars[4]={
+    {255,60,60,0.0011f,0.0f},{60,200,255,0.0009f,2.1f},{200,90,255,0.0013f,4.2f},{255,200,60,0.0007f,1.1f}};
+  for(int b=0;b<4;b++){
+    int cy=(int)(gH*0.5f + sinf(t*bars[b].spd+bars[b].ph)*(gH*0.36f));
+    for(int dy=-10;dy<=10;dy++){
+      float k=1.0f-fabsf((float)dy)/11.0f;
+      int yy=cy+dy;
+      if(yy>=0&&yy<gH-30) gfx_hline(0,yy,gW,CRK_RGB((int)(bars[b].r*k),(int)(bars[b].g*k),(int)(bars[b].b*k)));
+    }
+  }
+  // the logo: chrome gradient + 2px drop shadow (shadow first, per pixel,
+  // later logo pixels legitimately overdraw it)
+  const int lw=OMEGA_LOGO_W, lh=OMEGA_LOGO_H, lx=(gW-lw)/2, ly=26;
+  for(int yy=0;yy<lh;yy++){
+    float f=(float)yy/lh;
+    uint16_t col = f<0.5f ? crk_lerp(238,242,255, 148,168,205, f*2.0f)
+                          : crk_lerp(148,168,205, 228,234,246, (f-0.5f)*2.0f);
+    const uint8_t*row=&OMEGA_LOGO[yy*OMEGA_LOGO_BPR];
+    for(int xx=0;xx<lw;xx++)
+      if(row[xx>>3]&(0x80>>(xx&7))){
+        gfx_drawPixel(lx+xx+2,ly+yy+2,CRK_RGB(4,5,10));
+        gfx_drawPixel(lx+xx,ly+yy,col);
+      }
+  }
+  // the boing ball: tilted checker, floor shadow
+  const int r=34, floorY=gH-44;
+  int bx=gW/2+(int)(sinf(t*0.0014f)*(gW/2-r-8));
+  int topY=ly+lh+10+r;
+  int amp=(floorY-r)-topY; if(amp<20)amp=20;
+  int by=floorY-r-(int)(fabsf(sinf(t*0.0035f))*amp);
+  for(int yy=-4;yy<=4;yy++){
+    int w=(int)(r*0.85f*sqrtf(1.0f-((float)yy/4.0f)*((float)yy/4.0f)));
+    gfx_fillRect(bx-w+6,floorY+yy,2*w,1,CRK_RGB(3,4,9));
+  }
+  const float cell=r/3.0f, ph=fmodf(t*0.05f,cell*2.0f);
+  const float cs=cosf(0.31f), sn=sinf(0.31f);
+  for(int yy=-r;yy<=r;yy++){
+    int hw=(int)sqrtf((float)(r*r-yy*yy));
+    for(int xx=-hw;xx<=hw;xx++){
+      float rx=xx*cs-yy*sn, ry=xx*sn+yy*cs;
+      int cc=(((int)floorf((rx+ph)/cell))+((int)floorf(ry/cell)))&1;
+      gfx_drawPixel(bx+xx,by+yy, cc?CRK_RGB(255,42,42):CRK_RGB(244,244,244));
+    }
+  }
+  gfx_drawCircle(bx,by,r,CRK_RGB(110,0,0));
+  crk_scrollerT(t,CRK_SCROLL_OMEGA,CRK_RGB(255,200,80),10,false);
+}
 static void drawCracktro(int style){
-  bool denise=(style==7), wrangler=(style==8), retronaut=(style==9);   // 5.4.0/P4.9: hidden custom themes
+  bool omega=(style==7), denise=(style==8), wrangler=(style==9), retronaut=(style==10);   // 5.4.0/P4.9: hidden custom themes
   int s=(style>=1&&style<=6)?(style-1):(int)(esp_random()%6);
   initStars();
   if(retronaut)retroLogoLoad();
@@ -1700,7 +1754,8 @@ static void drawCracktro(int style){
     if(Touch_ReadFrame()){unsigned long t0=millis();while(Touch_ReadFrame()&&millis()-t0<500)delay(10);break;}
     if(!g_loop_cracktro&&millis()-startMs>=6000)break;
     float t=(float)(millis()-startMs);
-    if(denise)crkDenise(t);
+    if(omega)crkOmega(t);
+    else if(denise)crkDenise(t);
     else if(wrangler)crkWrangler(t);
     else if(retronaut)crkRetronaut(t);
     else switch(s){case 0:crkCopper(t);break;case 1:crkStarfield(t);break;case 2:crkRaster(t);break;
@@ -3079,9 +3134,9 @@ static void scanScreensaver(){                               // arm iff /screens
   // bounces instead (the third member of the crew, haunting the idle screen).
   g_ss_claude=g_ss_paths.empty();
   g_ss_have=!g_ss_paths.empty()||g_ss_claude;
-  if(g_cracktro==7)g_ss_have=true;   // 5.4.0: Denise theme arms the saver even with no /screensaver folder
-  if(g_cracktro==8)g_ss_have=true;   // v5.5.2: Wrangler theme (CRACKTRO=WRANGLER) arms it too
-  if(g_cracktro==9)g_ss_have=true;   // P4.9: Retronaut helmet screensaver
+  if(g_cracktro==8)g_ss_have=true;   // 5.4.0: Denise theme arms the saver even with no /screensaver folder
+  if(g_cracktro==9)g_ss_have=true;   // v5.5.2: Wrangler theme (CRACKTRO=WRANGLER) arms it too
+  if(g_cracktro==10)g_ss_have=true;   // P4.9: Retronaut helmet screensaver
 }
 // Procedurally draw the Claude starburst into the bounce buffer (no JPEG needed):
 // 12 tapered coral rays around a solid hub. It's math, not a bitmap — so it
@@ -3373,10 +3428,10 @@ static void runScreensaver(){                                // blocking bounce 
     }
   }
   int idx=0;
-  bool deniseMode=(g_cracktro==7);                          // 5.4.0: hidden Denise theme
+  bool deniseMode=(g_cracktro==8);                          // 5.4.0: hidden Denise theme
   bool vincent=false;
-  bool wranglerMode=(g_cracktro==8);                        // v5.5.2: bounce the @wrangler_amiga wordmark
-  bool retronautMode=(g_cracktro==9);                       // P4.9: bounce the Retronaut helmet
+  bool wranglerMode=(g_cracktro==9);                        // v5.5.2: bounce the @wrangler_amiga wordmark
+  bool retronautMode=(g_cracktro==10);                       // P4.9: bounce the Retronaut helmet
   bool claudeMode=(!deniseMode)&&(!wranglerMode)&&(!retronautMode)&&g_ss_paths.empty();
   int ssForm=0;                                              // v4.8.1 ghost + v4.9.6 lolly: cycles on every wall hit
   bool showName=false; const char* curName=NAMES[0]; int nameSz=3;   // v5.5.1: bounce can flip to a contributor name
