@@ -1,0 +1,23 @@
+# ============================================================
+#  GTi JC3248 DIAGNOSTIC  -  config.test
+#  Copy this file to the SD card ROOT. The test sketch reads it
+#  at boot to choose what to test and at what clocks. Open the
+#  Arduino Serial Monitor at 115200 to read the full report.
+# ============================================================
+
+# MODE - what to run:
+#   INFO     dump chip / silicon rev / PSRAM / flash / MAC only
+#   PSRAM    allocate & verify the WHOLE PSRAM  (the freeze suspect)
+#   DISPLAY  R/G/B/W panel sweep - is the QSPI display alive?
+#   TOUCH    probe + read the digitizer; flags no-ACK / garbage coords
+#   ALL      everything (default)
+MODE=ALL
+
+# TIMING knobs - chase "works slow, freezes at rated speed":
+CPU_MHZ=240      # try 160 or 80 to test the timing theory
+LCD_MHZ=50       # QSPI panel clock MHz; drop to 40/30 if display is flaky
+TOUCH_KHZ=400    # I2C digitizer clock; drop to 100 to test a bus/timing conflict
+SD_KHZ=20000     # SDIO clock
+
+LOOP=1           # 1 = keep re-running (best for TOUCH, watch live). 0 = once.
+HOLD_MS=4000     # pause between loops (ms)

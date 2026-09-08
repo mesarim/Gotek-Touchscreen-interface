@@ -1,0 +1,13 @@
+{
+  "name": "GTi — JC3248 Hardware Diagnostic (chip ID / PSRAM / digitizer / clocks)",
+  "version": "diag",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        { "path": "Gotek_JC3248_Test.ino.merged.bin", "offset": 0 }
+      ]
+    }
+  ]
+}

@@ -35,7 +35,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.4-JC3248"
+#define FW_VERSION "5.9.4-ghost-JC3248"
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -922,6 +922,7 @@ static uint16_t* g_slB=NULL;          // slideshow double-buffer: incoming frame
 static int g_dongle_cap=32;   // CONFIG.TXT CAP= : max wireless dongles to discover/cast (1..64)
 static int g_hivemind=1;      // v4.8.1 (undocumented HIVEMIND=): 1 = FLING fans out to all MuCa dongles (classic), 0 = paired dongle only
 static int g_cracktro=0;      // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or 0 = pick one at random each boot
+static bool g_ghost=false;    // CONFIG.TXT GHOST=ON : loop-liveness ghost (diagnostic) — its eyes move only while loop() runs
 static int g_car_bootmode=0;  // CONFIG.TXT CAROUSEL= : default boot VIEW — 0/OFF=list, 1/ON=reel, 2=LAST (restore last view, remembered in /.gtiview). v4.8.5+: carousel is ALWAYS available via the flip toggle regardless.
 // ── 5.8.6: home-WiFi dongle transport (LINK=HOMEWIFI) — route the FLING via the home router to a Webby dongle's gotek.local, instead of hopping to the dongle's own AP ──
 static bool   g_link_home=false;                                    // LINK: false=ESP-NOW/AP (default), true=HOME WIFI
@@ -1423,6 +1424,7 @@ static void loadConfig(){
     else if(k=="REELFILTER"){String ru=v;ru.trim();ru.toUpperCase();g_reelfilter=(ru=="ON"||ru=="1"||ru=="YES");}
     else if(k=="COMPACT"){g_compact=(v=="ON"||v=="1");}
     else if(k=="SCREENSAVER"){g_ss_enabled=(v!="OFF"&&v!="0");}
+    else if(k=="GHOST"){String dv=v;dv.toUpperCase();g_ghost=(dv=="ON"||dv=="1");}   // diagnostic loop-liveness ghost
     else if(k=="SS_IDLE"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_idle_ms=s*1000UL;}
     else if(k=="SS_LOAD"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_load_ms=s*1000UL;}
     else if(k=="SSMODE"){String u=v;u.toUpperCase();g_ss_matrix=(u=="MATRIX"||u=="RAIN");g_ss_slides=!(u=="BOUNCE"||u=="0"||u=="SPRITES"||g_ss_matrix);}   // v5.7.2 slideshow; 5.8.3 matrix
@@ -4602,7 +4604,39 @@ static void handleTap(uint16_t px,uint16_t py){
 // ════════════════════════════════════════════════════════════════════════════
 // MAIN LOOP — touch state machine: tap vs drag-scroll with flick inertia
 // ════════════════════════════════════════════════════════════════════════════
+// ── GHOST: loop-liveness ghost (GHOST=ON) ─────────────────────────────────
+// A tiny ghost drawn STRAIGHT to the panel from loop() (bypassing the PSRAM
+// framebuffer + flush), so its eyes only move while loop() is actually cycling.
+//   no ghost at all  -> never reached loop() (crashed in setup / PSRAM)
+//   eyes moving       -> loop is alive; the UI is just stuck, not frozen
+//   eyes frozen       -> loop blocked mid-iteration (points at a hung call)
+static void ghostTick(){
+  if(!g_ghost || !panel_handle) return;
+  static uint32_t next=0; if(millis()<next) return; next=millis()+280;
+  static uint16_t df=0; df++;
+  const int W=36,H=36; static uint16_t gbuf[36*36];
+  const uint16_t BG=swap16(TFT_BLACK), BODY=swap16(TFT_CYAN), EYE=swap16(TFT_WHITE), PUP=swap16(TFT_BLUE);
+  static const int8_t LX[8]={-2,-1,0,1,2,1,0,-1}, LY[8]={0,-1,-2,-1,0,1,2,1};
+  int d=df&7, dx=LX[d], dy=LY[d]; bool blink=((df%6)==5);
+  const int cx=W/2, ey=14, exL=cx-5, exR=cx+5;
+  for(int y=0;y<H;y++) for(int x=0;x<W;x++){
+    uint16_t c=BG;
+    bool dome=((x-cx)*(x-cx)+(y-15)*(y-15)<=13*13) && y<=15;
+    bool body=(x>=cx-13 && x<=cx+13 && y>15 && y<=28);
+    bool hem =(y>28 && y<=31 && ((x/4)&1));
+    if(dome||body||hem) c=BODY;
+    if((x-exL)*(x-exL)+(y-ey)*(y-ey)<=9 || (x-exR)*(x-exR)+(y-ey)*(y-ey)<=9) c=EYE;
+    if(!blink){
+      if((x-exL-dx)*(x-exL-dx)+(y-ey-dy)*(y-ey-dy)<=2 || (x-exR-dx)*(x-exR-dx)+(y-ey-dy)*(y-ey-dy)<=2) c=PUP;
+    } else if(y==ey && (abs(x-exL)<=2 || abs(x-exR)<=2)) c=PUP;
+    gbuf[y*W+x]=c;
+  }
+  int X0=LCD_WIDTH-W-4, Y0=4;
+  esp_lcd_panel_draw_bitmap(panel_handle, X0, Y0, X0+W, Y0+H, gbuf);
+}
+
 void loop(){
+  ghostTick();   // GHOST=ON: loop-liveness beacon — eyes move only while this runs
   if(g_espnow_link_just_established){g_espnow_link_just_established=false;
     gfx_fillRect(0,0,VW,STATUS_H,0x07E0);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0x07E0);
     gfx_setCursor(VW/2-57,6);gfx_print(T(L_DONGLE_LINKED));gfx_flush();delay(2000);drawStatusBar();gfx_flush();}
