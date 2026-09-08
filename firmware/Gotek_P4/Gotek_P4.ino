@@ -3952,7 +3952,7 @@ static void runSDAccessBoot(bool sdok){
 // OTA partition table (Tools > Partition Scheme > a "2x…APP" 16M scheme); a
 // single-slot "No OTA" build has no spare slot and says so instead of failing ugly.
 #define FWUP_PATH "/GTi_update.bin"
-#define FWUP_TAG  "JC35"   // v5.5.3: SD update auto-detects any *.bin whose name carries this tag (no rename)
+#define FWUP_TAG  "P4"     // SD update auto-detects any GTi-P4-*.bin (was "JC35", which collided with the JC3248 build)
 static void fwupMsg(int y,const char*s,uint16_t fg,uint16_t bg,int sz){gfx_setTextSize(sz);gfx_setTextColor(fg,bg);gfx_setCursor((VW-gfx_textWidth(s))/2,y);gfx_print(s);}
 static void fwupWait(){uint16_t tx,ty;gfx_flush();while(!(Touch_ReadFrame()&&getTouchXY(&tx,&ty)))delay(30);delay(200);}
 // Board-ID guard. Arduino stamps EVERY ESP32 sketch with the same esp_app_desc
