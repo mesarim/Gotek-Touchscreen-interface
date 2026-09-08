@@ -1,4 +1,4 @@
-// Gotek_XIAO_Webby.ino — "Webby (XIAO / N16R8 OPI edition)"  (WiFi / web edition of the dongle)
+// Gotek_XIAO_Webby.ino — "Webby (XIAO OPI edition)"  (WiFi / web edition of the dongle)
 // ============================================================================
 // SIBLING of Gotek_SuperMini.ino (the base, v3.5.x). SAME proven core — USB-MSC
 // ramdisk, build_volume, hardDetach/hardAttach, ESP-NOW + owner-lock, TCP app
@@ -24,13 +24,12 @@
 //
 // Board / IDE settings — the ONLY difference from Gotek_SuperMini_Webby is the PSRAM
 // mode + flash size; the sketch and pins are identical (Webby board-profile design).
-// Pick the target with BOARD_N16R8 below, then set in the IDE:
-//   Board          : ESP32S3 Dev Module     (works for both XIAO and the N16R8 devkit)
+// In the IDE:
+//   Board          : ESP32S3 Dev Module
 //   USB Mode       : USB-OTG (TinyUSB)       USB CDC on Boot: DISABLED   MSC on Boot: Disabled
-//   PSRAM          : *** OPI PSRAM ***  (8MB octal — NOT QSPI; both XIAO S3R8 and N16R8)
-//   XIAO  (ESP32-S3R8)  : Flash 8MB    Partition: Default 8MB w/ spiffs    CPU: 240MHz
-//   N16R8 (S3 DevKitC)  : Flash 16MB   Partition: Default 16MB w/ spiffs   CPU: 240MHz
-//   NOTE: a QSPI-built binary will NOT boot on these OPI boards — must build with OPI.
+//   PSRAM          : *** OPI PSRAM ***  (XIAO ESP32-S3R8 = 8MB octal — NOT QSPI)
+//   Flash Size     : 8MB    Partition: Default 8MB w/ spiffs    CPU: 240MHz
+//   NOTE: a QSPI-built binary will NOT boot on this OPI board — must build with OPI.
 // ============================================================================
 
 #include <Arduino.h>
@@ -50,21 +49,15 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-// ── Target board (OPI-PSRAM S3): default = Seeed XIAO ESP32-S3; uncomment for N16R8 devkit ──
-// #define BOARD_N16R8   // generic ESP32-S3-DevKitC N16R8 (16MB flash). Commented = XIAO (8MB flash).
-#ifdef BOARD_N16R8
-#define FW_VERSION     "Webby-0.7-n16r8"
-#else
 #define FW_VERSION     "Webby-0.7-xiao"
-#endif
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
 // USB broken out to a usable connector (it IS the USB drive), and >=4MB flash.
-// The SuperMini is just the cheapest board that packages those three. XIAO
-// (ESP32-S3R8) and a generic N16R8 devkit share the same GP1/GP2 optional status
-// LEDs and GP0 BOOT, so no pin override is needed here — only the PSRAM/flash build
-// settings differ (see header). Override the pins below only for an oddball board.
+// The SuperMini is just the cheapest board that packages those three. The XIAO
+// (ESP32-S3R8) shares the same GP1/GP2 optional status LEDs and GP0 BOOT, so no pin
+// override is needed here — only the PSRAM mode / flash size differ (see header).
+// Override the pins below only for an oddball board.
 #ifndef LED_RED
 #define LED_RED        1
 #endif
