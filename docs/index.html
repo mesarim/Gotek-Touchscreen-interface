@@ -90,6 +90,7 @@
   .dev .pic{background:#0a0b12;border:1px solid var(--border);border-radius:4px;padding:.4rem;margin-bottom:.6rem;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center}
   .dev.sel .pic{border-color:#4a3a5e}
   .dev .pic svg{width:100%;height:100%}
+  .dev .pic img{max-width:100%;max-height:100%;object-fit:contain;border-radius:2px;display:block}
   .dev .sz{position:absolute;top:.85rem;right:.85rem;font-family:var(--display);font-weight:700;font-size:.68rem;color:var(--copper2);background:#0a0b12cc;border:1px solid var(--border);border-radius:3px;padding:.1rem .35rem}
   .dev .nm{font-family:var(--display);font-weight:700;font-size:.8rem;color:var(--bright);line-height:1.2}
   .dev .meta{font-size:.68rem;color:var(--dim);margin-top:.22rem}
@@ -407,7 +408,7 @@
   // ── real device data: manifests + versions + SD-update bins from docs/firmware/ ──
   const TOUCH = {
     main:[
-      {id:'jc3248', nm:'Guition JC3248', sz:'3.5″', ar:480/320, meta:'ESP32-S3 · 480×320',
+      {id:'jc3248', img:'img/jc3248.jpg', nm:'Guition JC3248', sz:'3.5″', ar:480/320, meta:'ESP32-S3 · 480×320',
         spot:'Guition 3.5-inch capacitive panel', tags:[['RECOMMENDED','t-rec'],['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
         prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, then release BOOT. <span class="muted">The screen stays dark in flash mode — that\'s normal.</span>',
         stable:{man:'firmware/jc3248/manifest.json', ver:'Firmware 5.5.5', sd:'firmware/jc3248/GTi-JC35-5.5.5-update.bin'},
@@ -460,12 +461,12 @@
   };
   const DONGLE = {
     main:[
-      {id:'supermini', nm:'Super Mini', sz:'', dongle:true, meta:'ESP32-S3 Super Mini + PSRAM',
+      {id:'supermini', img:'img/supermini.jpg', nm:'Super Mini', sz:'', dongle:true, meta:'ESP32-S3 Super Mini + PSRAM',
         spot:'The wider board with two side buttons', tags:[['PREFERRED','t-dongle'],['USB DONGLE','t-wifi']],
         prep:'Plug the Super Mini into your PC with a <b>USB data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release.',
         stable:{man:'firmware/supermini/manifest.json', ver:'Firmware v3.2.0 — ESP-NOW + WiFi transport, owner-lock, save write-back', sd:null},
         beta:{man:'firmware/supermini-beta/manifest.json', ver:'Webby-0.7-fleetUI — built-in multi-dongle web console (WebDAV / FTP)', sd:null}},
-      {id:'xiao', nm:'Seeed XIAO', sz:'', dongle:true, meta:'Seeed XIAO ESP32-S3 · 21×17mm',
+      {id:'xiao', img:'img/xiao.jpg', nm:'Seeed XIAO', sz:'', dongle:true, meta:'Seeed XIAO ESP32-S3 · 21×17mm',
         spot:'Tiny board, “seeed studio” metal shield — plug the antenna in first', tags:[['USB DONGLE','t-wifi']],
         prep:'Plug the XIAO into your PC with a <b>USB data cable</b> — and its <b>WiFi antenna</b> before powering on. Hold <b>BOOT</b>, tap <b>RESET</b>, release.',
         stable:{man:'firmware/xiao/manifest.json', ver:'Firmware v3.2.0 — ESP-NOW + WiFi transport tuned for the tiny footprint', sd:null},
@@ -501,7 +502,7 @@
       +'<circle cx="142" cy="64" r="1.4" fill="'+accent+'"/>'
       +'<rect x="62" y="88" width="8" height="4" rx="1" fill="#454a6a"/><rect x="80" y="88" width="8" height="4" rx="1" fill="#454a6a"/></svg>';
   }
-  function devPic(d){ return d.dongle?dongleSVG('#ffc061'):screenSVG(d.ar,'#ff8a3c'); }
+  function devPic(d){ if(d.img) return '<img src="'+d.img+'" alt="'+d.nm+'" loading="lazy">'; return d.dongle?dongleSVG('#ffc061'):screenSVG(d.ar,'#ff8a3c'); }
   function tagHtml(tags){return tags.map(t=>'<span class="tag '+t[1]+'">'+t[0]+'</span>').join('');}
 
   let kind='touch', sel=null, mode='fresh', beta=false, selVer=null;
