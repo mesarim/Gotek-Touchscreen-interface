@@ -1162,7 +1162,7 @@ static void generateDefaultConfig(){
   f.println("# Gotek Touchscreen Interface - OMEGAWARE");
   f.println("# Edit values below, then reboot.");
   f.println("");
-  f.println("# Theme: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD");
+  f.println("# Theme: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD 6=OMEGA");
   f.println("THEME=0");
   f.println("");
   f.println("# Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW to dongle)");
@@ -1182,7 +1182,7 @@ static void generateDefaultConfig(){
   f.println("# Font size: SMALL, NORMAL, LARGE");
   f.println("FONT=NORMAL");
   f.println("");
-  f.println("# Language: EN, FR, IT, ES, DE  (pull the SD and edit this line if you get stuck)");
+  f.println("# Language: EN, FR, IT, ES, DE, NL  (pull the SD and edit this line if you get stuck)");
   f.println("LANG=EN");
   f.println("");
   f.println("# Screen rotation in degrees: 0 or 180 = landscape, 90 or 270 = portrait.");
@@ -1250,6 +1250,10 @@ static void generateDefaultConfig(){
   f.println("");
   f.println("# Wireless dongle MAC (auto-filled when you pair via INFO screen)");
   f.println("# XIAO_MAC=");
+  f.println("");
+  f.println("# --- Advanced (optional; not active - add the line yourself to switch on) ---");
+  f.println("# WEBUI=ON  : serve the built-in web page over home WiFi (needs LINK=HOMEWIFI + HOME_SSID/PASS). Off by default.");
+  f.println("# LOG=OFF   : turn off the /gti.log diagnostic log (on by default).");
   f.close();
 }
 
@@ -1263,13 +1267,13 @@ static void selfHealConfig(){
   if(!SD_MMC.exists("/CONFIG.TXT"))return;   // fresh cards already get the full template
   struct CfgKey{const char*key;const char*block;};
   static const CfgKey KEYS[]={
-    {"THEME",    "\n# Theme: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD\nTHEME=0\n"},
+    {"THEME",    "\n# Theme: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD 6=OMEGA\nTHEME=0\n"},
     {"MODE",     "\n# Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW to dongle)\nMODE=STANDALONE\n"},
     {"CAROUSEL", "\n# CAROUSEL: default boot view. OFF=game list, ON=cover reel, LAST=restore last view.\nCAROUSEL=OFF\n"},
     {"LOOP",     "\n# Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s\nLOOP=0\n"},
     {"CRACKTRO", "\n# Boot cracktro style: 0=random each boot, or pick one:\n#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER\n#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE  7=OMEGAWARE\nCRACKTRO=0\n"},
     {"FONT",     "\n# Font size: SMALL, NORMAL, LARGE\nFONT=NORMAL\n"},
-    {"LANG",     "\n# Language: EN, FR, IT, ES, DE  (pull the SD and edit this line if you get stuck)\nLANG=EN\n"},
+    {"LANG",     "\n# Language: EN, FR, IT, ES, DE, NL  (pull the SD and edit this line if you get stuck)\nLANG=EN\n"},
     {"ROTATE",   "\n# Screen rotation in degrees: 0 or 180 = landscape, 90 or 270 = portrait.\nROTATE=0\n"},
     {"COVERMIN", "\n# COVERMIN: hide covers whose short side is under N px (0 = show all) - keeps the reel + panel clean.\nCOVERMIN=140\n"},
     {"REELFILTER", "\n# REELFILTER: ON = the reel (cover carousel) shows only games whose cover passes COVERMIN;\n#             the A-Z list still shows every game. OFF = reel shows all games.\nREELFILTER=OFF\n"},
