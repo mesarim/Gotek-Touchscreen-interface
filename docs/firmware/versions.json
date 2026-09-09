@@ -3,37 +3,157 @@
   "jc3248": {
     "chipFamily": "ESP32-S3",
     "shared": [
-      { "path": "firmware/_shared/jc3248/bootloader.bin", "offset": 0 },
-      { "path": "firmware/_shared/jc3248/partitions.bin", "offset": 32768 },
-      { "path": "firmware/_shared/jc3248/boot_app0.bin",  "offset": 57344 }
+      {
+        "path": "firmware/_shared/jc3248/bootloader.bin",
+        "offset": 0
+      },
+      {
+        "path": "firmware/_shared/jc3248/partitions.bin",
+        "offset": 32768
+      },
+      {
+        "path": "firmware/_shared/jc3248/boot_app0.bin",
+        "offset": 57344
+      }
     ],
     "appOffset": 65536,
     "builds": [
-      { "v": "5.9.6", "ch": "beta", "latest": true, "date": "2026-09-09", "app": "firmware/jc3248-beta/GTi-JC35-5.9.6-update.bin", "note": "touch fix (AXS15231B idle-frame reject) + shared web panel / web-OTA" },
-      { "v": "5.9.4-ghost2-tfix", "ch": "beta", "date": "2026-09-08", "app": "firmware/jc3248-ghost/GTi-JC35-5.9.4-ghost2-tfix-update.bin", "note": "first touch-fix build (frozen / bouncing-board fix)" },
-      { "v": "5.9.4-beta", "ch": "beta", "date": "2026-09-08", "app": "firmware/jc3248-beta/GTi-JC35-5.9.4-update.bin", "note": "OMEGAWARE cracktro + OMEGA theme + Dutch, reel cover-filter, pill bar" },
-      { "v": "5.9.3-beta", "ch": "beta", "date": "2026-09-07", "app": "firmware/jc3248-beta/GTi-JC35-5.9.3-update.bin", "note": "cracktro + theme groundwork" },
-      { "v": "5.9.1-beta", "ch": "beta", "date": "2026-09-04", "app": "firmware/jc3248-beta/GTi-JC35-5.9.1-update.bin", "note": "Home-WiFi setup on the touchscreen" },
-      { "v": "5.9.0-beta", "ch": "beta", "date": "2026-09-01", "app": "firmware/jc3248-beta/GTi-JC35-5.9.0-update.bin", "note": "sharded cover cache, faster reel on big libraries" },
-      { "v": "5.8.4-beta", "ch": "beta", "date": "2026-08-23", "app": "firmware/jc3248-beta/GTi-JC35-5.8.4-update.bin", "note": "1000+ cards without reboot, on-SD log" },
-      { "v": "5.8.3-beta", "ch": "beta", "date": "2026-08-21", "app": "firmware/jc3248-beta/GTi-JC35-5.8.3-update.bin", "note": "recurse-flatten library baseline" },
-      { "v": "5.5.5", "ch": "stable", "date": "2026-08-07", "full": "firmware/jc3248/manifest.json", "note": "last 5.5.x stable — full image (clean wipe)" }
+      {
+        "v": "5.9.7",
+        "ch": "beta",
+        "latest": true,
+        "date": "2026-09-09",
+        "app": "firmware/jc3248-beta/GTi-JC35-5.9.7-update.bin",
+        "note": "sample manual rewrite (jump [Section] markers); config names OMEGA theme & Dutch"
+      },
+      {
+        "v": "5.9.6",
+        "ch": "beta",
+        "latest": false,
+        "date": "2026-09-09",
+        "app": "firmware/jc3248-beta/GTi-JC35-5.9.6-update.bin",
+        "note": "touch fix (AXS15231B idle-frame reject) + shared web panel / web-OTA + config names OMEGA theme & Dutch"
+      },
+      {
+        "v": "5.9.4-ghost2-tfix",
+        "ch": "beta",
+        "date": "2026-09-08",
+        "app": "firmware/jc3248-ghost/GTi-JC35-5.9.4-ghost2-tfix-update.bin",
+        "note": "first touch-fix build (frozen / bouncing-board fix)"
+      },
+      {
+        "v": "5.9.4-beta",
+        "ch": "beta",
+        "date": "2026-09-08",
+        "app": "firmware/jc3248-beta/GTi-JC35-5.9.4-update.bin",
+        "note": "OMEGAWARE cracktro + OMEGA theme + Dutch, reel cover-filter, pill bar"
+      },
+      {
+        "v": "5.9.3-beta",
+        "ch": "beta",
+        "date": "2026-09-07",
+        "app": "firmware/jc3248-beta/GTi-JC35-5.9.3-update.bin",
+        "note": "cracktro + theme groundwork"
+      },
+      {
+        "v": "5.9.1-beta",
+        "ch": "beta",
+        "date": "2026-09-04",
+        "app": "firmware/jc3248-beta/GTi-JC35-5.9.1-update.bin",
+        "note": "Home-WiFi setup on the touchscreen"
+      },
+      {
+        "v": "5.9.0-beta",
+        "ch": "beta",
+        "date": "2026-09-01",
+        "app": "firmware/jc3248-beta/GTi-JC35-5.9.0-update.bin",
+        "note": "sharded cover cache, faster reel on big libraries"
+      },
+      {
+        "v": "5.8.4-beta",
+        "ch": "beta",
+        "date": "2026-08-23",
+        "app": "firmware/jc3248-beta/GTi-JC35-5.8.4-update.bin",
+        "note": "1000+ cards without reboot, on-SD log"
+      },
+      {
+        "v": "5.8.3-beta",
+        "ch": "beta",
+        "date": "2026-08-21",
+        "app": "firmware/jc3248-beta/GTi-JC35-5.8.3-update.bin",
+        "note": "recurse-flatten library baseline"
+      },
+      {
+        "v": "5.5.5",
+        "ch": "stable",
+        "date": "2026-08-07",
+        "full": "firmware/jc3248/manifest.json",
+        "note": "last 5.5.x stable — full image (clean wipe)"
+      }
     ]
   },
   "jc4827": {
     "chipFamily": "ESP32-S3",
     "shared": [
-      { "path": "firmware/_shared/jc4827/bootloader.bin", "offset": 0 },
-      { "path": "firmware/_shared/jc4827/partitions.bin", "offset": 32768 },
-      { "path": "firmware/_shared/jc4827/boot_app0.bin",  "offset": 57344 }
+      {
+        "path": "firmware/_shared/jc4827/bootloader.bin",
+        "offset": 0
+      },
+      {
+        "path": "firmware/_shared/jc4827/partitions.bin",
+        "offset": 32768
+      },
+      {
+        "path": "firmware/_shared/jc4827/boot_app0.bin",
+        "offset": 57344
+      }
     ],
     "appOffset": 65536,
     "builds": [
-      { "v": "5.9.6", "ch": "beta", "latest": true, "date": "2026-09-09", "app": "firmware/jc4827-beta/GTi-JC43-5.9.6-update.bin", "note": "shared web panel / web-OTA" },
-      { "v": "5.9.4-beta", "ch": "beta", "date": "2026-09-08", "app": "firmware/jc4827-beta/GTi-JC43-5.9.4-update.bin", "note": "OMEGAWARE cracktro + OMEGA theme + Dutch, reel cover-filter, pill bar" },
-      { "v": "5.9.3-beta", "ch": "beta", "date": "2026-09-07", "app": "firmware/jc4827-beta/GTi-JC43-5.9.3-update.bin", "note": "cracktro + theme groundwork" },
-      { "v": "5.8.4-beta", "ch": "beta", "date": "2026-08-23", "app": "firmware/jc4827-beta/GTi-JC43-5.8.4-update.bin", "note": "1000+ cards without reboot, on-SD log" },
-      { "v": "5.8.3-beta", "ch": "beta", "date": "2026-08-21", "app": "firmware/jc4827-beta/GTi-JC43-5.8.3-update.bin", "note": "recurse-flatten library baseline" }
+      {
+        "v": "5.9.7",
+        "ch": "beta",
+        "latest": true,
+        "date": "2026-09-09",
+        "app": "firmware/jc4827-beta/GTi-JC43-5.9.7-update.bin",
+        "note": "sample manual rewrite (jump [Section] markers); config names OMEGA theme & Dutch"
+      },
+      {
+        "v": "5.9.6",
+        "ch": "beta",
+        "latest": false,
+        "date": "2026-09-09",
+        "app": "firmware/jc4827-beta/GTi-JC43-5.9.6-update.bin",
+        "note": "shared web panel / web-OTA + config names OMEGA theme & Dutch"
+      },
+      {
+        "v": "5.9.4-beta",
+        "ch": "beta",
+        "date": "2026-09-08",
+        "app": "firmware/jc4827-beta/GTi-JC43-5.9.4-update.bin",
+        "note": "OMEGAWARE cracktro + OMEGA theme + Dutch, reel cover-filter, pill bar"
+      },
+      {
+        "v": "5.9.3-beta",
+        "ch": "beta",
+        "date": "2026-09-07",
+        "app": "firmware/jc4827-beta/GTi-JC43-5.9.3-update.bin",
+        "note": "cracktro + theme groundwork"
+      },
+      {
+        "v": "5.8.4-beta",
+        "ch": "beta",
+        "date": "2026-08-23",
+        "app": "firmware/jc4827-beta/GTi-JC43-5.8.4-update.bin",
+        "note": "1000+ cards without reboot, on-SD log"
+      },
+      {
+        "v": "5.8.3-beta",
+        "ch": "beta",
+        "date": "2026-08-21",
+        "app": "firmware/jc4827-beta/GTi-JC43-5.8.3-update.bin",
+        "note": "recurse-flatten library baseline"
+      }
     ]
   }
 }

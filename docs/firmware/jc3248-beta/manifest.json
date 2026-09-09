@@ -1,6 +1,6 @@
 {
-  "name": "Gotek Touchscreen Interface — JC3248 (5.9.6 — touch fix + shared web panel)",
-  "version": "5.9.6",
+  "name": "Gotek Touchscreen Interface — JC3248 (5.9.7 — touch fix + shared web panel)",
+  "version": "5.9.7",
   "new_install_prompt_erase": true,
   "builds": [
     { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_JC3248.ino.merged.bin", "offset": 0 } ] }

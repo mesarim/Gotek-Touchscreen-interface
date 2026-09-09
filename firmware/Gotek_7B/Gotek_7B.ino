@@ -55,7 +55,7 @@
 #include "diag_adf.h"      // embedded Amiga Test Kit ADF (zero-RLE compressed, public domain)
 
 // ---------- Version ----------
-#define FW_VERSION  "v5.0.0-7B-GRID"
+#define FW_VERSION  "v5.0.1-7B-GRID"
 // NOTE: version converged with the 7A (-7IN) at 4.13.0 — same interface, so matching
 // functionality now carries a matching number (they had drifted to 4.8.x vs 4.12.x).
 // The -PERF3 suffix still marks this board's dirty-rect perf engine generation.
@@ -1279,6 +1279,76 @@ static void ensureConfig(){
   // Create /ADF directory and README if missing
   if(!SD_MMC.exists("/ADF")){
     SD_MMC.mkdir("/ADF");
+    // v5.0.1: ship the SAMPLE folder template (parity with the JC boards) - a worked
+    // layout example + a [Section]-marked manual for the .rtfm reader. The browser
+    // skips any folder named SAMPLE, so copy it to a real game to see it in-reader.
+    SD_MMC.mkdir("/ADF/SAMPLE");
+    { File sf=SD_MMC.open("/ADF/SAMPLE/Sample.adf",FILE_WRITE);
+      if(sf){sf.print(
+    "This placeholder shows WHERE your disk image goes.\r\n"
+    "A real game is an .adf disk image (usually 880KB for Amiga).\r\n"
+    "The browser ignores any folder named SAMPLE - copy the layout,\r\n"
+    "don't play in here.\r\n");sf.close();} }
+    { File sf=SD_MMC.open("/ADF/SAMPLE/Sample.nfo",FILE_WRITE);
+      if(sf){sf.print(
+    "Title: Sample Game Name\r\n"
+    "Blurb: 1991 - Publisher Name - one line about the game\r\n"
+    "\r\n"
+    "This folder is an EXAMPLE ONLY. Copy this layout for real games:\r\n"
+    "\r\n"
+    "  /ADF/YourGame/YourGame.adf   the disk image\r\n"
+    "  /ADF/YourGame/YourGame.jpg   cover art (JPEG or PNG, any size)\r\n"
+    "  /ADF/YourGame/YourGame.nfo   this info file (plain text)\r\n"
+    "  /ADF/YourGame/YourGame.rtfm  how-to-play manual (plain text, optional)\r\n");sf.close();} }
+    { File sf=SD_MMC.open("/ADF/SAMPLE/Sample.rtfm",FILE_WRITE);
+      if(sf){sf.print(
+    "GTi MANUAL READER - sample card\r\n"
+    "\r\n"
+    "This is a .rtfm manual. Any line written in [square\r\n"
+    "brackets] becomes a heading AND an entry in the jump\r\n"
+    "list - tap the SECTIONS button below to try it.\r\n"
+    "\r\n"
+    "[About]\r\n"
+    "Any game can have a manual. Drop a plain-text file\r\n"
+    "named like the disk, ending .rtfm, beside it:\r\n"
+    "\r\n"
+    "  /ADF/YourGame/YourGame.rtfm\r\n"
+    "\r\n"
+    "A book button then appears on the cover art. Tap it\r\n"
+    "to read whatever you put here.\r\n"
+    "\r\n"
+    "[Reader]\r\n"
+    "  - Drag to scroll; flick for a fast spin.\r\n"
+    "  - SIZE cycles SMALL / NORMAL / LARGE text.\r\n"
+    "  - TOP jumps back to the start.\r\n"
+    "  - SECTIONS opens the jump list (only shown when the\r\n"
+    "    file has [headings]).\r\n"
+    "  - CLOSE or tap the page returns to the library.\r\n"
+    "  - It remembers where you were reading.\r\n"
+    "\r\n"
+    "[Sections]\r\n"
+    "Put a heading on its own line in square brackets, like\r\n"
+    "[Controls] or [Cheats]. It shows in accent colour and\r\n"
+    "in the SECTIONS jump list. That is the whole trick -\r\n"
+    "no other markup needed.\r\n"
+    "\r\n"
+    "[What to put]\r\n"
+    "Controls, how to play, tips, and cheat codes. Best of\r\n"
+    "all: copy-protection answers - the page/word lookups\r\n"
+    "and code-wheel codes. The original manual is long gone,\r\n"
+    "so saving them here is the most useful thing a .rtfm\r\n"
+    "can hold. Add multi-disk swap notes too.\r\n"
+    "\r\n"
+    "[Format]\r\n"
+    "  - Plain ASCII. Accents and smart quotes are cleaned\r\n"
+    "    up for you, but plain is safest.\r\n"
+    "  - A blank line starts a new paragraph.\r\n"
+    "  - Do not hand-wrap - text reflows to the font.\r\n"
+    "  - Keep it under ~16 KB (a page or two).\r\n"
+    "\r\n"
+    "Read the fine manual. :)\r\n"
+    "\r\n"
+    "- OMEGAWARE\r\n");sf.close();} }
     File r = SD_MMC.open("/ADF/README.TXT", FILE_WRITE);
     if(r){
       r.print(

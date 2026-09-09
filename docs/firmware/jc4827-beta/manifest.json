@@ -1,6 +1,6 @@
 {
-  "name": "Gotek Touchscreen Interface — JC4827 4.3\" (5.9.6 — shared web panel)",
-  "version": "5.9.6",
+  "name": "Gotek Touchscreen Interface — JC4827 4.3\" (5.9.7 — shared web panel)",
+  "version": "5.9.7",
   "new_install_prompt_erase": true,
   "builds": [
     { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_JC4827W543.ino.merged.bin", "offset": 0 } ] }
