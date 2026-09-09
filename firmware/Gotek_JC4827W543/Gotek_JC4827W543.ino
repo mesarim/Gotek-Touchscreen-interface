@@ -36,7 +36,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.4-JC4827"
+#define FW_VERSION "5.9.6-JC4827"
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -826,6 +826,7 @@ static bool   g_link_home=false;                                    // LINK: fal
 static String g_home_ssid="", g_home_pass="", g_dongle_home_ip="";  // HOME_SSID / HOME_PASS (set in CONFIG.TXT) + cached DONGLE_HOME_IP
 static String g_dav_host="",g_dav_user="",g_dav_pass="",g_dav_path="/";static int g_dav_port=443;static bool g_dav_https=true,g_dav_on=false;   // DAV_* in CONFIG.TXT (merge step 1)
 static String g_dav_test="";   // DAV_TEST= : smoke test — fetch this remote path once at boot. Proves the wiring without UI; remove the key (or the hook) once real UI exists.
+static bool g_web_on=false;    // WEBUI= : serve the shared web interface over HOME_SSID (merge step 2)
 static void davLogSerial(const String&m){Serial.println(m);}
 static void davApplyConfig(){DavConfig c;c.host=g_dav_host;c.port=(uint16_t)g_dav_port;c.https=g_dav_https;c.user=g_dav_user;c.pass=g_dav_pass;c.basePath=g_dav_path;c.enabled=g_dav_on;davClient.configure(c,davLogSerial);}
 // ── Item 4: load/eject behaviour toggles (all default OFF = safest) ──
@@ -1348,6 +1349,7 @@ static void loadConfig(){
     else if(k=="DAV_PATH"){g_dav_path=v;}
     else if(k=="DAV_HTTPS"){String hv=v;hv.toUpperCase();g_dav_https=!(hv=="OFF"||hv=="0");}
     else if(k=="DAV_TEST"){g_dav_test=v;}
+    else if(k=="WEBUI"){String wv=v;wv.toUpperCase();g_web_on=(wv=="ON"||wv=="1");}
     else if(k=="DONGLE_HOME_IP"){g_dongle_home_ip=v;}}
   f.close();
   davApplyConfig();   // hand the DAV_* settings to the shared client (merge step 1)
@@ -2964,17 +2966,23 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
   if(!g_dav_on||g_dav_host.length()==0){g_dav_fail="not configured (DAV=ON + DAV_HOST=)";Serial.println("[DAV] "+g_dav_fail);return false;}
   if(g_espnow_started){g_dav_fail="wireless dongle link active";Serial.println("[DAV] "+g_dav_fail);return false;}
   if(g_home_ssid.length()==0){g_dav_fail="HOME_SSID not set";Serial.println("[DAV] "+g_dav_fail);return false;}
-  Serial.printf("[DAV] joining '%s'\n",g_home_ssid.c_str());
-  WiFi.mode(WIFI_STA);WiFi.persistent(false);WiFi.setAutoReconnect(false);
-  WiFi.disconnect(false,true);delay(200);
-  WiFi.begin(g_home_ssid.c_str(),g_home_pass.c_str());
-  uint32_t t0=millis();while(WiFi.status()!=WL_CONNECTED&&millis()-t0<15000)delay(200);
-  if(WiFi.status()!=WL_CONNECTED){g_dav_fail="WiFi join failed";Serial.println("[DAV] "+g_dav_fail);WiFi.disconnect();WiFi.mode(WIFI_OFF);return false;}
+  // When the web server already holds a live STA connection, use it and — the
+  // important half — leave it standing afterwards. Joining is only for the
+  // standalone case where the radio is otherwise off.
+  const bool keepUp=(WiFi.status()==WL_CONNECTED);
+  if(!keepUp){
+    Serial.printf("[DAV] joining '%s'\n",g_home_ssid.c_str());
+    WiFi.mode(WIFI_STA);WiFi.persistent(false);WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false,true);delay(200);
+    WiFi.begin(g_home_ssid.c_str(),g_home_pass.c_str());
+    uint32_t t0=millis();while(WiFi.status()!=WL_CONNECTED&&millis()-t0<15000)delay(200);
+    if(WiFi.status()!=WL_CONNECTED){g_dav_fail="WiFi join failed";Serial.println("[DAV] "+g_dav_fail);WiFi.disconnect();WiFi.mode(WIFI_OFF);return false;}
+  }
   davApplyConfig();
   if(g_loaded&&!g_forceswap)hardDetach();
   long got=davClient.streamToBuffer(remotePath,g_disk+DATA_LBA*512,MAX_FILE_BYTES,false);
   davClient.closeIdle();                          // the pooled TLS context is ~50KB of internal heap
-  WiFi.disconnect();delay(100);WiFi.mode(WIFI_OFF);   // same leave discipline as espnowSendDiskHome
+  if(!keepUp){WiFi.disconnect();delay(100);WiFi.mode(WIFI_OFF);}   // standalone: same leave discipline as espnowSendDiskHome
   if(got<=0||davClient.lastTruncated()){
     g_dav_fail=davClient.lastError();
     Serial.printf("[DAV] fetch failed: %s\n",davClient.lastError().c_str());
@@ -2993,6 +3001,10 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
   Serial.printf("[DAV] mounted %s (%ld bytes)\n",showName.c_str(),got);
   return true;
 }
+
+// Merge step 2: the shared web interface + OTA, served over HOME_SSID when
+// WEBUI=ON. Placed here because it calls doLoadWebdav and the disk builders.
+#include "../shared/web_panel.h"
 
 static void doUnload(){
   // v4.8.0: EJECT is a save point — drain before the disk goes away
@@ -3329,6 +3341,7 @@ static void runSlideshow(std::vector<String>&pool){
   gfx_flush();
   if(ssSlideHold(g_ss_time_ms)){ ssSlideFree(); return; }
   while(true){
+    webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
     if(pool.size()<=1){ if(ssSlideHold(g_ss_time_ms))break; else continue; }
     int ni=(idx+1)%(int)pool.size();
     if(dbl){
@@ -3361,6 +3374,7 @@ static void runMatrixRain(){
   gfx_fillScreen(TFT_BLACK); gfx_flush();
   uint32_t last=millis(), seed=1;
   while(true){
+    webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
     if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
     uint32_t nf=millis();
     if(nf-last>=60){ last=nf; seed++;
@@ -3438,6 +3452,7 @@ static void runScreensaver(){                                // blocking bounce 
   gfx_fillScreen(TFT_BLACK);
   uint32_t last=millis();
   while(true){
+    webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
     if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
     uint32_t nf=millis();
     if(nf-last>=33){ last=nf;
@@ -4076,6 +4091,7 @@ void setup(){
   bool bootCar=(g_car_bootmode==1)||(g_car_bootmode==2&&readLastView()==1);   // v4.8.6: CAROUSEL= 0=list / 1=reel / LAST=restore
   if(bootCar&&!g_games.empty())carEnter();else{drawFullUI();gfx_flush();}
   esp_ota_mark_app_valid_cancel_rollback();   // v5.3: confirm this image booted OK (satisfies the A/B rollback handshake; harmless no-op on non-rollback bootloaders)
+  webPanelBegin();   // WEBUI=ON: join HOME_SSID and serve the shared page (merge step 2)
   // Merge step 1 smoke test: DAV_TEST=<remote path> in CONFIG.TXT fetches that
   // file over WebDAV right after boot and mounts it — the whole shared-client
   // wiring, visible on a Gotek, with zero UI. Skipped in wireless mode (the
@@ -4389,6 +4405,7 @@ static void handleTap(uint16_t px,uint16_t py){
 // MAIN LOOP — touch state machine: tap vs drag-scroll with flick inertia
 // ════════════════════════════════════════════════════════════════════════════
 void loop(){
+  webPanelService();   // one web client + one queued DAV load per pass (merge step 2)
   if(g_espnow_link_just_established){g_espnow_link_just_established=false;
     gfx_fillRect(0,0,VW,STATUS_H,0x07E0);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0x07E0);
     gfx_setCursor(VW/2-57,6);gfx_print(T(L_DONGLE_LINKED));gfx_flush();delay(2000);drawStatusBar();gfx_flush();}

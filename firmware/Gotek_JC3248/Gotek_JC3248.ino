@@ -35,7 +35,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.4-ghost2-tfix-JC3248"
+#define FW_VERSION "5.9.6-JC3248"
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -170,20 +170,6 @@ static esp_lcd_panel_io_handle_t io_handle = NULL;
 static esp_lcd_panel_handle_t panel_handle = NULL;
 static uint16_t *framebuffer = NULL;
 static uint16_t *dma_buffer = NULL;
-// ── GHOST (GHOST=ON): diagnostic liveness beacon, composited into the full-width
-//    flush path below (never a partial-width blit). Declared here so gfx_flush can
-//    overlay it. Rendered/repainted from loop() -> see ghostTick(). ──
-static bool g_ghost=false;
-#define GHOST_W 36
-#define GHOST_H 36
-#define GHOST_X0 (LCD_WIDTH-GHOST_W-4)
-#define GHOST_Y0 4
-static uint16_t g_ghost_buf[GHOST_W*GHOST_H];
-static bool g_ghost_drawn=false;   // set true after first render; gate for the flush overlay
-static inline void ghostOverlay(uint16_t*dma,int sy,int rows){
-  for(int gy=0;gy<GHOST_H;gy++){int py=GHOST_Y0+gy; if(py<sy||py>=sy+rows)continue;
-    memcpy(&dma[(py-sy)*LCD_WIDTH+GHOST_X0], &g_ghost_buf[gy*GHOST_W], GHOST_W*2);}
-}
 static JPEGDEC jpegdec;
 static PNG     pngdec;   // v4.8.4 PNG cover support
 
@@ -259,7 +245,6 @@ static void gfx_flush(){
   for(int sy=0;sy<LCD_HEIGHT;sy+=ROWS_PER_STRIP){
     int rows=min(ROWS_PER_STRIP,LCD_HEIGHT-sy);
     memcpy(dma_buffer,&framebuffer[sy*LCD_WIDTH],LCD_WIDTH*rows*2);
-    if(g_ghost&&g_ghost_drawn)ghostOverlay(dma_buffer,sy,rows);
     esp_lcd_panel_draw_bitmap(panel_handle,0,sy,LCD_WIDTH,sy+rows,dma_buffer);
     delayMicroseconds(500);
   }
@@ -410,15 +395,6 @@ static void displayInit(){
 
 // ── Touch (from Dimi) ──
 static uint8_t gTouchPts=0;static uint16_t gTouchX=0,gTouchY=0;
-// ── TOUCH-CAL (ghost2 bench): OPT-IN raw->pixel scaling for wide-range digitizers ──
-// Default OFF = ORIGINAL behaviour, good boards untouched. Set TOUCHCAL=maxX,maxY in
-// CONFIG.TXT ONLY on a board whose digitizer reports a wider raw range than the panel;
-// then reads are scaled to pixels instead of rejected. Auto-detection was UNSAFE: the
-// finger-lift phantom reads on a good board look identical to a wide-range coord, so
-// auto-cal latched onto them and made a good board bounce/miscalibrate.
-static uint16_t g_txmax=LCD_WIDTH-1, g_tymax=LCD_HEIGHT-1;  // digitizer raw full-scale (set by TOUCHCAL)
-static bool     g_touchcal_fixed=false;                     // true once TOUCHCAL enables scaling
-static uint16_t g_traw_x=0, g_traw_y=0;                     // last raw read (readout / TOUCHCAL tuning)
 static void touchInit(){Wire.begin(TOUCH_SDA,TOUCH_SCL,400000);}
 static bool Touch_ReadFrame(){
   uint8_t cmd[11]={0xb5,0xab,0xa5,0x5a,0x00,0x00,0x00,0x08,0x00,0x00,0x00};
@@ -431,20 +407,10 @@ static bool Touch_ReadFrame(){
   // fill (b[1]=0xCA/0xFF) was mis-read as a phantom touch -> UI flooded ("bouncing").
   if(buf[0]!=0 || buf[1]==0){gTouchPts=0;return false;}
   uint16_t rx=((buf[2]&0x0F)<<8)|buf[3],ry=((buf[4]&0x0F)<<8)|buf[5];
-  g_traw_x=rx; g_traw_y=ry;                          // remember raw read (bench readout)
-  uint16_t px,py;
-  if(g_touchcal_fixed){
-    // WIDE-RANGE digitizer (opt-in via TOUCHCAL): drop phantom reads beyond the
-    // calibrated range, then scale the valid range down to native pixels.
-    if(rx>g_txmax||ry>g_tymax){gTouchPts=0;return false;}
-    px=(uint16_t)((uint32_t)rx*(LCD_WIDTH-1)/(g_txmax?g_txmax:1));
-    py=(uint16_t)((uint32_t)ry*(LCD_HEIGHT-1)/(g_tymax?g_tymax:1));
-  } else {
-    // DEFAULT — original behaviour, unchanged: panel-pixel coords, drop out-of-range
-    // (this also filters the finger-lift phantom reads). Good boards untouched.
-    if(rx>=LCD_WIDTH||ry>=LCD_HEIGHT){gTouchPts=0;return false;}
-    px=rx; py=ry;
-  }
+  // AXS15231B reports touch in native panel pixels; drop out-of-range
+  // (this also filters the finger-lift phantom reads).
+  if(rx>=LCD_WIDTH||ry>=LCD_HEIGHT){gTouchPts=0;return false;}
+  uint16_t px=rx, py=ry;
   switch(g_rot){                                   // inverse of fb_setPixel mapping
     case 1: gTouchX=px; gTouchY=py; break;
     case 2: gTouchX=py; gTouchY=(LCD_WIDTH-1)-px; break;
@@ -968,13 +934,13 @@ static uint16_t* g_slB=NULL;          // slideshow double-buffer: incoming frame
 static int g_dongle_cap=32;   // CONFIG.TXT CAP= : max wireless dongles to discover/cast (1..64)
 static int g_hivemind=1;      // v4.8.1 (undocumented HIVEMIND=): 1 = FLING fans out to all MuCa dongles (classic), 0 = paired dongle only
 static int g_cracktro=0;      // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or 0 = pick one at random each boot
-// (g_ghost is declared up near the framebuffer globals.) CONFIG.TXT GHOST=ON : loop-liveness ghost (diagnostic) — its eyes move only while loop() runs
 static int g_car_bootmode=0;  // CONFIG.TXT CAROUSEL= : default boot VIEW — 0/OFF=list, 1/ON=reel, 2=LAST (restore last view, remembered in /.gtiview). v4.8.5+: carousel is ALWAYS available via the flip toggle regardless.
 // ── 5.8.6: home-WiFi dongle transport (LINK=HOMEWIFI) — route the FLING via the home router to a Webby dongle's gotek.local, instead of hopping to the dongle's own AP ──
 static bool   g_link_home=false;                                    // LINK: false=ESP-NOW/AP (default), true=HOME WIFI
 static String g_home_ssid="", g_home_pass="", g_dongle_home_ip="";  // HOME_SSID / HOME_PASS (set in CONFIG.TXT) + cached DONGLE_HOME_IP
 static String g_dav_host="",g_dav_user="",g_dav_pass="",g_dav_path="/";static int g_dav_port=443;static bool g_dav_https=true,g_dav_on=false;   // DAV_* in CONFIG.TXT (merge step 1)
 static String g_dav_test="";   // DAV_TEST= : smoke test — fetch this remote path once at boot. Proves the wiring without UI; remove the key (or the hook) once real UI exists.
+static bool g_web_on=false;    // WEBUI= : serve the shared web interface over HOME_SSID (merge step 2)
 static void davLogSerial(const String&m){Serial.println(m);}
 static void davApplyConfig(){DavConfig c;c.host=g_dav_host;c.port=(uint16_t)g_dav_port;c.https=g_dav_https;c.user=g_dav_user;c.pass=g_dav_pass;c.basePath=g_dav_path;c.enabled=g_dav_on;davClient.configure(c,davLogSerial);}
 // ── Item 4: load/eject behaviour toggles (all default OFF = safest) ──
@@ -1391,9 +1357,6 @@ static void generateDefaultConfig(){
   f.println("DONGLE_HOME_IP=");
   f.println("");
   f.println("");
-  f.println("# GHOST: diagnostic liveness beacon. ON = draw a tiny ghost that moves its eyes while the");
-  f.println("#        firmware is running - lets you tell a frozen board from a busy one. OFF = normal (default).");
-  f.println("GHOST=OFF");
   f.println("# Wireless dongle MAC (auto-filled when you pair via INFO screen)");
   f.println("# XIAO_MAC=");
   f.close();
@@ -1439,7 +1402,6 @@ static void selfHealConfig(){
     {"HOME_SSID",      "# HOME_SSID: your home WiFi name (only used when LINK=HOMEWIFI).\nHOME_SSID=\n"},
     {"HOME_PASS",      "# HOME_PASS: your home WiFi password (only used when LINK=HOMEWIFI).\nHOME_PASS=\n"},
     {"DONGLE_HOME_IP", "# DONGLE_HOME_IP: auto-filled cache of the dongle's home-network IP (mDNS gotek.local is the primary lookup).\nDONGLE_HOME_IP=\n"},
-    {"GHOST",    "\n# GHOST: diagnostic liveness beacon. ON = a tiny ghost moves its eyes while the firmware runs\n#        (lets you tell a frozen board from a busy one). OFF = normal (default).\nGHOST=OFF\n"},
   };
   const int NK=sizeof(KEYS)/sizeof(KEYS[0]);
   bool present[NK]; for(int i=0;i<NK;i++)present[i]=false;
@@ -1475,8 +1437,6 @@ static void loadConfig(){
     else if(k=="REELFILTER"){String ru=v;ru.trim();ru.toUpperCase();g_reelfilter=(ru=="ON"||ru=="1"||ru=="YES");}
     else if(k=="COMPACT"){g_compact=(v=="ON"||v=="1");}
     else if(k=="SCREENSAVER"){g_ss_enabled=(v!="OFF"&&v!="0");}
-    else if(k=="GHOST"){String dv=v;dv.toUpperCase();g_ghost=(dv=="ON"||dv=="1");}   // diagnostic loop-liveness ghost
-    else if(k=="TOUCHCAL"){int c=v.indexOf(','); if(c>0){uint16_t mx=(uint16_t)v.substring(0,c).toInt(),my=(uint16_t)v.substring(c+1).toInt(); if(mx>0&&my>0){g_txmax=mx;g_tymax=my;g_touchcal_fixed=true;}}}   // pin digitizer raw full-scale "maxX,maxY"; disables auto-cal
     else if(k=="SS_IDLE"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_idle_ms=s*1000UL;}
     else if(k=="SS_LOAD"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_load_ms=s*1000UL;}
     else if(k=="SSMODE"){String u=v;u.toUpperCase();g_ss_matrix=(u=="MATRIX"||u=="RAIN");g_ss_slides=!(u=="BOUNCE"||u=="0"||u=="SPRITES"||g_ss_matrix);}   // v5.7.2 slideshow; 5.8.3 matrix
@@ -1505,6 +1465,7 @@ static void loadConfig(){
     else if(k=="DAV_PATH"){g_dav_path=v;}
     else if(k=="DAV_HTTPS"){String hv=v;hv.toUpperCase();g_dav_https=!(hv=="OFF"||hv=="0");}
     else if(k=="DAV_TEST"){g_dav_test=v;}
+    else if(k=="WEBUI"){String wv=v;wv.toUpperCase();g_web_on=(wv=="ON"||wv=="1");}
     else if(k=="DONGLE_HOME_IP"){g_dongle_home_ip=v;}}
   f.close();
   davApplyConfig();   // hand the DAV_* settings to the shared client (merge step 1)
@@ -3103,17 +3064,23 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
   if(!g_dav_on||g_dav_host.length()==0){g_dav_fail="not configured (DAV=ON + DAV_HOST=)";Serial.println("[DAV] "+g_dav_fail);return false;}
   if(g_espnow_started){g_dav_fail="wireless dongle link active";Serial.println("[DAV] "+g_dav_fail);return false;}
   if(g_home_ssid.length()==0){g_dav_fail="HOME_SSID not set";Serial.println("[DAV] "+g_dav_fail);return false;}
-  Serial.printf("[DAV] joining '%s'\n",g_home_ssid.c_str());
-  WiFi.mode(WIFI_STA);WiFi.persistent(false);WiFi.setAutoReconnect(false);
-  WiFi.disconnect(false,true);delay(200);
-  WiFi.begin(g_home_ssid.c_str(),g_home_pass.c_str());
-  uint32_t t0=millis();while(WiFi.status()!=WL_CONNECTED&&millis()-t0<15000)delay(200);
-  if(WiFi.status()!=WL_CONNECTED){g_dav_fail="WiFi join failed";Serial.println("[DAV] "+g_dav_fail);WiFi.disconnect();WiFi.mode(WIFI_OFF);return false;}
+  // When the web server already holds a live STA connection, use it and — the
+  // important half — leave it standing afterwards. Joining is only for the
+  // standalone case where the radio is otherwise off.
+  const bool keepUp=(WiFi.status()==WL_CONNECTED);
+  if(!keepUp){
+    Serial.printf("[DAV] joining '%s'\n",g_home_ssid.c_str());
+    WiFi.mode(WIFI_STA);WiFi.persistent(false);WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false,true);delay(200);
+    WiFi.begin(g_home_ssid.c_str(),g_home_pass.c_str());
+    uint32_t t0=millis();while(WiFi.status()!=WL_CONNECTED&&millis()-t0<15000)delay(200);
+    if(WiFi.status()!=WL_CONNECTED){g_dav_fail="WiFi join failed";Serial.println("[DAV] "+g_dav_fail);WiFi.disconnect();WiFi.mode(WIFI_OFF);return false;}
+  }
   davApplyConfig();
   if(g_loaded&&!g_forceswap)hardDetach();
   long got=davClient.streamToBuffer(remotePath,g_disk+DATA_LBA*512,MAX_FILE_BYTES,false);
   davClient.closeIdle();                          // the pooled TLS context is ~50KB of internal heap
-  WiFi.disconnect();delay(100);WiFi.mode(WIFI_OFF);   // same leave discipline as espnowSendDiskHome
+  if(!keepUp){WiFi.disconnect();delay(100);WiFi.mode(WIFI_OFF);}   // standalone: same leave discipline as espnowSendDiskHome
   if(got<=0||davClient.lastTruncated()){
     g_dav_fail=davClient.lastError();
     Serial.printf("[DAV] fetch failed: %s\n",davClient.lastError().c_str());
@@ -3132,6 +3099,10 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
   Serial.printf("[DAV] mounted %s (%ld bytes)\n",showName.c_str(),got);
   return true;
 }
+
+// Merge step 2: the shared web interface + OTA, served over HOME_SSID when
+// WEBUI=ON. Placed here because it calls doLoadWebdav and the disk builders.
+#include "../shared/web_panel.h"
 
 static void doUnload(){
   // v4.8.0: EJECT is a save point — drain before the disk goes away
@@ -3466,6 +3437,7 @@ static void runSlideshow(std::vector<String>&pool){
   gfx_flush();
   if(ssSlideHold(g_ss_time_ms)){ ssSlideFree(); return; }
   while(true){
+    webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
     if(pool.size()<=1){ if(ssSlideHold(g_ss_time_ms))break; else continue; }
     int ni=(idx+1)%(int)pool.size();
     if(dbl){
@@ -3498,6 +3470,7 @@ static void runMatrixRain(){
   gfx_fillScreen(TFT_BLACK); gfx_flush();
   uint32_t last=millis(), seed=1;
   while(true){
+    webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
     if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
     uint32_t nf=millis();
     if(nf-last>=60){ last=nf; seed++;
@@ -3575,6 +3548,7 @@ static void runScreensaver(){                                // blocking bounce 
   gfx_fillScreen(TFT_BLACK);
   uint32_t last=millis();
   while(true){
+    webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
     if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
     uint32_t nf=millis();
     if(nf-last>=33){ last=nf;
@@ -4343,6 +4317,7 @@ void setup(){
   bool bootCar=(g_car_bootmode==1)||(g_car_bootmode==2&&readLastView()==1);   // v4.8.6: CAROUSEL= 0=list / 1=reel / LAST=restore
   if(bootCar&&!g_games.empty())carEnter();else{drawFullUI();gfx_flush();}
   esp_ota_mark_app_valid_cancel_rollback();   // v5.3: confirm this image booted OK (satisfies the A/B rollback handshake; harmless no-op on non-rollback bootloaders)
+  webPanelBegin();   // WEBUI=ON: join HOME_SSID and serve the shared page (merge step 2)
   // Merge step 1 smoke test: DAV_TEST=<remote path> in CONFIG.TXT fetches that
   // file over WebDAV right after boot and mounts it — the whole shared-client
   // wiring, visible on a Gotek, with zero UI. Skipped in wireless mode (the
@@ -4657,48 +4632,9 @@ static void handleTap(uint16_t px,uint16_t py){
 // ════════════════════════════════════════════════════════════════════════════
 // MAIN LOOP — touch state machine: tap vs drag-scroll with flick inertia
 // ════════════════════════════════════════════════════════════════════════════
-// ── GHOST: loop-liveness ghost (GHOST=ON) ─────────────────────────────────
-// A tiny ghost drawn STRAIGHT to the panel from loop() (bypassing the PSRAM
-// framebuffer + flush), so its eyes only move while loop() is actually cycling.
-//   no ghost at all  -> never reached loop() (crashed in setup / PSRAM)
-//   eyes moving       -> loop is alive; the UI is just stuck, not frozen
-//   eyes frozen       -> loop blocked mid-iteration (points at a hung call)
-static void ghostTick(){
-  if(!g_ghost || !framebuffer || !panel_handle) return;
-  static uint32_t next=0; if(millis()<next) return; next=millis()+280;
-  static uint16_t df=0; df++;
-  const uint16_t BG=swap16(TFT_BLACK), BODY=swap16(TFT_CYAN), EYE=swap16(TFT_WHITE), PUP=swap16(TFT_BLUE);
-  static const int8_t LX[8]={-2,-1,0,1,2,1,0,-1}, LY[8]={0,-1,-2,-1,0,1,2,1};
-  int d=df&7, dx=LX[d], dy=LY[d]; bool blink=((df%6)==5);
-  const int cx=GHOST_W/2, ey=14, exL=cx-5, exR=cx+5;
-  for(int y=0;y<GHOST_H;y++) for(int x=0;x<GHOST_W;x++){
-    uint16_t c=BG;
-    bool dome=((x-cx)*(x-cx)+(y-15)*(y-15)<=13*13) && y<=15;
-    bool body=(x>=cx-13 && x<=cx+13 && y>15 && y<=28);
-    bool hem =(y>28 && y<=31 && ((x/4)&1));
-    if(dome||body||hem) c=BODY;
-    if((x-exL)*(x-exL)+(y-ey)*(y-ey)<=9 || (x-exR)*(x-exR)+(y-ey)*(y-ey)<=9) c=EYE;
-    if(!blink){
-      if((x-exL-dx)*(x-exL-dx)+(y-ey-dy)*(y-ey-dy)<=2 || (x-exR-dx)*(x-exR-dx)+(y-ey-dy)*(y-ey-dy)<=2) c=PUP;
-    } else if(y==ey && (abs(x-exL)<=2 || abs(x-exR)<=2)) c=PUP;
-    g_ghost_buf[y*GHOST_W+x]=c;
-  }
-  g_ghost_drawn=true;
-  // Composite the ghost band and push it through the SAME full-width strip path the UI
-  // uses (no partial-width blit -> no smear). Driven from loop(): a live board repaints
-  // here every 280ms (eyes move); a wedged loop stops calling this so the last frame
-  // stays on the panel, frozen (ghost present, not moving).
-  int y1=GHOST_Y0+GHOST_H;
-  for(int sy=0; sy<y1; sy+=ROWS_PER_STRIP){
-    int rows=min(ROWS_PER_STRIP, LCD_HEIGHT-sy);
-    memcpy(dma_buffer,&framebuffer[sy*LCD_WIDTH],LCD_WIDTH*rows*2);
-    ghostOverlay(dma_buffer,sy,rows);
-    esp_lcd_panel_draw_bitmap(panel_handle,0,sy,LCD_WIDTH,sy+rows,dma_buffer);
-  }
-}
 
 void loop(){
-  ghostTick();   // GHOST=ON: loop-liveness beacon — eyes move only while this runs
+  webPanelService();   // one web client + one queued DAV load per pass (merge step 2)
   if(g_espnow_link_just_established){g_espnow_link_just_established=false;
     gfx_fillRect(0,0,VW,STATUS_H,0x07E0);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0x07E0);
     gfx_setCursor(VW/2-57,6);gfx_print(T(L_DONGLE_LINKED));gfx_flush();delay(2000);drawStatusBar();gfx_flush();}

@@ -134,6 +134,10 @@
   .betabox{display:flex;gap:.5rem;align-items:center;font-size:.75rem;color:var(--dim);cursor:pointer;user-select:none;margin:-.1rem 0 .9rem}
   .betabox input{accent-color:var(--red);width:15px;height:15px}
   .betabox .lab b{color:var(--red)}
+  .verbox{display:flex;gap:.5rem;align-items:center;font-size:.8rem;color:var(--dim);margin:-.1rem 0 .9rem;flex-wrap:wrap}
+  .verbox>span:first-child{font-weight:700;letter-spacing:.04em;text-transform:uppercase;font-size:.72rem;color:var(--dim)}
+  .verbox select{font-family:var(--display,inherit);font-size:.82rem;background:#0d1f16;color:var(--green);border:1px solid var(--green);border-radius:4px;padding:.32rem .55rem;cursor:pointer;max-width:100%}
+  .verbox .vhint{font-size:.72rem;color:var(--dim);opacity:.85}
   .fwline{font-size:.82rem;color:var(--text);margin:.2rem 0 1rem;line-height:1.5}
   .fwline b{color:var(--copper2)}
   .fwline .v{color:var(--dim);font-size:.75rem}
@@ -255,6 +259,7 @@
     <!-- step 3: flash -->
     <div class="card muted" id="s3">
       <div class="card-h"><span class="num">3</span><span id="s3h">Choose firmware &amp; flash</span></div>
+      <label class="verbox" id="verbox" hidden><span>Version</span> <select id="verSel" onchange="onVer()"></select> <span class="vhint" id="vhint"></span></label>
       <label class="betabox" id="betabox" hidden><input type="checkbox" id="beta-chk" onchange="onBeta()"> <span class="lab">Show the <b>beta / testing</b> build</span></label>
       <div class="fwline" id="fwline"></div>
       <esp-web-install-button id="installBtn" manifest="" hide-progress></esp-web-install-button>
@@ -395,7 +400,7 @@
 
 <footer>
   Same flasher engine under the hood — <span class="eng"><b>esp-web-tools</b> over Web Serial, Chrome / Edge on desktop.</span><br>
-  Need help? Join the <a href="https://discord.gg/" target="_blank" rel="noopener">OMEGAWARE Discord</a> · <a href="help.html">Help &amp; guides</a> · <a href="features.html">Feature list</a> (<a href="GTi-Features.pdf">PDF</a>) · <a href="c6-update.html">C6 update path</a> · <a href="contributors.html">Contributors</a>
+  Need help? Join the <a href="https://discord.gg/7gY4PKUnnf" target="_blank" rel="noopener">OMEGAWARE Discord</a> · <a href="help.html">Help &amp; guides</a> · <a href="features.html">Feature list</a> (<a href="GTi-Features.pdf">PDF</a>) · <a href="c6-update.html">C6 update path</a> · <a href="contributors.html">Contributors</a> · <a href="https://ko-fi.com/mesarim" target="_blank" rel="noopener">Donate &#9829;</a>
 </footer>
 
 <script>
@@ -406,12 +411,12 @@
         spot:'Guition 3.5-inch capacitive panel', tags:[['RECOMMENDED','t-rec'],['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
         prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, then release BOOT. <span class="muted">The screen stays dark in flash mode — that\'s normal.</span>',
         stable:{man:'firmware/jc3248/manifest.json', ver:'Firmware 5.5.5', sd:'firmware/jc3248/GTi-JC35-5.5.5-update.bin'},
-        beta:{man:'firmware/jc3248-beta/manifest.json', ver:'Firmware 5.9.4-beta — OMEGAWARE cracktro + OMEGA theme + Dutch, plus reel cover-filter, pill bar, CRACKTRO=OFF', sd:'firmware/jc3248-beta/GTi-JC35-5.9.4-update.bin'}},
+        beta:{man:'firmware/jc3248-beta/manifest.json', ver:'Firmware 5.9.6 — touch fix + shared web panel + OMEGAWARE cracktro, theme, Dutch', sd:'firmware/jc3248-beta/GTi-JC35-5.9.6-update.bin'}},
       {id:'jc4827', nm:'Guition JC4827W543', sz:'4.3″', ar:480/272, meta:'ESP32-S3 · 480×272',
         spot:'4.3-inch QSPI, single USB-C', tags:[['BETA','t-beta'],['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
         prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release BOOT.',
         stable:null,
-        beta:{man:'firmware/jc4827-beta/manifest.json', ver:'Firmware 5.9.4-beta — OMEGAWARE cracktro + OMEGA theme + Dutch, plus reel cover-filter, pill bar', sd:'firmware/jc4827-beta/GTi-JC43-5.9.4-update.bin'}},
+        beta:{man:'firmware/jc4827-beta/manifest.json', ver:'Firmware 5.9.6 — shared web panel + OMEGAWARE cracktro, theme, Dutch', sd:'firmware/jc4827-beta/GTi-JC43-5.9.6-update.bin'}},
       {id:'p4', nm:'Guition JC4880 · P4', sz:'4.3″', ar:800/480, meta:'ESP32-P4 + C6 · 480×800 DSI',
         spot:'The flagship — TWO USB-C ports', tags:[['RECOMMENDED','t-rec'],['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
         prep:'Use the USB-C port <b>furthest from the buttons</b>, with a <b>data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release. <span class="muted">First boot self-updates its WiFi co-processor from the SD card.</span>',
@@ -499,8 +504,35 @@
   function devPic(d){ return d.dongle?dongleSVG('#ffc061'):screenSVG(d.ar,'#ff8a3c'); }
   function tagHtml(tags){return tags.map(t=>'<span class="tag '+t[1]+'">'+t[0]+'</span>').join('');}
 
-  let kind='touch', sel=null, mode='fresh', beta=false;
+  let kind='touch', sel=null, mode='fresh', beta=false, selVer=null;
   const $=id=>document.getElementById(id);
+
+  // ── Version history (per device) — loaded from firmware/versions.json ──
+  let VERSIONS=null;
+  fetch('firmware/versions.json').then(r=>r.ok?r.json():null).then(j=>{VERSIONS=j||{};}).catch(()=>{VERSIONS={};});
+  function deviceVersions(d){ return (VERSIONS && d && VERSIONS[d.id]) || null; }
+  function _abs(p){ return new URL(p, location.href).href; }
+  // Build an esp-web-tools manifest for one build. 'full' -> existing manifest.json path;
+  // 'app' -> multi-part (shared bootloader/partitions/boot_app0 + this app image) as a blob URL.
+  function manifestForVersion(cfg, b){
+    if(b.full) return b.full;
+    if(b._blob) return b._blob;
+    const parts = cfg.shared.map(p=>({path:_abs(p.path), offset:p.offset}));
+    parts.push({path:_abs(b.app), offset:cfg.appOffset});
+    const man = {name:'GTi '+b.v, version:b.v, new_install_prompt_erase:false,
+                 builds:[{chipFamily:cfg.chipFamily, parts:parts}]};
+    b._blob = URL.createObjectURL(new Blob([JSON.stringify(man)], {type:'application/json'}));
+    return b._blob;
+  }
+  function populateVerSel(cfg){
+    const el=$('verSel'); el.innerHTML='';
+    cfg.builds.forEach((b,i)=>{ const o=document.createElement('option'); o.value=i;
+      o.textContent = b.v+'  ·  '+b.ch+(b.latest?'  ★ latest':''); el.appendChild(o); });
+    let di=cfg.builds.findIndex(b=>b.latest); if(di<0) di=0;
+    el.value=di; selVer=cfg.builds[di];
+  }
+  function onVer(){ const cfg=deviceVersions(sel); if(!cfg) return;
+    selVer=cfg.builds[+$('verSel').value]||null; applyMode(); applyBuild(); }
 
   function go(id){
     document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
@@ -547,11 +579,18 @@
   }
   function findDev(id){const s=curSet(); return s.main.concat(s.legacy, s.diag||[]).find(d=>d.id===id);}
   function hasBeta(d){ return !!(d.stable && d.beta); }              // toggle only when there are two channels
-  function curBuild(){ if(!sel) return null; return (beta && sel.beta) ? sel.beta : (sel.stable || sel.beta); }
+  function curBuild(){
+    if(!sel) return null;
+    if(selVer){ const cfg=deviceVersions(sel);
+      return { man: manifestForVersion(cfg, selVer),
+               ver: selVer.v + (selVer.note ? ' — '+selVer.note : ''),
+               sd:  selVer.app || null }; }
+    return (beta && sel.beta) ? sel.beta : (sel.stable || sel.beta);
+  }
 
   function pickDev(id){
     sel=findDev(id); renderDevices();
-    mode='fresh'; beta=false;
+    mode='fresh'; beta=false; selVer=null;
     $('s2').classList.remove('muted'); $('s2').classList.remove('done');
     applyMode(); setStep(2);
     $('ready-chk').checked=false; $('btn-confirm').disabled=true; $('confirm-status').innerHTML='';
@@ -604,29 +643,33 @@
   }
 
   function renderStep3(){
-    $('betabox').hidden = !hasBeta(sel);
-    $('beta-chk').checked = beta;
+    const vs=deviceVersions(sel);
+    if(vs){ populateVerSel(vs); $('verbox').hidden=false; $('betabox').hidden=true; }
+    else { $('verbox').hidden=true; $('betabox').hidden=!hasBeta(sel); $('beta-chk').checked=beta; }
     applyBuild();
   }
   function onBeta(){ beta=$('beta-chk').checked; applyBuild(); }
   function applyBuild(){
     const b=curBuild(); if(!b) return;
     $('installBtn').setAttribute('manifest', b.man);
-    const betaTag = (beta && sel.beta) ? ' <span class="v">· beta / testing</span>' : '';
-    $('fwline').innerHTML = '<b>'+b.ver.split(' — ')[0]+'</b>'+betaTag+(b.ver.includes(' — ')?'<br><span class="v">'+b.ver.split(' — ').slice(1).join(' — ')+'</span>':'');
+    let tag='';
+    if(selVer){ tag=' <span class="v">· '+selVer.ch+(selVer.ch==='beta'?' / testing':'')+'</span>';
+      $('vhint').textContent = selVer.full ? '(full image — clean wipe)' : '(app image — keeps SD settings)'; }
+    else if(beta && sel.beta){ tag=' <span class="v">· beta / testing</span>'; }
+    $('fwline').innerHTML = '<b>'+b.ver.split(' — ')[0]+'</b>'+tag+(b.ver.includes(' — ')?'<br><span class="v">'+b.ver.split(' — ').slice(1).join(' — ')+'</span>':'');
   }
 
   function setStep(n){document.querySelectorAll('#steps .st').forEach(st=>{const s=+st.dataset.s;
     st.classList.toggle('active',s===n); st.classList.toggle('done',s<n);});}
   function resetFlow(){
-    sel=null; mode='fresh'; beta=false;
+    sel=null; mode='fresh'; beta=false; selVer=null;
     $('s2').classList.add('muted'); $('s3').classList.add('muted');
     $('s2').classList.remove('done'); $('s3').classList.remove('done');
     $('prep').innerHTML='Pick a device first.'; $('mode-note').hidden=true; $('sd-dl').hidden=true;
     $('mode-fresh').classList.add('on'); $('mode-sd').classList.remove('on');
     $('ready-chk').checked=false; $('btn-confirm').disabled=true;
     $('confirm-status').innerHTML='';
-    $('betabox').hidden=true; $('beta-chk').checked=false; $('fwline').innerHTML=''; $('installBtn').setAttribute('manifest','');
+    $('verbox').hidden=true; $('betabox').hidden=true; $('beta-chk').checked=false; $('fwline').innerHTML=''; $('installBtn').setAttribute('manifest','');
     $('legacy-wrap').hidden=true; $('trouble').hidden=false;
     $('s3').hidden=false; $('stln2').hidden=false; $('step3-dot').hidden=false;
     $('ready-row').hidden=false; $('btn-confirm').hidden=false; $('confirm-status').hidden=false;

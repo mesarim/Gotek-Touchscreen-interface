@@ -23,6 +23,12 @@ davClient.configure(c, logFn);   // logFn: void(*)(const String&) — or nullptr
 It reads no globals and calls nothing back except `logFn`. Include order does
 not matter.
 
+**Security note (per review):** HTTPS runs `setInsecure()` — there is no CA
+store on an ESP32, so the connection is **encrypted but not authenticated**,
+and Basic Auth rides on that. Point DAV_HOST at a server you trust on a
+network you trust (the intended case: your own NAS on your own LAN).
+Certificate-fingerprint pinning is a tracked nice-to-have.
+
 Battle scars worth knowing about, all fixed and covered by the host test suite
 in the OMEGAWARE tree (`tools/test/`, 325 assertions):
 
