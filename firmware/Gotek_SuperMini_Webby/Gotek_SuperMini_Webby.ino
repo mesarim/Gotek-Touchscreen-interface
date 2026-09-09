@@ -46,7 +46,7 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-0.7-fleetUI"
+#define FW_VERSION     "Webby-0.8-fleetUI"
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -393,6 +393,17 @@ static void setModeEspnow() {
   f.printf("PASS=%s\n", g_pass.c_str());
   f.printf("MODE=ESPNOW\n");
   f.close();
+}
+// WEBBY: full wipe of the saved home-Wi-Fi credentials + force ESP-NOW. Used by the
+// long BOOT-hold; the plain flip (setModeEspnow) keeps SSID/PASS for a one-tap rejoin.
+static void wipeWifiCreds() {
+  if (!LittleFS.begin(true)) return;
+  File f = LittleFS.open("/WEBBY.TXT", "w"); if (!f) return;
+  f.printf("SSID=\n");
+  f.printf("PASS=\n");
+  f.printf("MODE=ESPNOW\n");
+  f.close();
+  g_ssid = ""; g_pass = ""; g_modeStr = "ESPNOW";
 }
 
 // ── base TCP save/eject/status handlers (unchanged) ─────────────────────────
@@ -897,6 +908,8 @@ static void startWebServer(){
 // ── base BOOT-button owner-lock gesture (unchanged) ─────────────────────────
 #define BOOT_PAIR_MS   5000
 #define BOOT_WIPE_MS   15000
+#define BOOT_REVERT_MS   3000    // WEBBY: in Wi-Fi mode, hold BOOT >=3s to revert to ESP-NOW (keeps creds)
+#define BOOT_WIFIWIPE_MS 10000   // WEBBY: hold BOOT >=10s to also wipe saved SSID/PASS
 #define ENROLL_WIN_MS  30000
 static bool serviceBootButton(){
   uint32_t now = millis();
@@ -904,6 +917,37 @@ static bool serviceBootButton(){
   bool raw = (digitalRead(BOOT_PIN) == LOW);
   if (raw) upCount = 0; else if (upCount < 250) upCount++;
   bool down = (upCount < 8); bool phase = (now / 180) & 1; static bool wipedHold = false;
+
+  // WEBBY: when configured for home Wi-Fi, BOOT-hold is the physical escape back to
+  // ESP-NOW (mirrors the web "Disconnect Wi-Fi -> ESP-NOW" button). >=3s flips to
+  // ESP-NOW keeping the saved creds; >=10s also wipes SSID/PASS. Owner-lock pairing
+  // is an ESP-NOW-mode activity, so it keeps BOOT only while already in ESP-NOW mode.
+  if (g_modeStr == "WIFI") {
+    static uint32_t wrt0 = 0; static bool wrPrev = false;
+    if (down) {
+      if (!wrPrev) { wrPrev = true; wrt0 = now; }
+      uint32_t wheld = now - wrt0;
+      if      (wheld >= BOOT_WIFIWIPE_MS) setLeds(true, false);    // solid red = wipe armed
+      else if (wheld >= BOOT_REVERT_MS)   setLeds(phase, false);   // red blink  = flip armed
+      else                                setLeds(false, phase);   // blue blink = holding
+      return true;
+    }
+    if (wrPrev) {
+      uint32_t wheld = now - wrt0; wrPrev = false; setLeds(false, false);
+      if (wheld >= BOOT_WIFIWIPE_MS) {
+        wipeWifiCreds();
+        oledStatus("Gotek OMEGA " FW_VERSION, "Wi-Fi WIPED", "Creds cleared", "Rebooting...");
+        delay(600); ESP.restart();
+      } else if (wheld >= BOOT_REVERT_MS) {
+        setModeEspnow();
+        oledStatus("Gotek OMEGA " FW_VERSION, "Wi-Fi OFF", "Back to ESP-NOW", "Rebooting...");
+        delay(600); ESP.restart();
+      }
+      return true;
+    }
+    return false;
+  }
+
   if (g_enroll_open && now > g_enroll_until) g_enroll_open = false;
   if (down) {
     if (!held_prev) { held_prev = true; held_t0 = now; wipedHold = false; }
