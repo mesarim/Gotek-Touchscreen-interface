@@ -29,7 +29,7 @@
 // the reported firmware string — so a device always tells you WHICH build of
 // the web layer it runs. Flashing identical version numbers taught us that a
 // number nobody increments is a number nobody can verify.
-#define GTI_WEB_REV "r3"
+#define GTI_WEB_REV "r8"
 
 #include <Update.h>
 #include <ESPmDNS.h>
@@ -394,6 +394,22 @@ static void wpHandleClient(WiFiClient &client) {
     j += "\"mode\":\"ADF\"}";
     wpSendJson(client, 200, j);
   }
+  else if (method == "GET" && path == "/api/fleet") {
+    wpSendJson(client, 200, pfRosterJson());
+  }
+  else if (method == "POST" && path == "/api/fleet/send") {
+    const String ip = wpPairValue(bodyStr, "ip");
+    if (ip.length() == 0) { wpSendJson(client, 400, "{\"error\":\"No ip\"}"); }
+    else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length()) { wpSendJson(client, 409, "{\"error\":\"Fleet busy\"}"); }
+    else { const long tp = wpPairValue(bodyStr, "tcp").toInt(); g_pfSendTcp = (tp > 0 && tp < 65536) ? (uint16_t)tp : 3333; g_pfSendIp = ip; wpSendJson(client, 200, "{\"status\":\"queued\"}"); }
+  }
+  else if (method == "POST" && path == "/api/fleet/cmd") {
+    const String ip = wpPairValue(bodyStr, "ip");
+    const long cmd = wpPairValue(bodyStr, "cmd").toInt();
+    if (ip.length() == 0 || cmd < 1 || cmd > 4) { wpSendJson(client, 400, "{\"error\":\"Need ip and cmd\"}"); }
+    else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length()) { wpSendJson(client, 409, "{\"error\":\"Fleet busy\"}"); }
+    else { g_pfCmd = (uint8_t)cmd; g_pfCmdIp = ip; wpSendJson(client, 200, "{\"status\":\"queued\"}"); }
+  }
   else if (method == "POST" && path == "/api/disk/unload") {
     doUnload();
     g_webDavLoaded = "";
@@ -434,7 +450,7 @@ static void wpHandleClient(WiFiClient &client) {
         build_fat(g_disk + RESERVED_SECTORS * 512, (uint32_t)n);
         String outn = (g_mode == MODE_GEN) ? name : String(getOutputFilename());
         build_root(g_disk + (RESERVED_SECTORS + SECTORS_PER_FAT) * 512, outn.c_str(), (uint32_t)n);
-        g_sv_img_size = 0; svDirtyReset();
+        g_sv_img_size = 0; g_img_bytes = (uint32_t)n; svDirtyReset();   // FLING size = the uploaded image bytes
         hardAttach();
         g_loaded = true;
         String bn = name; const int d = bn.lastIndexOf('.'); if (d > 0) bn = bn.substring(0, d);
@@ -564,11 +580,14 @@ static void wpHandleClient(WiFiClient &client) {
 // the parked question — not answered here by accident.
 static void webPanelBegin() {
   if (!g_web_on) return;
-  if (g_espnow_started) { webLog("[WEB] wireless dongle mode active - web UI off"); return; }
+  // OMEGAWARE always-web: the web UI + WebDAV must be up in every mode, so this
+  // no longer bails when ESP-NOW happens to be armed. The panel is a home-WiFi
+  // STA regardless of STANDALONE/WIRELESS; mode only gates the fleet card.
   if (g_home_ssid.length() == 0) { webLog("[WEB] HOME_SSID not set - web UI off"); return; }
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);   // OMEGAWARE: kill STA modem power-save — with it on, LAN flings crawl at ~30 KB/s and drop mid-transfer; off = full WiFi throughput for flings + WebDAV
   WiFi.begin(g_home_ssid.c_str(), g_home_pass.c_str());
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) delay(200);

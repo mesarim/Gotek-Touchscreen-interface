@@ -461,7 +461,8 @@ static uint32_t g_sv_wl_loadid=0;                        // dongle load_id it ac
 static inline bool svGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void svSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
 static void svDirtyReset(){memset(g_sv_dirty,0,sizeof(g_sv_dirty));g_sv_dirty_count=0;g_sv_last_write=0;}
-static uint32_t g_sv_img_size=0;                         // bytes of the mounted image (standalone tracking)
+static uint32_t g_sv_img_size=0;                         // bytes of the Amiga save-writeback image (0 = no SD writeback: web upload, WebDAV, diag, GEN)
+static uint32_t g_img_bytes=0;                            // raw bytes of the mounted image in the data region — the size to FLING (every load path sets it; unload clears it)
 
 static int32_t onWrite(uint32_t lba,uint32_t off,uint8_t*buf,uint32_t n){uint32_t s=lba*512+off;if(s+n>TOTAL_SECTORS*512)return 0;memcpy(g_disk+s,buf,n);
   // v4.8.0: tick the dirty scorecard for every image sector this write touches
@@ -969,6 +970,7 @@ static int g_sel=0,g_scroll=0,g_disk_sel=0,g_loaded_game_idx=-1,g_loaded_disk_id
 static int g_disk_page=0;  // current page of disk selector (6 disks/page)
 #define DISKS_PER_PAGE 6
 static String g_loaded_name="";static bool g_loaded=false;
+#include "panel_fleet.h"          // OMEGAWARE: LAN fleet controller (roster + fling) — placed here so its globals are in scope for the INFO screen + doLoad, before web_panel.h uses its routes
 // ── Smooth list scroll + A-Z index state ──
 static float g_scrollPx=0;                 // pixel scroll offset (source of truth)
 static int   g_az_page=0;                  // 0 = #/A-M, 1 = N-Z
@@ -2016,7 +2018,7 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_FLEET };
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
 static InfoItem g_ii[20]; static int g_ii_n=0;
 struct InfoRect { int x,y,w,h; uint8_t act; };
@@ -2041,7 +2043,8 @@ static void drawInfoPanel(){
   add(String(T(L_CFG_MODE))+": "+(g_wireless_mode?T(L_WIRELESS):T(L_STANDALONE)), g_wireless_mode?COL_BLUE:COL_GREEN, TFT_BLACK, IA_MODE);
   // v0.2: keep the dongle controls next to the MODE toggle (page 1) — SWITCH DONGLE (with LOCK/UNLOCK) used to land on page 2.
   if(g_wireless_mode){
-    add(espnowIsPaired()?String(T(L_SWITCH_DONGLE)):String(T(L_SCAN_DONGLES)), espnowIsPaired()?COL_GREEN:COL_AMBER, TFT_BLACK, IA_DONGLE);
+    { pfPrune(); String fl=String("FLEET: ")+String(g_pfPeerN); if(g_pfTargetName.length())fl+=" > "+g_pfTargetName;   // LAN fleet: dongles heard over home WiFi + the chosen target
+      add(fl, g_pfPeerN?COL_GREEN:COL_AMBER, TFT_BLACK, IA_FLEET); }
     add(String("LINK: ")+(g_link_home?"HOME WIFI":"ESP-NOW"), g_link_home?COL_BLUE:COL_BAR, g_link_home?TFT_WHITE:COL_LIT, IA_LINK);   // 5.8.6: transport picker
     add(String("HOME WIFI: ")+(g_home_ssid.length()?g_home_ssid:String("set up")), COL_ACCENT, TFT_WHITE, IA_HOMEWIFI);   // on-screen home-wifi credential entry
     uint8_t mm[64][6]; int mcN=enumMuCaDongles(mm,g_dongle_cap);
@@ -3044,6 +3047,7 @@ static bool doLoadSelected(const String&adfPath){
   if(buf)free(buf);f.close();
   // v4.8.0: fresh disk in the RAM disk = fresh save tracking
   g_sv_img_size=(g_mode==MODE_GEN)?0:fsz;svDirtyReset();   // v5.2: GEN has no Amiga save-writeback (0 = no dirty tracking)
+  g_img_bytes=copied;                                      // FLING size = the raw bytes we just copied into the data region
   hardAttach();g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_path=loadPath;g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
   if(g_sel>=0&&g_sel<(int)g_games.size()){if(g_games[g_sel].plays<65535)g_games[g_sel].plays++;saveStats();}
   if(g_wireless_mode&&g_espnow_started){
@@ -3067,6 +3071,12 @@ static bool doLoadSelected(const String&adfPath){
         g_sv_wl_path=loadPath;g_sv_wl_loadid=g_espnow_load_id;
       }
     }
+  }
+  // OMEGAWARE LAN fleet: in wireless mode with a chosen target, fling this disk
+  // to the dongle over home WiFi. QUEUE only — loop()'s pfWorker does the
+  // blocking transfer (never inside a handler). ESP-NOW is not involved.
+  if(g_wireless_mode && g_pfTargetIp.length() && WiFi.status()==WL_CONNECTED){
+    g_pfSendIp=g_pfTargetIp; g_pfSendTcp=g_pfTargetTcp;
   }
   drawStatusBar();drawListAndCover();gfx_flush();return true;
 }
@@ -3113,6 +3123,7 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
   String outn=(g_mode==MODE_GEN)?showName:String(getOutputFilename());
   build_root(g_disk+(RESERVED_SECTORS+SECTORS_PER_FAT)*512,outn.c_str(),(uint32_t)got);
   g_sv_img_size=0;svDirtyReset();                 // no SD path to write saves back to — tracking off for now
+  g_img_bytes=(uint32_t)got;                       // FLING size = the bytes streamed from WebDAV into the data region
   hardAttach();g_loaded=true;g_loaded_name=showName;g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
   Serial.printf("[DAV] mounted %s (%ld bytes)\n",showName.c_str(),got);
   return true;
@@ -3127,7 +3138,7 @@ static void doUnload(){
   // (v4.8.1: own-disk flush in any mode)
   if(g_sv_dirty_count)svFlushStandalone();
   if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
-  hardDetach();g_loaded=false;g_loaded_name="";g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;svDirtyReset();
+  hardDetach();g_loaded=false;g_loaded_name="";g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;g_img_bytes=0;svDirtyReset();
   if(g_wireless_mode&&g_espnow_started&&espnowIsPaired())espnowSendEject();drawStatusBar();drawListAndCover();gfx_flush();}
 
 // Expand the zero-RLE embedded ADF straight into the RAM-disk data area. No SD needed.
@@ -3148,7 +3159,7 @@ static void doLoadDiag(){
   diagInflate(DIAG_RLE,DIAG_RLE_LEN,g_disk+DATA_LBA*512);
   hardAttach();
   g_loaded=true;g_loaded_name="AMIGA TEST KIT";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
-  g_loaded_path="";g_sv_img_size=0;svDirtyReset();   // diag disk: writes are never persisted
+  g_loaded_path="";g_sv_img_size=0;g_img_bytes=DIAG_ADF_SIZE;svDirtyReset();   // diag disk: writes are never persisted; FLING size = the diag ADF
   drawFullUI();gfx_flush();
 }
 
@@ -3456,6 +3467,7 @@ static void runSlideshow(std::vector<String>&pool){
   if(ssSlideHold(g_ss_time_ms)){ ssSlideFree(); return; }
   while(true){
     webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
+    pfService(); pfWorker();   // OMEGAWARE: keep the fleet roster + fling live during the saver too
     if(pool.size()<=1){ if(ssSlideHold(g_ss_time_ms))break; else continue; }
     int ni=(idx+1)%(int)pool.size();
     if(dbl){
@@ -3489,6 +3501,7 @@ static void runMatrixRain(){
   uint32_t last=millis(), seed=1;
   while(true){
     webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
+    pfService(); pfWorker();   // OMEGAWARE: keep the fleet roster + fling live during the saver too
     if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
     uint32_t nf=millis();
     if(nf-last>=60){ last=nf; seed++;
@@ -3567,6 +3580,7 @@ static void runScreensaver(){                                // blocking bounce 
   uint32_t last=millis();
   while(true){
     webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
+    pfService(); pfWorker();   // OMEGAWARE: keep the fleet roster + fling live during the saver too
     if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
     uint32_t nf=millis();
     if(nf-last>=33){ last=nf;
@@ -4118,6 +4132,73 @@ static void doScanDongles(){
 // Legacy single-pair (kept for compatibility, now routes to scan)
 static void doPairNow(){ doScanDongles(); }
 
+// ── On-screen LAN fleet picker ─────────────────────────────────────────────
+// The dongles this panel HEARS over home WiFi (g_pfPeers, from the UDP beacons)
+// — name, IP, which disk each holds — and which one the on-screen INSERT/EJECT
+// act on. Pure LAN, no ESP-NOW. Blocking, so it keeps web + discovery alive.
+static void doFleetPick(){
+  pfService(); pfPrune();
+  int rowH=46, listTop=26, btnBarY=VH-40;
+  int maxRows=(btnBarY-listTop-4)/rowH; if(maxRows<1)maxRows=1;
+  int n=g_pfPeerN;
+  int sel=0; for(int i=0;i<n;i++){ if(g_pfPeers[i].ip==g_pfTargetIp){sel=i;break;} }
+  int maxScroll=(n>maxRows)?(n-maxRows):0, scroll=0;
+  if(sel>=maxRows)scroll=sel-maxRows+1; if(scroll>maxScroll)scroll=maxScroll; if(scroll<0)scroll=0;
+  bool dirty=true, down=false, moved=false; int downX=0,downY=0,downScroll=0;
+  uint32_t lastPoll=millis();
+  while(true){
+    webPanelService(); pfService(); pfWorker();   // keep web + LAN discovery + queued flings alive while this blocks
+    if(millis()-lastPoll>1500){ pfPrune();
+      if(g_pfPeerN!=n){ n=g_pfPeerN; if(sel>=n)sel=n?n-1:0; maxScroll=(n>maxRows)?(n-maxRows):0; if(scroll>maxScroll)scroll=maxScroll; if(scroll<0)scroll=0; }
+      dirty=true; lastPoll=millis(); }
+    if(dirty){ dirty=false;
+      gfx_fillScreen(COL_BG);
+      gfx_setTextSize(1);gfx_setTextColor(COL_ORANGE,COL_BG);gfx_setCursor(8,7);
+      gfx_print(n?("Fleet ("+String(n)+") - pick target:"):String("Fleet - searching for dongles..."));
+      if(n==0){ gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,30);gfx_print(T(L_NO_DONGLES)); }
+      for(int r=0;r<maxRows&&(scroll+r)<n;r++){ int i=scroll+r,y=listTop+r*rowH;
+        PfPeer&p=g_pfPeers[i];
+        bool isSel=(i==sel), isTarget=(p.ip==g_pfTargetIp);
+        uint16_t bg=isSel?COL_SEL:COL_PANEL;
+        gfx_fillRoundRect(8,y,VW-16,rowH-4,6,bg);gfx_drawRoundRect(8,y,VW-16,rowH-4,6,isSel?COL_AMBER:COL_ACCENT);
+        gfx_setTextSize(1);gfx_setTextColor(inkFor(bg),bg);gfx_setCursor(18,y+6);gfx_print(p.name.length()?p.name:("Dongle "+String(i+1)));
+        uint16_t sub=(inkFor(bg)==TFT_BLACK)?COL_MID:COL_DIM;
+        gfx_setTextColor(sub,bg);gfx_setCursor(18,y+19);gfx_print(p.ip+"  "+p.board);
+        if(p.loaded){gfx_setTextColor(COL_GREEN,bg);gfx_setCursor(18,y+32);gfx_print(String("* ")+(p.disk.length()?p.disk:String("disk")));}
+        else{gfx_setTextColor(sub,bg);gfx_setCursor(18,y+32);gfx_print("empty");}
+        if(isTarget){gfx_setTextColor(COL_AMBER,bg);gfx_setCursor(VW-80,y+6);gfx_print("TARGET");}
+      }
+      if(n>maxRows){ int trackY=listTop,trackH=maxRows*rowH-4,thumbH=trackH*maxRows/n;if(thumbH<10)thumbH=10;
+        int thumbY=trackY+(trackH-thumbH)*scroll/(maxScroll?maxScroll:1);
+        gfx_fillRect(VW-4,trackY,3,trackH,COL_PANEL);gfx_fillRect(VW-4,thumbY,3,thumbH,COL_AMBER); }
+      int bw=(VW-4*4)/3,bx=4;const char* BL[3]={"USE","EJECT","BACK"};uint16_t BC[3]={COL_GREEN,COL_AMBER,COL_BAR};
+      for(int i=0;i<3;i++){ bool dis=(n==0&&i<2);
+        gfx_fillRoundRect(bx,btnBarY+2,bw,34,6,dis?COL_PANEL:BC[i]);gfx_setTextColor(dis?COL_DIM:inkFor(BC[i]),dis?COL_PANEL:BC[i]);
+        gfx_setTextSize(1);gfx_setCursor(bx+(bw-gfx_textWidth(BL[i]))/2,btnBarY+14);gfx_print(BL[i]);bx+=bw+4; }
+      gfx_flush();
+    }
+    bool t=Touch_ReadFrame(); uint16_t tx=0,ty=0; if(t)t=getTouchXY(&tx,&ty);
+    if(t){
+      if(!down){down=true;downX=tx;downY=ty;downScroll=scroll;moved=false;}
+      else{ if(maxScroll>0){int ns=downScroll+((int)downY-(int)ty)/rowH; if(ns<0)ns=0; if(ns>maxScroll)ns=maxScroll; if(ns!=scroll){scroll=ns;dirty=true;}}
+        if(abs((int)ty-downY)>8||abs((int)tx-downX)>8)moved=true; }
+    } else if(down){ down=false;
+      if(!moved){
+        if(downY>=btnBarY){ int bw=(VW-4*4)/3,i=(downX-4)/(bw+4);
+          if(i==0){ if(n>0){ PfPeer&p=g_pfPeers[sel]; g_pfTargetIp=p.ip; g_pfTargetName=p.name.length()?p.name:p.ip; g_pfTargetTcp=p.tcp;
+              gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_GREEN,COL_BG);{String s="TARGET SET";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);gfx_print(s);}gfx_flush();delay(800);break; } }
+          else if(i==1){ if(n>0){ g_pfCmdIp=g_pfPeers[sel].ip; g_pfCmd=PF_CMD_EJECT;
+              gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_AMBER,COL_BG);{String s="EJECTING";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);gfx_print(s);}gfx_flush();
+              uint32_t r=millis();while(g_pfCmdIp.length()&&millis()-r<3000){pfWorker();delay(20);} dirty=true; } }
+          else break; // BACK (i==2)
+        } else if(downY>=listTop&&downY<listTop+maxRows*rowH){ int slot=(downY-listTop)/rowH,idx=scroll+slot; if(idx>=0&&idx<n&&idx!=sel){sel=idx;dirty=true;} }
+      }
+    }
+    delay(15);
+  }
+  g_info_showing=true;   // back to the INFO tab; caller redraws drawInfoFull
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // SETUP
 // ════════════════════════════════════════════════════════════════════════════
@@ -4325,7 +4406,12 @@ void setup(){
     if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
     scanScreensaver();
   } else {gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,200);gfx_print(T(L_SD_MOUNT_FAIL));gfx_flush();delay(2000);relayout();}   // no card: still init layout so INFO/LOAD DIAG work
-  if(g_wireless_mode&&!sdAccessReq){espnowBegin();g_espnow_started=true;}   // v5.1: don't arm the radio when booting into SD access — no stray FATFS writes while the PC holds the card
+  // OMEGAWARE always-web: never auto-arm ESP-NOW at boot. The panel stays a
+  // home-WiFi STA in EVERY mode, so the web UI + WebDAV + LAN fleet are always
+  // up (coexistence — #15, which upstream parks). STANDALONE vs WIRELESS now
+  // only changes what the web UI shows (the fleet card), not the radio. ESP-NOW
+  // can still be armed on demand from the pairing UI for a legacy single link.
+  // (was: if(g_wireless_mode&&!sdAccessReq){espnowBegin();g_espnow_started=true;})
   if(g_cracktro>=0)drawCracktro(g_cracktro);   // CRACKTRO=OFF/NONE (-1) skips the boot demo entirely
   USB.onEvent(usbEventCB);
   if(sdAccessReq){runSDAccessBoot(sdok);}   // v5.1: SD-access boot mode — never returns (reboots to normal)
@@ -4533,13 +4619,14 @@ static void drawInfoFull(){
 }
 static void infoAction(uint8_t act){
   switch(act){
-    case IA_MODE: g_wireless_mode=!g_wireless_mode;saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE");if(g_wireless_mode)ensureEspNow();drawInfoFull();break;
+    case IA_MODE: g_wireless_mode=!g_wireless_mode;saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE");drawInfoFull();break;   // OMEGAWARE always-web: MODE is a UI gate (fleet card on/off) — never arm ESP-NOW here, the panel stays a home-WiFi STA so web+WebDAV stay up. (was: if(g_wireless_mode)ensureEspNow();)
     case IA_FONT: applyFont((g_font+1)%3);saveConfigKey("FONT",fontKey(g_font));drawInfoFull();break;
     case IA_THEME: applyTheme((g_theme_idx+1)%NUM_THEMES);saveConfigKey("THEME",String(g_theme_idx));drawInfoFull();break;   // Vince test: theme cycling lives in CONFIG now
     case IA_LANG: g_lang=(g_lang+1)%LANG_N;saveConfigKey("LANG",LANG_NAMES[g_lang]);drawInfoFull();break;
     case IA_ROTATE: g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_COMPACT: g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_DONGLE: doPairNow();drawInfoFull();break;
+    case IA_FLEET: doFleetPick();drawInfoFull();break;   // LAN fleet overview + pick the INSERT/EJECT target
     case IA_HIVEMIND: g_hivemind=!g_hivemind;saveConfigKey("HIVEMIND",g_hivemind?"ON":"OFF");drawInfoFull();break;
     case IA_LINK: g_link_home=!g_link_home;saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW");drawInfoFull();break;   // 5.8.6: ESP-NOW <-> HOME WIFI transport
     case IA_HOMEWIFI: doHomeWifiSetup(); drawInfoFull(); break;   // on-screen SSID/password entry
@@ -4653,6 +4740,8 @@ static void handleTap(uint16_t px,uint16_t py){
 
 void loop(){
   webPanelService();   // one web client + one queued DAV load per pass (merge step 2)
+  pfService();          // OMEGAWARE: hear Webby dongle beacons so /api/fleet has a roster
+  pfWorker();           // OMEGAWARE: run one queued fling/eject per pass (non-blocking)
   if(g_espnow_link_just_established){g_espnow_link_just_established=false;
     gfx_fillRect(0,0,VW,STATUS_H,0x07E0);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0x07E0);
     gfx_setCursor(VW/2-57,6);gfx_print(T(L_DONGLE_LINKED));gfx_flush();delay(2000);drawStatusBar();gfx_flush();}
