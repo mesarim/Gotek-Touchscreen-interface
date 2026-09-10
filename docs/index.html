@@ -465,12 +465,12 @@
         spot:'The wider board with two side buttons', tags:[['PREFERRED','t-dongle'],['USB DONGLE','t-wifi']],
         prep:'Plug the Super Mini into your PC with a <b>USB data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release.',
         stable:{man:'firmware/supermini/manifest.json', ver:'Firmware v3.2.0 — ESP-NOW + WiFi transport, owner-lock, save write-back', sd:null},
-        beta:{man:'firmware/supermini-beta/manifest.json', ver:'Webby-0.7-fleetUI — built-in multi-dongle web console (WebDAV / FTP)', sd:null}},
+        beta:{man:'firmware/supermini-beta/manifest.json', ver:'Webby-0.8-fleetUI — built-in multi-dongle web console (WebDAV / FTP)', sd:null}},
       {id:'xiao', img:'img/xiao.jpg', nm:'Seeed XIAO', sz:'', dongle:true, meta:'Seeed XIAO ESP32-S3 · 21×17mm',
         spot:'Tiny board, “seeed studio” metal shield — plug the antenna in first', tags:[['USB DONGLE','t-wifi']],
         prep:'Plug the XIAO into your PC with a <b>USB data cable</b> — and its <b>WiFi antenna</b> before powering on. Hold <b>BOOT</b>, tap <b>RESET</b>, release.',
         stable:{man:'firmware/xiao/manifest.json', ver:'Firmware v3.2.0 — ESP-NOW + WiFi transport tuned for the tiny footprint', sd:null},
-        beta:{man:'firmware/xiao-beta/manifest.json', ver:'Webby-0.7-xiao — built-in web console (WebDAV / FTP) + fleet, OPI 8MB build for the XIAO', sd:null}},
+        beta:{man:'firmware/xiao-beta/manifest.json', ver:'Webby-0.8-xiao — built-in web console (WebDAV / FTP) + fleet, OPI 8MB build for the XIAO', sd:null}},
     ],
     legacy:[]
   };
@@ -648,7 +648,7 @@
   function initVersions(){
     if(!sel) return;
     const vs=deviceVersions(sel);
-    if(vs){ populateVerSel(vs); $('verbox').hidden=false; $('betabox').hidden=true; }
+    if(vs){ populateVerSel(vs); $('verbox').hidden=(vs.builds.length<2); $('betabox').hidden=true; }
     else { $('verbox').hidden=true; $('betabox').hidden=!hasBeta(sel); $('beta-chk').checked=beta; }
   }
   function renderStep3(){ applyBuild(); }
