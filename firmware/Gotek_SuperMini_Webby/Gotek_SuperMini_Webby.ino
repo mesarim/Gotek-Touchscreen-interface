@@ -40,6 +40,7 @@
 #include "esp_wifi.h"
 #include "esp_heap_caps.h"   // HD test: internal-heap readout
 #include <LittleFS.h>
+#include <Update.h>   // OMEGAWARE: web OTA
 #include <WebServer.h>     // WEBBY: built-in (ESP32 core) — no external lib
 #include <ESPmDNS.h>       // WEBBY: gotek.local
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
@@ -363,7 +364,8 @@ static void loadConfig() {
 // WEBBY: WiFi-mode config (creds + mode) in LittleFS
 // ============================================================================
 static String g_ssid = "", g_pass = "", g_modeStr = "";   // g_modeStr: "WIFI" or "ESPNOW"
-static int    g_webmode = 0;   // resolved at boot: 0 = ESPNOW/AP, 1 = WIFI/STA
+static int    g_webmode = 0;
+static bool   g_join_failed = false;   // resolved at boot: 0 = ESPNOW/AP, 1 = WIFI/STA
 static String g_loaded_name = "";
 
 static void loadWifiCfg() {
@@ -521,6 +523,8 @@ static String statusJson(){
   s += ",\"name\":\""; s += jsonEsc(g_loaded_name); s += "\"";
   s += ",\"size\":"; s += String(g_image_size);
   s += ",\"mode\":\""; s += (g_webmode==1 ? "wifi" : "espnow"); s += "\"";
+  s += ",\"ssid\":\""; s += jsonEsc(g_ssid); s += "\"";
+  s += ",\"join_failed\":"; s += (g_join_failed ? "true" : "false");
   s += ",\"ip\":\""; s += ip; s += "\"";
   s += ",\"heap\":"; s += String((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));   // HD test
   s += ",\"psram\":"; s += String((unsigned)ESP.getFreePsram());
@@ -568,12 +572,35 @@ static void handleEjectWeb(){
   oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (web)", "", "Ready");
   server.send(200,"application/json", statusJson());
 }
+static void handleScan(){
+  // A scan needs the STA interface. In ESP-NOW/AP-only mode there is no
+  // STA, so scanNetworks returns -2 and the portal shows "scan failed" —
+  // exactly what a user hits on a fresh dongle. Add STA for the scan.
+  wifi_mode_t pm = WiFi.getMode();
+  if (!(pm & WIFI_MODE_STA)) WiFi.mode((wifi_mode_t)(pm | WIFI_MODE_STA));
+  int n = WiFi.scanNetworks(false, true, false, 200);
+  String jj = "{\"networks\":[";
+  for (int i = 0; i < n && i < 30; i++) {
+    if (i) jj += ",";
+    jj += "{\"ssid\":\""; jj += jsonEsc(WiFi.SSID(i));
+    jj += "\",\"rssi\":"; jj += String(WiFi.RSSI(i));
+    jj += ",\"enc\":"; jj += (WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "false" : "true");
+    jj += "}";
+    yield();
+  }
+  jj += "]}";
+  WiFi.scanDelete();
+  server.send(200, "application/json", jj);
+}
+
 static void handleSaveWifi(){
   String ssid = server.arg("ssid"); String pass = server.arg("pass");
   if (ssid.length()==0) { server.send(400,"application/json","{\"ok\":false,\"err\":\"no SSID\"}"); return; }
   saveWifiCfg(ssid, pass);
-  server.send(200,"application/json","{\"ok\":true}");
-  delay(400); ESP.restart();
+  bool saved = false;
+  if (LittleFS.begin(true)) { File rf = LittleFS.open("/WEBBY.TXT","r"); if (rf) { String want = "SSID=" + ssid; while (rf.available()) { String l = rf.readStringUntil('\n'); l.trim(); if (l == want) { saved = true; break; } } rf.close(); } }
+  server.send(200,"application/json", String("{\"ok\":true,\"saved\":") + (saved?"true":"false") + "}");
+  if (saved) { delay(500); ESP.restart(); }
 }
 static void handleEspnowWeb(){
   setModeEspnow();
@@ -617,35 +644,38 @@ input[type=file]{display:none}
 .toast.show{opacity:1;transform:translate(-50%,0)}.toast.err{background:#1e0f12;border-color:#6b3030;color:#ffd3d3}
 footer{text-align:center;color:#5b6076;font-size:11px;margin-top:22px}.hidden{display:none}
 </style></head><body><div class="wrap">
-<header><div class="badge"><b>&#937;</b></div><div class="title"><h1>GOTEK&nbsp;OMEGA</h1><span>Webby</span></div>
-<div class="conn"><span class="dot" id="condot"></span><span id="conntxt">...</span></div></header>
-<div class="tabs"><button class="on" id="tabDisk" onclick="view('disk')">Disk</button><button id="tabWifi" onclick="view('wifi')">Wi-Fi</button></div>
+<header><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASwAAABKCAYAAAABp2mGAAADwUlEQVR42u3dTW7kIBAG0L7/tbKY/VxoshopUtJp3C6oKniflEXGio3BfoPxD49HYD7+/P038vNYlNHy7P6ze72efHw8iqRSWaY2OrCABSxgtey5AEu9AqsfWBUBXdrIwAIWsIDV6iAFFrCAVR+skoh2bQxYAQtY6104EisHJLAcHz3BSitX94aBFbCAlWPD0VgBC1jA6gXW0rLt0jiwAhawcn04Fqt3KgBWwAIWsNo0EqyABaz8ti+PVdb6726vWn1l7dcpUY+Nweo2vgQsJxqw+tyI26IwwAIWsIC1tDCVtw0sJ5p6rDNctAVWwAIWsIDVbiANWE40YO2LVWgdVmm46AoA1vz/XJ6V6dW/f1322zZG9rnycb/DYw2lylupkoDVC6yryyLXk/E1jxPBKlfm7p81BlZOe/203jvPykWBCSxgla4gYOX3sKJfn7pyKQqsXljdLjewgHW3d/X/92fbu3LZ9xOEV3t6wKqN1a2yAwtYM9psBJPRHtUocMDKPQ+BBawWbbbisu3Z+oFV6xycXn5gAWvGXcJ3BuVf/Z1LQmABC1ghY1ivLt+uDKpn9AaBFVcnU/fBYw3AisRrpJf1KBJgAWv5nYnuYHUfdxztRb37yMPI/lcFq9sH/Nqce12vnbPB2rln8M4Y1oqelVdzgOXlZ2AdmR3e26u83Wn74vMywAIWsFp9QLPjdPLAAhawam+zXC/r5E8kO9GABayGYGXMGQgsYAFrzy9WLL+jkbV+YAELWAeBFYlKx4lUnWg9j5Fd9mP1GPLKcpXvZXWcqh5YwALWnLJN3bddGgdYwAJW3r4ffWlorAdYwOq370eiZXAaWMDq87pQGlgVGtXdNGABq9cL2cei5fY/sIAFrBaN63klYAGr1sPa7dBafSsUWMACFrDSZozu9G1qYAHr5Ieot0QroiJ2PrGBBSxgFQPraiFOOrF33i9gAWsbtERERERERERERERERERERERERERERERKxtPUIjIdl1Forkw/p4ZFJA2sK/Nlql0RSQPr7vJ3yjVj/6IveeEs0gysWV+4nbFvMyedcESJFABrdGLP6PJUAgtSIg3A+m357LkDotcT/VlkR5BIAbC+js9kTnQSCVb0d9wdPSKFwKowjdzM3tXdr4w6ekSagbWil1f1chBcIo3AWrH9u+ucjRWwRAqAtaJnET3G9AymGXcHHTkijcBa1bObsd7I+hGRZLBW9C4yZ2PWuxLZBKyry+9scwSZzN6VHpZIcbSuLLuLVXRvJvrBVoPtIpKCsZr4nk+4r8q1YijKBgAAAABJRU5ErkJggg==" alt="OMEGAWARE" style="height:34px;margin-right:4px"><div class="title"><h1>GOTEK&nbsp;OMEGA</h1><span>Webby dongle</span></div>
+<div class="conn"><span id="langbar" style="display:inline-flex;gap:2px;margin-right:8px"></span><span class="dot" id="condot"></span><span id="conntxt">...</span></div></header>
+<div class="tabs"><button class="on" id="tabDisk" onclick="view('disk')" data-i18n="disk">Disk</button><button id="tabWifi" onclick="view('wifi')" data-i18n="wifi">Wi-Fi</button></div>
 <section id="vDisk">
- <div class="card"><h2>In the drive</h2><div class="drive">
+ <div class="card"><h2 data-i18n="in_drive">In the drive</h2><div class="drive">
   <div class="floppy empty" id="floppy"><svg viewBox="0 0 52 52" aria-hidden="true">
    <path d="M7 5 H40 L46 11 V45 A2 2 0 0 1 44 47 H9 A2 2 0 0 1 7 45 V5 Z" fill="#262e4a" stroke="#3b4570" stroke-width="1"/>
    <rect x="14" y="5" width="22" height="13" rx="1" fill="#b9c1da"/><rect x="29" y="7" width="5" height="9" rx="1" fill="#2a3150"/>
    <rect x="11" y="25" width="30" height="19" rx="2" fill="#eef1fb"/><rect x="14" y="30" width="22" height="2.4" rx="1" fill="#aeb7d6"/><rect x="14" y="35" width="15" height="2.4" rx="1" fill="#c3ccec"/></svg></div>
-  <div class="meta" style="min-width:0"><div class="name" id="dname">-- no disk --</div><div class="sub" id="dsub">Load an ADF to insert it</div></div>
-  <button class="btn ghost eject" id="ejectBtn" onclick="ejectDisk()" disabled>Eject</button></div></div>
- <div class="card"><h2>Load image</h2>
-  <label class="drop" id="drop" for="file"><div class="plus">+</div><div class="big">Tap to choose an ADF</div><div class="small">or drag a file here &middot; .adf .adz .img</div></label>
+  <div class="meta" style="min-width:0"><div class="name" id="dname" data-i18n="no_disk">-- no disk --</div><div class="sub" id="dsub" data-i18n="load_ins">Load an ADF to insert it</div></div>
+  <button class="btn ghost eject" id="ejectBtn" onclick="ejectDisk()" disabled data-i18n="eject">Eject</button></div></div>
+ <div class="card"><h2 data-i18n="load_img">Load image</h2>
+  <label class="drop" id="drop" for="file"><div class="plus">+</div><div class="big" data-i18n="tap_choose">Tap to choose an ADF</div><div class="small"><span data-i18n="drag_hint">or drag a file here</span> &middot; .adf .adz .img</div></label>
   <input type="file" id="file" accept=".adf,.adz,.img" onchange="picked(this.files[0])">
-  <div class="prog" id="prog"><i id="bar"></i></div><div class="note">DD image up to ~880&nbsp;KB &middot; one disk at a time</div></div>
+  <div class="prog" id="prog"><i id="bar"></i></div><div class="note" data-i18n="dd_note">DD image up to ~880&nbsp;KB &middot; one disk at a time</div></div>
 </section>
 <section id="vWifi" class="hidden">
- <div class="card"><h2>Home Wi-Fi</h2>
-  <div class="field"><label>Network (SSID)</label><input id="ssid" placeholder="your home wifi name"></div>
-  <div class="field"><label>Password</label><input id="pass" type="password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;"></div>
-  <button class="btn amber wide" style="margin-top:16px" onclick="joinWifi()">Save &amp; Join</button>
-  <div class="hint">Saves and reboots onto your home Wi-Fi. After it joins, open <b>gotek.local</b> in any browser on that network.</div></div>
- <div class="card"><h2>ESP-NOW / GTi mode</h2>
+ <div class="card"><h2 data-i18n="home_wifi">Home Wi-Fi</h2>
+  <div id="joinmsg"></div>
+  <div class="field"><label data-i18n="net_ssid">Network (SSID)</label><input id="ssid" data-i18n-ph="ssid_ph" placeholder="your home wifi name"></div>
+  <button class="btn wide" style="margin-top:8px" onclick="scanWifi()" data-i18n="scan_btn">Scan for networks</button>
+  <div id="scanlist" style="margin-top:8px"></div>
+  <div class="field"><label data-i18n="password">Password</label><input id="pass" type="password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;"></div>
+  <button class="btn amber wide" style="margin-top:16px" onclick="joinWifi()" data-i18n="save_join">Save &amp; Join</button>
+  <div class="hint" data-i18n="wifi_hint">Saves and reboots onto your home Wi-Fi. After it joins, open <b>gotek.local</b> in any browser on that network.</div></div>
+ <div class="card"><h2 data-i18n="espnow_t">ESP-NOW / GTi mode</h2>
   <div class="hint" style="margin-top:0">Switch back to the dongle's own access point + ESP-NOW so a GTi screen can drive it. Reconnect to the <b>GotekOMEGA</b> Wi-Fi afterwards to return here.</div>
-  <button class="btn ghost wide" style="margin-top:14px" onclick="toEspnow()">Disconnect Wi-Fi &rarr; ESP-NOW</button></div>
+  <button class="btn ghost wide" style="margin-top:14px" onclick="toEspnow()" data-i18n="espnow_b">Disconnect Wi-Fi &rarr; ESP-NOW</button></div>
 </section>
 <footer>Webby-0.1 &middot; OMEGAWARE</footer></div>
 <div class="toast" id="toast"></div>
-<script>
+<script>var I18N={"disk":{"en":"Disk","fr":"Disque","it":"Disco","es":"Disco","de":"Diskette","nl":"Disk"},"wifi":{"en":"Wi-Fi","fr":"Wi-Fi","it":"Wi-Fi","es":"Wi-Fi","de":"WLAN","nl":"Wi-Fi"},"in_drive":{"en":"In the drive","fr":"Dans le lecteur","it":"Nel drive","es":"En la unidad","de":"Im Laufwerk","nl":"In het station"},"no_disk":{"en":"-- no disk --","fr":"-- aucun disque --","it":"-- nessun disco --","es":"-- sin disco --","de":"-- keine Diskette --","nl":"-- geen disk --"},"load_ins":{"en":"Load an ADF to insert it","fr":"Chargez un ADF pour l’inserer","it":"Carica un ADF per inserirlo","es":"Carga un ADF para insertarlo","de":"ADF laden zum Einlegen","nl":"Laad een ADF om hem te plaatsen"},"eject":{"en":"Eject","fr":"Ejecter","it":"Espelli","es":"Expulsar","de":"Auswerfen","nl":"Uitwerpen"},"load_img":{"en":"Load image","fr":"Charger une image","it":"Carica immagine","es":"Cargar imagen","de":"Abbild laden","nl":"Image laden"},"tap_choose":{"en":"Tap to choose an ADF","fr":"Touchez pour choisir un ADF","it":"Tocca per scegliere un ADF","es":"Toca para elegir un ADF","de":"Zum Auswahlen eines ADF tippen","nl":"Tik om een ADF te kiezen"},"drag_hint":{"en":"or drag a file here","fr":"ou glissez un fichier ici","it":"o trascina un file qui","es":"o arrastra un archivo aqui","de":"oder Datei hierher ziehen","nl":"of sleep hier een bestand"},"dd_note":{"en":"DD image up to ~880 KB, one disk at a time","fr":"Image DD jusqu’a ~880 Ko, un disque a la fois","it":"Immagine DD fino a ~880 KB, un disco alla volta","es":"Imagen DD hasta ~880 KB, un disco a la vez","de":"DD-Abbild bis ~880 KB, eine Diskette","nl":"DD-image tot ~880 KB, een disk tegelijk"},"home_wifi":{"en":"Home Wi-Fi","fr":"Wi-Fi domestique","it":"Wi-Fi di casa","es":"Wi-Fi de casa","de":"Heim-WLAN","nl":"Thuis-Wi-Fi"},"net_ssid":{"en":"Network (SSID)","fr":"Reseau (SSID)","it":"Rete (SSID)","es":"Red (SSID)","de":"Netzwerk (SSID)","nl":"Netwerk (SSID)"},"ssid_ph":{"en":"your home wifi name","fr":"nom de votre wifi","it":"nome del tuo wifi","es":"nombre de tu wifi","de":"Name deines WLAN","nl":"naam van je wifi"},"scan_btn":{"en":"Scan for networks","fr":"Rechercher des reseaux","it":"Cerca reti","es":"Buscar redes","de":"Netzwerke suchen","nl":"Netwerken zoeken"},"password":{"en":"Password","fr":"Mot de passe","it":"Password","es":"Contrasena","de":"Passwort","nl":"Wachtwoord"},"save_join":{"en":"Save & Join","fr":"Enregistrer & rejoindre","it":"Salva & connetti","es":"Guardar y unir","de":"Speichern & verbinden","nl":"Opslaan & verbinden"},"wifi_hint":{"en":"Saves and reboots onto your home Wi-Fi. After it joins, open gotek.local in any browser on that network.","fr":"Enregistre et redemarre sur votre Wi-Fi. Une fois connecte, ouvrez gotek.local dans un navigateur.","it":"Salva e riavvia sul tuo Wi-Fi. Dopo la connessione, apri gotek.local in un browser.","es":"Guarda y reinicia en tu Wi-Fi. Tras conectar, abre gotek.local en un navegador.","de":"Speichert und startet ins Heim-WLAN neu. Danach gotek.local im Browser oeffnen.","nl":"Slaat op en herstart op je Wi-Fi. Na verbinden open je gotek.local in een browser."},"espnow_t":{"en":"ESP-NOW / GTi mode","fr":"Mode ESP-NOW / GTi","it":"Modalita ESP-NOW / GTi","es":"Modo ESP-NOW / GTi","de":"ESP-NOW / GTi-Modus","nl":"ESP-NOW / GTi-modus"},"espnow_h":{"en":"Switch back to the dongle’s own access point + ESP-NOW so a GTi screen can drive it. Reconnect to the GotekOMEGA Wi-Fi afterwards to return here.","fr":"Revenir au point d’acces du dongle + ESP-NOW pour qu’un ecran GTi le pilote. Reconnectez-vous ensuite au Wi-Fi GotekOMEGA.","it":"Torna all’access point del dongle + ESP-NOW cosi uno schermo GTi puo guidarlo. Poi riconnettiti al Wi-Fi GotekOMEGA.","es":"Vuelve al punto de acceso del dongle + ESP-NOW para que una pantalla GTi lo controle. Luego reconecta al Wi-Fi GotekOMEGA.","de":"Zurueck zum eigenen Access Point + ESP-NOW, damit ein GTi-Bildschirm steuern kann. Danach mit dem GotekOMEGA-WLAN verbinden.","nl":"Terug naar de eigen access point + ESP-NOW zodat een GTi-scherm hem aanstuurt. Verbind daarna weer met het GotekOMEGA-Wi-Fi."},"espnow_b":{"en":"Disconnect Wi-Fi → ESP-NOW","fr":"Deconnecter Wi-Fi → ESP-NOW","it":"Disconnetti Wi-Fi → ESP-NOW","es":"Desconectar Wi-Fi → ESP-NOW","de":"WLAN trennen → ESP-NOW","nl":"Wi-Fi loskoppelen → ESP-NOW"},"scanning":{"en":"Scanning...","fr":"Recherche...","it":"Ricerca...","es":"Buscando...","de":"Suche...","nl":"Zoeken..."},"no_nets":{"en":"No networks found","fr":"Aucun reseau trouve","it":"Nessuna rete trovata","es":"No se hallaron redes","de":"Keine Netzwerke gefunden","nl":"Geen netwerken gevonden"},"scan_fail":{"en":"Scan failed, try again","fr":"Echec du scan, reessayez","it":"Scansione fallita, riprova","es":"Fallo el escaneo, reintenta","de":"Suche fehlgeschlagen, erneut","nl":"Scan mislukt, opnieuw"},"save_fail":{"en":"SAVE FAILED - not stored","fr":"ECHEC - non enregistre","it":"SALVATAGGIO FALLITO","es":"ERROR - no guardado","de":"SPEICHERN FEHLGESCHLAGEN","nl":"OPSLAAN MISLUKT"},"cant_conn":{"en":"Could not connect to","fr":"Impossible de se connecter a","it":"Impossibile connettersi a","es":"No se pudo conectar a","de":"Keine Verbindung zu","nl":"Kon niet verbinden met"},"wrong_pw":{"en":"Wrong password? Check it and try again.","fr":"Mauvais mot de passe ? Verifiez et reessayez.","it":"Password errata? Controlla e riprova.","es":"Contrasena incorrecta? Revisa y reintenta.","de":"Falsches Passwort? Pruefen und erneut.","nl":"Verkeerd wachtwoord? Check en probeer opnieuw."},"saved_join":{"en":"Saved, joining","fr":"Enregistre, connexion a","it":"Salvato, connessione a","es":"Guardado, uniendo a","de":"Gespeichert, verbinde mit","nl":"Opgeslagen, verbindt met"},"enter_net":{"en":"enter a network","fr":"saisissez un reseau","it":"inserisci una rete","es":"ingresa una red","de":"Netzwerk eingeben","nl":"voer een netwerk in"},"saving":{"en":"Saving...","fr":"Enregistrement...","it":"Salvataggio...","es":"Guardando...","de":"Speichern...","nl":"Opslaan..."}};var LANG=(localStorage.getItem("lang")||(navigator.language||"en")).slice(0,2).toLowerCase();if(!I18N.disk[LANG])LANG="en";function tt(k){var e=I18N[k];return e&&e[LANG]?e[LANG]:(e?e.en:k);}function applyI18n(){document.querySelectorAll("[data-i18n]").forEach(function(el){el.textContent=tt(el.getAttribute("data-i18n"));});document.querySelectorAll("[data-i18n-ph]").forEach(function(el){el.setAttribute("placeholder",tt(el.getAttribute("data-i18n-ph")));});}function setLang(l){LANG=l;try{localStorage.setItem("lang",l);}catch(e){}applyI18n();buildLangBar();}function buildLangBar(){var b=document.getElementById("langbar");if(!b)return;b.innerHTML="";["en","fr","it","es","de","nl"].forEach(function(l){var a=document.createElement("span");a.textContent=l.toUpperCase();a.style.cssText="cursor:pointer;padding:2px 5px;font-size:11px;border-radius:4px;"+(l===LANG?"background:#3b4570;color:#fff":"color:#8b93ad");a.onclick=function(){setLang(l);};b.appendChild(a);});}document.addEventListener("DOMContentLoaded",function(){applyI18n();buildLangBar();});
 function fmt(b){return b>=1048576?(b/1048576).toFixed(2)+' MB':Math.round(b/1024)+' KB';}
 function toast(m,e){var t=document.getElementById('toast');t.textContent=m;t.classList.toggle('err',!!e);t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(function(){t.classList.remove('show')},2600);}
 function view(v){document.getElementById('vDisk').classList.toggle('hidden',v!=='disk');document.getElementById('vWifi').classList.toggle('hidden',v!=='wifi');document.getElementById('tabDisk').classList.toggle('on',v==='disk');document.getElementById('tabWifi').classList.toggle('on',v==='wifi');}
@@ -670,7 +700,9 @@ function picked(f){
  x.send(fd);
 }
 function ejectDisk(){fetch('/eject',{method:'POST'}).then(function(r){return r.json()}).then(function(s){toast('Ejected');paint(s);});}
-function joinWifi(){var s=document.getElementById('ssid').value.trim();if(!s){toast('enter a network',1);return;}var b=new URLSearchParams();b.append('ssid',s);b.append('pass',document.getElementById('pass').value);toast('Saving...');fetch('/savewifi',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b.toString()}).then(function(){document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2>Rebooting onto '+s+'</h2><p style="color:#8b93ad">Reconnect your device to your home Wi-Fi, then open <b>gotek.local</b> in a browser.</p></div>';});}
+function scanWifi(){var L=document.getElementById('scanlist');L.textContent=tt('scanning');fetch('/scan').then(function(r){return r.json();}).then(function(d){L.innerHTML='';if(!d.networks||!d.networks.length){L.textContent=tt('no_nets');return;}d.networks.sort(function(a,b){return b.rssi-a.rssi;});d.networks.forEach(function(n){var row=document.createElement('div');row.style.cssText='padding:9px 11px;border:1px solid #2b2f42;border-radius:9px;margin-bottom:6px;cursor:pointer;display:flex;justify-content:space-between;gap:10px';var q=n.rssi>-50?'████':n.rssi>-65?'███░':n.rssi>-75?'██░░':'█░░░';var a=document.createElement('span');a.textContent=(n.ssid||'')+(n.enc?' 🔒':'');var b=document.createElement('span');b.style.cssText='color:#8b93ad;font-family:monospace';b.textContent=q+' '+n.rssi;row.appendChild(a);row.appendChild(b);row.addEventListener('click',function(){document.getElementById('ssid').value=n.ssid||'';L.innerHTML='';});L.appendChild(row);});}).catch(function(){L.textContent=tt('scan_fail');});}
+(function(){fetch('/status').then(function(r){return r.json();}).then(function(d){if(d&&d.join_failed&&d.ssid){var m=document.getElementById('joinmsg');if(m){var w=document.createElement('div');w.style.cssText='background:#2a1416;border:1px solid #6b2b2b;color:#ffb3b3;border-radius:9px;padding:10px 12px;margin-bottom:10px;font-size:13px';w.textContent=tt('cant_conn')+' '+String.fromCharCode(34)+d.ssid+String.fromCharCode(34)+'. '+tt('wrong_pw');m.appendChild(w);}var si=document.getElementById('ssid');if(si&&!si.value)si.value=d.ssid;}}).catch(function(){});})();
+function joinWifi(){var s=document.getElementById('ssid').value.trim();if(!s){toast(tt('enter_net'),1);return;}var b=new URLSearchParams();b.append('ssid',s);b.append('pass',document.getElementById('pass').value);toast(tt('saving'));fetch('/savewifi',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b.toString()}).then(function(r){return r.json();}).then(function(d){if(!d.saved){toast(tt('save_fail'),1);return;}document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2>'+tt('saved_join')+' '+s+'</h2><p style="color:#8b93ad">Reconnect your device to your home Wi-Fi, then open <b>gotek.local</b> in a browser.</p></div>';});}
 function toEspnow(){toast('Switching...');fetch('/espnow',{method:'POST'}).then(function(){document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2>Back to ESP-NOW / AP mode</h2><p style="color:#8b93ad">Rebooting. Reconnect to the <b>GotekOMEGA</b> Wi-Fi (password gotek1234) and open <b>192.168.4.1</b> to return here.</p></div>';});}
 var drop=document.getElementById('drop');
 ['dragenter','dragover'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.add('hot');});});
@@ -695,6 +727,27 @@ static void loadTheme(){
   String t=f.readStringUntil('\n'); t.trim(); f.close();
   if(t.length()) g_active_theme=t;
 }
+// ── Web OTA (added by OMEGAWARE): flash a new firmware over WiFi into the
+// inactive OTA slot. Uses the WebServer upload stream (Webby is not our
+// client-parser firmware). First byte must be 0xE9 (an ESP32 image).
+static bool g_ota_ok=false, g_ota_run=false, g_ota_first=false;
+static void onOtaUpload(){
+  HTTPUpload& up = server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    g_ota_ok=false; g_ota_first=true;
+    g_ota_run = Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
+  } else if (up.status == UPLOAD_FILE_WRITE && g_ota_run) {
+    if (g_ota_first) { g_ota_first=false; if (up.currentSize>0 && up.buf[0]!=0xE9) { Update.abort(); g_ota_run=false; return; } }
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) { g_ota_run=false; }
+  } else if (up.status == UPLOAD_FILE_END && g_ota_run) {
+    g_ota_ok = Update.end(true);
+  }
+}
+static void onOtaDone(){
+  server.send(200, "application/json", g_ota_ok ? "{\"status\":\"ok\"}" : "{\"error\":\"firmware update failed - not an ESP32 image?\"}");
+  if (g_ota_ok) { delay(600); ESP.restart(); }
+}
+
 static void apiSystemInfo(){
   String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
   String j = "{";
@@ -708,8 +761,10 @@ static void apiSystemInfo(){
   j += "\"theme\":\""; j += g_active_theme; j += "\",";
   j += "\"wifi_ip\":\""; j += ip; j += "\",";
   j += "\"wifi_clients\":"; j += String((unsigned)WiFi.softAPgetStationNum()); j += ",";
-  j += "\"internet\":false,\"internet_ssid\":\"\",\"internet_ip\":\"\",";
-  j += "\"has_sd\":false,\"has_display\":false,\"has_ota\":false,";
+  j += "\"internet\":"; j += (g_webmode==1 ? "true" : "false"); j += ",";
+  j += "\"internet_ssid\":\""; j += (g_webmode==1 ? jsonEsc(g_ssid) : String("")); j += "\",";
+  j += "\"internet_ip\":\""; j += (g_webmode==1 ? ip : String("")); j += "\",";
+  j += "\"has_sd\":false,\"has_display\":false,\"has_ota\":true,";
   j += "\"ftp_enabled\":false,\"dav_enabled\":false,\"log_enabled\":false";
   j += "}";
   server.send(200,"application/json", j);
@@ -772,6 +827,10 @@ static void apiThemesList(){
 }
 
 static void handleWebUI(){
+  // In AP/setup mode (not yet on home WiFi) serve the focused setup portal
+  // with the WiFi scan + feedback, not the rich SPA — the SPA is for once
+  // the dongle is on the LAN. Fixes "/" opening the wrong page during setup.
+  if (g_webmode != 1) { server.send_P(200, "text/html", PAGE_HTML); return; }
   server.sendHeader("Content-Encoding","gzip");
   server.send_P(200, "text/html", (PGM_P)webui_gz, webui_gz_len);
 }
@@ -874,6 +933,7 @@ static void startWebServer(){
   server.on("/status", HTTP_GET, [](){ server.send(200,"application/json", statusJson()); });
   server.on("/upload", HTTP_POST, handleUploadDone, handleUpload);
   server.on("/eject", HTTP_POST, handleEjectWeb);
+  server.on("/scan",     HTTP_GET,  handleScan);
   server.on("/savewifi", HTTP_POST, handleSaveWifi);
   server.on("/espnow", HTTP_POST, handleEspnowWeb);
   // PANEL: /api/* shim the SPA calls (has_sd:false dongle surface)
@@ -886,6 +946,7 @@ static void startWebServer(){
   server.on("/api/config",       HTTP_GET,  apiConfig);
   server.on("/api/config",       HTTP_POST, apiConfigSave);
   server.on("/api/system/reboot",HTTP_POST, apiReboot);
+  server.on("/api/system/ota",   HTTP_POST, onOtaDone, onOtaUpload);   // OMEGAWARE: web OTA
   // PANEL: theme gallery (built-in presets, no card needed)
   server.on("/api/themes/list", HTTP_GET,  apiThemesList);
   server.on("/api/fleet",       HTTP_GET,  apiFleet);        // FLEET roster
@@ -972,7 +1033,12 @@ static void startEspnowApMode(){
   // base radio: own AP on ch6 + ESP-NOW (so a GTi can drive it), TCP app server,
   // captive-portal DNS, and the web page served on 192.168.4.1.
   WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(AP_SSID, AP_PASS, ESPNOW_CHANNEL);
+  // Unique AP name per device: two dongles in one room both broadcasting
+  // "GotekOMEGA" is impossible to tell apart (you configure the wrong one).
+  uint8_t apm[6]; WiFi.macAddress(apm);
+  char apid[24]; snprintf(apid, sizeof(apid), "%s-%02X%02X", AP_SSID, apm[4], apm[5]);
+  char apline[32]; snprintf(apline, sizeof(apline), "AP: %s", apid);
+  WiFi.softAP(apid, AP_PASS, ESPNOW_CHANNEL);
   delay(300);
   _tcpServer.begin();
   dnsServer.start(53, "*", IPAddress(192,168,4,1)); g_dns_up = true;
@@ -991,7 +1057,7 @@ static void startEspnowApMode(){
   if (_owner_count == 0) { g_enroll_open = true; g_enroll_until = millis() + 6UL*60UL*1000UL; }
 
   // Broadcast hello burst so a GTi can discover us (web stays responsive meanwhile).
-  oledStatus("Gotek OMEGA " FW_VERSION, "AP: " AP_SSID, WiFi.softAPIP().toString(), "Broadcasting...");
+  oledStatus("Gotek OMEGA " FW_VERSION, apline, WiFi.softAPIP().toString(), "Broadcasting...");
   uint32_t t0 = millis();
   while (millis()-t0 < (uint32_t)(_paired ? 8000 : 3000)) {
     PktHello hello = {}; hello.type = PKT_PAIR_HELLO; WiFi.softAPmacAddress(hello.mac);
@@ -1044,6 +1110,7 @@ void setup() {
       while (WiFi.status() != WL_CONNECTED && millis()-t0 < 12000) { digitalWrite(LED_RED, ((millis()/200)&1)?HIGH:LOW); delay(50); }
     }
     digitalWrite(LED_RED, LOW);
+    g_join_failed = (WiFi.status() != WL_CONNECTED);
     if (WiFi.status() == WL_CONNECTED) {
       g_webmode = 1;
       g_is_master = false;
