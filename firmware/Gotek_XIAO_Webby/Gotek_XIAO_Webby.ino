@@ -50,7 +50,7 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-0.8-xiao"
+#define FW_VERSION     "Webby-1.0-xiao"
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -484,12 +484,12 @@ static void handleTCPClient(WiFiClient& client) {
   uint32_t received = 0; const size_t BUF = 4096;
   uint8_t* buf = (uint8_t*)malloc(BUF); if (!buf) { client.write((uint8_t)0x00); return; }
   t0 = millis();
-  while (received < size && millis()-t0 < 30000) {
+  while (received < size && millis()-t0 < 30000) {   // 30s = max STALL (no progress), not total — a slow-but-steady fling completes; t0 resets on every read below
     if (!client.connected()) break;
     int avail = client.available(); if (avail <= 0) { delay(1); continue; }
     size_t toRead = min((size_t)avail, min(BUF, (size_t)(size-received)));
     int rd = client.read(buf, toRead);
-    if (rd > 0) { memcpy(dst + received, buf, rd); received += rd; oledProgress(received, size); }
+    if (rd > 0) { memcpy(dst + received, buf, rd); received += rd; oledProgress(received, size); t0 = millis(); }
   }
   free(buf);
   if (received == size) {
@@ -1105,6 +1105,7 @@ void setup() {
   g_webmode = 0;
   if (tryWifi) {
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);   // OMEGAWARE: kill modem power-save — as the disk RECEIVER, a sleeping STA delays TCP ACKs and drops LAN flings mid-transfer; off = reliable flings
     WiFi.setHostname(discoName().c_str());   // FLEET: router table shows gotek-xxxx, not "espressif"
     // Two attempts: ESP32 STA frequently misses the first join and takes the retry.
     for (int attempt = 0; attempt < 2 && WiFi.status() != WL_CONNECTED; attempt++) {
