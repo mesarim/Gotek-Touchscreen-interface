@@ -239,6 +239,8 @@
     <!-- step 2: get ready -->
     <div class="card muted" id="s2">
       <div class="card-h"><span class="num">2</span>Get it ready</div>
+      <label class="verbox" id="verbox" hidden><span>Version</span> <select id="verSel" onchange="onVer()"></select> <span class="vhint" id="vhint"></span></label>
+      <label class="betabox" id="betabox" hidden><input type="checkbox" id="beta-chk" onchange="onBeta()"> <span class="lab">Show the <b>beta / testing</b> build</span></label>
       <div class="seg" id="mode-seg">
         <button class="on" id="mode-fresh" onclick="setMode('fresh')">Fresh flash</button>
         <button id="mode-sd" onclick="setMode('sd')">SD access</button>
@@ -259,9 +261,7 @@
 
     <!-- step 3: flash -->
     <div class="card muted" id="s3">
-      <div class="card-h"><span class="num">3</span><span id="s3h">Choose firmware &amp; flash</span></div>
-      <label class="verbox" id="verbox" hidden><span>Version</span> <select id="verSel" onchange="onVer()"></select> <span class="vhint" id="vhint"></span></label>
-      <label class="betabox" id="betabox" hidden><input type="checkbox" id="beta-chk" onchange="onBeta()"> <span class="lab">Show the <b>beta / testing</b> build</span></label>
+      <div class="card-h"><span class="num">3</span><span id="s3h">Flash it</span></div>
       <div class="fwline" id="fwline"></div>
       <esp-web-install-button id="installBtn" manifest="" hide-progress></esp-web-install-button>
       <div class="status" id="flash-status">The flasher opens its own window — pick your board’s port there, then it installs. Don’t unplug until it finishes.</div>
@@ -510,7 +510,7 @@
 
   // ── Version history (per device) — loaded from firmware/versions.json ──
   let VERSIONS=null;
-  fetch('firmware/versions.json?ts='+Date.now()).then(r=>r.ok?r.json():null).then(j=>{VERSIONS=j||{}; if(sel){applyMode();}}).catch(()=>{VERSIONS={};});
+  fetch('firmware/versions.json?ts='+Date.now()).then(r=>r.ok?r.json():null).then(j=>{VERSIONS=j||{}; if(sel){initVersions(); applyMode();}}).catch(()=>{VERSIONS={};});
   function deviceVersions(d){ return (VERSIONS && d && VERSIONS[d.id]) || null; }
   function _abs(p){ return new URL(p, location.href).href; }
   // Build an esp-web-tools manifest for one build. 'full' -> existing manifest.json path;
@@ -595,7 +595,7 @@
     sel=findDev(id); renderDevices();
     mode='fresh'; beta=false; selVer=null;
     $('s2').classList.remove('muted'); $('s2').classList.remove('done');
-    applyMode(); setStep(2);
+    initVersions(); applyMode(); setStep(2);
     $('ready-chk').checked=false; $('btn-confirm').disabled=true; $('confirm-status').innerHTML='';
     $('s3').classList.add('muted'); $('s3').classList.remove('done');
     $('s2').scrollIntoView({behavior:'smooth',block:'center'});
@@ -645,13 +645,14 @@
     $('s3').scrollIntoView({behavior:'smooth',block:'center'});
   }
 
-  function renderStep3(){
+  function initVersions(){
+    if(!sel) return;
     const vs=deviceVersions(sel);
     if(vs){ populateVerSel(vs); $('verbox').hidden=false; $('betabox').hidden=true; }
     else { $('verbox').hidden=true; $('betabox').hidden=!hasBeta(sel); $('beta-chk').checked=beta; }
-    applyBuild();
   }
-  function onBeta(){ beta=$('beta-chk').checked; applyBuild(); }
+  function renderStep3(){ applyBuild(); }
+  function onBeta(){ beta=$('beta-chk').checked; applyMode(); applyBuild(); }
   function applyBuild(){
     const b=curBuild(); if(!b) return;
     $('installBtn').setAttribute('manifest', b.man);
