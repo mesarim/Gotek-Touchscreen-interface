@@ -510,7 +510,7 @@
 
   // ── Version history (per device) — loaded from firmware/versions.json ──
   let VERSIONS=null;
-  fetch('firmware/versions.json').then(r=>r.ok?r.json():null).then(j=>{VERSIONS=j||{};}).catch(()=>{VERSIONS={};});
+  fetch('firmware/versions.json?ts='+Date.now()).then(r=>r.ok?r.json():null).then(j=>{VERSIONS=j||{}; if(sel){applyMode();}}).catch(()=>{VERSIONS={};});
   function deviceVersions(d){ return (VERSIONS && d && VERSIONS[d.id]) || null; }
   function _abs(p){ return new URL(p, location.href).href; }
   // Build an esp-web-tools manifest for one build. 'full' -> existing manifest.json path;
@@ -582,10 +582,12 @@
   function hasBeta(d){ return !!(d.stable && d.beta); }              // toggle only when there are two channels
   function curBuild(){
     if(!sel) return null;
-    if(selVer){ const cfg=deviceVersions(sel);
-      return { man: manifestForVersion(cfg, selVer),
-               ver: selVer.v + (selVer.note ? ' — '+selVer.note : ''),
-               sd:  selVer.app || null }; }
+    const cfg=deviceVersions(sel);
+    const b = selVer || (cfg ? (cfg.builds.find(x=>x.latest)||cfg.builds[0]) : null);
+    if(cfg && b){
+      return { man: manifestForVersion(cfg, b),
+               ver: b.v + (b.note ? ' — '+b.note : ''),
+               sd:  b.app || null }; }
     return (beta && sel.beta) ? sel.beta : (sel.stable || sel.beta);
   }
 
