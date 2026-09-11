@@ -47,7 +47,7 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-1.3-fleetUI"
+#define FW_VERSION     "Webby-1.4-fleetUI"
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -917,7 +917,7 @@ static void sendAliveBeacon(){
 }
 
 // ── FLEET: peer roster (from beacons) + lowest-MAC master election ──────────
-struct FleetPeer { String id, name, ip, fw; bool hd; bool loaded; uint32_t seen; };
+struct FleetPeer { String id, name, ip, fw; bool hd; bool loaded; bool isPanel; uint32_t seen; };   // #rule: isPanel = a screen; a screen always leads, so dongles defer
 static FleetPeer g_peers[16]; static int g_peer_n = 0;
 static bool      g_is_master = false;
 static uint32_t  g_next_elect_ms = 0;
@@ -931,9 +931,9 @@ static String jf(const String& s, const char* key){   // tiny "key":"val" / "key
   int e=i; while(e<(int)s.length() && s[e]!=',' && s[e]!='}') e++;
   return s.substring(i, e);
 }
-static void fleetUpsert(const String& id,const String& name,const String& ip,const String& fw,bool hd,bool loaded){
-  for(int i=0;i<g_peer_n;i++) if(g_peers[i].id==id){ g_peers[i].name=name; g_peers[i].ip=ip; g_peers[i].fw=fw; g_peers[i].hd=hd; g_peers[i].loaded=loaded; g_peers[i].seen=millis(); return; }
-  if(g_peer_n<16){ g_peers[g_peer_n].id=id; g_peers[g_peer_n].name=name; g_peers[g_peer_n].ip=ip; g_peers[g_peer_n].fw=fw; g_peers[g_peer_n].hd=hd; g_peers[g_peer_n].loaded=loaded; g_peers[g_peer_n].seen=millis(); g_peer_n++; }
+static void fleetUpsert(const String& id,const String& name,const String& ip,const String& fw,bool hd,bool loaded,bool isPanel){
+  for(int i=0;i<g_peer_n;i++) if(g_peers[i].id==id){ g_peers[i].name=name; g_peers[i].ip=ip; g_peers[i].fw=fw; g_peers[i].hd=hd; g_peers[i].loaded=loaded; g_peers[i].isPanel=isPanel; g_peers[i].seen=millis(); return; }
+  if(g_peer_n<16){ g_peers[g_peer_n].id=id; g_peers[g_peer_n].name=name; g_peers[g_peer_n].ip=ip; g_peers[g_peer_n].fw=fw; g_peers[g_peer_n].hd=hd; g_peers[g_peer_n].loaded=loaded; g_peers[g_peer_n].isPanel=isPanel; g_peers[g_peer_n].seen=millis(); g_peer_n++; }
 }
 static void fleetPrune(){
   uint32_t now=millis(); int w=0;
@@ -946,13 +946,14 @@ static void pollDisco(){   // read sibling beacons off the discovery socket
     char buf[600]; int n=_disco.read((uint8_t*)buf, sizeof(buf)-1); if(n<=0) return; buf[n]=0;
     String s(buf); if(s.indexOf("\"gti\":1")<0) continue;
     String id=jf(s,"id"); if(id.length()==0 || id==discoId()) continue;   // ignore self
-    fleetUpsert(id, jf(s,"name"), jf(s,"ip"), jf(s,"fw"), jf(s,"hd")=="true", jf(s,"loaded")=="true");
+    fleetUpsert(id, jf(s,"name"), jf(s,"ip"), jf(s,"fw"), jf(s,"hd")=="true", jf(s,"loaded")=="true", jf(s,"role")=="panel");
   }
 }
-static void doElection(){   // lowest MAC among alive devices wears the gotekomega hat
+static void doElection(){   // a screen always leads; otherwise the lowest MAC wears the gotekomega hat
   fleetPrune();
   String me=discoId(); bool master=true;
-  for(int i=0;i<g_peer_n;i++) if(g_peers[i].id < me){ master=false; break; }
+  for(int i=0;i<g_peer_n;i++) if(g_peers[i].isPanel){ master=false; break; }   // #rule: a panel (screen) is present -> it is the leader, dongles defer (stay gotekomega-<mac>.local)
+  if(master) for(int i=0;i<g_peer_n;i++) if(g_peers[i].id < me){ master=false; break; }
   if(master!=g_is_master){
     g_is_master=master;
     MDNS.end();
