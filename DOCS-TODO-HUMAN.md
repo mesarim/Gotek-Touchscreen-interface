@@ -2,7 +2,7 @@
 
 _Maintained by the `gotek-docs` skill. These are the documentation assets the skill **cannot** make — screenshots of a running device, photos of hardware. Everything text-shaped (config keys, versions, feature blurbs) the skill writes itself; only genuinely visual items land here. Delete an entry once its asset is shot and placed._
 
-## JC3248 / JC4827 — 5.9.6
+## JC3248 / JC4827 — 5.9.7
 
 - **OMEGA theme (`THEME=6`, the house default)** — a screenshot of the library running the OMEGA theme. Why: it's now the default reskin and the 7th theme; people pick themes by look, not name. Where: theme gallery in `docs/guide.html` / the download-page feature blurb.
 - **`CRACKTRO=7` "OMEGAWARE" boot intro** — a screenshot (or short clip still) of the 1991 OMEGAWARE cracktro. Why: new cracktro style; the reader chooses cracktros by look. Where: alongside the other cracktro examples in the guide.
