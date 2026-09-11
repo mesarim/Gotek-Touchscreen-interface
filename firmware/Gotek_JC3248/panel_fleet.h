@@ -18,7 +18,8 @@
 #define PF_TCP_PORT   3333
 #define PF_STALE_MS   40000UL
 #define PF_MAX_PEERS  16
-#define PF_CMD_EJECT  0x03
+#define PF_CMD_EJECT   0x03
+#define PF_CMD_SETNAME 0x06   // #24: tell the dongle the pretty display name for the NEXT disk (its FAT12 root stays OMEGA.ADF)
 
 struct PfPeer { String id, name, ip, board, fw, disk; uint16_t tcp; bool hd, loaded; uint32_t seen; };
 static PfPeer   g_pfPeers[PF_MAX_PEERS];
@@ -166,6 +167,25 @@ static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &
   return true;
 }
 
+// #24: set-next-name — tell the dongle the pretty display name before the disk.
+// Best-effort: an old dongle ignores the unknown escape (one-sided safe), so a
+// failure here never blocks the fling.
+static bool pfSendName(const String &ip, uint16_t port, const String &name, String &err) {
+  WiFiClient c;
+  if (!c.connect(ip.c_str(), port, 4000)) { err = "connect failed"; return false; }
+  c.setNoDelay(true);
+  String nm = name; if (nm.length() > 120) nm = nm.substring(0, 120);
+  const uint8_t hdr[6] = { 0xFF, 0xFF, 0xFF, 0xFF, PF_CMD_SETNAME, (uint8_t)nm.length() };
+  c.write(hdr, 6);
+  if (nm.length()) c.write((const uint8_t *)nm.c_str(), nm.length());
+  const uint32_t t0 = millis();
+  while (c.available() < 1 && millis() - t0 < 3000) { if (!c.connected()) break; delay(3); }
+  const int a = c.available() >= 1 ? c.read() : -1;
+  c.stop();
+  if (a != 0x01) { err = (a < 0) ? "no ack" : "not supported"; return false; }
+  return true;
+}
+
 // Drain one queued fling/command. Call from loop().
 static void pfWorker() {
   if (g_pfCmdIp.length()) {
@@ -177,6 +197,8 @@ static void pfWorker() {
   if (g_pfSendIp.length()) {
     const String ip = g_pfSendIp; g_pfSendIp = ""; const uint16_t tp = g_pfSendTcp;
     g_pfBusy = true; String err;
+    const String nm = g_loaded_display.length() ? g_loaded_display : g_loaded_name;
+    if (nm.length()) { String nerr; pfSendName(ip, tp, nm, nerr); }   // #24: name-on-fling, best-effort — old dongles ignore the escape
     const bool ok = pfSendDisk(ip, tp, err);
     g_pfLastTarget = ip; g_pfLastResult = ok ? "ok" : err; g_pfBusy = false;
   }

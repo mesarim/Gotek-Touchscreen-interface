@@ -970,6 +970,7 @@ static int g_sel=0,g_scroll=0,g_disk_sel=0,g_loaded_game_idx=-1,g_loaded_disk_id
 static int g_disk_page=0;  // current page of disk selector (6 disks/page)
 #define DISKS_PER_PAGE 6
 static String g_loaded_name="";static bool g_loaded=false;
+static String g_loaded_display="";   // #24: NFO/meta-aware display name of the loaded disk — this is what we FLING to a dongle (g_loaded_name is the filename base; the NFO "Title:" overrides the shown name)
 #include "panel_fleet.h"          // OMEGAWARE: LAN fleet controller (roster + fling) — placed here so its globals are in scope for the INFO screen + doLoad, before web_panel.h uses its routes
 // ── Smooth list scroll + A-Z index state ──
 static float g_scrollPx=0;                 // pixel scroll offset (source of truth)
@@ -3049,6 +3050,7 @@ static bool doLoadSelected(const String&adfPath){
   g_sv_img_size=(g_mode==MODE_GEN)?0:fsz;svDirtyReset();   // v5.2: GEN has no Amiga save-writeback (0 = no dirty tracking)
   g_img_bytes=copied;                                      // FLING size = the raw bytes we just copied into the data region
   hardAttach();g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_path=loadPath;g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
+  g_loaded_display=(g_sel>=0&&g_sel<(int)g_games.size())?g_games[g_sel].name:g_loaded_name;   // #24: fling the NFO/meta display name, not the filename base
   if(g_sel>=0&&g_sel<(int)g_games.size()){if(g_games[g_sel].plays<65535)g_games[g_sel].plays++;saveStats();}
   if(g_wireless_mode&&g_espnow_started){
     uint8_t mcMacs[64][6]; int mcN=enumMuCaDongles(mcMacs,g_dongle_cap);
@@ -3124,7 +3126,7 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
   build_root(g_disk+(RESERVED_SECTORS+SECTORS_PER_FAT)*512,outn.c_str(),(uint32_t)got);
   g_sv_img_size=0;svDirtyReset();                 // no SD path to write saves back to — tracking off for now
   g_img_bytes=(uint32_t)got;                       // FLING size = the bytes streamed from WebDAV into the data region
-  hardAttach();g_loaded=true;g_loaded_name=showName;g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
+  hardAttach();g_loaded=true;g_loaded_name=showName;g_loaded_display=showName;g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;   // #24: WebDAV fling name = the shown name
   Serial.printf("[DAV] mounted %s (%ld bytes)\n",showName.c_str(),got);
   return true;
 }
@@ -3138,7 +3140,7 @@ static void doUnload(){
   // (v4.8.1: own-disk flush in any mode)
   if(g_sv_dirty_count)svFlushStandalone();
   if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
-  hardDetach();g_loaded=false;g_loaded_name="";g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;g_img_bytes=0;svDirtyReset();
+  hardDetach();g_loaded=false;g_loaded_name="";g_loaded_display="";g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;g_img_bytes=0;svDirtyReset();
   if(g_wireless_mode&&g_espnow_started&&espnowIsPaired())espnowSendEject();drawStatusBar();drawListAndCover();gfx_flush();}
 
 // Expand the zero-RLE embedded ADF straight into the RAM-disk data area. No SD needed.
@@ -3158,7 +3160,7 @@ static void doLoadDiag(){
   build_volume("DISK.ADF",DIAG_ADF_SIZE);                 // force an .ADF image regardless of MODE
   diagInflate(DIAG_RLE,DIAG_RLE_LEN,g_disk+DATA_LBA*512);
   hardAttach();
-  g_loaded=true;g_loaded_name="AMIGA TEST KIT";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
+  g_loaded=true;g_loaded_name="AMIGA TEST KIT";g_loaded_display="AMIGA TEST KIT";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
   g_loaded_path="";g_sv_img_size=0;g_img_bytes=DIAG_ADF_SIZE;svDirtyReset();   // diag disk: writes are never persisted; FLING size = the diag ADF
   drawFullUI();gfx_flush();
 }

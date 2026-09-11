@@ -29,7 +29,7 @@
 // the reported firmware string — so a device always tells you WHICH build of
 // the web layer it runs. Flashing identical version numbers taught us that a
 // number nobody increments is a number nobody can verify.
-#define GTI_WEB_REV "r8"
+#define GTI_WEB_REV "r9"
 
 #include <Update.h>
 #include <ESPmDNS.h>
@@ -454,7 +454,7 @@ static void wpHandleClient(WiFiClient &client) {
         hardAttach();
         g_loaded = true;
         String bn = name; const int d = bn.lastIndexOf('.'); if (d > 0) bn = bn.substring(0, d);
-        g_loaded_name = bn; g_loaded_path = ""; g_webDavLoaded = "";
+        g_loaded_name = bn; g_loaded_display = bn; g_loaded_path = ""; g_webDavLoaded = "";   // #24: fling name for a web-uploaded disk = its filename base
         webLog("Web upload mounted: " + name + " (" + String(n) + " B)");
         wpSendJson(client, 200, "{\"name\":\"" + wpJsonEscape(name) + "\",\"bytes\":" + String(n) + "}");
       } else {
