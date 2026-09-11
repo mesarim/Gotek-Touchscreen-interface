@@ -50,7 +50,7 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-1.0-xiao"
+#define FW_VERSION     "Webby-1.1-xiao"
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -95,6 +95,7 @@
 #define CMD_GET_STATUS  0x02
 #define CMD_EJECT       0x03
 #define CMD_EJECT_FORCE 0x04
+#define CMD_SET_NAME    0x06   // #24: set the pretty display name for the NEXT flung disk (g_loaded_name only; FAT12 stays OMEGA.ADF)
 // ── FLEET: UDP discovery beacon (shared port: dongle, app, JC, browser-master) ──
 #define GTI_DISCO_PORT   51703
 #define ALIVE_BEACON_MS  12000   // "I'm alive" cadence, home-WiFi only
@@ -227,6 +228,23 @@ static void build_volume_ex(const char* outName, uint32_t fsz, bool wipeAll) {
   root[11]=0x20;wr16(root,26,2);wr32(root,28,fsz);
 }
 static void build_volume(const char* outName, uint32_t fsz){ build_volume_ex(outName,fsz,true); }
+
+// #24: the pretty display name for the NEXT flung disk (set-next-name escape),
+// consumed once when the disk lands. FAT12 root name stays constant (OMEGA.ADF).
+static String g_next_name = "";
+
+// #24: a valid, legal 8.3 FAT name from any display string (upper alnum only,
+// <=8 chars) + a constant .ADF — the FAT name is cosmetic (nothing reads it),
+// so this keeps a long/odd upload filename from producing a garbage root entry.
+static String to83(const String& in){
+  const char* s=in.c_str(); const char* dot=strrchr(s,'.');
+  size_t nl = dot ? (size_t)(dot-s) : in.length();
+  String base;
+  for(size_t i=0;i<nl && base.length()<8;i++){ char c=s[i];
+    if((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')) base += (char)toupper(c); }
+  if(base.length()==0) base="OMEGA";
+  return base + ".ADF";
+}
 
 static String macToStr(const uint8_t* mac) {
   char buf[18];
@@ -474,11 +492,19 @@ static void handleTCPClient(WiFiClient& client) {
     else if (cmd == CMD_GET_STATUS)  doGetStatus(client);
     else if (cmd == CMD_EJECT)       doEject(client,false);
     else if (cmd == CMD_EJECT_FORCE) doEject(client,true);
+    else if (cmd == CMD_SET_NAME) {   // #24: 1-byte length + name bytes -> g_next_name
+      uint32_t tn=millis(); while(client.available()<1 && millis()-tn<2000){ if(!client.connected())break; delay(1); }
+      int len = client.available()>=1 ? client.read() : 0;
+      char nb[129]; int got=0; uint32_t tb=millis();
+      while(got<len && millis()-tb<2000){ if(!client.connected())break; int c=client.read(); if(c<0){delay(1);continue;} if(got<128)nb[got]=(char)c; got++; tb=millis(); }
+      nb[got<128?got:128]=0; g_next_name=String(nb);
+      client.write((uint8_t)0x01);
+    }
     else client.write((uint8_t)0x00);
     return;
   }
   if (size == 0 || size > MAX_FILE_BYTES) { client.write((uint8_t)0x00); return; }
-  const char* outName = "DISK.ADF";
+  const char* outName = "OMEGA.ADF";   // #24: FAT12 root stays a constant legal 8.3 (cosmetic); the pretty name lands in g_loaded_name
   build_volume(outName, size);
   uint8_t* dst = g_disk + DATA_LBA * SECTOR_SIZE;
   uint32_t received = 0; const size_t BUF = 4096;
@@ -493,7 +519,9 @@ static void handleTCPClient(WiFiClient& client) {
   }
   free(buf);
   if (received == size) {
-    g_load_id++; g_image_size = size; dirtyReset(); g_loaded_name = "DISK.ADF";
+    g_load_id++; g_image_size = size; dirtyReset();
+    g_loaded_name = g_next_name.length() ? g_next_name : String("OMEGA.ADF");   // #24: pretty name from the set-next-name escape, else the constant
+    g_next_name = "";   // consume it — the next fling must set its own name
     uint8_t ack[5]; ack[0]=0x01; wrLE32(ack+1,g_load_id); client.write(ack,5); client.flush(); delay(100); client.stop();
     if (g_disk_loaded) hardDetach(); hardAttach(); g_disk_loaded = true; g_next_status_ms = 0; digitalWrite(LED_BLUE, HIGH);
     oledStatus("LOADED!", "", "USB: attached", "Gotek ready");
@@ -540,7 +568,7 @@ static String statusJson(){
 // Finalize a browser upload: lay metadata over the streamed data, re-insert.
 static void webFinishLoad(){
   uint32_t size = g_up_recv;
-  build_volume_ex(g_up_name.c_str(), size, false);   // metadata only — data already streamed in
+  build_volume_ex(to83(g_up_name).c_str(), size, false);   // #24: 8.3-mangle for the FAT12 root; full name kept in g_loaded_name (below)
   g_image_size = size; g_load_id++; dirtyReset();
   if (g_disk_loaded) hardDetach();
   hardAttach(); g_disk_loaded = true; g_next_status_ms = 0; digitalWrite(LED_BLUE, HIGH);
