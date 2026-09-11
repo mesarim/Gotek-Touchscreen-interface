@@ -29,7 +29,9 @@
 // the reported firmware string — so a device always tells you WHICH build of
 // the web layer it runs. Flashing identical version numbers taught us that a
 // number nobody increments is a number nobody can verify.
-#define GTI_WEB_REV "r9"
+#ifndef GTI_WEB_REV
+#define GTI_WEB_REV "r10"   // fallback: the sketch may define this first (JC3248 does, so it shows on-screen too)
+#endif
 
 #include <Update.h>
 #include <ESPmDNS.h>

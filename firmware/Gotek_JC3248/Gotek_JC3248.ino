@@ -36,6 +36,7 @@
 #include <sys/stat.h>
 
 #define FW_VERSION "5.9.7-JC3248"
+#define GTI_WEB_REV "r11"   // OMEGAWARE build rev — shown on the status bar AND appended to the web firmware string (web_panel.h uses this via an #ifndef fallback). Bump on EVERY flash.
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -1869,7 +1870,7 @@ static int drawWrapped(int x,int y,const String&s,int maxW,int lineH,int maxLine
 static void drawStatusBar(){
   gfx_fillRect(0,0,VW,STATUS_H,COL_BAR);gfx_setTextSize(1);
   gfx_setTextColor(COL_ORANGE,COL_BAR);gfx_setCursor(6,6);gfx_print("OMEGAWARE");
-  gfx_setTextColor(COL_MID,COL_BAR);gfx_print("  " FW_VERSION);
+  gfx_setTextColor(COL_MID,COL_BAR);gfx_print("  " FW_VERSION " " GTI_WEB_REV);   // show the build rev on-screen too, not just in the web UI
   if(g_wireless_mode){gfx_setTextColor(espnowIsPaired()?0x07E0:0xFD20,COL_BAR);gfx_setCursor(VW/2-40,6);gfx_print(espnowIsPaired()?"WIRELESS:PAIRED":"WIRELESS:PAIR");}
   else{gfx_setTextColor(0x07FF,COL_BAR);int tw=gfx_textWidth("STANDALONE");gfx_setCursor((VW-tw)/2,6);gfx_print(T(L_STANDALONE));}
   // v5.7.x: load-status indicator (top-right). Standalone reads g_loaded; wireless reads
@@ -3024,7 +3025,7 @@ static bool doLoadSelected(const String&adfPath){
   gfx_flush();
   // Clean swap: if a disk is already mounted, cleanly eject first so the host re-reads the new media.
   // FORCESWAP=ON skips this and swaps the bytes in place (faster, but the host may not notice).
-  if(g_loaded && !g_forceswap) hardDetach();
+  if(!g_wireless_mode && g_loaded && !g_forceswap) hardDetach();   // remote-only mode: no local Gotek, so skip the USB detach/attach churn (and the phantom DISK.ADF drive) — just prep + fling
   File f=SD_MMC.open(loadPath.c_str(),FILE_READ);if(!f){gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_FAILED));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
   // Use VFS to get real file size (SD_MMC f.size() returns 0 for subdirectory files)
   String vfsLoad="/sdcard"+loadPath;
@@ -3049,7 +3050,8 @@ static bool doLoadSelected(const String&adfPath){
   // v4.8.0: fresh disk in the RAM disk = fresh save tracking
   g_sv_img_size=(g_mode==MODE_GEN)?0:fsz;svDirtyReset();   // v5.2: GEN has no Amiga save-writeback (0 = no dirty tracking)
   g_img_bytes=copied;                                      // FLING size = the raw bytes we just copied into the data region
-  hardAttach();g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_path=loadPath;g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
+  if(!g_wireless_mode) hardAttach();   // remote-only mode: don't present the RAM disk over USB — the panel isn't a local drive, it just flings to the dongle
+  g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_path=loadPath;g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
   g_loaded_display=(g_sel>=0&&g_sel<(int)g_games.size())?g_games[g_sel].name:g_loaded_name;   // #24: fling the NFO/meta display name, not the filename base
   if(g_sel>=0&&g_sel<(int)g_games.size()){if(g_games[g_sel].plays<65535)g_games[g_sel].plays++;saveStats();}
   if(g_wireless_mode&&g_espnow_started){
