@@ -35,7 +35,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.7-JC3248"
+#define FW_VERSION "5.9.8-JC3248"
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -1370,6 +1370,23 @@ static void generateDefaultConfig(){
   f.println("# DONGLE_HOME_IP: auto-filled cache of the dongle's home IP (mDNS gotek.local is primary).");
   f.println("DONGLE_HOME_IP=");
   f.println("");
+  f.println("# --- WebDAV client (optional) - point GTi at a WebDAV server ---");
+  f.println("# Off until you set DAV=ON and a DAV_HOST. HTTPS here is encrypted but NOT");
+  f.println("# certificate-authenticated, and DAV_PASS is stored in plain text on this card.");
+  f.println("# DAV: ON = enable the WebDAV client (DAV_ENABLED is accepted as the same switch).");
+  f.println("DAV=OFF");
+  f.println("# DAV_HOST: WebDAV server hostname or IP.");
+  f.println("DAV_HOST=");
+  f.println("# DAV_PORT: server port (default 443).");
+  f.println("DAV_PORT=443");
+  f.println("# DAV_HTTPS: ON = TLS (default), OFF = plain HTTP.");
+  f.println("DAV_HTTPS=ON");
+  f.println("# DAV_USER / DAV_PASS: Basic-Auth credentials (blank = none).");
+  f.println("DAV_USER=");
+  f.println("DAV_PASS=");
+  f.println("# DAV_PATH: base path on the server (default /).");
+  f.println("DAV_PATH=/");
+  f.println("");
   f.println("");
   f.println("# Wireless dongle MAC (auto-filled when you pair via INFO screen)");
   f.println("# XIAO_MAC=");
@@ -1420,6 +1437,13 @@ static void selfHealConfig(){
     {"HOME_SSID",      "# HOME_SSID: your home WiFi name (only used when LINK=HOMEWIFI).\nHOME_SSID=\n"},
     {"HOME_PASS",      "# HOME_PASS: your home WiFi password (only used when LINK=HOMEWIFI).\nHOME_PASS=\n"},
     {"DONGLE_HOME_IP", "# DONGLE_HOME_IP: auto-filled cache of the dongle's home-network IP (mDNS gotek.local is the primary lookup).\nDONGLE_HOME_IP=\n"},
+    {"DAV",       "\n# --- WebDAV client (optional) ---\n# HTTPS here is encrypted but NOT certificate-authenticated; DAV_PASS is stored in plain text on this card.\n# DAV: ON = enable the WebDAV client (DAV_ENABLED is accepted as the same switch).\nDAV=OFF\n"},
+    {"DAV_HOST",  "# DAV_HOST: WebDAV server hostname or IP.\nDAV_HOST=\n"},
+    {"DAV_PORT",  "# DAV_PORT: server port (default 443).\nDAV_PORT=443\n"},
+    {"DAV_HTTPS", "# DAV_HTTPS: ON = TLS (default), OFF = plain HTTP.\nDAV_HTTPS=ON\n"},
+    {"DAV_USER",  "# DAV_USER: Basic-Auth username (blank = none).\nDAV_USER=\n"},
+    {"DAV_PASS",  "# DAV_PASS: Basic-Auth password (blank = none).\nDAV_PASS=\n"},
+    {"DAV_PATH",  "# DAV_PATH: base path on the server (default /).\nDAV_PATH=/\n"},
   };
   const int NK=sizeof(KEYS)/sizeof(KEYS[0]);
   bool present[NK]; for(int i=0;i<NK;i++)present[i]=false;
