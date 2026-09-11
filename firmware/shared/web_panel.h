@@ -321,6 +321,11 @@ static void wpHandleClient(WiFiClient &client) {
         const String v = wpPairValue(bodyStr, "WIFI_CLIENT_PASS");
         if (v.length()) { g_home_pass = v; saveConfigKey("HOME_PASS", v); }
       }
+      if (bodyStr.indexOf("MDNS_NAME=") >= 0) {   // #rule: the panel's own mDNS name — re-register live so the change takes effect without a reboot
+        const String v = wpPairValue(bodyStr, "MDNS_NAME");
+        if (v.length()) { g_mdns_name = v; saveConfigKey("MDNS_NAME", v);
+          if (g_web_up) { MDNS.end(); if (MDNS.begin(g_mdns_name.c_str())) MDNS.addService("http", "tcp", 80); } }
+      }
       // The panel's own options: persisted verbatim through saveConfigKey
       // (update-in-place-or-append), picked up by loadConfig at the next
       // boot. The page says so and offers the reboot button.
@@ -347,6 +352,7 @@ static void wpHandleClient(WiFiClient &client) {
       j += "\"WIFI_CLIENT_ENABLED\":\"1\",";
       j += "\"WIFI_CLIENT_SSID\":\"" + wpJsonEscape(g_home_ssid) + "\",";
       j += "\"WIFI_CLIENT_PASS\":\"" + wpJsonEscape(g_home_pass) + "\",";
+      j += "\"MDNS_NAME\":\"" + wpJsonEscape(g_mdns_name) + "\",";   // #rule: the panel's own name (default gotekomega) — editable in the config UI
       j += "\"DAV_ENABLED\":\"" + String(g_dav_on ? "1" : "0") + "\",";
       j += "\"DAV_HOST\":\"" + wpJsonEscape(g_dav_host) + "\",";
       j += "\"DAV_PORT\":\"" + String(g_dav_port) + "\",";
@@ -595,7 +601,7 @@ static void webPanelBegin() {
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) delay(200);
   if (WiFi.status() != WL_CONNECTED) { webLog("[WEB] WiFi join failed - web UI off"); return; }
   davApplyConfig();
-  if (MDNS.begin("gotek")) MDNS.addService("http", "tcp", 80);
+  if (MDNS.begin(g_mdns_name.length() ? g_mdns_name.c_str() : "gotekomega")) MDNS.addService("http", "tcp", 80);   // #rule: the panel owns its name (default gotekomega) — it is the fleet leader when present
   webPanelServer.begin();
   g_web_up = true;
   webLog("[WEB] up at http://" + WiFi.localIP().toString() + "/ (gotek.local)");

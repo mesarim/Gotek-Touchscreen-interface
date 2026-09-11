@@ -75,6 +75,23 @@ static void pfUpsert(const String &j) {
   p->hd = pfJf(j, "hd") == "true"; p->loaded = pfJf(j, "loaded") == "true"; p->seen = millis();
 }
 
+// #rule: announce this panel as the fleet LEADER on the shared discovery port, so
+// the dongles cede gotekomega.local to it and stay gotekomega-<mac>.local. A screen,
+// when present, always leads. Rate-limited so it can be called every pass.
+static uint32_t g_pfBeaconNext = 0;
+static void pfSendBeacon() {
+  if (!g_pfUdpUp || WiFi.status() != WL_CONNECTED) return;
+  if (millis() < g_pfBeaconNext) return;
+  g_pfBeaconNext = millis() + 8000;
+  uint8_t m[6]; WiFi.macAddress(m);
+  char id[13]; snprintf(id, sizeof(id), "%02X%02X%02X%02X%02X%02X", m[0], m[1], m[2], m[3], m[4], m[5]);
+  String j = "{\"gti\":1,\"role\":\"panel\",\"id\":\"" + String(id) + "\",\"name\":\"" + pfJesc(String("GTi panel")) +
+             "\",\"ip\":\"" + WiFi.localIP().toString() + "\",\"loaded\":" + (g_loaded ? "true" : "false") + "}";
+  g_pfUdp.beginPacket(IPAddress(255, 255, 255, 255), PF_DISCO_PORT);
+  g_pfUdp.write((const uint8_t *)j.c_str(), j.length());
+  g_pfUdp.endPacket();
+}
+
 // Call every loop() pass. Opens the socket once STA WiFi is up; drops it and
 // the roster when the network goes away (or we are on ESP-NOW instead).
 static void pfService() {
@@ -89,8 +106,10 @@ static void pfService() {
     char buf[600]; const int n = g_pfUdp.read((uint8_t *)buf, sizeof(buf) - 1); if (n <= 0) break;
     buf[n] = 0; const String s(buf);
     if (s.indexOf("\"gti\":1") < 0) continue;
+    if (s.indexOf("\"role\":\"panel\"") >= 0) continue;   // #rule: the panel's roster is dongles only — ignore other panels + our own beacon
     pfUpsert(s);
   }
+  pfSendBeacon();   // #rule: keep announcing ourselves as the leader
 }
 
 // The roster the web fleet card reads. The panel lists itself first with what

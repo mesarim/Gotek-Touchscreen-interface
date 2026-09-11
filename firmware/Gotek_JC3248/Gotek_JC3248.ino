@@ -36,7 +36,7 @@
 #include <sys/stat.h>
 
 #define FW_VERSION "5.9.7-JC3248"
-#define GTI_WEB_REV "r11"   // OMEGAWARE build rev — shown on the status bar AND appended to the web firmware string (web_panel.h uses this via an #ifndef fallback). Bump on EVERY flash.
+#define GTI_WEB_REV "r12"   // OMEGAWARE build rev — shown on the status bar AND appended to the web firmware string (web_panel.h uses this via an #ifndef fallback). Bump on EVERY flash.
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -954,6 +954,7 @@ static int g_car_bootmode=0;  // CONFIG.TXT CAROUSEL= : default boot VIEW — 0/
 // ── 5.8.6: home-WiFi dongle transport (LINK=HOMEWIFI) — route the FLING via the home router to a Webby dongle's gotek.local, instead of hopping to the dongle's own AP ──
 static bool   g_link_home=false;                                    // LINK: false=ESP-NOW/AP (default), true=HOME WIFI
 static String g_home_ssid="", g_home_pass="", g_dongle_home_ip="";  // HOME_SSID / HOME_PASS (set in CONFIG.TXT) + cached DONGLE_HOME_IP
+static String g_mdns_name="gotekomega";   // #rule: MDNS_NAME (CONFIG.TXT / web) — the panel's own mDNS name. Default gotekomega: a screen is ALWAYS the fleet leader, so the panel owns gotekomega.local and the dongles defer to gotekomega-<mac>.local
 static String g_dav_host="",g_dav_user="",g_dav_pass="",g_dav_path="/";static int g_dav_port=443;static bool g_dav_https=true,g_dav_on=false;   // DAV_* in CONFIG.TXT (merge step 1)
 static String g_dav_test="";   // DAV_TEST= : smoke test — fetch this remote path once at boot. Proves the wiring without UI; remove the key (or the hook) once real UI exists.
 static bool g_web_on=false;    // WEBUI= : serve the shared web interface over HOME_SSID (merge step 2)
@@ -1478,6 +1479,7 @@ static void loadConfig(){
     else if(k=="NESTING"){String nv=v;nv.toUpperCase();g_nesting=(nv=="ON"||nv=="1"||nv=="TRUE");}
     else if(k=="LINK"){String lv=v;lv.toUpperCase();g_link_home=(lv=="HOMEWIFI"||lv=="HOME"||lv=="WIFI");}
     else if(k=="HOME_SSID"||k=="WIFI_CLIENT_SSID"){if(v.length())g_home_ssid=v;}   // WIFI_CLIENT_SSID: the OMEGAWARE tree stores the same credential under this name; empty never erases a value another key already set
+    else if(k=="MDNS_NAME"){if(v.length())g_mdns_name=v;}   // #rule: the panel's mDNS name (default gotekomega)
     else if(k=="HOME_PASS"||k=="WIFI_CLIENT_PASS"){if(v.length())g_home_pass=v;}
     else if(k=="DAV"||k=="DAV_ENABLED"){String dv=v;dv.toUpperCase();g_dav_on=(dv=="ON"||dv=="1");}   // DAV_ENABLED: the OMEGAWARE tree writes this name for the same switch — cards travel between firmwares, so accept both
     else if(k=="DAV_HOST"){g_dav_host=v;}
