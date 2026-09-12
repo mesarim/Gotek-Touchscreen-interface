@@ -160,12 +160,12 @@
     "chipFamily": "ESP32-S3",
     "builds": [
       {
-        "v": "Webby-0.8",
+        "v": "Webby-1.5",
         "ch": "beta",
         "latest": true,
-        "date": "2026-09-10",
+        "date": "2026-09-12",
         "full": "firmware/supermini-beta/manifest.json",
-        "note": "fleet web console (WebDAV/FTP) + BOOT-hold ESP-NOW revert"
+        "note": "unique-SSID fix + settable device name + name-on-fling + screen-as-leader fleet naming"
       },
       {
         "v": "3.2.0",
@@ -180,12 +180,12 @@
     "chipFamily": "ESP32-S3",
     "builds": [
       {
-        "v": "Webby-0.8",
+        "v": "Webby-1.5",
         "ch": "beta",
         "latest": true,
-        "date": "2026-09-10",
+        "date": "2026-09-12",
         "full": "firmware/xiao-beta/manifest.json",
-        "note": "web console (WebDAV/FTP) + fleet + BOOT-revert, OPI 8MB"
+        "note": "unique-SSID fix + settable name + name-on-fling + fleet naming (OPI 8MB)"
       },
       {
         "v": "3.2.0",

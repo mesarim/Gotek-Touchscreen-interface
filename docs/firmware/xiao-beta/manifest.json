@@ -1,6 +1,6 @@
 {
   "name": "Gotek XIAO — Webby BETA (OMEGA UI + ESP-NOW + home WiFi + fleet; OPI 8MB)",
-  "version": "Webby-0.8-xiao",
+  "version": "Webby-1.5-xiao",
   "new_install_prompt_erase": true,
   "builds": [ { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_XIAO_Webby.ino.merged.bin", "offset": 0 } ] } ]
 }
