@@ -35,7 +35,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.8-JC3248"
+#define FW_VERSION "5.9.9-JC3248"
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -3144,6 +3144,7 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
 
 // Merge step 2: the shared web interface + OTA, served over HOME_SSID when
 // WEBUI=ON. Placed here because it calls doLoadWebdav and the disk builders.
+#define GTI_WEB_SD_FILES 1   // 5.9.9: WiFi SD file-access endpoints (JC3.5 only for now)
 #include "../shared/web_panel.h"
 
 static void doUnload(){
