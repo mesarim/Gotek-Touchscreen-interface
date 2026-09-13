@@ -13,6 +13,7 @@
 #pragma once
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <ESPmDNS.h>   // #clubday: the fleet controller re-registers its own mDNS name after the panel-vs-panel election
 
 #define PF_DISCO_PORT 51703
 #define PF_TCP_PORT   3333
@@ -39,6 +40,67 @@ static uint32_t g_pfLastKbps = 0, g_pfLastBytes = 0, g_pfLastMs = 0;
 // The dongle the on-screen INSERT/EJECT act on, chosen in the fleet picker.
 static String   g_pfTargetIp, g_pfTargetName;
 static uint16_t g_pfTargetTcp = PF_TCP_PORT;
+
+// ── Panel-vs-panel election (#clubday: many screens on one Wi-Fi, one gotekomega.local) ──
+// Every screen beacons role:panel with its MAC id and the mDNS name it currently holds.
+// Among screens that still want the default "gotekomega", the LOWEST MAC keeps
+// gotekomega.local; the rest fall back to gotekomega-<mac>.local (same scheme the dongles
+// use). A screen given a custom MDNS_NAME never contends. Deterministic, no mDNS probing.
+struct PfPanel { String id, mdns; uint32_t seen; };
+static PfPanel  g_pfPanels[PF_MAX_PEERS];
+static int      g_pfPanelN = 0;
+static String   g_pfMyId;              // this screen's MAC (uppercase hex) — same format as the beacon id
+static String   g_pfMdnsName;          // the mDNS name we are actually registered under (no ".local")
+static bool     g_pfIsLeader = true;   // do we own the base gotekomega.local?
+static bool     g_pfMdnsDirty = true;  // set when the elected name changes -> re-register (no reboot)
+
+static String pfMyMac() {
+  uint8_t m[6]; WiFi.macAddress(m);
+  char b[13]; snprintf(b, sizeof(b), "%02X%02X%02X%02X%02X%02X", m[0], m[1], m[2], m[3], m[4], m[5]);
+  return String(b);
+}
+static String pfMacSuffix() {   // last 2 bytes, lowercase — matches the dongle's gotekomega-<mac> scheme
+  uint8_t m[6]; WiFi.macAddress(m);
+  char b[8]; snprintf(b, sizeof(b), "%02x%02x", m[4], m[5]);
+  return String(b);
+}
+static String pfMdnsName() { return g_pfMdnsName.length() ? g_pfMdnsName : g_mdns_name; }
+
+static void pfPanelUpsert(const String &id, const String &mdns) {
+  if (!id.length()) return;
+  for (int i = 0; i < g_pfPanelN; i++)
+    if (g_pfPanels[i].id == id) { g_pfPanels[i].mdns = mdns; g_pfPanels[i].seen = millis(); return; }
+  if (g_pfPanelN < PF_MAX_PEERS) { g_pfPanels[g_pfPanelN].id = id; g_pfPanels[g_pfPanelN].mdns = mdns; g_pfPanels[g_pfPanelN].seen = millis(); g_pfPanelN++; }
+}
+static void pfPanelPrune() {
+  uint32_t now = millis(); int w = 0;
+  for (int i = 0; i < g_pfPanelN; i++)
+    if (now - g_pfPanels[i].seen < PF_STALE_MS) { if (w != i) g_pfPanels[w] = g_pfPanels[i]; w++; }
+  g_pfPanelN = w;
+}
+// Decide our effective mDNS name from the screens we can hear. Marks dirty on change.
+static void pfElect() {
+  if (!g_pfMyId.length()) g_pfMyId = pfMyMac();
+  pfPanelPrune();
+  String want;
+  if (g_mdns_name != "gotekomega") {           // a named screen keeps its own name, never contends
+    want = g_mdns_name; g_pfIsLeader = true;
+  } else {
+    bool yield = false;                         // yield gotekomega to any live screen with a lower MAC that also wants it
+    for (int i = 0; i < g_pfPanelN; i++)
+      if (g_pfPanels[i].mdns == "gotekomega" && g_pfPanels[i].id < g_pfMyId) { yield = true; break; }
+    want = yield ? (String("gotekomega-") + pfMacSuffix()) : String("gotekomega");
+    g_pfIsLeader = !yield;
+  }
+  if (want != g_pfMdnsName) { g_pfMdnsName = want; g_pfMdnsDirty = true; }
+}
+// Re-register mDNS when the elected name changed. Safe to call every pass — only acts when dirty.
+static void pfApplyMdns() {
+  if (!g_pfMdnsDirty || g_pfMdnsName.length() == 0) return;
+  MDNS.end();
+  if (MDNS.begin(g_pfMdnsName.c_str())) MDNS.addService("http", "tcp", 80);
+  g_pfMdnsDirty = false;
+}
 
 static String pfJesc(const String &s) {
   String o; o.reserve(s.length() + 4);
@@ -86,7 +148,7 @@ static void pfSendBeacon() {
   uint8_t m[6]; WiFi.macAddress(m);
   char id[13]; snprintf(id, sizeof(id), "%02X%02X%02X%02X%02X%02X", m[0], m[1], m[2], m[3], m[4], m[5]);
   String j = "{\"gti\":1,\"role\":\"panel\",\"id\":\"" + String(id) + "\",\"name\":\"" + pfJesc(String("GTi panel")) +
-             "\",\"ip\":\"" + WiFi.localIP().toString() + "\",\"loaded\":" + (g_loaded ? "true" : "false") + "}";
+             "\",\"mdns\":\"" + pfJesc(pfMdnsName()) + "\",\"ip\":\"" + WiFi.localIP().toString() + "\",\"loaded\":" + (g_loaded ? "true" : "false") + "}";
   g_pfUdp.beginPacket(IPAddress(255, 255, 255, 255), PF_DISCO_PORT);
   g_pfUdp.write((const uint8_t *)j.c_str(), j.length());
   g_pfUdp.endPacket();
@@ -101,15 +163,22 @@ static void pfService() {
   }
   if (!g_pfUdpUp) g_pfUdpUp = g_pfUdp.begin(PF_DISCO_PORT) != 0;
   if (!g_pfUdpUp) return;
+  if (!g_pfMyId.length()) g_pfMyId = pfMyMac();   // needed to tell our own beacon apart from other screens
   for (int guard = 0; guard < 8; guard++) {
     const int sz = g_pfUdp.parsePacket(); if (sz <= 0) break;
     char buf[600]; const int n = g_pfUdp.read((uint8_t *)buf, sizeof(buf) - 1); if (n <= 0) break;
     buf[n] = 0; const String s(buf);
     if (s.indexOf("\"gti\":1") < 0) continue;
-    if (s.indexOf("\"role\":\"panel\"") >= 0) continue;   // #rule: the panel's roster is dongles only — ignore other panels + our own beacon
+    if (s.indexOf("\"role\":\"panel\"") >= 0) {           // #clubday: another screen — track it for the leader election, keep it out of the dongle roster
+      const String pid = pfJf(s, "id");
+      if (pid.length() && pid != g_pfMyId) pfPanelUpsert(pid, pfJf(s, "mdns"));
+      continue;
+    }
     pfUpsert(s);
   }
-  pfSendBeacon();   // #rule: keep announcing ourselves as the leader
+  pfElect();        // #clubday: pick our mDNS name from the screens we hear (lowest MAC keeps gotekomega.local)
+  pfApplyMdns();    // re-register if it changed — no reboot
+  pfSendBeacon();   // #rule: keep announcing ourselves (with the elected name) as a leader
 }
 
 // The roster the web fleet card reads. The panel lists itself first with what
@@ -118,6 +187,9 @@ static String pfRosterJson() {
   pfPrune();
   const bool busy = g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length();
   String j = "{\"self\":\"panel\",\"name\":\"" + pfJesc(String("GTi panel")) + "\",";
+  j += "\"mdns\":\"" + pfJesc(pfMdnsName()) + "\",";                       // #clubday: the mDNS name this screen actually holds after the election
+  j += "\"leader\":" + String(g_pfIsLeader ? "true" : "false") + ",";     // #clubday: true = owns gotekomega.local
+  j += "\"panels\":" + String(g_pfPanelN + 1) + ",";                      // #clubday: screens seen on the net, incl. self
   // The SPA shows the fleet card only in WIRELESS mode: STANDALONE means the
   // panel is the local drive and has no dongles to control. Home WiFi + web are
   // up in both modes, so this flag is purely a UI gate.
