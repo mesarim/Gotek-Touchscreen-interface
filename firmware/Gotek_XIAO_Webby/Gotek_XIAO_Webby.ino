@@ -50,7 +50,7 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-1.5-xiao"
+#define FW_VERSION     "Webby-1.5.3-xiao-lock"
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -96,6 +96,11 @@
 #define CMD_EJECT       0x03
 #define CMD_EJECT_FORCE 0x04
 #define CMD_SET_NAME    0x06   // #24: set the pretty display name for the NEXT flung disk (g_loaded_name only; FAT12 stays DISK.ADF)
+#define CMD_ENROLL      0x07   // #lock: [FFFFFFFF][07][16-byte token] -> if the enroll window is open, store the token as an owner
+#define CMD_AUTH        0x08   // #lock: [FFFFFFFF][08][16-byte token] preamble before a disk fling -> proves the sender is an enrolled owner
+#define CMD_UNENROLL    0x09   // #lock: [FFFFFFFF][09][16-byte token] -> remove that token (unclaim/release)
+#define WTOKEN_LEN      16     // #lock: owner-token length (bytes)
+#define WENROLL_WIN_MS  60000UL // #lock: how long a BOOT tap keeps the WiFi enroll window open
 // ── FLEET: UDP discovery beacon (shared port: dongle, app, JC, browser-master) ──
 #define GTI_DISCO_PORT   51703
 #define ALIVE_BEACON_MS  12000   // "I'm alive" cadence, home-WiFi only
@@ -263,6 +268,40 @@ static uint8_t  _owner_count   = 0;
 static bool     g_enroll_open  = false;
 static uint32_t g_enroll_until = 0;
 
+// ── #lock: WiFi/LAN owner tokens — gate flings on a shared network to enrolled screens ──
+// Extends the ESP-NOW owner concept (above) to the WiFi/TCP path. A locked dongle
+// (>=1 token) only accepts a fling preceded by a valid AUTH token. Enrolment needs the
+// WiFi enroll window open (a short BOOT tap = physical possession).
+#define WOWNER_MAX 4
+static uint8_t  g_wowners[WOWNER_MAX][WTOKEN_LEN];
+static int      g_wowner_count = 0;
+static uint32_t g_wenroll_until = 0;   // WiFi enroll window (a short BOOT tap opens it)
+static bool wtokIsOwner(const uint8_t* t){ for(int i=0;i<g_wowner_count;i++) if(memcmp(g_wowners[i],t,WTOKEN_LEN)==0) return true; return false; }
+static bool wtokLocked(){ return g_wowner_count>0; }
+static String wtokHex(const uint8_t* t){ char b[WTOKEN_LEN*2+1]; for(int i=0;i<WTOKEN_LEN;i++) sprintf(b+i*2,"%02x",t[i]); return String(b); }
+static bool wtokFromHex(const String& s, uint8_t* out){ if((int)s.length()<WTOKEN_LEN*2) return false; for(int i=0;i<WTOKEN_LEN;i++){ char h[3]={s[i*2],s[i*2+1],0}; out[i]=(uint8_t)strtol(h,nullptr,16); } return true; }
+static void saveWOwners(){ File f=LittleFS.open("/WOWNERS.TXT","w"); if(!f) return; for(int i=0;i<g_wowner_count;i++){ f.print("OWNER="); f.println(wtokHex(g_wowners[i])); } f.close(); }
+static void loadWOwners(){ g_wowner_count=0; File f=LittleFS.open("/WOWNERS.TXT","r"); if(!f) return; while(f.available() && g_wowner_count<WOWNER_MAX){ String l=f.readStringUntil('\n'); l.trim(); if(l.startsWith("OWNER=")){ uint8_t t[WTOKEN_LEN]; if(wtokFromHex(l.substring(6),t) && !wtokIsOwner(t)) memcpy(g_wowners[g_wowner_count++],t,WTOKEN_LEN); } } f.close(); }
+static bool addWOwner(const uint8_t* t){ if(wtokIsOwner(t)) return true; if(g_wowner_count>=WOWNER_MAX) return false; memcpy(g_wowners[g_wowner_count++],t,WTOKEN_LEN); saveWOwners(); return true; }
+static bool delWOwner(const uint8_t* t){ for(int i=0;i<g_wowner_count;i++) if(memcmp(g_wowners[i],t,WTOKEN_LEN)==0){ for(int j=i;j<g_wowner_count-1;j++) memcpy(g_wowners[j],g_wowners[j+1],WTOKEN_LEN); g_wowner_count--; saveWOwners(); return true; } return false; }
+// #lock: read exactly one 16-byte token off the wire (bounded); false = short/aborted.
+static bool wReadToken(WiFiClient& c, uint8_t* tok){
+  int got=0; uint32_t tb=millis();
+  while(got<WTOKEN_LEN && millis()-tb<3000){ if(!c.connected())break; int ch=c.read(); if(ch<0){delay(1);continue;} tok[got++]=(uint8_t)ch; tb=millis(); }
+  return got==WTOKEN_LEN;
+}
+// #lock: rollover-safe "enroll window still open?" (signed wrap compare, not millis() < deadline).
+static bool wEnrollOpen(){ return g_wenroll_until != 0 && (int32_t)(millis() - g_wenroll_until) < 0; }
+// #lock: clear every WiFi owner - the escape hatch from an orphaned lock (physical BOOT gestures call this).
+static void wipeWOwners(){ g_wowner_count=0; LittleFS.begin(true); LittleFS.remove("/WOWNERS.TXT"); }
+
+// ── #lock: custom AP name + password (Mez's idea) — protects the dongle's own setup AP ──
+// Kept in /APCFG.TXT, apart from WEBBY.TXT, so a wifi-cred wipe does not undo it.
+static String g_ap_name = AP_SSID;
+static String g_ap_pass = AP_PASS;
+static void loadApCfg(){ if(!LittleFS.begin(true)) return; File f=LittleFS.open("/APCFG.TXT","r"); if(!f) return; while(f.available()){ String l=f.readStringUntil('\n'); l.trim(); if(l.startsWith("APNAME=")) g_ap_name=l.substring(7); else if(l.startsWith("APPASS=")) g_ap_pass=l.substring(7); } f.close(); if(!g_ap_name.length()) g_ap_name=AP_SSID; }
+static void saveApCfg(const String& name, const String& pass){ if(!LittleFS.begin(true)) return; File f=LittleFS.open("/APCFG.TXT","w"); if(!f) return; f.print("APNAME="); f.println(name.length()?name:String(AP_SSID)); f.print("APPASS="); f.println(pass.length()>=8?pass:String(AP_PASS)); f.close(); }
+
 // ESP-NOW receive queue
 #define RX_PKT_SIZE 250
 struct RxPkt { uint8_t data[RX_PKT_SIZE]; int len; };
@@ -309,6 +348,7 @@ static void saveOwners(){
   f.close();
 }
 static void wipeOwners(){
+  wipeWOwners();   // #lock: one 'forget every owner' gesture, both transports
   _owner_count=0; _paired=false; memset(_wave_mac,0,6);
   if(_wavePeer){ delete _wavePeer; _wavePeer=nullptr; }
   if(LittleFS.begin(true)) LittleFS.remove("/XIAO_CONFIG.TXT");
@@ -498,31 +538,71 @@ static void sendStatusBeacon(){
 
 static void handleTCPClient(WiFiClient& client) {
   oledStatus("Receiving...", "TCP connected", "", "");
-  uint32_t t0 = millis();
-  while (client.available() < 4 && millis()-t0 < 5000) delay(1);
-  if (client.available() < 4) { client.write((uint8_t)0x00); return; }
-  uint8_t hdr[4]; client.read(hdr, 4);
-  uint32_t size = ((uint32_t)hdr[0]<<24)|((uint32_t)hdr[1]<<16)|((uint32_t)hdr[2]<<8)|(uint32_t)hdr[3];
-  if (size == TCP_CMD_ESCAPE) {
-    t0 = millis(); while (client.available() < 1 && millis()-t0 < 3000) delay(1);
-    if (!client.available()) { client.write((uint8_t)0x00); return; }
-    uint8_t cmd = client.read();
-    if      (cmd == CMD_GET_SAVE)    doGetSave(client);
-    else if (cmd == CMD_GET_STATUS)  doGetStatus(client);
-    else if (cmd == CMD_EJECT)       doEject(client,false);
-    else if (cmd == CMD_EJECT_FORCE) doEject(client,true);
-    else if (cmd == CMD_SET_NAME) {   // #24: 1-byte length + name bytes -> g_next_name
-      uint32_t tn=millis(); while(client.available()<1 && millis()-tn<2000){ if(!client.connected())break; delay(1); }
-      int len = client.available()>=1 ? client.read() : 0;
-      char nb[129]; int got=0; uint32_t tb=millis();
-      while(got<len && millis()-tb<2000){ if(!client.connected())break; int c=client.read(); if(c<0){delay(1);continue;} if(got<128)nb[got]=(char)c; got++; tb=millis(); }
-      nb[got<128?got:128]=0; g_next_name=String(nb);
-      client.write((uint8_t)0x01);
+  uint32_t t0;
+  bool authed = false;   // #lock: set by a valid CMD_AUTH preamble on this connection
+  // #lock: at most two frames per connection - an optional AUTH preamble, then the real command or the disk.
+  for (int frame = 0; frame < 2; frame++) {
+    t0 = millis();
+    while (client.available() < 4 && millis()-t0 < 5000) delay(1);
+    if (client.available() < 4) { client.write((uint8_t)0x00); return; }
+    uint8_t hdr[4]; client.read(hdr, 4);
+    uint32_t size = ((uint32_t)hdr[0]<<24)|((uint32_t)hdr[1]<<16)|((uint32_t)hdr[2]<<8)|(uint32_t)hdr[3];
+
+    if (size == TCP_CMD_ESCAPE) {
+      t0 = millis(); while (client.available() < 1 && millis()-t0 < 3000) delay(1);
+      if (!client.available()) { client.write((uint8_t)0x00); return; }
+      uint8_t cmd = client.read();
+
+      // -- always allowed: read-only status, the AUTH preamble, and ENROLL (gated by its own physical BOOT window) --
+      if (cmd == CMD_GET_STATUS) { doGetStatus(client); return; }
+      if (cmd == CMD_ENROLL) {
+        uint8_t tok[WTOKEN_LEN];
+        if (!wReadToken(client, tok)) { client.write((uint8_t)0x00); return; }
+        if (!wEnrollOpen()) { client.write((uint8_t)0x02); return; }   // 0x02 = window closed: tap BOOT on the dongle first
+        bool ok = addWOwner(tok);
+        client.write(ok?(uint8_t)0x01:(uint8_t)0x03);                  // 0x03 = owners full
+        if (ok) { g_wenroll_until = 0; oledStatus("Gotek OMEGA " FW_VERSION,"CLAIMED","Screen enrolled",String(g_wowner_count)+" owner(s)"); }
+        return;
+      }
+      if (cmd == CMD_AUTH) {
+        uint8_t tok[WTOKEN_LEN];
+        if (!wReadToken(client, tok)) { client.write((uint8_t)0x00); return; }
+        if (wtokLocked() && !wtokIsOwner(tok)) { client.write((uint8_t)0x05); return; }   // locked + not an owner
+        authed = true; continue;   // the NEXT frame carries the real command or the disk
+      }
+
+      // -- everything below changes state or reads the user's data: refused while locked without AUTH --
+      if (wtokLocked() && !authed) { client.write((uint8_t)0x05); return; }
+
+      if (cmd == CMD_GET_SAVE)    { doGetSave(client);     return; }
+      if (cmd == CMD_EJECT)       { doEject(client,false); return; }
+      if (cmd == CMD_EJECT_FORCE) { doEject(client,true);  return; }
+      if (cmd == CMD_SET_NAME) {   // #24: 1-byte length + name bytes -> g_next_name
+        uint32_t tn=millis(); while(client.available()<1 && millis()-tn<2000){ if(!client.connected())break; delay(1); }
+        int len = client.available()>=1 ? client.read() : 0;
+        char nb[129]; int got=0; uint32_t tb=millis();
+        while(got<len && millis()-tb<2000){ if(!client.connected())break; int c=client.read(); if(c<0){delay(1);continue;} if(got<128)nb[got]=(char)c; got++; tb=millis(); }
+        nb[got<128?got:128]=0; g_next_name=String(nb);
+        client.write((uint8_t)0x01); return;
+      }
+      if (cmd == CMD_UNENROLL) {   // #lock: remove that owner (unclaim); the token itself proves ownership
+        uint8_t tok[WTOKEN_LEN];
+        if (!wReadToken(client, tok)) { client.write((uint8_t)0x00); return; }
+        bool ok = delWOwner(tok);
+        client.write(ok?(uint8_t)0x01:(uint8_t)0x00);
+        if (ok) oledStatus("Gotek OMEGA " FW_VERSION,"RELEASED","Owner removed",String(g_wowner_count)+" owner(s)");
+        return;
+      }
+      client.write((uint8_t)0x00); return;
     }
-    else client.write((uint8_t)0x00);
-    return;
-  }
-  if (size == 0 || size > MAX_FILE_BYTES) { client.write((uint8_t)0x00); return; }
+
+    // -- disk payload --
+    if (size == 0 || size > MAX_FILE_BYTES) { client.write((uint8_t)0x00); return; }
+    if (wtokLocked() && !authed) { client.write((uint8_t)0x05); return; }   // #lock: locked dongle refuses an unauthenticated fling
+    // #safety: detach BEFORE overwriting the RAM disk. The browser-upload path already does this;
+    // the TCP path did not, so a re-fling left the host mounted on a half-rewritten volume for the
+    // whole transfer (minutes, on a bad link).
+    if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; g_loaded_name = ""; digitalWrite(LED_BLUE, LOW); }
   const char* outName = "DISK.ADF";   // #24: FAT12 root stays a constant legal 8.3 (cosmetic); the pretty name lands in g_loaded_name
   build_volume(outName, size);
   uint8_t* dst = g_disk + DATA_LBA * SECTOR_SIZE;
@@ -549,6 +629,9 @@ static void handleTCPClient(WiFiClient& client) {
     client.write((uint8_t)0x00); client.flush(); delay(100); client.stop();
     oledStatus("TRANSFER ERROR", "", "", ""); sendSimple(PKT_XIAO_ERROR);
   }
+    return;
+  }
+  client.write((uint8_t)0x00);   // #lock: AUTH followed by another AUTH carries no work
 }
 
 // ============================================================================
@@ -585,6 +668,16 @@ static String statusJson(){
   return s;
 }
 
+// ── #lock: while this dongle is locked to a screen AND on the shared home LAN, its own
+// web page is not an auth channel - every WRITE endpoint is refused. Reads stay open.
+// Configure it from its own password-protected AP (g_webmode==0), or UNCLAIM it from the owning screen.
+static bool webWriteAllowed(){ return !(wtokLocked() && g_webmode == 1); }
+static bool webDenyLocked(){
+  if (webWriteAllowed()) return false;
+  server.send(403,"application/json","{\"error\":\"dongle is locked to a screen - use its own AP, or UNCLAIM it first\"}");
+  return true;
+}
+
 // Finalize a browser upload: lay metadata over the streamed data, re-insert.
 static void webFinishLoad(){
   uint32_t size = g_up_recv;
@@ -596,6 +689,7 @@ static void webFinishLoad(){
   sendSimple(PKT_XIAO_DONE);   // harmless if no ESP-NOW peer
 }
 static void handleUpload(){
+  if (!webWriteAllowed()) return;   // #lock: discard the stream; the Done handler answers 403
   HTTPUpload& up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
     g_up_recv = 0; g_up_overflow = false;
@@ -612,6 +706,7 @@ static void handleUpload(){
   }
 }
 static void handleUploadDone(){
+  if (webDenyLocked()) return;   // #lock
   if (g_up_overflow) { server.send(413,"application/json","{\"ok\":false,\"err\":\"image too big for the 1MB ramdisk (DD only)\"}"); return; }
   if (g_up_recv == 0) { server.send(400,"application/json","{\"ok\":false,\"err\":\"empty upload\"}"); return; }
   g_loaded_name = g_up_name;
@@ -619,6 +714,7 @@ static void handleUploadDone(){
   server.send(200,"application/json", statusJson());
 }
 static void handleEjectWeb(){
+  if (webDenyLocked()) return;   // #lock
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   dirtyReset(); g_loaded_name=""; digitalWrite(LED_BLUE, LOW);
   oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (web)", "", "Ready");
@@ -646,6 +742,7 @@ static void handleScan(){
 }
 
 static void handleSaveWifi(){
+  if (webDenyLocked()) return;   // #lock
   String ssid = server.arg("ssid"); String pass = server.arg("pass");
   if (ssid.length()==0) { server.send(400,"application/json","{\"ok\":false,\"err\":\"no SSID\"}"); return; }
   if (server.hasArg("name")) g_devname = sanitizeName(server.arg("name"));   // #name: set at first setup so it joins already-named (no default-name clash)
@@ -656,6 +753,7 @@ static void handleSaveWifi(){
   if (saved) { delay(500); ESP.restart(); }
 }
 static void handleEspnowWeb(){
+  if (webDenyLocked()) return;   // #lock
   setModeEspnow();
   server.send(200,"application/json","{\"ok\":true}");
   delay(400); ESP.restart();
@@ -732,6 +830,11 @@ footer{text-align:center;color:#5b6076;font-size:11px;margin-top:22px}.hidden{di
  <div class="card"><h2 data-i18n="espnow_t">ESP-NOW / GTi mode</h2>
   <div class="hint" style="margin-top:0">Switch back to the dongle's own access point + ESP-NOW so a GTi screen can drive it. Reconnect to the <b>GotekOMEGA</b> Wi-Fi afterwards to return here.</div>
   <button class="btn ghost wide" style="margin-top:14px" onclick="toEspnow()" data-i18n="espnow_b">Disconnect Wi-Fi &rarr; ESP-NOW</button></div>
+ <div class="card"><h2>AP security</h2>
+  <div class="hint" style="margin-top:0">Rename this dongle setup access point and give it a password. Only someone who knows them can join it to reconfigure the dongle. WPA2 password: 8+ characters.</div>
+  <div class="field"><label>AP name</label><input id="apname" placeholder="GotekOMEGA" maxlength="24"></div>
+  <div class="field"><label>AP password (8+)</label><input id="appass" type="password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" maxlength="32"></div>
+  <button class="btn amber wide" style="margin-top:12px" onclick="setAp()">Save AP &amp; reboot</button></div>
 </section>
 <footer>Webby-0.1 &middot; OMEGAWARE</footer></div>
 <div class="toast" id="toast"></div>
@@ -767,6 +870,7 @@ function scanWifi(){var L=document.getElementById('scanlist');L.textContent=tt('
 (function(){fetch('/status').then(function(r){return r.json();}).then(function(d){if(d&&d.devname){window.__dn=d.devname;}if(d&&d.devname&&d.devname.indexOf('gotekomega-')!==0){var dn=document.getElementById('devname');if(dn&&!dn.value)dn.value=d.devname;}if(d&&d.join_failed&&d.ssid){var m=document.getElementById('joinmsg');if(m){var w=document.createElement('div');w.style.cssText='background:#2a1416;border:1px solid #6b2b2b;color:#ffb3b3;border-radius:9px;padding:10px 12px;margin-bottom:10px;font-size:13px';w.textContent=tt('cant_conn')+' '+String.fromCharCode(34)+d.ssid+String.fromCharCode(34)+'. '+tt('wrong_pw');m.appendChild(w);}var si=document.getElementById('ssid');if(si&&!si.value)si.value=d.ssid;}}).catch(function(){});})();
 function joinWifi(){var s=document.getElementById('ssid').value.trim();if(!s){toast(tt('enter_net'),1);return;}var b=new URLSearchParams();b.append('ssid',s);b.append('pass',document.getElementById('pass').value);var dn=document.getElementById('devname');var nm=dn?dn.value.trim():'';b.append('name',nm);toast(tt('saving'));fetch('/savewifi',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b.toString()}).then(function(r){return r.json();}).then(function(d){if(!d.saved){toast(tt('save_fail'),1);return;}var own=(nm?san(nm):'')||window.__dn||'gotekomega';document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2>'+tt('saved_join')+' '+s+'</h2><p style="color:#8b93ad">Reconnect your device to your home Wi-Fi. This dongle is at <b>'+own+'.local</b>. The screen / fleet leader stays at <b>gotekomega.local</b>.</p></div>';});}
 function toEspnow(){toast('Switching...');fetch('/espnow',{method:'POST'}).then(function(){document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2>Back to ESP-NOW / AP mode</h2><p style="color:#8b93ad">Rebooting. Reconnect to the <b>GotekOMEGA</b> Wi-Fi (password gotek1234) and open <b>192.168.4.1</b> to return here.</p></div>';});}
+function setAp(){var n=document.getElementById('apname').value.trim();var p=document.getElementById('appass').value;if(p&&p.length<8){toast('Password 8+ chars',1);return;}var b=new URLSearchParams();b.append('apname',n);b.append('appass',p);toast('Saving AP...');fetch('/setap',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b.toString()}).then(function(r){return r.json();}).then(function(d){if(!d.saved){toast(d.err||'Failed',1);return;}document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2>AP updated</h2><p style="color:#8b93ad">Rebooting. Reconnect to <b>'+(n||'GotekOMEGA')+'</b> with the new password.</p></div>';}).catch(function(){});}
 var drop=document.getElementById('drop');
 ['dragenter','dragover'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.add('hot');});});
 ['dragleave','drop'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.remove('hot');});});
@@ -795,6 +899,7 @@ static void loadTheme(){
 // client-parser firmware). First byte must be 0xE9 (an ESP32 image).
 static bool g_ota_ok=false, g_ota_run=false, g_ota_first=false;
 static void onOtaUpload(){
+  if (!webWriteAllowed()) return;   // #lock: discard the stream; the Done handler answers 403
   HTTPUpload& up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
     g_ota_ok=false; g_ota_first=true;
@@ -807,6 +912,7 @@ static void onOtaUpload(){
   }
 }
 static void onOtaDone(){
+  if (webDenyLocked()) return;   // #lock
   server.send(200, "application/json", g_ota_ok ? "{\"status\":\"ok\"}" : "{\"error\":\"firmware update failed - not an ESP32 image?\"}");
   if (g_ota_ok) { delay(600); ESP.restart(); }
 }
@@ -845,11 +951,13 @@ static void apiDiskStatus(){
   server.send(200,"application/json", j);
 }
 static void apiDiskUnload(){
+  if (webDenyLocked()) return;   // #lock
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   dirtyReset(); g_loaded_name=""; digitalWrite(LED_BLUE, LOW);
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiGamesUploadDone(){
+  if (webDenyLocked()) return;   // #lock
   if (g_up_overflow) { server.send(413,"application/json","{\"error\":\"image too big for the HD ramdisk\"}"); return; }
   if (g_up_recv == 0) { server.send(400,"application/json","{\"error\":\"empty upload\"}"); return; }
   g_loaded_name = g_up_name;
@@ -866,7 +974,7 @@ static void apiWifiStatus(){
 }
 static void apiConfig(){
   String j = "{";
-  j += "\"DISPLAY\":\"SUPERMINI\",\"LASTMODE\":\"ADF\",";
+  j += "\"DISPLAY\":\"XIAO\",\"LASTMODE\":\"ADF\",";
   j += "\"MDNS_NAME\":\"" MDNS_NAME "\",";
   j += "\"WIFI_ENABLED\":\"1\",";
   j += "\"WIFI_CLIENT_ENABLED\":\""; j += (g_webmode==1?"1":"0"); j += "\",";
@@ -877,12 +985,14 @@ static void apiConfig(){
   server.send(200,"application/json", j);
 }
 static void apiConfigSave(){
+  if (webDenyLocked()) return;   // #lock
   String ssid = server.arg("WIFI_CLIENT_SSID");
   String pass = server.arg("WIFI_CLIENT_PASS");
   if (ssid.length()) { saveWifiCfg(ssid, pass); server.send(200,"application/json","{\"status\":\"ok\",\"reboot\":true}"); delay(400); ESP.restart(); return; }
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
-static void apiReboot(){ server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
+static void apiReboot(){ if (webDenyLocked()) return;   // #lock
+  server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
 static void apiThemesList(){
   String j = "{\"active\":\""; j += g_active_theme;
   j += "\",\"themes\":[\"AMIGA_WB2\",\"AMIGA_WB13\",\"PAPER_WHITE\",\"MIDNIGHT\",\"PHOSPHOR\",\"OMEGA_DARK\"]}";
@@ -916,9 +1026,12 @@ static void sendAliveBeacon(){
   j += ",\"id\":\"";    j += discoId();      j += "\"";
   j += ",\"name\":\"";  j += discoName();    j += "\"";
   j += ",\"ip\":\"";    j += ip.toString();  j += "\"";
-  j += ",\"board\":\"supermini\"";
+  j += ",\"board\":\"xiao\"";                    // this firmware only runs on the XIAO ESP32-S3 (it used to say "supermini")
   j += ",\"fw\":\"";    j += FW_VERSION;     j += "\"";
   j += ",\"hd\":true";
+  j += ",\"lk\":1";                              // #lock: understands the WiFi owner-lock -> the panel prepends AUTH
+  j += ",\"lkd\":"; j += (wtokLocked()?"1":"0"); // #lock: 1 = locked (>=1 enrolled owner)
+  j += ",\"enr\":"; j += (wEnrollOpen()?"1":"0"); // #lock: 1 = enroll window open -> screens offer CLAIM
   j += ",\"port\":80";
   j += ",\"tcp\":";     j += String(TCP_PORT);
   j += ",\"loaded\":";  j += (g_disk_loaded?"true":"false");
@@ -1001,6 +1114,18 @@ static void startWebServer(){
   server.on("/scan",     HTTP_GET,  handleScan);
   server.on("/savewifi", HTTP_POST, handleSaveWifi);
   server.on("/espnow", HTTP_POST, handleEspnowWeb);
+  server.on("/setap", HTTP_POST, [](){   // #lock: set a custom AP name + password (protects the dongle's own setup AP)
+    if (webDenyLocked()) return;   // #lock
+    String name = server.hasArg("apname") ? server.arg("apname") : "";
+    String pass = server.hasArg("appass") ? server.arg("appass") : "";
+    name.trim();
+    if (name.length() > 24) name = name.substring(0,24);   // #lock: clamp server-side; the HTML maxlength is advisory
+    if (pass.length() > 32) pass = pass.substring(0,32);
+    if(pass.length() && pass.length()<8){ server.send(200,"application/json","{\"saved\":false,\"err\":\"password must be 8+ chars\"}"); return; }
+    saveApCfg(name, pass);
+    server.send(200,"application/json","{\"saved\":true}");
+    delay(400); ESP.restart();   // AP change needs a reboot
+  });
   // PANEL: /api/* shim the SPA calls (has_sd:false dongle surface)
   server.on("/api/system/info",  HTTP_GET,  apiSystemInfo);
   server.on("/api/disk/status",  HTTP_GET,  apiDiskStatus);
@@ -1061,16 +1186,20 @@ static bool serviceBootButton(){
     if (wrPrev) {
       uint32_t wheld = now - wrt0; wrPrev = false; setLeds(false, false);
       if (wheld >= BOOT_WIFIWIPE_MS) {
-        wipeWifiCreds();
-        oledStatus("Gotek OMEGA " FW_VERSION, "Wi-Fi WIPED", "Creds cleared", "Rebooting...");
+        wipeWifiCreds(); wipeWOwners();   // #lock: this is the physical escape from an orphaned lock - clear owners too
+        oledStatus("Gotek OMEGA " FW_VERSION, "Wi-Fi WIPED", "Creds + owners", "Rebooting...");
         delay(600); ESP.restart();
       } else if (wheld >= BOOT_REVERT_MS) {
         setModeEspnow();
         oledStatus("Gotek OMEGA " FW_VERSION, "Wi-Fi OFF", "Back to ESP-NOW", "Rebooting...");
         delay(600); ESP.restart();
+      } else {   // #lock: short BOOT tap in WiFi mode = open the enroll window so a screen can CLAIM this dongle
+        g_wenroll_until = now + WENROLL_WIN_MS;
+        oledStatus("Gotek OMEGA " FW_VERSION, "PAIRING OPEN", "Tap CLAIM on a", "screen (60s)");
       }
       return true;
     }
+    if (wEnrollOpen()) { setLeds(false, (now%600)<120); return true; }   // #lock: BLUE heartbeat while the enroll window is open
     return false;
   }
 
@@ -1101,9 +1230,11 @@ static void startEspnowApMode(){
   // Unique AP name per device: two dongles in one room both broadcasting
   // "GotekOMEGA" is impossible to tell apart (you configure the wrong one).
   uint8_t apm[6]; WiFi.macAddress(apm);
-  char apid[24]; snprintf(apid, sizeof(apid), "%s-%02X%02X", AP_SSID, apm[4], apm[5]);
-  char apline[32]; snprintf(apline, sizeof(apline), "AP: %s", apid);
-  WiFi.softAP(apid, AP_PASS, ESPNOW_CHANNEL);
+  char apid[40];
+  if (g_ap_name == AP_SSID) snprintf(apid, sizeof(apid), "%s-%02X%02X", g_ap_name.c_str(), apm[4], apm[5]);   // default name -> unique per device
+  else snprintf(apid, sizeof(apid), "%s", g_ap_name.c_str());                                                 // #lock: custom AP name -> exactly what the user set
+  char apline[48]; snprintf(apline, sizeof(apline), "AP: %s", apid);
+  WiFi.softAP(apid, g_ap_pass.length()>=8 ? g_ap_pass.c_str() : AP_PASS, ESPNOW_CHANNEL);                     // #lock: custom AP password (WPA2 needs >=8; else fall back)
   delay(300);
   _tcpServer.begin();
   dnsServer.start(53, "*", IPAddress(192,168,4,1)); g_dns_up = true;
@@ -1159,6 +1290,8 @@ void setup() {
 
   loadConfig();       // enrolled owners (used in ESPNOW mode)
   loadWifiCfg();      // WEBBY: home creds + mode
+  loadWOwners();      // #lock: WiFi owner tokens (LAN fling gate)
+  loadApCfg();        // #lock: custom AP name + password (setup-AP protection)
   loadTheme();        // PANEL: last-chosen web theme
 
   // WEBBY: pick the radio mode.
