@@ -50,6 +50,11 @@ static uint8_t  g_panel_token[PF_TOKEN_LEN] = {0};
 static bool     g_panel_token_ok = false;
 static String   g_pfEnrollIp;   // queued by the web handler; pfWorker sends CMD_ENROLL to this dongle
 static String   g_pfEnrollResult;
+// #lock: id of a dongle a WEB claim just enrolled. loop() persists DONGLE_<mac>.MINE for it
+// (the sketch owns the SD helpers), so the web path records ownership like the on-screen one.
+static String   g_pfUnenrollIp;  // queued by the web handler; pfWorker sends CMD_UNENROLL to this dongle
+static String   g_pfClaimedId;
+static String   g_pfReleasedId;   // #lock: loop() clears DONGLE_<mac>.MINE for it after a web UNCLAIM
 // #lock: ids (MACs) of dongles THIS screen owns (claimed). Loaded at boot from CONFIG.TXT
 // (DONGLE_<mac>.MINE=1) by the sketch; used to hide locked-not-mine dongles and to gate UNCLAIM.
 static String   g_mineIds[16];
@@ -60,6 +65,7 @@ static void pfDelMine(const String &id){ for(int i=0;i<g_mineN;i++) if(g_mineIds
 // #console: a locked dongle is only visible on a screen that owns it — EXCEPT while it is in
 // pairing mode (enr), so any screen can still claim a dongle whose BOOT was just tapped.
 static bool pfPeerVisible(const PfPeer &p){ return p.enr || pfIsMine(p.id) || !p.lkd; }
+static int  pfPeerIdx(const String &id){ for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].id==id) return i; return -1; }   // rows are held by id: a prune must not shift one under your finger
 
 // ── Panel-vs-panel election (#clubday: many screens on one Wi-Fi, one gotekomega.local) ──
 // Every screen beacons role:panel with its MAC id and the mDNS name it currently holds.
@@ -244,10 +250,27 @@ static String pfRosterJson() {
   return j;
 }
 
-// #lock: is the dongle at this IP running lock-capable firmware (advertised "lk":1)?
-static bool pfPeerLockCapable(const String &ip) {
-  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) return g_pfPeers[i].lk;
+// #lock: send our token ONLY to a lock-capable dongle this screen actually owns. Beacons are
+// unauthenticated, so "lk":1 alone must never be enough to make us hand the token to a stranger.
+static bool pfPeerWantsAuth(const String &ip) {
+  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) return g_pfPeers[i].lk && pfIsMine(g_pfPeers[i].id);
   return false;
+}
+// #lock: the TCP port this peer advertises (never assume 3333).
+static uint16_t pfPeerTcp(const String &ip) {
+  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) return g_pfPeers[i].tcp;
+  return PF_TCP_PORT;
+}
+// #lock: write the AUTH preamble. Returns false if the dongle refuses us immediately (0x05).
+static bool pfWriteAuth(WiFiClient &c, String &err) {
+  uint8_t a[5 + PF_TOKEN_LEN]; a[0]=a[1]=a[2]=a[3]=0xFF; a[4]=PF_CMD_AUTH; memcpy(a+5, g_panel_token, PF_TOKEN_LEN);
+  c.write(a, sizeof(a));
+  // The dongle answers ONLY on refusal, and it does so before we send anything else — so give it a
+  // short window. Without this the refusal arrives mid-payload and surfaces as "connection lost".
+  const uint32_t t0 = millis();
+  while (!c.available() && millis() - t0 < 400) { if (!c.connected()) break; delay(5); }
+  if (c.available()) { const int r = c.read(); err = (r == 0x05) ? "locked to another screen" : "refused"; return false; }
+  return true;
 }
 
 // Push the loaded disk to a dongle. BLOCKING — loop() only.
@@ -258,16 +281,17 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
   WiFiClient c;
   if (!c.connect(ip.c_str(), port, 8000)) { err = "connect failed"; return false; }
   c.setNoDelay(true);   // disable Nagle: with the dongle's delayed-ACK, Nagle stalls each window ~200ms and crawls the fling to ~35 KB/s
-  if (g_panel_token_ok && pfPeerLockCapable(ip)) {   // #lock: AUTH preamble — the dongle validates the token, then reads the size+disk below
-    uint8_t a[5 + PF_TOKEN_LEN]; a[0]=a[1]=a[2]=a[3]=0xFF; a[4]=PF_CMD_AUTH; memcpy(a+5, g_panel_token, PF_TOKEN_LEN);
-    c.write(a, sizeof(a));
+  if (g_panel_token_ok && pfPeerWantsAuth(ip)) {   // #lock: prove ownership before the disk
+    if (!pfWriteAuth(c, err)) { c.stop(); return false; }
   }
   const uint8_t hdr[4] = { (uint8_t)(size >> 24), (uint8_t)(size >> 16), (uint8_t)(size >> 8), (uint8_t)size };
   const uint32_t tSend0 = millis();   // time the bulk transfer for the throughput report
   c.write(hdr, 4);
   uint32_t sent = 0, stall = millis();
+  const uint32_t deadline = millis() + 180000UL;   // hard ceiling: a crawling link must not hold the screen hostage for minutes
   while (sent < size) {
     if (!c.connected()) { err = "connection lost at " + String(sent) + "B"; c.stop(); return false; }
+    if ((int32_t)(millis() - deadline) > 0) { err = "too slow - " + String(sent*100/size) + "% in 3 min"; c.stop(); return false; }
     uint32_t chunk = size - sent; if (chunk > 8192) chunk = 8192;
     const size_t w = c.write(data + sent, chunk);
     if (w == 0) { if (millis() - stall > 15000) { err = "send stalled"; c.stop(); return false; } delay(2); continue; }
@@ -286,14 +310,20 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
 static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &err) {
   WiFiClient c;
   if (!c.connect(ip.c_str(), port, 5000)) { err = "connect failed"; return false; }
+  c.setNoDelay(true);
+  if (g_panel_token_ok && pfPeerWantsAuth(ip)) {   // #lock: commands are privileged too (eject/save/name)
+    if (!pfWriteAuth(c, err)) { c.stop(); return false; }
+  }
   const uint8_t f[5] = { 0xFF, 0xFF, 0xFF, 0xFF, cmd };
   c.write(f, 5);
   const uint32_t t0 = millis();
   while (c.available() < 1 && millis() - t0 < 3000) { if (!c.connected()) break; delay(5); }
   const int a = c.available() >= 1 ? c.read() : -1;
   c.stop();
-  if (a < 0) { err = "no reply"; return false; }
-  return true;
+  // Only 0x01 is success. The dongle answers 0x02 for "refused, unsaved data", 0x05 for "locked".
+  if (a == 0x01) return true;
+  err = (a < 0) ? "no reply" : (a == 0x02) ? "refused - unsaved data (use force)" : (a == 0x05) ? "locked to another screen" : "refused";
+  return false;
 }
 
 // #24: set-next-name — tell the dongle the pretty display name before the disk.
@@ -303,6 +333,9 @@ static bool pfSendName(const String &ip, uint16_t port, const String &name, Stri
   WiFiClient c;
   if (!c.connect(ip.c_str(), port, 4000)) { err = "connect failed"; return false; }
   c.setNoDelay(true);
+  if (g_panel_token_ok && pfPeerWantsAuth(ip)) {   // #lock: SET_NAME is privileged too - without this a locked dongle
+    if (!pfWriteAuth(c, err)) { c.stop(); return false; }   // refuses the name and the fling lands as "DISK.ADF"
+  }
   String nm = name; if (nm.length() > 120) nm = nm.substring(0, 120);
   const uint8_t hdr[6] = { 0xFF, 0xFF, 0xFF, 0xFF, PF_CMD_SETNAME, (uint8_t)nm.length() };
   c.write(hdr, 6);
@@ -318,6 +351,7 @@ static bool pfSendName(const String &ip, uint16_t port, const String &name, Stri
 // #lock: enroll this panel's token as an owner of the dongle at ip. The dongle's enroll
 // window must be open (short BOOT tap on the dongle). Short best-effort exchange.
 static bool pfSendEnroll(const String &ip, uint16_t port, String &err) {
+  if (!g_panel_token_ok) { err = "no panel token (SD missing?)"; return false; }   // #lock: never enrol an all-zero token
   WiFiClient c;
   if (!c.connect(ip.c_str(), port, 4000)) { err = "connect failed"; return false; }
   c.setNoDelay(true);
@@ -334,6 +368,7 @@ static bool pfSendEnroll(const String &ip, uint16_t port, String &err) {
 
 // #lock: release ownership — tell the dongle to drop THIS panel's token. Blocking, short.
 static bool pfSendUnenroll(const String &ip, uint16_t port, String &err) {
+  if (!g_panel_token_ok) { err = "no panel token (SD missing?)"; return false; }
   WiFiClient c;
   if (!c.connect(ip.c_str(), port, 4000)) { err = "connect failed"; return false; }
   c.setNoDelay(true);
@@ -352,13 +387,21 @@ static void pfWorker() {
   if (g_pfEnrollIp.length()) {   // #lock: enroll this panel as an owner of the chosen dongle
     const String ip = g_pfEnrollIp; g_pfEnrollIp = "";
     g_pfBusy = true; String err;
-    const bool ok = pfSendEnroll(ip, PF_TCP_PORT, err);
+    const bool ok = pfSendEnroll(ip, pfPeerTcp(ip), err);
+    if (ok) { for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) { pfAddMine(g_pfPeers[i].id); g_pfClaimedId = g_pfPeers[i].id; break; } }
     g_pfEnrollResult = ok ? "enrolled" : err; g_pfLastTarget = ip; g_pfLastResult = ok ? "enrolled" : err; g_pfBusy = false;
+  }
+  if (g_pfUnenrollIp.length()) {   // #lock: release our claim (the dongle drops OUR token only)
+    const String ip = g_pfUnenrollIp; g_pfUnenrollIp = "";
+    g_pfBusy = true; String err;
+    const bool ok = pfSendUnenroll(ip, pfPeerTcp(ip), err);
+    if (ok) for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) { pfDelMine(g_pfPeers[i].id); g_pfReleasedId = g_pfPeers[i].id; break; }
+    g_pfEnrollResult = ok ? "released" : err; g_pfLastTarget = ip; g_pfLastResult = ok ? "released" : err; g_pfBusy = false;
   }
   if (g_pfCmdIp.length()) {
     const String ip = g_pfCmdIp; g_pfCmdIp = ""; const uint8_t cmd = g_pfCmd; g_pfCmd = 0;
     g_pfBusy = true; String err;
-    const bool ok = pfSendCommand(ip, PF_TCP_PORT, cmd, err);
+    const bool ok = pfSendCommand(ip, pfPeerTcp(ip), cmd, err);
     g_pfLastTarget = ip; g_pfLastResult = ok ? "ok" : err; g_pfBusy = false;
   }
   if (g_pfSendIp.length()) {

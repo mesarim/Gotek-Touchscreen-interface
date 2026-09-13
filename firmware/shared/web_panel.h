@@ -413,9 +413,18 @@ static void wpHandleClient(WiFiClient &client) {
   }
   else if (method == "POST" && path == "/api/fleet/enroll") {   // #lock: enroll this panel as an owner of the dongle at ip (its BOOT enroll window must be open)
     const String ip = wpPairValue(bodyStr, "ip");
+    bool pairing = false;   // #lock: the token only ever leaves this panel toward a dongle we can SEE with its
+    for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip && g_pfPeers[i].enr) { pairing = true; break; }   // BOOT window open - never to a hand-typed ip
     if (ip.length() == 0) { wpSendJson(client, 400, "{\"error\":\"No ip\"}"); }
+    else if (!pairing) { wpSendJson(client, 403, "{\"error\":\"Not pairing - tap BOOT on the dongle first\"}"); }
     else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length() || g_pfEnrollIp.length()) { wpSendJson(client, 409, "{\"error\":\"Fleet busy\"}"); }
     else { g_pfEnrollIp = ip; wpSendJson(client, 200, "{\"status\":\"queued\"}"); }
+  }
+  else if (method == "POST" && path == "/api/fleet/unenroll") {   // #lock: release THIS panel's claim on the dongle at ip
+    const String ip = wpPairValue(bodyStr, "ip");                  // safe by construction: it only ever removes our own token
+    if (ip.length() == 0) { wpSendJson(client, 400, "{\"error\":\"No ip\"}"); }
+    else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length() || g_pfEnrollIp.length() || g_pfUnenrollIp.length()) { wpSendJson(client, 409, "{\"error\":\"Fleet busy\"}"); }
+    else { g_pfUnenrollIp = ip; wpSendJson(client, 200, "{\"status\":\"queued\"}"); }
   }
   else if (method == "POST" && path == "/api/fleet/cmd") {
     const String ip = wpPairValue(bodyStr, "ip");

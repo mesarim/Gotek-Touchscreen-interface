@@ -36,7 +36,7 @@
 #include <sys/stat.h>
 
 #define FW_VERSION "5.9.7-JC3248"
-#define GTI_WEB_REV "r21"   // OMEGAWARE build rev — shown on the status bar AND appended to the web firmware string (web_panel.h uses this via an #ifndef fallback). Bump on EVERY flash.
+#define GTI_WEB_REV "r22"   // OMEGAWARE build rev — shown on the status bar AND appended to the web firmware string (web_panel.h uses this via an #ifndef fallback). Bump on EVERY flash.
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -2077,7 +2077,9 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_SAVEDWIFI, IA_FLEET };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_SAVEDWIFI, IA_FLEET, IA_ORPHAN };
+static int  pfOrphanCount();     // #lock: locked dongles this screen does not own (defined by the fleet section)
+static void doReleaseOrphans();  // #lock: offer our token to each of them - only a real owner token releases one
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
 static InfoItem g_ii[28]; static int g_ii_n=0;   // #clubday: bumped 20->28 so added rows (SAVED WIFI etc.) never push tail items (SD ACCESS / FW UPDATE) off the list
 struct InfoRect { int x,y,w,h; uint8_t act; };
@@ -2107,6 +2109,7 @@ static void drawInfoPanel(){
     add(String("LINK: ")+(g_link_home?"HOME WIFI":"ESP-NOW"), g_link_home?COL_BLUE:COL_BAR, g_link_home?TFT_WHITE:COL_LIT, IA_LINK);   // 5.8.6: transport picker
     add(String("HOME WIFI: ")+(g_home_ssid.length()?g_home_ssid:String("set up")), COL_ACCENT, TFT_WHITE, IA_HOMEWIFI);   // #clubday: scan + pick + live-switch
     add(String("SAVED WIFI: ")+String((int)g_known.size()), COL_BLUE, TFT_WHITE, IA_SAVEDWIFI);   // #clubday: remembered networks (view + forget)
+    { int orp=pfOrphanCount(); if(orp) add(String("RELEASE LOCKS: ")+String(orp), COL_AMBER, TFT_BLACK, IA_ORPHAN); }   // #lock: recovery for a lock this screen made but no longer remembers
     uint8_t mm[64][6]; int mcN=enumMuCaDongles(mm,g_dongle_cap);
     if(mcN>0) add(String(T(L_CFG_HIVEMIND))+": "+(g_hivemind?T(L_ON):T(L_OFF)), g_hivemind?COL_ACCENT:COL_BAR, g_hivemind?TFT_WHITE:COL_LIT, IA_HIVEMIND);
   }
@@ -4340,6 +4343,23 @@ static void fleetEjectChecked(String* ids, int n){
   hwMsg("Ejected",("on "+String(ok)+" dongle(s)").c_str(),COL_AMBER,1500);
 }
 
+// #lock: recovery. A dongle can stay locked to THIS screen while our own DONGLE_<mac>.MINE
+// record is gone (claimed from the web before r22, an SD swap, a factory reset). It then hides
+// from the fleet list and only an owner can release it. We offer our token to every locked
+// dongle we do not own: the dongle answers 0x01 only if that token really is one of its owners,
+// so this can never release someone else's claim — and a stranger's dongle just says no.
+static int pfOrphanCount(){ int n=0; for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].lkd && !pfIsMine(g_pfPeers[i].id)) n++; return n; }
+static void doReleaseOrphans(){
+  pfService(); pfPrune();
+  int tried=0, freed=0;
+  for(int i=0;i<g_pfPeerN;i++){ PfPeer&p=g_pfPeers[i];
+    if(!(p.lkd && !pfIsMine(p.id))) continue;
+    tried++; hwMsg("Releasing...",(p.name.length()?p.name:p.ip).c_str(),COL_ACCENT,1);
+    String err; if(pfSendUnenroll(p.ip,pfPeerTcp(p.ip),err)){ freed++; setDongleMine(p.id,false); } }
+  if(!tried) hwMsg("Nothing to release","no locked dongles",COL_AMBER,1500);
+  else hwMsg(freed?"Released":"Not ours",(String(freed)+" of "+String(tried)+" dongle(s)").c_str(),freed?COL_GREEN:COL_AMBER,1800);
+}
+
 // #console: the Fleet manager — multi-select dongles, SEND the staged disk to all of them,
 // CLAIM/UNCLAIM on the dongle's own row, EJECT the selection. Blocking; keeps web + discovery alive.
 static void doFleetPick(){
@@ -4351,17 +4371,26 @@ static void doFleetPick(){
   int maxRows=(btnBarY-listTop-4)/rowH; if(maxRows<1)maxRows=1;
   int scroll=0; bool dirty=true, down=false, moved=false; int downX=0,downY=0,downScroll=0;
   uint32_t lastPoll=millis();
+  String visId[PF_MAX_PEERS]; int vn=0, maxScroll=0; String drawnSig;   // #console: the list AS DRAWN, held by id
+  auto drainTouch=[&](){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); down=false; moved=true; };
   while(true){
     webPanelService(); pfService(); pfWorker();
-    if(millis()-lastPoll>1200){ pfPrune(); dirty=true; lastPoll=millis(); }
-    int vis[PF_MAX_PEERS], vn=0; for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])) vis[vn++]=i;   // #console: hide locked-not-mine
-    int maxScroll=(vn>maxRows)?(vn-maxRows):0; if(scroll>maxScroll)scroll=maxScroll; if(scroll<0)scroll=0;
+    if(millis()-lastPoll>1200){ pfPrune(); lastPoll=millis(); }
+    // candidate visible set; only repaint (and re-freeze the rows) when it really changed, so a
+    // dongle appearing/vanishing between frames can never move a row under a finger already down.
+    int cand[PF_MAX_PEERS], cn=0; String sig;
+    for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])){ cand[cn++]=i; sig+=g_pfPeers[i].id; sig+=','; }   // #console: hide locked-not-mine
+    if(sig!=drawnSig) dirty=true;
     if(dirty){ dirty=false;
+      vn=0; for(int k=0;k<cn;k++) visId[vn++]=g_pfPeers[cand[k]].id; drawnSig=sig;
+      for(int i=chkN-1;i>=0;i--){ bool live=false; for(int k=0;k<vn;k++) if(visId[k]==chk[i]){live=true;break;}   // a dongle that went away (or got claimed elsewhere) leaves the selection
+        if(!live){ for(int j=i;j<chkN-1;j++)chk[j]=chk[j+1]; chkN--; } }
+      maxScroll=(vn>maxRows)?(vn-maxRows):0; if(scroll>maxScroll)scroll=maxScroll; if(scroll<0)scroll=0;
       gfx_fillScreen(COL_BG);
       gfx_setTextSize(1);gfx_setTextColor(COL_ORANGE,COL_BG);gfx_setCursor(8,7);
       gfx_print(vn?("FLEET ("+String(vn)+")  tap = select  |  checked: "+String(chkN)):String("FLEET - searching for dongles..."));
       if(vn==0){ gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,30);gfx_print(T(L_NO_DONGLES)); }
-      for(int r=0;r<maxRows&&(scroll+r)<vn;r++){ int i=vis[scroll+r],y=listTop+r*rowH; PfPeer&p=g_pfPeers[i]; bool ck=isChk(p.id);
+      for(int r=0;r<maxRows&&(scroll+r)<vn;r++){ int i=pfPeerIdx(visId[scroll+r]); if(i<0) continue; int y=listTop+r*rowH; PfPeer&p=g_pfPeers[i]; bool ck=isChk(p.id);
         uint16_t bg=ck?COL_SEL:COL_PANEL;
         gfx_fillRoundRect(8,y,VW-16,rowH-4,6,bg);gfx_drawRoundRect(8,y,VW-16,rowH-4,6,ck?COL_AMBER:COL_ACCENT);
         gfx_drawRoundRect(16,y+rowH/2-13,20,20,4,inkFor(bg)); if(ck) gfx_fillRoundRect(19,y+rowH/2-10,14,14,3,COL_AMBER);   // checkbox
@@ -4388,18 +4417,18 @@ static void doFleetPick(){
     } else if(down){ down=false;
       if(!moved){
         if(downY>=btnBarY){ int bw=(VW-4*4)/3,i=(downX-4)/(bw+4);
-          if(i==0){ if(chkN>0){ fleetSendChecked(chk,chkN); dirty=true; } }
-          else if(i==1){ if(chkN>0){ fleetEjectChecked(chk,chkN); dirty=true; } }
+          if(i==0){ if(chkN>0){ fleetSendChecked(chk,chkN); drainTouch(); dirty=true; } }
+          else if(i==1){ if(chkN>0){ fleetEjectChecked(chk,chkN); drainTouch(); dirty=true; } }
           else break; // BACK
         } else if(downY>=listTop&&downY<listTop+maxRows*rowH){ int slot=(downY-listTop)/rowH,vidx=scroll+slot;
-          if(vidx>=0&&vidx<vn){ int i=vis[vidx]; PfPeer&p=g_pfPeers[i];
+          if(vidx>=0&&vidx<vn){ int i=pfPeerIdx(visId[vidx]); if(i<0){ dirty=true; } else { PfPeer&p=g_pfPeers[i];
             if((int)downX>=actX && (p.enr||pfIsMine(p.id))){   // per-row CLAIM / UNCLAIM
               String err;
               if(p.enr){ hwMsg("Claiming...",p.name.c_str(),COL_ACCENT,1); bool ok=pfSendEnroll(p.ip,p.tcp,err); if(ok){pfAddMine(p.id);setDongleMine(p.id,true);} hwMsg(ok?"Claimed":"Not claimed",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,1500); }
               else { hwMsg("Releasing...",p.name.c_str(),COL_ACCENT,1); bool ok=pfSendUnenroll(p.ip,p.tcp,err); if(ok){pfDelMine(p.id);setDongleMine(p.id,false);} hwMsg(ok?"Released":"Failed",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,1500); }
-              dirty=true;
+              drainTouch(); dirty=true;
             } else { toggleChk(p.id); dirty=true; }   // toggle select
-          }
+          } }
         }
       }
     }
@@ -4838,6 +4867,7 @@ static void infoAction(uint8_t act){
     case IA_COMPACT: g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_DONGLE: doPairNow();drawInfoFull();break;
     case IA_FLEET: doFleetPick(); g_info_showing=true; drawInfoFull(); break;   // #console: fleet manager (multi-select send + claim/unclaim per row)
+    case IA_ORPHAN: doReleaseOrphans(); g_info_showing=true; drawInfoFull(); break;   // #lock: release a lock this screen made but no longer remembers
     case IA_HIVEMIND: g_hivemind=!g_hivemind;saveConfigKey("HIVEMIND",g_hivemind?"ON":"OFF");drawInfoFull();break;
     case IA_LINK: g_link_home=!g_link_home;saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW");drawInfoFull();break;   // 5.8.6: ESP-NOW <-> HOME WIFI transport
     case IA_HOMEWIFI: doHomeWifiSetup(); drawInfoFull(); break;   // #clubday: scan + pick + live-switch
@@ -4954,6 +4984,9 @@ void loop(){
   webPanelService();   // one web client + one queued DAV load per pass (merge step 2)
   pfService();          // OMEGAWARE: hear Webby dongle beacons so /api/fleet has a roster
   pfWorker();           // OMEGAWARE: run one queued fling/eject per pass (non-blocking)
+  if(g_pfClaimedId.length()){ setDongleMine(g_pfClaimedId,true); g_pfClaimedId=""; }
+  if(g_pfReleasedId.length()){ setDongleMine(g_pfReleasedId,false); g_pfReleasedId=""; }   // #lock: and a web UNCLAIM forgets it   // #lock: a CLAIM from the web page persists ownership too, or the dongle hides itself from this screen after a reboot
+
   // #clubday: if the link is gone for a while (moved to another location), rejoin the strongest remembered net.
   // setAutoReconnect handles brief same-AP drops; this only fires when the current AP is truly gone.
   { static uint32_t wifiDownSince=0, wifiNextTry=0;
