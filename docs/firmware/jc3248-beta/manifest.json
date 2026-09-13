@@ -1,8 +1,16 @@
 {
-  "name": "Gotek Touchscreen Interface — JC3248 (5.9.7 — touch fix + shared web panel)",
-  "version": "5.9.7",
+  "name": "Gotek Touchscreen Interface \u2014 JC3248 (5.9.23 \u2014 WiFi SD file access + live mode switch)",
+  "version": "5.9.23",
   "new_install_prompt_erase": true,
   "builds": [
-    { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_JC3248.ino.merged.bin", "offset": 0 } ] }
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "Gotek_JC3248.ino.merged.bin",
+          "offset": 0
+        }
+      ]
+    }
   ]
 }

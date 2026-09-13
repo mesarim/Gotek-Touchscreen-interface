@@ -20,12 +20,11 @@
 
 // Bumped on every change to this file or the embedded page, appended to the
 // reported firmware string so a device tells you WHICH web build it runs.
-#define GTI_WEB_REV "r16"
+#define GTI_WEB_REV "r14"
 
 #include <Update.h>
 #include <ESPmDNS.h>
 #include <WebServer.h>
-#include <vector>
 #include "webui.h"
 
 static WebServer webPanelHttp(80);
@@ -442,37 +441,15 @@ static void suDone() {
   webPanelHttp.send(200, "application/json", "{\"name\":\"" + wpJsonEscape(g_suName) + "\",\"bytes\":" + String((uint32_t)g_suBytes) + "}");
 }
 
-// 5.9.22: recursive delete — remove a folder and everything inside it. Names are
-// collected before deleting (deleting while iterating a FAT dir is unsafe).
-static bool wpSdRmR(const String &path) {
-  File f = SD_MMC.open(path.c_str());
-  if (!f) return false;
-  if (!f.isDirectory()) { f.close(); return SD_MMC.remove(path.c_str()); }
-  std::vector<String> files, dirs;
-  File e;
-  while ((e = f.openNextFile())) {
-    String cn = e.name(); const int sl = cn.lastIndexOf('/'); if (sl >= 0) cn = cn.substring(sl + 1);
-    if (e.isDirectory()) dirs.push_back(cn); else files.push_back(cn);
-    e.close();
-  }
-  f.close();
-  String base = path; if (!base.endsWith("/")) base += "/";
-  bool ok = true;
-  for (auto &n : files) { if (!SD_MMC.remove((base + n).c_str())) ok = false; yield(); }
-  for (auto &n : dirs)  { if (!wpSdRmR(base + n)) ok = false; yield(); }
-  if (!SD_MMC.rmdir(path.c_str())) ok = false;
-  return ok;
-}
-
 static void hSdDelete() {
   const String want = wpSdNorm(wpArg("path"));
   if (!wpSdPathOK(want) || want == "/") { webPanelHttp.send(400, "application/json", "{\"error\":\"bad path\"}"); return; }
   File f = SD_MMC.open(want.c_str());
   const bool isDir = (f && f.isDirectory());
   if (f) f.close();
-  const bool ok = isDir ? wpSdRmR(want) : SD_MMC.remove(want.c_str());
+  const bool ok = isDir ? SD_MMC.rmdir(want.c_str()) : SD_MMC.remove(want.c_str());
   if (ok) webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}");
-  else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not delete\"}");
+  else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not delete (folder must be empty)\"}");
 }
 
 static const char FILES_PAGE[] = R"FILESPAGE(<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>GTi - SD Files</title>
@@ -490,12 +467,11 @@ th{color:#8b93a7;font-weight:500;font-size:12px;text-transform:uppercase;letter-
 .dir .nm{cursor:pointer;color:#7fb0ff}
 .sz{color:#8b93a7;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .act{text-align:right;white-space:nowrap}
-button,a.btn,label.btn{font:13px system-ui;background:#2a2f3d;color:#e7e9ee;border:0;border-radius:6px;padding:6px 10px;cursor:pointer;text-decoration:none;display:inline-block}
-button:hover,a.btn:hover,label.btn:hover{background:#3a4152}
+button,a.btn{font:13px system-ui;background:#2a2f3d;color:#e7e9ee;border:0;border-radius:6px;padding:6px 10px;cursor:pointer;text-decoration:none;display:inline-block}
+button:hover,a.btn:hover{background:#3a4152}
 .del{background:#3a2530;color:#ff9db0}
 .up{margin:16px 0;padding:18px;background:#1b1e27;border:1px dashed #2f3442;border-radius:8px}
 .up.drag{border-color:#7fb0ff;background:#1d2740}
-.uf{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .msg{margin:10px 0 0;font-size:13px;color:#9fd3a0;min-height:18px}
 .err{color:#ff9db0}
 .busy{opacity:.5;pointer-events:none}
@@ -506,12 +482,8 @@ button:hover,a.btn:hover,label.btn:hover{background:#3a4152}
 <div class=bar><button id=delSel class=del hidden>Delete selected</button></div>
 <table><thead><tr><th class=sel><input type=checkbox id=all title="select all"></th><th>Name</th><th class=sz>Size</th><th class=act></th></tr></thead><tbody id=rows></tbody></table>
 <div class=up id=drop>
-  <form id=uf class=uf>
-    <input type=file id=fi multiple>
-    <button type=submit>Upload files</button>
-    <label class=btn>Upload folder<input type=file id=fd webkitdirectory style="display:none"></label>
-  </form>
-  <div class=msg id=msg>Pick files, pick a folder, or drag files/folders onto this box.</div>
+  <form id=uf><input type=file id=fi multiple> <button type=submit>Upload</button></form>
+  <div class=msg id=msg>Pick several files, or drag a batch onto this box.</div>
 </div>
 </main>
 <script>
@@ -554,63 +526,27 @@ document.getElementById('delSel').onclick=function(){
     delPath(list[i]).then(function(){next(i+1)}).catch(function(){next(i+1)});
   })(0);
 };
-function mkdirp(dir){var b=new URLSearchParams();b.append('path',dir);return fetch('/api/sd/mkdir',{method:'POST',body:b}).then(function(r){return r.json()});}
-function relOf(f){return f._rel||f.webkitRelativePath||f.name;}
 function uploadAll(files){
   if(!files||!files.length){msg('Pick or drop files first',1);return;}
-  var arr=[].slice.call(files);document.body.classList.add('busy');var made={};
+  var arr=[].slice.call(files);document.body.classList.add('busy');
   (function next(i){
-    if(i>=arr.length){document.body.classList.remove('busy');msg('Uploaded '+arr.length+' item(s)');document.getElementById('fi').value='';load(cur);return;}
-    var f=arr[i];var rel=relOf(f);var sl=rel.lastIndexOf('/');
-    var sub=(sl>=0)?rel.substring(0,sl):'';var name=(sl>=0)?rel.substring(sl+1):rel;
-    var dest=(cur+(sub?('/'+sub):'')).replace(/\/+/g,'/');
-    msg('Uploading '+(i+1)+'/'+arr.length+': '+rel+' ...');
-    var doUp=function(){
-      var fd=new FormData();fd.append('file',f,name);
-      fetch('/api/sd/upload?path='+encodeURIComponent(dest),{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(d){
-        if(d.error){document.body.classList.remove('busy');msg('Stopped at '+rel+': '+d.error,1);load(cur);return;}
-        next(i+1);
-      }).catch(function(){document.body.classList.remove('busy');msg('Upload failed at '+rel,1);load(cur);});
-    };
-    if(sub && !made[dest]){made[dest]=1;mkdirp(dest).then(function(d){if(d&&d.error){document.body.classList.remove('busy');msg('Could not make folder '+dest+': '+d.error,1);load(cur);}else doUp();}).catch(doUp);}
-    else doUp();
+    if(i>=arr.length){document.body.classList.remove('busy');msg('Uploaded '+arr.length+' file(s)');document.getElementById('fi').value='';load(cur);return;}
+    var f=arr[i];msg('Uploading '+(i+1)+'/'+arr.length+': '+f.name+' ...');
+    var fd=new FormData();fd.append('file',f);
+    fetch('/api/sd/upload?path='+encodeURIComponent(cur),{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(d){
+      if(d.error){document.body.classList.remove('busy');msg('Stopped at '+f.name+': '+d.error,1);load(cur);return;}
+      next(i+1);
+    }).catch(function(){document.body.classList.remove('busy');msg('Upload failed at '+f.name+' - is a disk mounted?',1);load(cur);});
   })(0);
 }
 document.getElementById('uf').onsubmit=function(ev){ev.preventDefault();uploadAll(document.getElementById('fi').files);};
-document.getElementById('fd').onchange=function(){if(this.files&&this.files.length)uploadAll(this.files);};
-function traverseEntry(entry,path,out){return new Promise(function(res){
-  if(entry.isFile){entry.file(function(f){f._rel=path+f.name;out.push(f);res();},function(){res();});}
-  else if(entry.isDirectory){var rd=entry.createReader();var all=[];(function rb(){rd.readEntries(function(e){if(!e.length){Promise.all(all.map(function(x){return traverseEntry(x,path+entry.name+'/',out);})).then(res);}else{all=all.concat(e);rb();}},function(){res();});})();}
-  else res();});}
-function filesFromDrop(dt){
-  var items=dt.items;
-  if(!items||!items.length||!items[0].webkitGetAsEntry){return Promise.resolve([].slice.call(dt.files));}
-  var out=[],ps=[];
-  for(var i=0;i<items.length;i++){var en=items[i].webkitGetAsEntry&&items[i].webkitGetAsEntry();if(en)ps.push(traverseEntry(en,'',out));}
-  return Promise.all(ps).then(function(){return out;});
-}
 var drop=document.getElementById('drop');
 ['dragover','dragenter'].forEach(function(ev){drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.add('drag');});});
 ['dragleave','dragend'].forEach(function(ev){drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.remove('drag');});});
-drop.addEventListener('drop',function(e){e.preventDefault();drop.classList.remove('drag');if(e.dataTransfer){msg('Reading dropped items...');filesFromDrop(e.dataTransfer).then(function(fs){uploadAll(fs);});}});
+drop.addEventListener('drop',function(e){e.preventDefault();drop.classList.remove('drag');if(e.dataTransfer&&e.dataTransfer.files)uploadAll(e.dataTransfer.files);});
 fetch('/api/system/info').then(function(r){return r.json()}).then(function(d){document.getElementById('fw').textContent=d.firmware||''}).catch(function(){});
 load('/');
 </script></body></html>)FILESPAGE";
-
-static void hSdMkdir() {
-  if (g_loaded) { webPanelHttp.send(409, "application/json", "{\"error\":\"Unload the mounted disk first\"}"); return; }
-  const String want = wpSdNorm(wpArg("path"));
-  if (!wpSdPathOK(want) || want == "/") { webPanelHttp.send(400, "application/json", "{\"error\":\"bad path\"}"); return; }
-  bool ok = true;                                  // create each level (idempotent)
-  for (int i = 1; i <= (int)want.length(); i++) {
-    if (i == (int)want.length() || want[i] == '/') {
-      String seg = want.substring(0, i);
-      if (seg.length() > 1 && !SD_MMC.exists(seg.c_str())) { if (!SD_MMC.mkdir(seg.c_str())) { ok = false; break; } }
-    }
-  }
-  if (ok) webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}");
-  else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not create folder\"}");
-}
 
 static void hFiles() { webPanelHttp.send_P(200, "text/html", FILES_PAGE); }
 #endif  // GTI_WEB_SD_FILES
@@ -641,7 +577,6 @@ static void webPanelRegister() {
   webPanelHttp.on("/api/sd/get",     HTTP_GET,  hSdGet);
   webPanelHttp.on("/api/sd/upload",  HTTP_POST, suDone, suUpload);
   webPanelHttp.on("/api/sd/delete",  HTTP_POST, hSdDelete);
-  webPanelHttp.on("/api/sd/mkdir",   HTTP_POST, hSdMkdir);
   webPanelHttp.on("/files",          HTTP_GET,  hFiles);
 #endif
   webPanelHttp.onNotFound([]() { webPanelHttp.send(404, "application/json", "{\"error\":\"Not available on this device\"}"); });

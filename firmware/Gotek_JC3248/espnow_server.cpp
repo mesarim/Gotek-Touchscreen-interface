@@ -192,6 +192,9 @@ static void loadConfig() {
 
 // ---------- API ----------
 void espnowBegin() {
+  if(_bcastPeer){ delete _bcastPeer; _bcastPeer=nullptr; }   // 5.9.17: idempotent so a live re-init is safe
+  if(_xiaoPeer){ delete _xiaoPeer; _xiaoPeer=nullptr; }
+  ESP_NOW.end();
   // Use WIFI_AP_STA — AP mode needed for Waveshare to connect to XIAO's AP later
   WiFi.mode(WIFI_AP_STA);
   WiFi.setChannel(ESPNOW_CHANNEL);
@@ -212,6 +215,13 @@ void espnowBegin() {
     if (!_xiaoPeer->add_peer()) { delete _xiaoPeer; _xiaoPeer = nullptr; }
     Serial.println("[NOW] Restored XIAO peer");
   }
+}
+
+// 5.9.17: stop ESP-NOW cleanly so MODE can switch away from it without a reboot.
+void espnowStop() {
+  ESP_NOW.end();
+  if(_bcastPeer){ delete _bcastPeer; _bcastPeer=nullptr; }
+  if(_xiaoPeer){ delete _xiaoPeer; _xiaoPeer=nullptr; }
 }
 
 void espnowBroadcastHello() {

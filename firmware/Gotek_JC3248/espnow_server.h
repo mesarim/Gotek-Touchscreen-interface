@@ -58,6 +58,7 @@ bool espnowFetchSave(SavePersistCb persist);
 
 // API
 void   espnowBegin();
+void   espnowStop();   // 5.9.17: clean teardown for live MODE switching
 void   espnowBroadcastHello();
 bool   espnowIsPaired();
 String espnowGetXiaoMac();

@@ -35,7 +35,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.23-JC3248"
+#define FW_VERSION "5.9.12-JC3248"
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -1280,178 +1280,119 @@ static inline const char* T(int id){ return LSTR[id][g_lang]; }
 static void generateDefaultConfig(){
   if(SD_MMC.exists("/CONFIG.TXT"))return;  // never overwrite an existing config
   File f=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);if(!f)return;
-  static const char DEFAULT_CONFIG[] =
-R"CFG(# ============================================================
-#  Gotek Touchscreen Interface  -  OMEGAWARE
-#  CONFIG.TXT   -   edit the values below, then reboot.
-#
-#  Lines starting with # are notes and are ignored.
-#  Everything is grouped into sections:  VISUALS / BOOT /
-#  LIBRARY / LOADING & SAVES / SCREENSAVER / NETWORKING /
-#  WEBDAV / SYSTEM.   Change a KEY=VALUE line to set an option.
-# ============================================================
-
-
-# ============================================================
-#  VISUALS      theme, fonts, layout, on-screen look
-# ============================================================
-
-# Theme: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD 6=OMEGA
-THEME=0
-
-# Font size: SMALL, NORMAL, LARGE
-FONT=NORMAL
-
-# Screen rotation in degrees: 0 or 180 = landscape, 90 or 270 = portrait.
-# Easiest to set with the ROTATE button on the INFO screen (each tap = +90).
-ROTATE=0
-
-# COMPACT: OFF = cover art + list, ON = maximise the game list (cover collapses to a strip)
-COMPACT=OFF
-
-# BTNSTYLE: reel button style. PILL=rounded coloured buttons (default), FLAT=flat bar.
-BTNSTYLE=PILL
-
-# COVERMIN: hide covers whose short side is under N px (0 = show all) - keeps the reel + panel clean.
-COVERMIN=140
-
-# REELFILTER: ON = the reel (cover carousel) shows only games whose cover passes COVERMIN;
-#             the A-Z list still shows every game. OFF = reel shows all games.
-REELFILTER=OFF
-
-
-# ============================================================
-#  BOOT         startup view + cracktro splash
-# ============================================================
-
-# CAROUSEL: default boot view. OFF=game list, ON=cover reel, LAST=restore last view.
-CAROUSEL=OFF
-
-# Boot cracktro style: 0=random each boot, or pick one:
-#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER
-#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE  7=OMEGAWARE
-CRACKTRO=0
-
-# Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s
-LOOP=0
-
-
-# ============================================================
-#  LIBRARY      how the game collection is organised
-# ============================================================
-
-# CATEGORIES: OFF = one flat library (classic). ON = browse by category -
-#   any top-level folder that holds NO disk images (only subfolders) becomes a category.
-CATEGORIES=OFF
-
-# NESTING: OFF = categories are one level deep. ON = allow sub-categories (folders within category folders).
-NESTING=OFF
-
-
-# ============================================================
-#  LOADING & SAVES     load/eject behaviour + write-back
-# ============================================================
-
-# Load/eject behaviour (all OFF = safest: select, then press the button)
-# TAPLOAD: ON = tapping the already-highlighted game row loads it (old double-tap)
-TAPLOAD=OFF
-# HOTSWAP: ON = tapping another disk while loaded swaps to it instantly
-HOTSWAP=OFF
-# FORCESWAP: ON = swap disk contents without the USB eject/re-attach cycle
-FORCESWAP=OFF
-
-# SAVES: save-game persistence when the Amiga writes to the disk.
-#   OFF       = writes live only until eject/power-off (classic behaviour)
-#   COPY      = writes are kept as GameName.sav.adf beside the master (recommended)
-#   OVERWRITE = writes are patched straight into the master .adf
-SAVES=COPY
-
-# SDSPEED: SD card clock speed.
-#   20 = safe default, works with every card.
-#   40 = ~1.7x faster reads if your card can hold it (auto-falls back to 20 if it can't mount).
-SDSPEED=20
-
-
-# ============================================================
-#  SCREENSAVER      idle slideshow
-# ============================================================
-
-# SCREENSAVER: idle slideshow. ON = show it after a few minutes idle, OFF = never.
-SCREENSAVER=ON
-# SSMODE: SLIDES = full-screen photo slideshow (default), BOUNCE = bouncing logo, MATRIX = code rain.
-SSMODE=SLIDES
-# SSFX: transition between slides - SHUFFLE (random), FADE, DISSOLVE, SLIDE, or CUT.
-SSFX=SHUFFLE
-# SSTIME: seconds each slide is shown (2-120).
-SSTIME=6
-# SSFAV: ON = also slideshow the cover art of your favourited games;
-#        OFF = only images you drop in the /screensaver/ folder.
-SSFAV=ON
-
-
-# ============================================================
-#  NETWORKING      wireless mode, dongles, home WiFi
-# ============================================================
-
-# Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW / WiFi to a dongle)
-MODE=STANDALONE
-
-# CAP: max wireless dongles the scan will list (default 32, up to 64)
-CAP=32
-
-# HIVEMIND: wireless FLING fan-out. ON=send to all paired MuCa dongles (classic), OFF=only the selected dongle.
-HIVEMIND=ON
-
-# LINK: dongle transport. ESPNOW = the dongle's own AP + ESP-NOW (default).
-#       HOMEWIFI = route the FLING via your home router to a Webby dongle's gotek.local.
-LINK=ESPNOW
-# HOME_SSID / HOME_PASS: your home WiFi (only used when LINK=HOMEWIFI).
-HOME_SSID=
-HOME_PASS=
-# DONGLE_HOME_IP: auto-filled cache of the dongle's home IP (mDNS gotek.local is primary).
-DONGLE_HOME_IP=
-
-# WEBUI: serve the built-in web page over home WiFi (needs LINK=HOMEWIFI + HOME_SSID/PASS).
-#        Off by default - uncomment the next line to switch it on.
-# WEBUI=ON
-
-# Wireless dongle MAC (auto-filled when you pair via the INFO screen)
-# XIAO_MAC=
-
-
-# ============================================================
-#  WEBDAV       optional - point GTi at a WebDAV server
-# ============================================================
-# Off until you set DAV=ON and a DAV_HOST. HTTPS here is encrypted but NOT
-# certificate-authenticated, and DAV_PASS is stored in plain text on this card.
-
-# DAV: ON = enable the WebDAV client (DAV_ENABLED is accepted as the same switch).
-DAV=OFF
-# DAV_HOST: WebDAV server hostname or IP.
-DAV_HOST=
-# DAV_PORT: server port (default 443).
-DAV_PORT=443
-# DAV_HTTPS: ON = TLS (default), OFF = plain HTTP.
-DAV_HTTPS=ON
-# DAV_USER / DAV_PASS: Basic-Auth credentials (blank = none).
-DAV_USER=
-DAV_PASS=
-# DAV_PATH: base path on the server (default /).
-DAV_PATH=/
-
-
-# ============================================================
-#  SYSTEM       language + diagnostics
-# ============================================================
-
-# Language: EN, FR, IT, ES, DE, NL  (pull the SD and edit this line if you get stuck)
-LANG=EN
-
-# LOG: the /gti.log diagnostic log is ON by default.
-#      Uncomment the next line to turn it off.
-# LOG=OFF
-)CFG";
-  f.print(DEFAULT_CONFIG);
+  f.println("# Gotek Touchscreen Interface - OMEGAWARE");
+  f.println("# Edit values below, then reboot.");
+  f.println("");
+  f.println("# Theme: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD 6=OMEGA");
+  f.println("THEME=0");
+  f.println("");
+  f.println("# Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW to dongle)");
+  f.println("MODE=STANDALONE");
+  f.println("");
+  f.println("# CAROUSEL: default boot view. OFF=game list, ON=cover reel, LAST=restore last view.");
+  f.println("CAROUSEL=OFF");
+  f.println("");
+  f.println("# Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s");
+  f.println("LOOP=0");
+  f.println("");
+  f.println("# Boot cracktro style: 0=random each boot, or pick one:");
+  f.println("#   1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER");
+  f.println("#   4=PLASMA  5=BOING BALL  6=SYNTHWAVE  7=OMEGAWARE");
+  f.println("CRACKTRO=0");
+  f.println("");
+  f.println("# Font size: SMALL, NORMAL, LARGE");
+  f.println("FONT=NORMAL");
+  f.println("");
+  f.println("# Language: EN, FR, IT, ES, DE, NL  (pull the SD and edit this line if you get stuck)");
+  f.println("LANG=EN");
+  f.println("");
+  f.println("# Screen rotation in degrees: 0 or 180 = landscape, 90 or 270 = portrait.");
+  f.println("# Easiest to set with the ROTATE button on the INFO screen (each tap = +90).");
+  f.println("ROTATE=0");
+  f.println("");
+  f.println("# COMPACT: OFF = cover art + list, ON = maximise the game list (cover collapses to a strip)");
+  f.println("COMPACT=OFF");
+  f.println("");
+  f.println("# BTNSTYLE: reel button style. PILL=rounded coloured buttons (default), FLAT=flat bar.");
+  f.println("BTNSTYLE=PILL");
+  f.println("");
+  f.println("# CAP: max wireless dongles the scan will list (default 32, up to 64)");
+  f.println("CAP=32");
+  f.println("");
+  f.println("# HIVEMIND: wireless FLING fan-out. ON=send to all paired MuCa dongles (classic), OFF=only the selected dongle.");
+  f.println("HIVEMIND=ON");
+  f.println("");
+  f.println("# Load/eject behaviour (all OFF = safest: select, then press the button)");
+  f.println("# TAPLOAD: ON = tapping the already-highlighted game row loads it (old double-tap)");
+  f.println("TAPLOAD=OFF");
+  f.println("# HOTSWAP: ON = tapping another disk while loaded swaps to it instantly");
+  f.println("HOTSWAP=OFF");
+  f.println("# FORCESWAP: ON = swap disk contents without the USB eject/re-attach cycle");
+  f.println("FORCESWAP=OFF");
+  f.println("");
+  f.println("# SAVES: save-game persistence when the Amiga writes to the disk.");
+  f.println("#   OFF       = writes live only until eject/power-off (classic behaviour)");
+  f.println("#   COPY      = writes are kept as GameName.sav.adf beside the master (recommended)");
+  f.println("#   OVERWRITE = writes are patched straight into the master .adf");
+  f.println("SAVES=COPY");
+  f.println("");
+  f.println("# SDSPEED: SD card clock speed.");
+  f.println("#   20 = safe default, works with every card.");
+  f.println("#   40 = ~1.7x faster reads if your card can hold it (auto-falls back to 20 if it can't mount).");
+  f.println("SDSPEED=20");
+  f.println("");
+  f.println("# CATEGORIES: OFF = one flat library (classic). ON = browse by category —");
+  f.println("#   any top-level folder that holds NO disk images (only subfolders) becomes a category.");
+  f.println("CATEGORIES=OFF");
+  f.println("");
+  f.println("# NESTING: OFF = categories are one level deep. ON = allow sub-categories (folders within category folders).");
+  f.println("NESTING=OFF");
+  f.println("");
+  f.println("# SCREENSAVER: idle slideshow. ON = show it after a few minutes idle, OFF = never.");
+  f.println("SCREENSAVER=ON");
+  f.println("# SSMODE: SLIDES = full-screen photo slideshow (default), BOUNCE = bouncing logo, MATRIX = code rain.");
+  f.println("SSMODE=SLIDES");
+  f.println("# SSFX: transition between slides - SHUFFLE (random), FADE, DISSOLVE, SLIDE, or CUT.");
+  f.println("SSFX=SHUFFLE");
+  f.println("# SSTIME: seconds each slide is shown (2-120).");
+  f.println("SSTIME=6");
+  f.println("# SSFAV: ON = also slideshow the cover art of your favourited games;");
+  f.println("#        OFF = only images you drop in the /screensaver/ folder.");
+  f.println("SSFAV=ON");
+  f.println("");
+  f.println("# LINK: dongle transport. ESPNOW = the dongle's own AP + ESP-NOW (default).");
+  f.println("#       HOMEWIFI = route the FLING via your home router to a Webby dongle's gotek.local.");
+  f.println("LINK=ESPNOW");
+  f.println("# HOME_SSID / HOME_PASS: your home WiFi (only used when LINK=HOMEWIFI).");
+  f.println("HOME_SSID=");
+  f.println("HOME_PASS=");
+  f.println("# DONGLE_HOME_IP: auto-filled cache of the dongle's home IP (mDNS gotek.local is primary).");
+  f.println("DONGLE_HOME_IP=");
+  f.println("");
+  f.println("# --- WebDAV client (optional) - point GTi at a WebDAV server ---");
+  f.println("# Off until you set DAV=ON and a DAV_HOST. HTTPS here is encrypted but NOT");
+  f.println("# certificate-authenticated, and DAV_PASS is stored in plain text on this card.");
+  f.println("# DAV: ON = enable the WebDAV client (DAV_ENABLED is accepted as the same switch).");
+  f.println("DAV=OFF");
+  f.println("# DAV_HOST: WebDAV server hostname or IP.");
+  f.println("DAV_HOST=");
+  f.println("# DAV_PORT: server port (default 443).");
+  f.println("DAV_PORT=443");
+  f.println("# DAV_HTTPS: ON = TLS (default), OFF = plain HTTP.");
+  f.println("DAV_HTTPS=ON");
+  f.println("# DAV_USER / DAV_PASS: Basic-Auth credentials (blank = none).");
+  f.println("DAV_USER=");
+  f.println("DAV_PASS=");
+  f.println("# DAV_PATH: base path on the server (default /).");
+  f.println("DAV_PATH=/");
+  f.println("");
+  f.println("");
+  f.println("# Wireless dongle MAC (auto-filled when you pair via INFO screen)");
+  f.println("# XIAO_MAC=");
+  f.println("");
+  f.println("# --- Advanced (optional; not active - add the line yourself to switch on) ---");
+  f.println("# WEBUI=ON  : serve the built-in web page over home WiFi (needs LINK=HOMEWIFI + HOME_SSID/PASS). Off by default.");
+  f.println("# LOG=OFF   : turn off the /gti.log diagnostic log (on by default).");
   f.close();
 }
 
@@ -3822,57 +3763,11 @@ static void hwMsg(const char* l1, const char* l2, uint16_t col, uint32_t ms){
   gfx_flush(); delay(ms);
 }
 
-// 5.9.13: scan for WiFi networks and let the user TAP one (kills SSID typos and
-// case mismatches). Returns the chosen SSID, or "" if the user picks Type-manually.
-static String doWifiScanPick(){
-  for(;;){
-    hwMsg("Scanning WiFi...", "", COL_ACCENT, 10);
-    WiFi.mode(WIFI_STA);
-    WiFi.disconnect(false,false);      // 5.9.20: drop the active link so the scan actually runs (ESP32 returns 0 while associated+serving)
-    delay(120);
-    int n = WiFi.scanNetworks(false,true);   // blocking, include hidden
-    if(n<0) n=0;
-    String names[8]; int cnt=0;
-    for(int i=0;i<n && cnt<8;i++){
-      String sn = WiFi.SSID(i); if(sn.length()==0) continue;
-      bool dup=false; for(int j=0;j<cnt;j++) if(names[j]==sn){dup=true;break;}
-      if(!dup) names[cnt++]=sn;
-    }
-    WiFi.scanDelete();
-    gfx_fillScreen(COL_BG);
-    gfx_setTextSize(2); gfx_setTextColor(COL_ACCENT,COL_BG); gfx_setCursor(10,10); gfx_print("Pick WiFi network");
-    gfx_setTextSize(1);
-    const int top=40, rh=26;
-    for(int i=0;i<cnt;i++){ int y=top+i*rh; gfx_drawRoundRect(8,y,VW-16,rh-4,5,COL_SEP); gfx_setTextColor(COL_LIT,COL_BG); gfx_setCursor(14,y+7); gfx_print(names[i]); }
-    int listRows=cnt;
-    if(cnt==0){ gfx_setTextColor(COL_AMBER,COL_BG); gfx_setCursor(14,top+7); gfx_print("(none found - tap Rescan)"); listRows=1; }
-    const int ym=top+listRows*rh;     gfx_fillRoundRect(8,ym,VW-16,rh-4,5,COL_BAR); gfx_setTextColor(COL_LIT,COL_BAR); gfx_setCursor(14,ym+7); gfx_print("[ Type manually ]");
-    const int yr=top+(listRows+1)*rh; gfx_fillRoundRect(8,yr,VW-16,rh-4,5,COL_BAR); gfx_setTextColor(COL_LIT,COL_BAR); gfx_setCursor(14,yr+7); gfx_print("[ Rescan ]");
-    gfx_flush();
-    bool pressed=false; int rel=0; bool rescan=false;
-    for(;;){
-      uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
-      if(have){ if(!pressed){ pressed=true;
-        if((int)ty>=top){
-          int idx=((int)ty-top)/rh;
-          if(idx>=0 && idx<cnt){ kbWaitRelease(); return names[idx]; }
-          if(idx==listRows){ kbWaitRelease(); return String(""); }
-          if(idx==listRows+1){ kbWaitRelease(); rescan=true; break; }
-        }
-      }} else { if(pressed && ++rel>=3) pressed=false; }
-      delay(12);
-    }
-    if(rescan) continue;
-  }
-}
-
 // The Home-WiFi setup flow: enter SSID, enter password, save + enable HOMEWIFI.
 // Reached from the settings screen (IA_HOMEWIFI).
 static void doHomeWifiSetup(){
   String ssid = g_home_ssid, pass = g_home_pass;
-  String picked = doWifiScanPick();                                     // 5.9.13: scan + tap (no typos / case mismatch)
-  if (picked.length()) ssid = picked;
-  else if (!kbInput("Home WiFi: network name (SSID)", ssid, 32)) return;   // manual fallback / cancel
+  if (!kbInput("Home WiFi: network name (SSID)", ssid, 32)) return;     // cancel
   ssid.trim();
   if (ssid.length() == 0) { hwMsg("No SSID", "nothing saved", COL_AMBER, 1200); return; }
   if (!kbInput("Home WiFi: password (blank = open)", pass, 63)) return; // cancel
@@ -3882,23 +3777,11 @@ static void doHomeWifiSetup(){
   saveConfigKey("HOME_PASS", pass);
   saveConfigKey("LINK", "HOMEWIFI");
   hwMsg("Home WiFi saved", ("SSID: " + ssid).c_str(), COL_ACCENT, 1600);
-  if (g_web_on) webPanelBegin();   // 5.9.13: re-join with the new creds now (non-blocking, no reboot)
 }
 
 // 5.9.9: Web UI / WiFi SD-access setup (STANDALONE only — the web server can't
 // coexist with ESP-NOW). Turning it on captures home-WiFi creds if not set,
 // flips WEBUI=ON, and reboots so webPanelBegin() brings the server up.
-// 5.9.17: switch the radio between the three MODE states LIVE (no reboot).
-// STANDALONE = radio off, ESP-NOW = blind dongles, WiFi = home router + web UI.
-static void applyRadioMode(){
-  if(g_espnow_started){ espnowStop(); g_espnow_started=false; }   // leave ESP-NOW cleanly
-  webPanelStop();                                                 // stop the web server if it was up
-  WiFi.disconnect(true,true); delay(60);
-  if(!g_wireless_mode){ WiFi.mode(WIFI_OFF); }                     // STANDALONE
-  else if(g_link_home){ webPanelBegin(); }                        // WiFi (non-blocking; server comes up in webPanelService)
-  else { ensureEspNow(); }                                        // ESP-NOW
-}
-
 static void doWebUiSetup(){
   if(g_web_on){                                   // currently on -> turn off
     g_web_on=false; saveConfigKey("WEBUI","OFF");
@@ -4754,7 +4637,7 @@ static void drawInfoFull(){
 }
 static void infoAction(uint8_t act){
   switch(act){
-    case IA_MODE: { int m=!g_wireless_mode?0:(g_link_home?2:1); m=(m+1)%3; g_wireless_mode=(m!=0); g_link_home=(m==2); saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE"); saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW"); applyRadioMode(); drawInfoFull(); } break;   // 5.9.19: live switch, no reboot, no splash
+    case IA_MODE: { int m=!g_wireless_mode?0:(g_link_home?2:1); m=(m+1)%3; g_wireless_mode=(m!=0); g_link_home=(m==2); saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE"); saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW"); const char* mn=(m==0)?"STANDALONE (radio off)":((m==2)?"WiFi (home router)":"ESP-NOW (blind dongles)"); hwMsg("MODE ->",mn,COL_ACCENT,1300); delay(650); ESP.restart(); } break;   // 5.9.12: 3-way cycle
     case IA_FONT: applyFont((g_font+1)%3);saveConfigKey("FONT",fontKey(g_font));drawInfoFull();break;
     case IA_THEME: applyTheme((g_theme_idx+1)%NUM_THEMES);saveConfigKey("THEME",String(g_theme_idx));drawInfoFull();break;   // Vince test: theme cycling lives in CONFIG now
     case IA_LANG: g_lang=(g_lang+1)%LANG_N;saveConfigKey("LANG",LANG_NAMES[g_lang]);drawInfoFull();break;

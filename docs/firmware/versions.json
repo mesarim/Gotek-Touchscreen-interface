@@ -1,5 +1,5 @@
 {
-  "_note": "Per-device firmware version history for the web flasher. To add a build: drop its <ver>-update.bin (the app image — byte-identical to the merged app region at 0x10000) somewhere under firmware/, then add one entry to that device's 'builds'. 'app' entries flash multi-part (that device's shared bootloader/partitions/boot_app0 + this app) — a clean bootable install that leaves SPIFFS/NVS intact. 'full' entries point at a complete merged.bin manifest.json (full erase). Newest first. 'latest:true' marks the default selection. P4 is intentionally not listed.",
+  "_note": "Per-device firmware version history for the web flasher. To add a build: drop its <ver>-update.bin (the app image \u2014 byte-identical to the merged app region at 0x10000) somewhere under firmware/, then add one entry to that device's 'builds'. 'app' entries flash multi-part (that device's shared bootloader/partitions/boot_app0 + this app) \u2014 a clean bootable install that leaves SPIFFS/NVS intact. 'full' entries point at a complete merged.bin manifest.json (full erase). Newest first. 'latest:true' marks the default selection. P4 is intentionally not listed.",
   "jc3248": {
     "chipFamily": "ESP32-S3",
     "shared": [
@@ -19,9 +19,17 @@
     "appOffset": 65536,
     "builds": [
       {
-        "v": "5.9.7",
+        "v": "5.9.23",
         "ch": "beta",
         "latest": true,
+        "date": "2026-09-12",
+        "app": "firmware/jc3248-beta/GTi-JC35-5.9.23-update.bin",
+        "note": "WiFi SD file access over home WiFi (browse / upload / download / recursive-delete ADFs from a browser) + live 3-way mode switch Standalone/ESP-NOW/WiFi (no reboot) + folder upload incl. subfolders + GTi.local + tidied sectioned CONFIG.TXT"
+      },
+      {
+        "v": "5.9.7",
+        "ch": "beta",
+        "latest": false,
         "date": "2026-09-09",
         "app": "firmware/jc3248-beta/GTi-JC35-5.9.7-update.bin",
         "note": "sample manual rewrite (jump [Section] markers); config names OMEGA theme & Dutch"
@@ -88,7 +96,7 @@
         "ch": "stable",
         "date": "2026-08-07",
         "full": "firmware/jc3248/manifest.json",
-        "note": "last 5.5.x stable — full image (clean wipe)"
+        "note": "last 5.5.x stable \u2014 full image (clean wipe)"
       }
     ]
   },
