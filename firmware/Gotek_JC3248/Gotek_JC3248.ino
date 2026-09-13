@@ -36,7 +36,7 @@
 #include <sys/stat.h>
 
 #define FW_VERSION "5.9.7-JC3248"
-#define GTI_WEB_REV "r14"   // OMEGAWARE build rev — shown on the status bar AND appended to the web firmware string (web_panel.h uses this via an #ifndef fallback). Bump on EVERY flash.
+#define GTI_WEB_REV "r21"   // OMEGAWARE build rev — shown on the status bar AND appended to the web firmware string (web_panel.h uses this via an #ifndef fallback). Bump on EVERY flash.
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -1174,6 +1174,21 @@ static void forgetNet(const String&ssid){
   saveKnownNets();
 }
 
+// #lock: load this panel's owner token from CONFIG.TXT (PANEL_TOKEN=<32 hex>); generate + persist if absent.
+static void pfEnsureToken(){
+  String hex="";
+  File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);
+  if(f){ while(f.available()){ String l=f.readStringUntil('\n'); l.trim(); if(l.startsWith("PANEL_TOKEN=")){ hex=l.substring(12); hex.trim(); break; } } f.close(); }
+  if((int)hex.length()>=PF_TOKEN_LEN*2){
+    for(int i=0;i<PF_TOKEN_LEN;i++){ char h[3]={hex[i*2],hex[i*2+1],0}; g_panel_token[i]=(uint8_t)strtol(h,nullptr,16); }
+    g_panel_token_ok=true; return;
+  }
+  for(int i=0;i<PF_TOKEN_LEN;i++) g_panel_token[i]=(uint8_t)(esp_random()&0xFF);
+  char b[PF_TOKEN_LEN*2+1]; for(int i=0;i<PF_TOKEN_LEN;i++) sprintf(b+i*2,"%02x",g_panel_token[i]);
+  saveConfigKey("PANEL_TOKEN", String(b));
+  g_panel_token_ok=true;
+}
+
 // ── Dongle friendly names (touchscreen-side only; keyed to the dongle MAC) ──
 static String macKey(const String&mac){String h="";for(unsigned i=0;i<mac.length();i++){char c=mac[i];if(c!=':')h+=(char)toupper(c);}return "DONGLE_"+h;}
 static String getDongleName(const String&mac){String key=macKey(mac),r="";File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);if(!f)return r;
@@ -2064,9 +2079,9 @@ static void drawActionStrip(){
 // ── v5.5.4: full-screen paginated INFO/settings model ──
 enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_SAVEDWIFI, IA_FLEET };
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
-static InfoItem g_ii[20]; static int g_ii_n=0;
+static InfoItem g_ii[28]; static int g_ii_n=0;   // #clubday: bumped 20->28 so added rows (SAVED WIFI etc.) never push tail items (SD ACCESS / FW UPDATE) off the list
 struct InfoRect { int x,y,w,h; uint8_t act; };
-static InfoRect g_ir[20]; static int g_ir_n=0;
+static InfoRect g_ir[28]; static int g_ir_n=0;
 static int g_info_page=0, g_info_pages=1;
 static void drawInfoFull();   // paginated settings + INFO bottom bar + flush
 // v5.6.7: readable ink for a key's colour on the dim fill — dark key colours
@@ -2082,7 +2097,7 @@ static void drawInfoPanel(){
   // record their rects in g_ir[] so the tap handler hits exactly what's drawn.
   g_ii_n=0;
   auto add=[&](const String&l,uint16_t bg,uint16_t fg,uint8_t act){
-    if(g_ii_n>=20)return; strncpy(g_ii[g_ii_n].lbl,l.c_str(),31); g_ii[g_ii_n].lbl[31]=0;
+    if(g_ii_n>=28)return; strncpy(g_ii[g_ii_n].lbl,l.c_str(),31); g_ii[g_ii_n].lbl[31]=0;
     g_ii[g_ii_n].bg=bg; g_ii[g_ii_n].fg=fg; g_ii[g_ii_n].act=act; g_ii_n++; };
   add(String(T(L_CFG_MODE))+": "+(g_wireless_mode?T(L_WIRELESS):T(L_STANDALONE)), g_wireless_mode?COL_BLUE:COL_GREEN, TFT_BLACK, IA_MODE);
   // v0.2: keep the dongle controls next to the MODE toggle (page 1) — SWITCH DONGLE (with LOCK/UNLOCK) used to land on page 2.
@@ -2139,7 +2154,7 @@ static void drawInfoPanel(){
     if(tw>colW-8){ sz=1; gfx_setTextSize(sz); tw=gfx_textWidth(g_ii[i2].lbl); }   // shrink an over-long label to fit the half-width cell
     gfx_setTextColor(kink,kdim);
     gfx_setCursor(bx+(colW-tw)/2,by+(bh-8*sz)/2);gfx_print(g_ii[i2].lbl);
-    if(g_ir_n<20){g_ir[g_ir_n].x=bx;g_ir[g_ir_n].y=by;g_ir[g_ir_n].w=colW;g_ir[g_ir_n].h=bh;g_ir[g_ir_n].act=g_ii[i2].act;g_ir_n++;}
+    if(g_ir_n<28){g_ir[g_ir_n].x=bx;g_ir[g_ir_n].y=by;g_ir[g_ir_n].w=colW;g_ir[g_ir_n].h=bh;g_ir[g_ir_n].act=g_ii[i2].act;g_ir_n++;}
   }
   gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
   gfx_setCursor(8,iy+ih-11);gfx_print("IP:"+WiFi.localIP().toString()+"  Heap:"+String(ESP.getFreeHeap()/1024)+"K  Games:"+String(g_games.size()));   // #clubday: show the panel's own IP next to the WEB address above
@@ -3128,8 +3143,13 @@ static bool doLoadSelected(const String&adfPath){
   // OMEGAWARE LAN fleet: in wireless mode with a chosen target, fling this disk
   // to the dongle over home WiFi. QUEUE only — loop()'s pfWorker does the
   // blocking transfer (never inside a handler). ESP-NOW is not involved.
-  if(g_wireless_mode && g_pfTargetIp.length() && WiFi.status()==WL_CONNECTED){
-    g_pfSendIp=g_pfTargetIp; g_pfSendTcp=g_pfTargetTcp;
+  // #console: where does this staged disk go? >1 dongle -> "Play on" multi-select; exactly 1 -> send directly; 0 -> stays staged.
+  if(g_wireless_mode && WiFi.status()==WL_CONNECTED){
+    int vn=0,only=-1; for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])){ vn++; only=i; }
+    if(vn>=2){ doFleetPick(); }
+    else if(vn==1){ PfPeer&p=g_pfPeers[only]; hwMsg("Sending...",p.name.c_str(),COL_ACCENT,1);
+      String nm=g_loaded_display.length()?g_loaded_display:g_loaded_name; if(nm.length()){String ne;pfSendName(p.ip,p.tcp,nm,ne);}
+      String err; bool ok=pfSendDisk(p.ip,p.tcp,err); hwMsg(ok?"Sent":"Not sent",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,ok?1200:2200); }
   }
   drawStatusBar();drawListAndCover();gfx_flush();return true;
 }
@@ -3721,6 +3741,8 @@ static bool kbInput(const char* title, String& io, int maxlen){
       gfx_fillRect(0,0,VW,22,COL_BAR);
       gfx_setTextSize(1); gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER, COL_BAR);
       gfx_setCursor(6,7); gfx_print(title);
+      // #clubday: top-bar CANCEL so a wrong network / wrong password / mistyped SSID can always be backed out (was: no cancel -> lockout until power-cycle)
+      gfx_fillRoundRect(VW-62,3,56,16,4,(uint16_t)0x8000); gfx_setTextColor(TFT_WHITE,(uint16_t)0x8000); gfx_setCursor(VW-62+(56-gfx_textWidth("CANCEL"))/2,7); gfx_print("CANCEL");
       // input box
       gfx_fillRoundRect(8,26,VW-16,32,6,COL_PANEL); gfx_drawRoundRect(8,26,VW-16,32,6,COL_AMBER);
       gfx_setTextSize(2); gfx_setTextColor(inkFor(COL_PANEL), COL_PANEL);
@@ -3760,6 +3782,7 @@ static bool kbInput(const char* title, String& io, int maxlen){
     uint16_t tx=0, ty=0; bool have = Touch_ReadFrame() && getTouchXY(&tx,&ty);
     if (have) { rel = 0;
       if (!pressed) { pressed = true; bool handled = false;
+        if (ty < 22 && (int)tx >= VW-62) { kbWaitRelease(); return false; }   // #clubday: top-bar CANCEL -> caller's cancel path (no save/connect)
         const char** ROWS = sym ? SY : AL;
         int ky = kbTop;
         for (int r=0; r<4 && !handled; r++) {
@@ -3846,7 +3869,7 @@ static int wifiPickFromScan(String& outSsid, bool& outSecured){
     WiFi.scanDelete();
     for(int a=0;a<m;a++){ int best=a; for(int b=a+1;b<m;b++) if(rs[b]>rs[best])best=b; if(best!=a){int tr=rs[a];rs[a]=rs[best];rs[best]=tr;String ts=ss[a];ss[a]=ss[best];ss[best]=ts;bool tb=en[a];en[a]=en[best];en[best]=tb;} }
     int avail=(VH-hdr-(ctlH+gap+bm))/(rowH+gap); if(avail<1)avail=1; int vis=m<avail?m:avail;
-    bool dirty=true,pressed=false; int rel=0; kbWaitRelease(400);
+    bool dirty=true,pressed=true; int rel=0; kbWaitRelease(600);   // #clubday: start "pressed" + drain -> no phantom tap from the opening touch landing on a network
     while(true){
       if(dirty){ dirty=false; gfx_fillScreen(COL_BG);
         gfx_fillRect(0,0,VW,hdr,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_BAR),COL_BAR); gfx_setCursor(6,8); gfx_print("Choose WiFi network");
@@ -3892,25 +3915,30 @@ static void doHomeWifiSetup(){
     hwMsg("Could not join", (oldSsid.length()?("back on "+oldSsid):String("no connection")).c_str(), COL_AMBER, 2200); }
 }
 
-// The "Saved WiFi networks" manager (INFO -> SAVED WIFI): list remembered nets, forget with the X.
+// The "Saved WiFi networks" manager (INFO -> SAVED WIFI): list remembered nets, each with a clear FORGET button.
 static void savedWifiManage(){
-  const int hdr=24,rowH=32,gap=4,bm=6,ctlH=34;
-  bool dirty=true,pressed=false; int rel=0; kbWaitRelease(400);
+  const int hdr=24,rowH=34,gap=5,bm=6,ctlH=34,FGW=84;   // FGW = width of the FORGET button
+  bool dirty=true,pressed=true; int rel=0; kbWaitRelease(600);   // start "pressed": the opening tap must be released before anything here counts (no phantom tap)
   while(true){
     int m=g_known.size(); int avail=(VH-hdr-(ctlH+gap+bm))/(rowH+gap); if(avail<1)avail=1; int vis=m<avail?m:avail;
     if(dirty){ dirty=false; gfx_fillScreen(COL_BG);
-      gfx_fillRect(0,0,VW,hdr,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_BAR),COL_BAR); gfx_setCursor(6,8); gfx_print("Saved WiFi networks");
+      gfx_fillRect(0,0,VW,hdr,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_BAR),COL_BAR); gfx_setCursor(6,8); gfx_print("Saved WiFi  -  tap FORGET to remove");
       if(m==0){ gfx_setTextColor(COL_DIM,COL_BG); gfx_setCursor(14,hdr+gap+8); gfx_print("(none remembered yet)"); }
+      String curSsid=(WiFi.status()==WL_CONNECTED && WiFi.SSID().length())?WiFi.SSID():g_home_ssid;   // #clubday: mark the net we are ACTUALLY on, not just list slot 0
       for(int i=0;i<vis;i++){ int y=hdr+gap+i*(rowH+gap);
         gfx_fillRoundRect(6,y,VW-12,rowH,6,COL_PANEL); gfx_drawRoundRect(6,y,VW-12,rowH,6,COL_BAR);
-        gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL); String nm=g_known[i].ssid; if(i==0)nm+="  (current)"; gfx_setCursor(14,y+(rowH-8)/2); gfx_print(nm);
-        int bx=VW-12-30; gfx_fillRoundRect(bx,y+4,26,rowH-8,5,(uint16_t)0x8000); gfx_setTextColor(TFT_WHITE,(uint16_t)0x8000); gfx_setCursor(bx+9,y+(rowH-8)/2); gfx_print("X"); }
+        gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL);
+        String nm=g_known[i].ssid; int maxw=VW-12-FGW-24; while(gfx_textWidth(nm)>maxw&&nm.length()>3)nm=nm.substring(0,nm.length()-1);
+        gfx_setCursor(14,y+(rowH-8)/2); gfx_print(nm);
+        if(g_known[i].ssid==curSsid){ gfx_setTextColor(COL_GREEN,COL_PANEL); gfx_print("  (current)"); }
+        int bx=VW-12-FGW; gfx_fillRoundRect(bx,y+4,FGW-4,rowH-8,6,(uint16_t)0x8000); gfx_setTextColor(TFT_WHITE,(uint16_t)0x8000); gfx_setCursor(bx+(FGW-4-gfx_textWidth("FORGET"))/2,y+(rowH-8)/2); gfx_print("FORGET"); }
       int cy=hdr+gap+vis*(rowH+gap); gfx_fillRoundRect(gap,cy,VW-2*gap,ctlH,6,COL_SEL); gfx_setTextColor(inkFor(COL_SEL),COL_SEL); gfx_setCursor((VW-gfx_textWidth("Back"))/2,cy+(ctlH-8)/2); gfx_print("Back");
       gfx_flush(); }
     uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
     if(have){ rel=0; if(!pressed){ pressed=true;
-      for(int i=0;i<vis;i++){ int y=hdr+gap+i*(rowH+gap); int bx=VW-12-30; if(ty>=y&&ty<y+rowH&&(int)tx>=bx){ forgetNet(g_known[i].ssid); dirty=true; break; } }
-      int cy=hdr+gap+vis*(rowH+gap); if(ty>=cy&&ty<cy+ctlH){ kbWaitRelease(); return; }
+      bool acted=false;
+      for(int i=0;i<vis;i++){ int y=hdr+gap+i*(rowH+gap); int bx=VW-12-FGW; if(ty>=y&&ty<y+rowH&&(int)tx>=bx){ forgetNet(g_known[i].ssid); dirty=true; acted=true; break; } }
+      if(!acted){ int cy=hdr+gap+vis*(rowH+gap); if(ty>=cy&&ty<cy+ctlH){ kbWaitRelease(); return; } }
     } } else { if(pressed&&++rel>=3)pressed=false; }
     delay(12);
   }
@@ -4285,70 +4313,98 @@ static void doScanDongles(){
 static void doPairNow(){ doScanDongles(); }
 
 // ── On-screen LAN fleet picker ─────────────────────────────────────────────
-// The dongles this panel HEARS over home WiFi (g_pfPeers, from the UDP beacons)
-// — name, IP, which disk each holds — and which one the on-screen INSERT/EJECT
-// act on. Pure LAN, no ESP-NOW. Blocking, so it keeps web + discovery alive.
+// #lock: persist which dongles THIS screen owns (CONFIG.TXT DONGLE_<mac>.MINE=1) + load at boot.
+static void setDongleMine(const String& id, bool on){ saveConfigKey(macKey(id)+".MINE", on?"1":"0"); }
+static void loadMineIds(){
+  g_mineN=0; File f=SD_MMC.open("/CONFIG.TXT",FILE_READ); if(!f) return;
+  while(f.available()){ String l=f.readStringUntil('\n'); l.trim();
+    if(l.startsWith("DONGLE_") && l.endsWith(".MINE=1")){ pfAddMine(l.substring(7, l.length()-7)); } }
+  f.close();
+}
+// #console: send the staged disk to every checked dongle, one at a time, with per-dongle feedback (incl. a lock refusal).
+static void fleetSendChecked(String* ids, int n){
+  if(!g_loaded || g_img_bytes==0){ hwMsg("No disk staged","load a game first",COL_AMBER,1800); return; }
+  String nm = g_loaded_display.length()?g_loaded_display:g_loaded_name;
+  int ok=0, fail=0; String lastErr="";
+  for(int k=0;k<n;k++){ int pi=-1; for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].id==ids[k]){pi=i;break;} if(pi<0) continue;
+    PfPeer&p=g_pfPeers[pi];
+    hwMsg("Sending...",(p.name+"  ("+String(k+1)+"/"+String(n)+")").c_str(),COL_ACCENT,1);
+    if(nm.length()){ String ne; pfSendName(p.ip,p.tcp,nm,ne); }
+    String err; if(pfSendDisk(p.ip,p.tcp,err)) ok++; else { fail++; lastErr=p.name+": "+err; }
+  }
+  hwMsg(fail?"Some refused":"Sent", (fail?lastErr:("to "+String(ok)+" dongle(s)")).c_str(), fail?COL_AMBER:COL_GREEN, 2400);
+}
+static void fleetEjectChecked(String* ids, int n){
+  int ok=0; for(int k=0;k<n;k++){ int pi=-1; for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].id==ids[k]){pi=i;break;} if(pi<0) continue;
+    String err; if(pfSendCommand(g_pfPeers[pi].ip,g_pfPeers[pi].tcp,PF_CMD_EJECT,err)) ok++; }
+  hwMsg("Ejected",("on "+String(ok)+" dongle(s)").c_str(),COL_AMBER,1500);
+}
+
+// #console: the Fleet manager — multi-select dongles, SEND the staged disk to all of them,
+// CLAIM/UNCLAIM on the dongle's own row, EJECT the selection. Blocking; keeps web + discovery alive.
 static void doFleetPick(){
   pfService(); pfPrune();
-  int rowH=46, listTop=26, btnBarY=VH-40;
+  static String chk[16]; int chkN=0;   // #console: checked dongle ids (multi-select target set)
+  auto isChk=[&](const String&id)->bool{ for(int i=0;i<chkN;i++) if(chk[i]==id) return true; return false; };
+  auto toggleChk=[&](const String&id){ for(int i=0;i<chkN;i++) if(chk[i]==id){ for(int j=i;j<chkN-1;j++)chk[j]=chk[j+1]; chkN--; return; } if(chkN<16) chk[chkN++]=id; };
+  const int rowH=50, listTop=26, btnBarY=VH-40, actW=92; const int actX=VW-10-actW;
   int maxRows=(btnBarY-listTop-4)/rowH; if(maxRows<1)maxRows=1;
-  int n=g_pfPeerN;
-  int sel=0; for(int i=0;i<n;i++){ if(g_pfPeers[i].ip==g_pfTargetIp){sel=i;break;} }
-  int maxScroll=(n>maxRows)?(n-maxRows):0, scroll=0;
-  if(sel>=maxRows)scroll=sel-maxRows+1; if(scroll>maxScroll)scroll=maxScroll; if(scroll<0)scroll=0;
-  bool dirty=true, down=false, moved=false; int downX=0,downY=0,downScroll=0;
+  int scroll=0; bool dirty=true, down=false, moved=false; int downX=0,downY=0,downScroll=0;
   uint32_t lastPoll=millis();
   while(true){
-    webPanelService(); pfService(); pfWorker();   // keep web + LAN discovery + queued flings alive while this blocks
-    if(millis()-lastPoll>1500){ pfPrune();
-      if(g_pfPeerN!=n){ n=g_pfPeerN; if(sel>=n)sel=n?n-1:0; maxScroll=(n>maxRows)?(n-maxRows):0; if(scroll>maxScroll)scroll=maxScroll; if(scroll<0)scroll=0; }
-      dirty=true; lastPoll=millis(); }
+    webPanelService(); pfService(); pfWorker();
+    if(millis()-lastPoll>1200){ pfPrune(); dirty=true; lastPoll=millis(); }
+    int vis[PF_MAX_PEERS], vn=0; for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])) vis[vn++]=i;   // #console: hide locked-not-mine
+    int maxScroll=(vn>maxRows)?(vn-maxRows):0; if(scroll>maxScroll)scroll=maxScroll; if(scroll<0)scroll=0;
     if(dirty){ dirty=false;
       gfx_fillScreen(COL_BG);
       gfx_setTextSize(1);gfx_setTextColor(COL_ORANGE,COL_BG);gfx_setCursor(8,7);
-      gfx_print(n?("Fleet ("+String(n)+") - pick target:"):String("Fleet - searching for dongles..."));
-      if(n==0){ gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,30);gfx_print(T(L_NO_DONGLES)); }
-      for(int r=0;r<maxRows&&(scroll+r)<n;r++){ int i=scroll+r,y=listTop+r*rowH;
-        PfPeer&p=g_pfPeers[i];
-        bool isSel=(i==sel), isTarget=(p.ip==g_pfTargetIp);
-        uint16_t bg=isSel?COL_SEL:COL_PANEL;
-        gfx_fillRoundRect(8,y,VW-16,rowH-4,6,bg);gfx_drawRoundRect(8,y,VW-16,rowH-4,6,isSel?COL_AMBER:COL_ACCENT);
-        gfx_setTextSize(1);gfx_setTextColor(inkFor(bg),bg);gfx_setCursor(18,y+6);gfx_print(p.name.length()?p.name:("Dongle "+String(i+1)));
+      gfx_print(vn?("FLEET ("+String(vn)+")  tap = select  |  checked: "+String(chkN)):String("FLEET - searching for dongles..."));
+      if(vn==0){ gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,30);gfx_print(T(L_NO_DONGLES)); }
+      for(int r=0;r<maxRows&&(scroll+r)<vn;r++){ int i=vis[scroll+r],y=listTop+r*rowH; PfPeer&p=g_pfPeers[i]; bool ck=isChk(p.id);
+        uint16_t bg=ck?COL_SEL:COL_PANEL;
+        gfx_fillRoundRect(8,y,VW-16,rowH-4,6,bg);gfx_drawRoundRect(8,y,VW-16,rowH-4,6,ck?COL_AMBER:COL_ACCENT);
+        gfx_drawRoundRect(16,y+rowH/2-13,20,20,4,inkFor(bg)); if(ck) gfx_fillRoundRect(19,y+rowH/2-10,14,14,3,COL_AMBER);   // checkbox
+        gfx_setTextColor(inkFor(bg),bg);gfx_setCursor(44,y+7);gfx_print(p.name.length()?p.name:("Dongle "+String(i+1)));
         uint16_t sub=(inkFor(bg)==TFT_BLACK)?COL_MID:COL_DIM;
-        gfx_setTextColor(sub,bg);gfx_setCursor(18,y+19);gfx_print(p.ip+"  "+p.board);
-        if(p.loaded){gfx_setTextColor(COL_GREEN,bg);gfx_setCursor(18,y+32);gfx_print(String("* ")+(p.disk.length()?p.disk:String("disk")));}
-        else{gfx_setTextColor(sub,bg);gfx_setCursor(18,y+32);gfx_print("empty");}
-        if(isTarget){gfx_setTextColor(COL_AMBER,bg);gfx_setCursor(VW-80,y+6);gfx_print("TARGET");}
+        gfx_setTextColor(p.loaded?COL_GREEN:sub,bg);gfx_setCursor(44,y+23);gfx_print(p.loaded?(String("* ")+(p.disk.length()?p.disk:String("disk"))):String("empty"));
+        gfx_setTextColor(sub,bg);gfx_setCursor(44,y+35);gfx_print(p.ip+(pfIsMine(p.id)?"  (mine)":(p.lkd?"  (locked)":"")));
+        if(p.enr){ gfx_fillRoundRect(actX,y+9,actW,rowH-22,6,COL_GREEN);gfx_setTextColor(TFT_BLACK,COL_GREEN);gfx_setCursor(actX+(actW-gfx_textWidth("CLAIM"))/2,y+rowH/2-8);gfx_print("CLAIM"); }
+        else if(pfIsMine(p.id)){ gfx_fillRoundRect(actX,y+9,actW,rowH-22,6,(uint16_t)0x8000);gfx_setTextColor(TFT_WHITE,(uint16_t)0x8000);gfx_setCursor(actX+(actW-gfx_textWidth("UNCLAIM"))/2,y+rowH/2-8);gfx_print("UNCLAIM"); }
       }
-      if(n>maxRows){ int trackY=listTop,trackH=maxRows*rowH-4,thumbH=trackH*maxRows/n;if(thumbH<10)thumbH=10;
+      if(vn>maxRows){ int trackY=listTop,trackH=maxRows*rowH-4,thumbH=trackH*maxRows/vn;if(thumbH<10)thumbH=10;
         int thumbY=trackY+(trackH-thumbH)*scroll/(maxScroll?maxScroll:1);
         gfx_fillRect(VW-4,trackY,3,trackH,COL_PANEL);gfx_fillRect(VW-4,thumbY,3,thumbH,COL_AMBER); }
-      int bw=(VW-4*4)/3,bx=4;const char* BL[3]={"USE","EJECT","BACK"};uint16_t BC[3]={COL_GREEN,COL_AMBER,COL_BAR};
-      for(int i=0;i<3;i++){ bool dis=(n==0&&i<2);
+      int bw=(VW-4*4)/3,bx=4;const char* BL[3]={"SEND","EJECT","BACK"};uint16_t BC[3]={COL_GREEN,COL_AMBER,COL_BAR};
+      for(int i=0;i<3;i++){ bool dis=(chkN==0&&i<2);
         gfx_fillRoundRect(bx,btnBarY+2,bw,34,6,dis?COL_PANEL:BC[i]);gfx_setTextColor(dis?COL_DIM:inkFor(BC[i]),dis?COL_PANEL:BC[i]);
         gfx_setTextSize(1);gfx_setCursor(bx+(bw-gfx_textWidth(BL[i]))/2,btnBarY+14);gfx_print(BL[i]);bx+=bw+4; }
       gfx_flush();
     }
     bool t=Touch_ReadFrame(); uint16_t tx=0,ty=0; if(t)t=getTouchXY(&tx,&ty);
-    if(t){
-      if(!down){down=true;downX=tx;downY=ty;downScroll=scroll;moved=false;}
+    if(t){ if(!down){down=true;downX=tx;downY=ty;downScroll=scroll;moved=false;}
       else{ if(maxScroll>0){int ns=downScroll+((int)downY-(int)ty)/rowH; if(ns<0)ns=0; if(ns>maxScroll)ns=maxScroll; if(ns!=scroll){scroll=ns;dirty=true;}}
         if(abs((int)ty-downY)>8||abs((int)tx-downX)>8)moved=true; }
     } else if(down){ down=false;
       if(!moved){
         if(downY>=btnBarY){ int bw=(VW-4*4)/3,i=(downX-4)/(bw+4);
-          if(i==0){ if(n>0){ PfPeer&p=g_pfPeers[sel]; g_pfTargetIp=p.ip; g_pfTargetName=p.name.length()?p.name:p.ip; g_pfTargetTcp=p.tcp;
-              gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_GREEN,COL_BG);{String s="TARGET SET";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);gfx_print(s);}gfx_flush();delay(800);break; } }
-          else if(i==1){ if(n>0){ g_pfCmdIp=g_pfPeers[sel].ip; g_pfCmd=PF_CMD_EJECT;
-              gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_AMBER,COL_BG);{String s="EJECTING";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);gfx_print(s);}gfx_flush();
-              uint32_t r=millis();while(g_pfCmdIp.length()&&millis()-r<3000){pfWorker();delay(20);} dirty=true; } }
-          else break; // BACK (i==2)
-        } else if(downY>=listTop&&downY<listTop+maxRows*rowH){ int slot=(downY-listTop)/rowH,idx=scroll+slot; if(idx>=0&&idx<n&&idx!=sel){sel=idx;dirty=true;} }
+          if(i==0){ if(chkN>0){ fleetSendChecked(chk,chkN); dirty=true; } }
+          else if(i==1){ if(chkN>0){ fleetEjectChecked(chk,chkN); dirty=true; } }
+          else break; // BACK
+        } else if(downY>=listTop&&downY<listTop+maxRows*rowH){ int slot=(downY-listTop)/rowH,vidx=scroll+slot;
+          if(vidx>=0&&vidx<vn){ int i=vis[vidx]; PfPeer&p=g_pfPeers[i];
+            if((int)downX>=actX && (p.enr||pfIsMine(p.id))){   // per-row CLAIM / UNCLAIM
+              String err;
+              if(p.enr){ hwMsg("Claiming...",p.name.c_str(),COL_ACCENT,1); bool ok=pfSendEnroll(p.ip,p.tcp,err); if(ok){pfAddMine(p.id);setDongleMine(p.id,true);} hwMsg(ok?"Claimed":"Not claimed",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,1500); }
+              else { hwMsg("Releasing...",p.name.c_str(),COL_ACCENT,1); bool ok=pfSendUnenroll(p.ip,p.tcp,err); if(ok){pfDelMine(p.id);setDongleMine(p.id,false);} hwMsg(ok?"Released":"Failed",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,1500); }
+              dirty=true;
+            } else { toggleChk(p.id); dirty=true; }   // toggle select
+          }
+        }
       }
     }
     delay(15);
   }
-  g_info_showing=true;   // back to the INFO tab; caller redraws drawInfoFull
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -4540,6 +4596,8 @@ void setup(){
     generateDefaultConfig();
     selfHealConfig();           // append any documented keys an older CONFIG.TXT is missing
     loadConfig();
+    pfEnsureToken();            // #lock: this panel's owner token (PANEL_TOKEN in CONFIG.TXT)
+    loadMineIds();              // #lock: which dongles this screen owns (hide/act filter)
     if(g_sd_freq==40000){           // 5.3.5: SDSPEED=40 opt-in — remount fast, fall back to 20 if it won't take
       SD_MMC.end();delay(30);SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);
       if(!SD_MMC.begin("/sdcard",true,false,40000)){g_sd_freq=20000;SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);SD_MMC.begin("/sdcard",true,false,20000);}
@@ -4779,7 +4837,7 @@ static void infoAction(uint8_t act){
     case IA_ROTATE: g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_COMPACT: g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_DONGLE: doPairNow();drawInfoFull();break;
-    case IA_FLEET: doFleetPick();drawInfoFull();break;   // LAN fleet overview + pick the INSERT/EJECT target
+    case IA_FLEET: doFleetPick(); g_info_showing=true; drawInfoFull(); break;   // #console: fleet manager (multi-select send + claim/unclaim per row)
     case IA_HIVEMIND: g_hivemind=!g_hivemind;saveConfigKey("HIVEMIND",g_hivemind?"ON":"OFF");drawInfoFull();break;
     case IA_LINK: g_link_home=!g_link_home;saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW");drawInfoFull();break;   // 5.8.6: ESP-NOW <-> HOME WIFI transport
     case IA_HOMEWIFI: doHomeWifiSetup(); drawInfoFull(); break;   // #clubday: scan + pick + live-switch
@@ -4903,6 +4961,11 @@ void loop(){
     else if(!g_known.empty() && !g_espnow_started){
       uint32_t noww=millis(); if(!wifiDownSince) wifiDownSince=noww;
       if(noww-wifiDownSince>25000 && noww>=wifiNextTry){ wifiNextTry=noww+25000; if(wifiAutoJoin()) g_pfMdnsDirty=true; } } }   // re-announce mDNS on the (possibly new) IP
+  // #clubday: the panel-vs-panel election can change our mDNS name a few seconds after boot (a screen that yields
+  // gotekomega.local to a lower-MAC screen). The status bar / WEB line were drawn before that -> refresh on change.
+  { static String g_mdnsShown; String cur=pfMdnsName();
+    if(cur!=g_mdnsShown){ g_mdnsShown=cur; if(g_info_showing) drawInfoFull(); else { drawStatusBar(); gfx_flush(); } } }
+  // #lock: claiming moved into the Fleet manager (per-dongle row) — no auto-pop, so many screens no longer all prompt at once.
   if(g_espnow_link_just_established){g_espnow_link_just_established=false;
     gfx_fillRect(0,0,VW,STATUS_H,0x07E0);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0x07E0);
     gfx_setCursor(VW/2-57,6);gfx_print(T(L_DONGLE_LINKED));gfx_flush();delay(2000);drawStatusBar();gfx_flush();}

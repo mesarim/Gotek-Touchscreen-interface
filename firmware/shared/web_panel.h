@@ -411,6 +411,12 @@ static void wpHandleClient(WiFiClient &client) {
     else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length()) { wpSendJson(client, 409, "{\"error\":\"Fleet busy\"}"); }
     else { const long tp = wpPairValue(bodyStr, "tcp").toInt(); g_pfSendTcp = (tp > 0 && tp < 65536) ? (uint16_t)tp : 3333; g_pfSendIp = ip; wpSendJson(client, 200, "{\"status\":\"queued\"}"); }
   }
+  else if (method == "POST" && path == "/api/fleet/enroll") {   // #lock: enroll this panel as an owner of the dongle at ip (its BOOT enroll window must be open)
+    const String ip = wpPairValue(bodyStr, "ip");
+    if (ip.length() == 0) { wpSendJson(client, 400, "{\"error\":\"No ip\"}"); }
+    else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length() || g_pfEnrollIp.length()) { wpSendJson(client, 409, "{\"error\":\"Fleet busy\"}"); }
+    else { g_pfEnrollIp = ip; wpSendJson(client, 200, "{\"status\":\"queued\"}"); }
+  }
   else if (method == "POST" && path == "/api/fleet/cmd") {
     const String ip = wpPairValue(bodyStr, "ip");
     const long cmd = wpPairValue(bodyStr, "cmd").toInt();
