@@ -47,7 +47,7 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-1.5-fleetUI"
+#define FW_VERSION     "Webby-1.5-lock"
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -92,6 +92,11 @@
 #define CMD_EJECT       0x03
 #define CMD_EJECT_FORCE 0x04
 #define CMD_SET_NAME    0x06   // #24: set the pretty display name for the NEXT flung disk (g_loaded_name only; FAT12 stays OMEGA.ADF)
+#define CMD_ENROLL      0x07   // #lock: [FFFFFFFF][07][16-byte token] -> if the WiFi enroll window is open, store the token as an owner
+#define CMD_AUTH        0x08   // #lock: [FFFFFFFF][08][16-byte token] preamble before a disk fling -> proves the sender is an enrolled owner
+#define CMD_UNENROLL    0x09   // #lock: [FFFFFFFF][09][16-byte token] -> remove that token from the owner list (unclaim/release)
+#define WTOKEN_LEN      16     // #lock: owner-token length (bytes)
+#define WENROLL_WIN_MS  60000UL // #lock: how long a BOOT-tap keeps the WiFi enroll window open
 // ── FLEET: UDP discovery beacon (shared port: dongle, app, JC, browser-master) ──
 #define GTI_DISCO_PORT   51703
 #define ALIVE_BEACON_MS  12000   // "I'm alive" cadence, home-WiFi only
@@ -258,6 +263,23 @@ static uint8_t  _owners[MAX_OWNERS][6] = {{0}};
 static uint8_t  _owner_count   = 0;
 static bool     g_enroll_open  = false;
 static uint32_t g_enroll_until = 0;
+
+// ── #lock prototype: WiFi/LAN owner tokens — gate flings to enrolled screens ──
+// A locked dongle (>=1 owner token) only accepts a fling preceded by a valid AUTH
+// token. Enrollment needs the WiFi enroll window open (a short BOOT tap = physical
+// possession). Mirrors the ESP-NOW owner-lock, over the WiFi/TCP path.
+#define WOWNER_MAX 4
+static uint8_t  g_wowners[WOWNER_MAX][WTOKEN_LEN];
+static int      g_wowner_count = 0;
+static uint32_t g_wenroll_until = 0;   // WiFi enroll window (a short BOOT tap opens it)
+static bool wtokIsOwner(const uint8_t* t){ for(int i=0;i<g_wowner_count;i++) if(memcmp(g_wowners[i],t,WTOKEN_LEN)==0) return true; return false; }
+static bool wtokLocked(){ return g_wowner_count>0; }
+static String wtokHex(const uint8_t* t){ char b[WTOKEN_LEN*2+1]; for(int i=0;i<WTOKEN_LEN;i++) sprintf(b+i*2,"%02x",t[i]); return String(b); }
+static bool wtokFromHex(const String& s, uint8_t* out){ if((int)s.length()<WTOKEN_LEN*2) return false; for(int i=0;i<WTOKEN_LEN;i++){ char h[3]={s[i*2],s[i*2+1],0}; out[i]=(uint8_t)strtol(h,nullptr,16); } return true; }
+static void saveWOwners(){ File f=LittleFS.open("/WOWNERS.TXT","w"); if(!f) return; for(int i=0;i<g_wowner_count;i++){ f.print("OWNER="); f.println(wtokHex(g_wowners[i])); } f.close(); }
+static void loadWOwners(){ g_wowner_count=0; File f=LittleFS.open("/WOWNERS.TXT","r"); if(!f) return; while(f.available() && g_wowner_count<WOWNER_MAX){ String l=f.readStringUntil('\n'); l.trim(); if(l.startsWith("OWNER=")){ uint8_t t[WTOKEN_LEN]; if(wtokFromHex(l.substring(6),t) && !wtokIsOwner(t)) memcpy(g_wowners[g_wowner_count++],t,WTOKEN_LEN); } } f.close(); }
+static bool addWOwner(const uint8_t* t){ if(wtokIsOwner(t)) return true; if(g_wowner_count>=WOWNER_MAX) return false; memcpy(g_wowners[g_wowner_count++],t,WTOKEN_LEN); saveWOwners(); return true; }
+static bool delWOwner(const uint8_t* t){ for(int i=0;i<g_wowner_count;i++) if(memcmp(g_wowners[i],t,WTOKEN_LEN)==0){ for(int j=i;j<g_wowner_count-1;j++) memcpy(g_wowners[j],g_wowners[j+1],WTOKEN_LEN); g_wowner_count--; saveWOwners(); return true; } return false; }
 
 // ESP-NOW receive queue
 #define RX_PKT_SIZE 250
@@ -499,26 +521,58 @@ static void handleTCPClient(WiFiClient& client) {
   if (client.available() < 4) { client.write((uint8_t)0x00); return; }
   uint8_t hdr[4]; client.read(hdr, 4);
   uint32_t size = ((uint32_t)hdr[0]<<24)|((uint32_t)hdr[1]<<16)|((uint32_t)hdr[2]<<8)|(uint32_t)hdr[3];
+  bool authed = false;   // #lock: set true by a valid CMD_AUTH preamble
   if (size == TCP_CMD_ESCAPE) {
     t0 = millis(); while (client.available() < 1 && millis()-t0 < 3000) delay(1);
     if (!client.available()) { client.write((uint8_t)0x00); return; }
     uint8_t cmd = client.read();
-    if      (cmd == CMD_GET_SAVE)    doGetSave(client);
-    else if (cmd == CMD_GET_STATUS)  doGetStatus(client);
-    else if (cmd == CMD_EJECT)       doEject(client,false);
-    else if (cmd == CMD_EJECT_FORCE) doEject(client,true);
+    if      (cmd == CMD_GET_SAVE)    { doGetSave(client);     return; }
+    else if (cmd == CMD_GET_STATUS)  { doGetStatus(client);   return; }
+    else if (cmd == CMD_EJECT)       { doEject(client,false); return; }
+    else if (cmd == CMD_EJECT_FORCE) { doEject(client,true);  return; }
     else if (cmd == CMD_SET_NAME) {   // #24: 1-byte length + name bytes -> g_next_name
       uint32_t tn=millis(); while(client.available()<1 && millis()-tn<2000){ if(!client.connected())break; delay(1); }
       int len = client.available()>=1 ? client.read() : 0;
       char nb[129]; int got=0; uint32_t tb=millis();
       while(got<len && millis()-tb<2000){ if(!client.connected())break; int c=client.read(); if(c<0){delay(1);continue;} if(got<128)nb[got]=(char)c; got++; tb=millis(); }
       nb[got<128?got:128]=0; g_next_name=String(nb);
-      client.write((uint8_t)0x01);
+      client.write((uint8_t)0x01); return;
     }
-    else client.write((uint8_t)0x00);
-    return;
+    else if (cmd == CMD_ENROLL) {   // #lock: [16-byte token] -> add as owner IF the enroll window is open
+      uint8_t tok[WTOKEN_LEN]; int got=0; uint32_t tb=millis();
+      while(got<WTOKEN_LEN && millis()-tb<3000){ if(!client.connected())break; int c=client.read(); if(c<0){delay(1);continue;} tok[got++]=(uint8_t)c; tb=millis(); }
+      if(got<WTOKEN_LEN){ client.write((uint8_t)0x00); return; }
+      if(millis()>=g_wenroll_until){ client.write((uint8_t)0x02); return; }         // 0x02 = window closed: tap BOOT on the dongle first
+      bool ok=addWOwner(tok);
+      client.write(ok?(uint8_t)0x01:(uint8_t)0x03);                                 // 0x03 = owners full
+      if(ok){ g_wenroll_until=0; oledStatus("Gotek OMEGA " FW_VERSION,"CLAIMED","Screen enrolled",String(g_wowner_count)+" owner(s)"); }
+      return;
+    }
+    else if (cmd == CMD_UNENROLL) {  // #lock: [16-byte token] -> remove that owner (unclaim). The token itself proves ownership; no window needed.
+      uint8_t tok[WTOKEN_LEN]; int got=0; uint32_t tb=millis();
+      while(got<WTOKEN_LEN && millis()-tb<3000){ if(!client.connected())break; int c=client.read(); if(c<0){delay(1);continue;} tok[got++]=(uint8_t)c; tb=millis(); }
+      if(got<WTOKEN_LEN){ client.write((uint8_t)0x00); return; }
+      bool ok=delWOwner(tok);
+      client.write(ok?(uint8_t)0x01:(uint8_t)0x00);
+      if(ok) oledStatus("Gotek OMEGA " FW_VERSION,"RELEASED","Owner removed",String(g_wowner_count)+" owner(s)");
+      return;
+    }
+    else if (cmd == CMD_AUTH) {      // #lock: [16-byte token] preamble -> validate, then read the disk that follows
+      uint8_t tok[WTOKEN_LEN]; int got=0; uint32_t tb=millis();
+      while(got<WTOKEN_LEN && millis()-tb<3000){ if(!client.connected())break; int c=client.read(); if(c<0){delay(1);continue;} tok[got++]=(uint8_t)c; tb=millis(); }
+      if(got<WTOKEN_LEN){ client.write((uint8_t)0x00); return; }
+      if(wtokLocked() && !wtokIsOwner(tok)){ client.write((uint8_t)0x05); return; } // #lock: locked + not an owner -> distinct reject code (0x05) so the panel can say "locked to another screen"
+      authed = true;
+      t0=millis(); while(client.available()<4 && millis()-t0<5000) delay(1);
+      if(client.available()<4){ client.write((uint8_t)0x00); return; }
+      client.read(hdr,4);
+      size = ((uint32_t)hdr[0]<<24)|((uint32_t)hdr[1]<<16)|((uint32_t)hdr[2]<<8)|(uint32_t)hdr[3];
+      // fall through to the disk path
+    }
+    else { client.write((uint8_t)0x00); return; }
   }
   if (size == 0 || size > MAX_FILE_BYTES) { client.write((uint8_t)0x00); return; }
+  if (wtokLocked() && !authed) { client.write((uint8_t)0x00); return; }   // #lock: a locked dongle rejects an unauthenticated fling
   const char* outName = "OMEGA.ADF";   // #24: FAT12 root stays a constant legal 8.3 (cosmetic); the pretty name lands in g_loaded_name
   build_volume(outName, size);
   uint8_t* dst = g_disk + DATA_LBA * SECTOR_SIZE;
@@ -915,6 +969,9 @@ static void sendAliveBeacon(){
   j += ",\"board\":\"supermini\"";
   j += ",\"fw\":\"";    j += FW_VERSION;     j += "\"";
   j += ",\"hd\":true";
+  j += ",\"lk\":1";                              // #lock: this dongle understands the WiFi owner-lock -> the panel prepends AUTH
+  j += ",\"lkd\":"; j += (wtokLocked()?"1":"0"); // #lock: 1 = locked (>=1 enrolled owner)
+  j += ",\"enr\":"; j += ((millis()<g_wenroll_until)?"1":"0"); // #lock: 1 = enroll window open -> screens pop a CLAIM prompt
   j += ",\"port\":80";
   j += ",\"tcp\":";     j += String(TCP_PORT);
   j += ",\"loaded\":";  j += (g_disk_loaded?"true":"false");
@@ -1064,9 +1121,13 @@ static bool serviceBootButton(){
         setModeEspnow();
         oledStatus("Gotek OMEGA " FW_VERSION, "Wi-Fi OFF", "Back to ESP-NOW", "Rebooting...");
         delay(600); ESP.restart();
+      } else {   // #lock: short BOOT tap in WiFi mode = open the enroll window so a screen can CLAIM this dongle
+        g_wenroll_until = now + WENROLL_WIN_MS;
+        oledStatus("Gotek OMEGA " FW_VERSION, "PAIRING OPEN", "Tap CLAIM on a", "screen (60s)");
       }
       return true;
     }
+    if (millis() < g_wenroll_until) { setLeds(false, (now%600)<120); return true; }   // #lock: BLUE heartbeat (short on/long off) while the enroll window is open — distinct from other states; red isn't wired on these boards
     return false;
   }
 
@@ -1155,6 +1216,7 @@ void setup() {
 
   loadConfig();       // enrolled owners (used in ESPNOW mode)
   loadWifiCfg();      // WEBBY: home creds + mode
+  loadWOwners();      // #lock: WiFi owner tokens (LAN fling gate)
   loadTheme();        // PANEL: last-chosen web theme
 
   // WEBBY: pick the radio mode.
