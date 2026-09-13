@@ -20,7 +20,7 @@
 #define PF_STALE_MS   40000UL
 #define PF_MAX_PEERS  16
 #define PF_CMD_EJECT   0x03
-#define PF_CMD_SETNAME 0x06   // #24: tell the dongle the pretty display name for the NEXT disk (its FAT12 root stays OMEGA.ADF)
+#define PF_CMD_SETNAME 0x06   // #24: tell the dongle the pretty display name for the NEXT disk (its FAT12 root stays DISK.ADF)
 #define PF_CMD_ENROLL  0x07   // #lock: enroll this panel's token as an owner (dongle's enroll window must be open)
 #define PF_CMD_AUTH    0x08   // #lock: token preamble before a disk fling, proving this panel is an enrolled owner
 #define PF_CMD_UNENROLL 0x09  // #lock: remove this panel's token from the dongle's owner list (unclaim/release)
