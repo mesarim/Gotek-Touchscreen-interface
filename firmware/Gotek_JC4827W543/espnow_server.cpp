@@ -3,6 +3,7 @@
 // WiFi TCP: disk data transfer (reliable, fast)
 
 #include "espnow_server.h"
+#include "../shared/save_geometry.h"
 #include <Arduino.h>
 #include "ESP32_NOW.h"
 #include "WiFi.h"
@@ -611,9 +612,9 @@ bool espnowFetchSave(SavePersistCb persist) {
       uint32_t loadId  = (uint32_t)hdr[4] | ((uint32_t)hdr[5]<<8) | ((uint32_t)hdr[6]<<16) | ((uint32_t)hdr[7]<<24);
       uint32_t imgSize = (uint32_t)hdr[8] | ((uint32_t)hdr[9]<<8) | ((uint32_t)hdr[10]<<16) | ((uint32_t)hdr[11]<<24);
       uint16_t mapLen  = (uint16_t)hdr[12] | ((uint16_t)hdr[13]<<8);
-      if (mapLen > 0 && mapLen <= 256) {
+      if (GotekSaveGeometry::header(imgSize,mapLen)) {
         mapBuf = (uint8_t*)malloc(mapLen);
-        if (mapBuf && readFull(client, mapBuf, mapLen, 5000)) {
+        if (mapBuf && readFull(client,mapBuf,mapLen,5000) && GotekSaveGeometry::bitmap(imgSize,mapBuf,mapLen)) {
           uint32_t nSec = 0;
           for (uint32_t i = 0; i < (uint32_t)mapLen*8; i++)
             if ((mapBuf[i>>3]>>(i&7))&1) nSec++;

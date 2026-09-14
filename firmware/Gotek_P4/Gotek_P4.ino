@@ -2935,10 +2935,12 @@ static bool svFlushStandalone(){
 }
 // Wireless persist callback — runs inside espnowFetchSave, between CRC-verify and ack.
 static bool svPersistWireless(uint32_t load_id,uint32_t img_size,const uint8_t*map,uint16_t mapLen,const uint8_t*packed,uint32_t nSec){
-  (void)img_size;
   if(g_saves_mode==0)return false;
   if(!g_sv_wl_path.length())return false;                             // no mapping (multicast / pre-save FLING)
   if(g_sv_wl_loadid&&load_id&&g_sv_wl_loadid!=load_id)return false;   // stale — not the disk we flung
+  File source=SD_MMC.open(g_sv_wl_path,FILE_READ);
+  if(!source || source.size()!=img_size){source.close();return false;}
+  source.close();
   if(nSec==0)return true;                                             // nothing to write; ack quiets the beacon
   String master=g_sv_wl_path;
   String sav=(g_saves_mode==2)?master:savPathFor(master);
