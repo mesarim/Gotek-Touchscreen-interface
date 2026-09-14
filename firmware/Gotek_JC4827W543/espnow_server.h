@@ -83,4 +83,7 @@ bool   espnowSendDiskTo(const uint8_t* mac, uint32_t size);   // multicast: send
 // Home-WiFi transport: join the home router (STA), resolve the dongle via mDNS "gotek.local"
 // (ioIp seeds a cached IP and receives the resolved one to persist), push over TCP-3333.
 bool   espnowSendDiskHome(const String& ssid, const String& pass, String& ioIp, uint32_t size);
-void   espnowSendEject();
+bool   espnowSendEject(bool force=false);
+
+void espnowSetHome(bool enabled,const String& ssid,const String& pass,const String& ip);
+bool espnowPollStatus();

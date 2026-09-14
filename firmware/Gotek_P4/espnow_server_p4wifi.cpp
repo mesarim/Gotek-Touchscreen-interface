@@ -11,17 +11,15 @@
 // for a WiFi AP scan: every dongle's SoftAP is SSID "GotekOMEGA" with a unique BSSID,
 // which maps 1:1 onto the existing scan/select UI (BSSID == the dongle's identity).
 //
-// What works here: SCAN dongles, single-dongle load (AP-direct 192.168.4.1),
-//   home-WiFi load (STA + mDNS gotekomega.local), hivemind fan-out (sequential
-//   AP-hop), and save-writeback fetch (escape 0x01 GET_SAVE).
-// What is stubbed (needs ESP-NOW, or a dongle HTTP call — flagged v2):
-//   eject-to-dongle, lock/unlock/unpair, live "online" heartbeat, board-caps (HD)
-//   detection. Loading is the critical path and is fully functional.
+// WiFi AP discovery, direct and home-network transfers, TCP save retrieval,
+// status/capability polling and acknowledged eject are supported. ESP-NOW-only
+// owner enrollment and lock controls remain unavailable on the P4 companion.
 //
 // Build: use EITHER this file OR espnow_server_p4stub.cpp, never both (duplicate
 // symbols). Rename the stub to .bak and drop this in.
 
 #include "espnow_server.h"
+#include "../shared/home_wifi.h"
 #include "../shared/dongle_wifi.h"
 #include "../shared/save_geometry.h"
 #include <Arduino.h>
@@ -32,6 +30,9 @@
 
 #define DONGLE_AP_CHANNEL 6   // dongles' SoftAP sits on ch6 (legacy ESPNOW_CHANNEL)
 
+void espnowSetHome(bool enabled,const String& ssid,const String& pass,const String& ip){
+  GotekHome::configure(enabled,ssid,pass,ip);
+}
 // ---------- State (same globals the UI reads) ----------
 volatile bool g_espnow_paired                = false;
 volatile bool g_espnow_xiao_ready            = false;
@@ -43,7 +44,7 @@ volatile bool     g_dongle_loaded            = false;
 volatile uint32_t g_dongle_load_id           = 0;
 volatile uint32_t g_dongle_img_size          = 0;
 volatile uint8_t  g_espnow_dongle_caps  = 0;
-volatile uint8_t  g_espnow_dongle_board = 0;   // stays 0 on P4 (no PAIR_REPLY) = DD-safe default
+volatile uint8_t  g_espnow_dongle_board = 0;   // DD-safe until TCP capabilities are read
 volatile uint32_t g_espnow_load_id      = 0;
 volatile bool     g_espnow_dirty        = false;
 volatile uint32_t g_espnow_dirty_loadid = 0;
@@ -181,8 +182,8 @@ String espnowGetXiaoMac() {
            _dongle_mac[3],_dongle_mac[4],_dongle_mac[5]);
   return String(buf);
 }
-// No ESP-NOW heartbeat on P4; "online" == we have a selected dongle. (v2: quick TCP /status probe.)
-bool espnowXiaoOnline() { return g_espnow_paired; }
+// TCP status polling supplies the heartbeat on this WiFi-only adapter.
+bool espnowXiaoOnline() { return g_espnow_xiao_last_seen && millis()-g_espnow_xiao_last_seen<30000; }
 
 bool espnowSendNotify(const String&, const String&, uint32_t) {
   g_espnow_xiao_ready = false; g_espnow_xiao_done = false; g_espnow_xiao_error = false;
@@ -264,7 +265,7 @@ static bool sendDiskCore(const uint8_t* mac, const char* ipc, uint32_t size, uin
   client.write(hdr, 4);
   uint32_t sent = 0; const size_t BUF = 4096;
   while (sent < size) { size_t n = min((uint32_t)BUF, size-sent); size_t w = client.write(src+sent, n); if(!w){ Serial.println("[P4WIFI] write err"); break; } sent += w; }
-  client.clear();
+  client.flush();
   Serial.printf("[P4WIFI] sent %lu bytes\n",(unsigned long)sent);
 
   bool ok = false;
@@ -295,61 +296,36 @@ bool espnowSendDiskTo(const uint8_t* mac, uint32_t size) {
 
 // Home-WiFi transport: join the router (STA/DHCP), resolve the dongle via mDNS
 // gotekomega.local (or cached ioIp), push over TCP-3333. ioIp receives the resolved IP.
-bool espnowSendDiskHome(const String& ssid, const String& pass, String& ioIp, uint32_t size) {
-  if (ssid.length() == 0) { g_espnow_xiao_error = true; return false; }
-  Serial.printf("[P4WIFI/HOME] joining '%s'\n", ssid.c_str());
-  WiFi.mode(WIFI_STA);
-  WiFi.persistent(false); WiFi.setAutoReconnect(false);
-  WiFi.disconnect(false, true); delay(200);
-  WiFi.begin(ssid.c_str(), pass.c_str());
-  uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) { delay(200); Serial.print("."); }
-  Serial.println();
-
-  bool ok = false;
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("[P4WIFI/HOME] joined, IP %s\n", WiFi.localIP().toString().c_str());
-    String ip = ioIp;
-    if (MDNS.begin("gti-remote")) {
-      IPAddress r = MDNS.queryHost("gotekomega", 2500);
-      if ((uint32_t)r != 0) { ip = r.toString(); ioIp = ip; Serial.printf("[P4WIFI/HOME] gotekomega.local -> %s\n", ip.c_str()); }
-      MDNS.end();
+bool espnowSendDiskHome(const String& ssid,const String& pass,String& ioIp,uint32_t size){
+  GotekHome::configure(true,ssid,pass,ioIp);
+  String ip; bool ok=false;
+  if(GotekHome::begin(ip)){
+    ioIp=ip;
+    tcpSendSetName(ip.c_str());   // Preserve the image extension on home Wi-Fi too.
+    WiFiClient client;
+    if(client.connect(ip.c_str(),DONGLE_TCP_PORT)){
+      uint8_t header[4]={(uint8_t)(size>>24),(uint8_t)(size>>16),(uint8_t)(size>>8),(uint8_t)size};
+      uint32_t sent=0;
+      if(client.write(header,4)==4){
+        const uint8_t* data=g_disk+ESPNOW_DATA_LBA*ESPNOW_SECTOR_SIZE;
+        while(sent<size){size_t n=min((uint32_t)4096,size-sent);size_t w=client.write(data+sent,n);if(!w)break;sent+=w;}
+      }
+      uint8_t ack[5];uint32_t got=0,start=millis();
+      while(sent==size && got<5 && millis()-start<10000){
+        if(client.available())ack[got++]=client.read();
+        else if(!client.connected())break;else delay(5);
+      }
+      ok=sent==size && got==5 && ack[0]==1;
+      if(ok)g_espnow_load_id=(uint32_t)ack[1]|((uint32_t)ack[2]<<8)|((uint32_t)ack[3]<<16)|((uint32_t)ack[4]<<24);
+      client.stop();
     }
-    if (ip.length() > 0) {
-      tcpSendSetName(ip.c_str());   // wireless DSK fix: real filename+ext for the fling
-      WiFiClient client;
-      if (client.connect(ip.c_str(), DONGLE_TCP_PORT)) {
-        uint8_t* src = g_disk + ESPNOW_DATA_LBA * ESPNOW_SECTOR_SIZE;
-        uint8_t hdr[4] = { (uint8_t)(size>>24),(uint8_t)(size>>16),(uint8_t)(size>>8),(uint8_t)size };
-        client.write(hdr, 4);
-        uint32_t sent = 0; const size_t BUF = 4096;
-        while (sent < size) { size_t n = min((uint32_t)BUF, size-sent); size_t w = client.write(src+sent, n); if(!w) break; sent += w; }
-        client.clear();
-        t0 = millis(); while (!client.available() && millis()-t0 < 10000) delay(10);
-        if (client.available()) {
-          ok = (client.read() == 0x01);
-          if (ok) { uint32_t tid=millis(); uint8_t lid[4]; int got=0;
-            while (got<4 && millis()-tid<300){ if(client.available()) lid[got++]=client.read(); else delay(5); }
-            g_espnow_load_id = (got==4) ? ((uint32_t)lid[0]|((uint32_t)lid[1]<<8)|((uint32_t)lid[2]<<16)|((uint32_t)lid[3]<<24)) : 0;
-          }
-        }
-        client.stop();
-        Serial.printf("[P4WIFI/HOME] sent %lu bytes ack=%s\n",(unsigned long)sent, ok?"OK":"ERR");
-      } else Serial.println("[P4WIFI/HOME] TCP connect failed");
-    } else Serial.println("[P4WIFI/HOME] dongle not found (mDNS + no cached IP)");
-  } else Serial.println("[P4WIFI/HOME] home join failed");
-
-  WiFi.disconnect(); delay(50);
-  if (ok) g_espnow_xiao_done = true; else g_espnow_xiao_error = true;
+  }
+  GotekHome::end(true);
+  g_espnow_xiao_done=ok;g_espnow_xiao_error=!ok;
   return ok;
 }
 
-void espnowSendEject() {
-  // v2: eject-to-dongle needs the TCP escape (FF FF FF FF 03) which means an AP join —
-  // too heavy to fire on UI navigation. Loading auto-replaces the disk, so eject is a
-  // convenience only; leave it a no-op on P4 for now (eject also available on the
-  // dongle's own web page).
-}
+
 
 // ── Lock/unlock/unpair are ESP-NOW control — unavailable on P4 WiFi-only (v2: dongle HTTP). ──
 void espnowSendUnpair(const uint8_t*){}
@@ -375,19 +351,62 @@ static bool readFull(WiFiClient& c, uint8_t* buf, uint32_t len, uint32_t timeout
   }
   return got==len;
 }
-bool espnowFetchSave(SavePersistCb persist) {
-  if (!g_espnow_paired || !persist) return false;
-  String ip = _dongle_ip.length() ? _dongle_ip : String(DONGLE_AP_IP);
-
-  WiFi.mode(WIFI_STA);
-  WiFi.persistent(false); WiFi.setAutoReconnect(false);
-  WiFi.disconnect(false, true); delay(200);
-  bool haveMac=false; for(int i=0;i<6;i++) if(_dongle_mac[i]){ haveMac=true; break; }
-  if (haveMac) gotekBeginDongle(_dongle_mac,DONGLE_AP_PASS);
-  else         WiFi.begin(DONGLE_AP_SSID, DONGLE_AP_PASS);
-  uint32_t t0=millis(); while(WiFi.status()!=WL_CONNECTED && millis()-t0<15000) delay(200);
-  if (WiFi.status()!=WL_CONNECTED) { Serial.println("[P4WIFI/SAVE] join failed"); WiFi.disconnect(); return false; }
-
+static bool beginControl(String& ip){
+  if(GotekHome::enabled){
+    return GotekHome::begin(ip);
+  }
+  if(!g_espnow_paired)return false;
+  WiFi.mode(WIFI_STA);WiFi.persistent(false);WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false,true);delay(100);
+  joinDongleAP(_dongle_mac);
+  uint32_t start=millis();
+  while(WiFi.status()!=WL_CONNECTED && millis()-start<15000)delay(50);
+  ip=DONGLE_AP_IP;
+  return WiFi.status()==WL_CONNECTED;
+}
+static void endControl(){
+  if(GotekHome::enabled)GotekHome::end(true);
+  else { WiFi.disconnect(); }
+}
+static bool requestOnNetwork(const String& ip,uint8_t cmd,uint8_t* reply,size_t length){
+  WiFiClient client;bool ok=false;
+  if(client.connect(ip.c_str(),DONGLE_TCP_PORT)){
+    uint8_t request[5]={255,255,255,255,cmd};
+    ok=client.write(request,5)==5 && readFull(client,reply,length,5000);
+    client.stop();
+  }
+  return ok;
+}
+static bool controlRequest(uint8_t cmd,uint8_t* reply,size_t length){
+  String ip;bool ok=beginControl(ip) && requestOnNetwork(ip,cmd,reply,length);
+  endControl();return ok;
+}
+bool espnowSendEject(bool force){
+  uint8_t reply=0;
+  bool ok=controlRequest(force?4:3,&reply,1) && reply==1;
+  if(ok){g_dongle_loaded=false;g_espnow_dirty=false;}
+  return ok;
+}
+bool espnowPollStatus(){
+  String ip;if(!beginControl(ip)){endControl();return false;}
+  uint8_t reply[21];
+  if(!requestOnNetwork(ip,2,reply,sizeof(reply)) || reply[0]!='S' || reply[1]!='T' || reply[2]!=1){endControl();return false;}
+  g_espnow_xiao_last_seen=millis();g_espnow_dongle_caps=reply[2];
+  g_espnow_dirty_loadid=(uint32_t)reply[3]|((uint32_t)reply[4]<<8)|((uint32_t)reply[5]<<16)|((uint32_t)reply[6]<<24);
+  g_espnow_dirty_count=(uint16_t)reply[7]|((uint16_t)reply[8]<<8);
+  g_espnow_dirty_size=(uint32_t)reply[17]|((uint32_t)reply[18]<<8)|((uint32_t)reply[19]<<16)|((uint32_t)reply[20]<<24);
+  g_espnow_dirty=g_espnow_dirty_count!=0;
+  uint8_t caps[8];
+  if(requestOnNetwork(ip,7,caps,sizeof(caps)) && caps[0]=='G' && caps[1]=='C' && caps[2]==1){
+    uint32_t capacity=(uint32_t)caps[4]|((uint32_t)caps[5]<<8)|((uint32_t)caps[6]<<16)|((uint32_t)caps[7]<<24);
+    g_espnow_dongle_board=capacity>=1802240?1:0;g_dongle_loaded=caps[3]!=0;
+  }
+  endControl();return true;
+}
+bool espnowFetchSave(SavePersistCb persist){
+  if(!persist)return false;
+  String ip;
+  if(!beginControl(ip)){endControl();return false;}
   WiFiClient client;
   bool okAll=false; uint8_t* mapBuf=nullptr; uint8_t* packed=nullptr;
   if (client.connect(ip.c_str(), DONGLE_TCP_PORT)) {
@@ -422,7 +441,7 @@ bool espnowFetchSave(SavePersistCb persist) {
   }
   if (mapBuf) free(mapBuf);
   if (packed) free(packed);
-  WiFi.disconnect(); delay(50);
+  endControl();
   if (okAll) g_espnow_dirty=false;
   return okAll;
 }

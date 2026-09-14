@@ -2635,7 +2635,7 @@ static bool doLoadSelected(const String& adfPath){
   if (g_wireless_mode && espnowIsPaired()) {
     String modeName = (g_mode==MODE_ADF) ? "ADF" : (g_mode==MODE_DSK) ? "DSK" : "GEN";
     espnowSendNotify(g_loaded_name, modeName, copied);
-    espnowSendDisk(copied);
+    if(!espnowSendDisk(copied)){svToast("TRANSFER FAILED");return false;}
   }
   // In standalone mode, hardAttach() already connected USB directly to Gotek
 
@@ -2667,10 +2667,13 @@ static void doLoadDiag(){
 
 static bool doUnload(){
   if(!svPrepareChange())return false;
+  if(g_wireless_mode && espnowIsPaired() && !espnowSendEject(g_saves_mode==0)){
+    if(g_loaded)hardAttach();svToast("EJECT FAILED - DISK RETAINED");return false;
+  }
+
   hardDetach();
   g_loaded=false; g_loaded_name=""; g_loaded_path="";
   g_loaded_game_idx=-1; g_loaded_disk_idx=-1; svDirtyReset();
-  if (g_wireless_mode && espnowIsPaired()) espnowSendEject();
   drawStatusBar();
   drawListAndCover();
 return true;

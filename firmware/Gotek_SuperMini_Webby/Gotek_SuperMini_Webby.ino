@@ -610,6 +610,10 @@ static void handleTCPClient(WiFiClient& client) {
     else if (cmd == CMD_GET_STATUS)  doGetStatus(client);
     else if (cmd == CMD_EJECT)       doEject(client,false);
     else if (cmd == CMD_EJECT_FORCE) doEject(client,true);
+    else if(cmd==7){
+      uint8_t caps[8]={'G','C',1,(uint8_t)(g_disk_loaded?1:0)};
+      wrLE32(caps+4,MAX_FILE_BYTES);client.write(caps,sizeof(caps));
+    }
     else if (cmd == CMD_SET_NAME) {   // #24: 1-byte length + name bytes -> g_next_name
       uint32_t tn=millis(); while(client.available()<1 && millis()-tn<2000){ if(!client.connected())break; delay(1); }
       int len = client.available()>=1 ? client.read() : 0;

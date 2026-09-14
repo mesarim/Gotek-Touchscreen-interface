@@ -3071,8 +3071,10 @@ static bool svPersistWireless(uint32_t load_id,uint32_t img_size,const uint8_t*m
 }
 // Wireless fetch driver: overlay + dance + repaint. Called from loop/interlocks.
 static bool svFetchWireless(){
+  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+
   if(g_saves_mode==0){g_espnow_dirty=false;return true;}                   // SAVES=OFF: ignore beacons
-  if(!g_wireless_mode||!g_espnow_started||!espnowIsPaired())return false;
+  if(!g_wireless_mode||(!g_link_home && (!g_espnow_started||!espnowIsPaired())))return false;
   gfx_fillRect(0,VH/2-24,VW,48,COL_ACCENT);gfx_setTextSize(2);gfx_setTextColor(TFT_WHITE,COL_ACCENT);
   {const char*m="SAVING GAME...";int tw=gfx_textWidth(m);gfx_setCursor((VW-tw)/2,VH/2-8);gfx_print(m);}gfx_flush();
   bool ok=espnowFetchSave(svPersistWireless);
@@ -3085,6 +3087,7 @@ static bool svFetchWireless(){
 
 // Freeze USB before the final save so no write can race the change.
 static bool svPrepareChange(){
+  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
   bool wasOnline=g_usb_online;
   if(wasOnline)hardDetach();
   if(!svFlushStandalone()){
@@ -3095,6 +3098,9 @@ static bool svPrepareChange(){
     if(wasOnline)hardAttach();
     return false;
   }
+  if(g_wireless_mode && g_saves_mode==0 && (g_link_home||espnowIsPaired()) && !espnowSendEject(true)){
+    if(wasOnline)hardAttach();return false;
+  }
   return true;
 }
 static void invalidateLocalImage(){
@@ -3103,13 +3109,16 @@ static void invalidateLocalImage(){
   svDirtyReset();
 }
 static bool doLoadSelected(const String&adfPath){
+  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+  if(g_wireless_mode && g_link_home && isHDImage(adfPath))espnowPollStatus();
+
   // v4.9 / v5.x: HD (1.76MB) over wireless is now gated by the dongle's advertised
   // capability (pad[1] of the pairing reply). An HD-capable XIAO (2MB ramdisk,
   // g_espnow_dongle_board==1) may receive it; the Super Mini and old DD-only
   // dongles (board 0) still can't hold it, so they stay blocked. Multicast/
   // Hivemind stays blocked too (a mixed fleet may include a DD dongle).
   // Standalone HD load (cable) is unaffected either way.
-  bool hdDongleReady = espnowIsPaired() && g_espnow_dongle_board==1 && !g_hivemind;
+  bool hdDongleReady = (g_link_home || espnowIsPaired()) && g_espnow_dongle_board==1 && !g_hivemind;
   if(g_wireless_mode && g_mode==MODE_ADF && isHDImage(adfPath) && !hdDongleReady){
     gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
     gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_PANEL);gfx_setCursor(6,STATUS_H+16);gfx_print(T(L_HD_NO_WIRELESS));
@@ -3161,7 +3170,7 @@ static bool doLoadSelected(const String&adfPath){
   g_sv_img_size=(g_mode==MODE_GEN)?0:fsz;svDirtyReset();   // v5.2: GEN has no Amiga save-writeback (0 = no dirty tracking)
   hardAttach();g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_path=loadPath;g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
   if(g_sel>=0&&g_sel<(int)g_games.size()){if(g_games[g_sel].plays<65535)g_games[g_sel].plays++;saveStats();}
-  if(g_wireless_mode&&g_espnow_started){
+  if(g_wireless_mode){
     // 1.6.3 wireless DSK fix: tell the dongle the FAT12 name+extension to build,
     // matching what standalone would use (getOutputFilename / real name for GEN),
     // so a CPC .dsk mounts as DISK.DSK not DISK.ADF (FlashFloppy Error 34).
@@ -3169,25 +3178,25 @@ static bool doLoadSelected(const String&adfPath){
                                      : (basenameNoExt(filenameOnly(adfPath)) + (g_mode==MODE_ADF ? ".adf" : ".dsk"));
       espnowSetFlingName(fn); }
     uint8_t mcMacs[64][6]; int mcN=enumMuCaDongles(mcMacs,g_dongle_cap);
-    if(mcN>0&&g_hivemind){                                  // multicast: fan the disk out to every MuCa- dongle in turn (v4.8.1: only when HIVEMIND=ON)
+    if(!g_link_home && mcN>0&&g_hivemind){                                  // multicast: fan the disk out to every MuCa- dongle in turn (v4.8.1: only when HIVEMIND=ON)
       g_sv_wl_path="";g_sv_wl_loadid=0;                     // Hivemind saves: PINNED — no writeback mapping for multicast
       for(int i=0;i<mcN;i++){
         gfx_setTextSize(1);gfx_setTextColor(TFT_CYAN,COL_PANEL);gfx_fillRect(4,STATUS_H+24,150,12,COL_PANEL);
         gfx_setCursor(6,STATUS_H+26);gfx_print("Multicast "+String(i+1)+"/"+String(mcN));gfx_flush();
-        espnowSendDiskTo(mcMacs[i],copied);
+        if(!espnowSendDiskTo(mcMacs[i],copied)){svToast("TRANSFER FAILED");return false;}
       }
     } else if(g_link_home && g_home_ssid.length()){         // 5.8.6: home-WiFi transport — route via the router to the dongle's gotek.local
       String prevIp=g_dongle_home_ip;
       if(espnowSendDiskHome(g_home_ssid,g_home_pass,g_dongle_home_ip,copied)){
         g_sv_wl_path=loadPath;g_sv_wl_loadid=g_espnow_load_id;
-      }
+      }else{svToast("TRANSFER FAILED");return false;}
       if(g_dongle_home_ip!=prevIp&&g_dongle_home_ip.length())saveConfigKey("DONGLE_HOME_IP",g_dongle_home_ip);  // persist the resolved IP for next time
     } else if(espnowIsPaired()){                            // single paired dongle — unchanged
       espnowSendNotify(g_loaded_name,g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN",copied);
       if(espnowSendDisk(copied)){                           // v4.8.0: remember what we flung, keyed by the dongle's load_id
         g_sv_wl_path=loadPath;g_sv_wl_loadid=g_espnow_load_id;
-      }
-    }
+      }else{svToast("TRANSFER FAILED");return false;}
+    }else{svToast("NO DONGLE SELECTED");return false;}
   }
   drawStatusBar();drawListAndCover();gfx_flush();return true;
 }
@@ -3246,10 +3255,15 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
 
 static bool doUnload(){
   if(!svPrepareChange())return false;
+  if(g_wireless_mode && (g_link_home||espnowIsPaired()) && !espnowSendEject(g_saves_mode==0)){
+    if(g_loaded)hardAttach();svToast("EJECT FAILED - DISK RETAINED");return false;
+  }
+  g_sv_wl_path="";g_sv_wl_loadid=0;
+
   // v4.8.0: EJECT is a save point — drain before the disk goes away
   // (v4.8.1: own-disk flush in any mode)
   hardDetach();g_loaded=false;g_loaded_name="";g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;svDirtyReset();
-  if(g_wireless_mode&&g_espnow_started&&espnowIsPaired())espnowSendEject();drawStatusBar();drawListAndCover();gfx_flush();return true;
+  drawStatusBar();drawListAndCover();gfx_flush();return true;
 }
 
 // Expand the zero-RLE embedded ADF straight into the RAM-disk data area. No SD needed.
@@ -4924,9 +4938,16 @@ void loop(){
 
   // ── Save-game housekeeping (v4.8.0) — runs in list AND carousel mode ──
   if(!touch){
+    static uint32_t lastStatusPoll=0;
+    if(g_wireless_mode && g_link_home && g_sv_wl_path.length() &&
+       now-lastStatusPoll>=10000 && now-g_last_touch_ms>1200){
+  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+      espnowPollStatus();lastStatusPoll=millis();now=millis();
+    }
+
     // Wireless: the dongle beaconed settled unsaved sectors — fetch once the finger is off the glass
     static uint32_t svNextTry=0;
-    if(g_espnow_dirty&&g_wireless_mode&&g_espnow_started&&now>=svNextTry&&now-g_last_touch_ms>1200){
+    if(g_espnow_dirty&&g_wireless_mode&&(g_link_home||g_espnow_started)&&now>=svNextTry&&now-g_last_touch_ms>1200){
       svFetchWireless();
       if(g_espnow_dirty)svNextTry=now+30000;   // fetch failed — back off; the dongle keeps beaconing
     }

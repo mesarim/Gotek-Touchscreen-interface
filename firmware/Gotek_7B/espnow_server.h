@@ -72,4 +72,7 @@ void   espnowForgetActive(const uint8_t* mac);     // clear local pairing if mac
 bool   espnowSendNotify(const String& name, const String& mode, uint32_t size);
 bool   espnowSendDisk(uint32_t size);
 bool   espnowSendDiskTo(const uint8_t* mac, uint32_t size);   // multicast: send to one dongle by MAC
-void   espnowSendEject();
+bool   espnowSendEject(bool force=false);
+
+void espnowSetHome(bool enabled,const String& ssid,const String& pass,const String& ip);
+bool espnowPollStatus();
