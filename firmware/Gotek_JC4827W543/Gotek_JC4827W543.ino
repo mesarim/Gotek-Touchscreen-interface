@@ -12,6 +12,7 @@
 #include "../shared/webdav_client.h"
 #include <FS.h>
 #include <SD_MMC.h>
+#include "../shared/save_image.h"
 #include "driver/spi_master.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_vendor.h"
@@ -2847,30 +2848,16 @@ static String savPathFor(const String&adfPath){
   return adfPath.substring(0,dot)+".sav"+adfPath.substring(dot);
 }
 static bool savExistsFor(const String&adfPath){String sv=savPathFor(adfPath);return sv!=adfPath&&SD_MMC.exists(sv);}
-// Copy base→sav.tmp, patch dirty sectors, atomic rename. Sector source is either
+// Copy base→sav.tmp, patch dirty sectors, recoverable replacement. Sector source is either
 // `packed` (k-th set bit = k-th 512B block; wireless) or `ram` (g_disk; standalone).
 static bool svPatchCore(const String&master,const String&sav,const uint8_t*map,uint32_t mapBits,
                         const uint8_t*packed,const uint8_t*ram){
-  String base=SD_MMC.exists(sav)?sav:master;
-  String tmp=sav+".tmp";
-  SD_MMC.remove(tmp);
-  {File in=SD_MMC.open(base,FILE_READ);if(!in)return false;
-   File out=SD_MMC.open(tmp,FILE_WRITE);if(!out){in.close();return false;}
-   uint8_t*buf=(uint8_t*)malloc(16384);if(!buf){in.close();out.close();return false;}
-   int rd;while((rd=in.read(buf,16384))>0)out.write(buf,rd);
-   free(buf);in.close();out.close();}
-  File f=SD_MMC.open(tmp,"r+");if(!f)return false;
-  uint32_t k=0;bool ok=true;
-  for(uint32_t i=0;i<mapBits;i++){
-    if(!((map[i>>3]>>(i&7))&1))continue;
-    const uint8_t*src=packed?(packed+(size_t)k*512):(ram+(size_t)(DATA_LBA+i)*512);
-    if(!f.seek(i*512UL)||f.write(src,512)!=512){ok=false;break;}
-    k++;
-  }
-  f.flush();f.close();
-  if(!ok){SD_MMC.remove(tmp);return false;}
-  SD_MMC.remove(sav);
-  return SD_MMC.rename(tmp,sav);
+  return GotekSave::patch(SD_MMC, master, sav, map, mapBits,
+    [&](uint32_t sector, uint32_t k, uint8_t* dst) {
+      const uint8_t* src = packed ? packed + (size_t)k * 512 : ram + (size_t)(DATA_LBA + sector) * 512;
+      memcpy(dst, src, 512);
+      return true;
+    });
 }
 static void svToast(const String&msg){
   gfx_fillRect(0,0,VW,STATUS_H,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,COL_GREEN);
@@ -2938,6 +2925,7 @@ static bool doLoadSelected(const String&adfPath){
   if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
   if(g_sv_dirty_count&&g_loaded)svFlushStandalone();
   // Prefer the save-copy when one exists (COPY mode): saves accumulate in the .sav
+  if(!GotekSave::recover(SD_MMC))return false;
   String loadPath=adfPath;
   if(g_saves_mode==1&&savExistsFor(adfPath))loadPath=savPathFor(adfPath);
   gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
@@ -4103,6 +4091,10 @@ void setup(){
   build_volume(getOutputFilename(),g_mode==MODE_ADF?ADF_DEFAULT_SIZE:64);
   SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);delay(100);
   bool sdok=SD_MMC.begin("/sdcard",true,false,20000);if(!sdok){delay(200);sdok=SD_MMC.begin("/sdcard",true,false,20000);}
+  if(sdok && !GotekSave::recover(SD_MMC)){
+    Serial.println("Save recovery failed; SD disabled to preserve files");
+    SD_MMC.end(); sdok=false;
+  }
   if(sdok){
     if(!SD_MMC.exists("/ADF")){SD_MMC.mkdir("/ADF");ensureSampleFolder();SD_MMC.mkdir("/screensaver");}   // blank card: SAMPLE example + arm the screensaver by default (v4.8.5 — DELETE /screensaver to disable it; empty = the bouncing starburst, drop in JPGs for a gallery)
     if(!SD_MMC.exists("/DSK"))SD_MMC.mkdir("/DSK");

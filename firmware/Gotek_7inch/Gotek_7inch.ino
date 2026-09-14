@@ -26,6 +26,7 @@
 #include "USBMSC.h"
 #include <FS.h>
 #include <SD_MMC.h>
+#include "../shared/save_image.h"
 
 // K display stack: esp_lcd RGB panel (double framebuffer) — no LovyanGFX
 #include "esp_heap_caps.h"
@@ -2572,27 +2573,14 @@ static String savPathFor(const String&adfPath){
   return adfPath.substring(0,dot)+".sav"+adfPath.substring(dot);
 }
 static bool savExistsFor(const String&adfPath){String sv=savPathFor(adfPath);return sv!=adfPath&&SD_MMC.exists(sv);}
-// Copy base->sav.tmp, patch dirty sectors from RAM (g_disk), atomic rename.
+// Copy base->sav.tmp, patch dirty sectors from RAM (g_disk), recoverable replacement.
 static bool svPatchCore(const String&master,const String&sav,const uint8_t*map,uint32_t mapBits,const uint8_t*ram){
-  String base=SD_MMC.exists(sav)?sav:master;
-  String tmp=sav+".tmp";
-  SD_MMC.remove(tmp);
-  {File in=SD_MMC.open(base,FILE_READ);if(!in)return false;
-   File out=SD_MMC.open(tmp,FILE_WRITE);if(!out){in.close();return false;}
-   uint8_t*buf=(uint8_t*)malloc(16384);if(!buf){in.close();out.close();return false;}
-   int rd;while((rd=in.read(buf,16384))>0)out.write(buf,rd);
-   free(buf);in.close();out.close();}
-  File f=SD_MMC.open(tmp,"r+");if(!f)return false;
-  bool ok=true;
-  for(uint32_t i=0;i<mapBits;i++){
-    if(!((map[i>>3]>>(i&7))&1))continue;
-    const uint8_t*src=ram+(size_t)(DATA_LBA+i)*512;
-    if(!f.seek(i*512UL)||f.write(src,512)!=512){ok=false;break;}
-  }
-  f.flush();f.close();
-  if(!ok){SD_MMC.remove(tmp);return false;}
-  SD_MMC.remove(sav);
-  return SD_MMC.rename(tmp,sav);
+  return GotekSave::patch(SD_MMC, master, sav, map, mapBits,
+    [&](uint32_t sector, uint32_t k, uint8_t* dst) {
+      const uint8_t* src = ram + (size_t)(DATA_LBA + sector) * 512;
+      memcpy(dst, src, 512);
+      return true;
+    });
 }
 static void svToast(const String&msg){
   UG->fillRect(0,0,LCD_WIDTH,STATUS_H,COL_GREEN);UG->setFont(&lgfx::fonts::DejaVu12);UG->setTextColor(TFT_BLACK,COL_GREEN);
@@ -2615,6 +2603,7 @@ static void svFlushStandalone(){
 }
 static bool doLoadSelected(const String& adfPath){
   if(g_sv_dirty_count) svFlushStandalone();          // persist the OUTGOING disk before g_disk is overwritten
+  if(!GotekSave::recover(SD_MMC))return false;
   String loadPath=adfPath;
   if(g_saves_mode==1 && savExistsFor(adfPath)) loadPath=savPathFor(adfPath);   // SAVES=COPY: resume from the .sav
   // Loading overlay in cover panel
@@ -3686,6 +3675,10 @@ void setup(){
   delay(100);
   bool sdok=SD_MMC.begin("/sdcard",true);
   if(!sdok){ delay(200); sdok=SD_MMC.begin("/sdcard",true); }
+  if(sdok && !GotekSave::recover(SD_MMC)){
+    Serial.println("Save recovery failed; SD disabled to preserve files");
+    SD_MMC.end(); sdok=false;
+  }
   if(sdok){
     ensureConfig();      // create CONFIG.TXT with defaults if missing or empty
     selfHealConfig();    // append any documented keys an older CONFIG.TXT is missing
