@@ -33,6 +33,7 @@
 #include <esp_mac.h>
 #include "esp_wifi.h"
 #include <LittleFS.h>
+#include "../shared/owner_keys.h"
 
 #define FW_VERSION     "v3.7.0-xiao"   // owner-lock parity w/ Super Mini v3.5.3 (multi-owner allowlist, BOOT-hold pair/wipe, TCP eject, heartbeat) + HD 2MB ramdisk. Wire-compatible w/ the Mini (stays DD).
 #define ESPNOW_CHANNEL 6
@@ -244,19 +245,18 @@ static uint32_t g_enroll_until = 0;       // ms deadline for that window
 
 // ESP-NOW receive queue (FreeRTOS)
 #define RX_PKT_SIZE 250
-struct RxPkt { uint8_t data[RX_PKT_SIZE]; int len; };
+struct RxPkt { uint8_t data[RX_PKT_SIZE]; uint8_t source[6]; int len; bool broadcast; };
 static QueueHandle_t _rxQueue = nullptr;
 
-static void queuePacket(const uint8_t* data, int len) {
-  if (!_rxQueue) return;
-  RxPkt pkt;
-  int n = min(len, RX_PKT_SIZE);
-  memcpy(pkt.data, data, n); pkt.len = n;
-  xQueueSendFromISR(_rxQueue, &pkt, nullptr);
+static void queuePacket(const uint8_t* source,const uint8_t* data,int len,bool broadcast){
+  if(!_rxQueue || !source || !data || len<1 || len>RX_PKT_SIZE)return;
+  RxPkt pkt={};memcpy(pkt.source,source,6);memcpy(pkt.data,data,len);
+  pkt.len=len;pkt.broadcast=broadcast;
+  xQueueSend(_rxQueue,&pkt,0);
 }
 
 // Forward declare
-static void handleESPNOW(const uint8_t* data, int len);
+static void handleESPNOW(const uint8_t* source,const uint8_t* data,int len,bool broadcast);
 
 // ESP-NOW peer class
 class XiaoPeer : public ESP_NOW_Peer {
@@ -266,7 +266,7 @@ public:
   ~XiaoPeer() { remove(); }
   bool add_peer() { return add(); }
   bool send_pkt(const uint8_t* d, size_t l) { return send(d, l); }
-  void onReceive(const uint8_t* d, size_t l, bool b) override { queuePacket(d, (int)l); }
+  void onReceive(const uint8_t* d, size_t l, bool b) override { queuePacket(addr(),d,(int)l,b); }
   void onSent(bool) override {}
 };
 
@@ -312,11 +312,13 @@ static void wipeOwners(){
 }
 
 // Handle ESP-NOW control packets
-static void handleESPNOW(const uint8_t* data, int len) {
-  if (len < 1) return;
+static void handleESPNOW(const uint8_t* source,const uint8_t* data,int len,bool broadcast) {
+  if(len!=sizeof(PktHello))return;
   uint8_t type = data[0];
 
   if (type == PKT_PAIR_HELLO) {
+    if(memcmp(source,data+1,6))return;
+    bool canEnroll=g_enroll_open;
     const PktHello* p = (const PktHello*)data;
     // Owner lock (v3.5.0): only obey enrolled GTis. An unknown GTi is enrolled
     // ONLY while a BOOT-hold pairing window is open — otherwise ignored silently.
@@ -346,6 +348,7 @@ static void handleESPNOW(const uint8_t* data, int len) {
     strncpy(reply.ip, AP_IP, 15);
     reply.pad[0] = SAVE_PROTO_VER;
     reply.pad[1] = 1;                  // HD-capable (2MB ramdisk) — GTi may fling 1.76MB HD
+    if(!GotekAuth::pairReply(LittleFS,source,(uint8_t*)&reply,canEnroll))return;
     XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
     if (dst) dst->send_pkt((uint8_t*)&reply, sizeof(reply));
 
@@ -354,7 +357,9 @@ static void handleESPNOW(const uint8_t* data, int len) {
     return;
   }
 
-  if (type == PKT_UNPAIR) {                        // v3.5.2: an owner GTi asked to be forgotten
+  if (type == PKT_UNPAIR) {
+    if(broadcast || memcmp(source,data+1,6) || !isOwner(source) ||
+       !GotekAuth::authorize(source,data,len))return;                        // v3.5.2: an owner GTi asked to be forgotten
     const PktHello* p = (const PktHello*)data;
     if (removeOwner(p->mac)) {                     // only ever removes a MAC that was enrolled
       saveOwners();
@@ -369,6 +374,9 @@ static void handleESPNOW(const uint8_t* data, int len) {
   }
 
   if (type == PKT_DISK_EJECT) {
+    if(broadcast || !isOwner(source) || !GotekAuth::authorize(source,data,len))return;
+    bool wasLoaded=g_disk_loaded;hardDetach();
+    if(g_dirty_count){if(wasLoaded)hardAttach();return;}
     if (g_disk_loaded) { hardDetach(); g_disk_loaded=false; }
     // A new-firmware GTi drains saves BEFORE ejecting, so any bits left here are
     // either already fetched or from an old GTi that can't fetch — drop them.
@@ -380,7 +388,7 @@ static void handleESPNOW(const uint8_t* data, int len) {
 }
 
 static void onNewPeer(const esp_now_recv_info_t* info, const uint8_t* data, int len, void* arg) {
-  queuePacket(data, len);
+  queuePacket(info->src_addr,data,len,!memcmp(info->des_addr,ESP_NOW.BROADCAST_ADDR,6));
 }
 
 // Load saved config
@@ -691,7 +699,7 @@ void setup() {
     // Drain ESP-NOW queue
     RxPkt pkt;
     while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE)
-      handleESPNOW(pkt.data, pkt.len);
+      handleESPNOW(pkt.source,pkt.data,pkt.len,pkt.broadcast);
 
     // Check for TCP clients while pairing
     WiFiClient client = _tcpServer.accept();
@@ -783,7 +791,7 @@ void loop() {
   // Drain ESP-NOW control queue
   RxPkt pkt;
   while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE)
-    handleESPNOW(pkt.data, pkt.len);
+    handleESPNOW(pkt.source,pkt.data,pkt.len,pkt.broadcast);
 
   // Handle TCP disk transfers
   WiFiClient client = _tcpServer.accept();

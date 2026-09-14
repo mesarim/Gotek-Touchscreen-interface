@@ -46,6 +46,7 @@
 #include "esp_wifi.h"
 #include "esp_heap_caps.h"   // HD test: internal-heap readout
 #include <LittleFS.h>
+#include "../shared/owner_keys.h"
 #include <Update.h>   // OMEGAWARE: web OTA
 #include <WebServer.h>     // WEBBY: built-in (ESP32 core) — no external lib
 #include <ESPmDNS.h>       // WEBBY: gotekomega.local
@@ -275,15 +276,15 @@ static uint32_t g_enroll_until = 0;
 
 // ESP-NOW receive queue
 #define RX_PKT_SIZE 250
-struct RxPkt { uint8_t data[RX_PKT_SIZE]; int len; };
+struct RxPkt { uint8_t data[RX_PKT_SIZE]; uint8_t source[6]; int len; bool broadcast; };
 static QueueHandle_t _rxQueue = nullptr;
-static void queuePacket(const uint8_t* data, int len) {
-  if (!_rxQueue) return;
-  RxPkt pkt; int n = min(len, RX_PKT_SIZE);
-  memcpy(pkt.data, data, n); pkt.len = n;
-  xQueueSendFromISR(_rxQueue, &pkt, nullptr);
+static void queuePacket(const uint8_t* source,const uint8_t* data,int len,bool broadcast){
+  if(!_rxQueue || !source || !data || len<1 || len>RX_PKT_SIZE)return;
+  RxPkt pkt={};memcpy(pkt.source,source,6);memcpy(pkt.data,data,len);
+  pkt.len=len;pkt.broadcast=broadcast;
+  xQueueSend(_rxQueue,&pkt,0);
 }
-static void handleESPNOW(const uint8_t* data, int len);
+static void handleESPNOW(const uint8_t* source,const uint8_t* data,int len,bool broadcast);
 
 class XiaoPeer : public ESP_NOW_Peer {
 public:
@@ -292,7 +293,7 @@ public:
   ~XiaoPeer() { remove(); }
   bool add_peer() { return add(); }
   bool send_pkt(const uint8_t* d, size_t l) { return send(d, l); }
-  void onReceive(const uint8_t* d, size_t l, bool b) override { queuePacket(d, (int)l); }
+  void onReceive(const uint8_t* d, size_t l, bool b) override { queuePacket(addr(),d,(int)l,b); }
   void onSent(bool) override {}
 };
 static XiaoPeer* _bcastPeer = nullptr;
@@ -325,10 +326,12 @@ static void wipeOwners(){
   oledStatus("Gotek OMEGA " FW_VERSION,"** WIPED **","All owners cleared","Hold BOOT to pair");
 }
 
-static void handleESPNOW(const uint8_t* data, int len) {
-  if (len < 1) return;
+static void handleESPNOW(const uint8_t* source,const uint8_t* data,int len,bool broadcast) {
+  if(len!=sizeof(PktHello))return;
   uint8_t type = data[0];
   if (type == PKT_PAIR_HELLO) {
+    if(memcmp(source,data+1,6))return;
+    bool canEnroll=g_enroll_open;
     const PktHello* p = (const PktHello*)data;
     // WEBBY note: Webby ships unlocked, so with no enrolled owners any GTi may pair
     // (g_enroll_open is forced true at boot in ESPNOW mode when _owner_count==0).
@@ -345,12 +348,15 @@ static void handleESPNOW(const uint8_t* data, int len) {
     if (!_wavePeer->add_peer()) { delete _wavePeer; _wavePeer = nullptr; }
     PktHello reply = {}; reply.type = PKT_PAIR_REPLY;
     WiFi.softAPmacAddress(reply.mac); strncpy(reply.ip, AP_IP, 15); reply.pad[0] = SAVE_PROTO_VER; reply.pad[1] = 1;
+    if(!GotekAuth::pairReply(LittleFS,source,(uint8_t*)&reply,canEnroll))return;
     XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
     if (dst) dst->send_pkt((uint8_t*)&reply, sizeof(reply));
     oledStatus("Gotek OMEGA " FW_VERSION, known?"Reconnected":"Owner added", macToStr(_wave_mac), String(_owner_count)+" owner(s)");
     return;
   }
   if (type == PKT_UNPAIR) {
+    if(broadcast || memcmp(source,data+1,6) || !isOwner(source) ||
+       !GotekAuth::authorize(source,data,len))return;
     const PktHello* p = (const PktHello*)data;
     if (removeOwner(p->mac)) {
       saveOwners();
@@ -364,13 +370,16 @@ static void handleESPNOW(const uint8_t* data, int len) {
     return;
   }
   if (type == PKT_DISK_EJECT) {
+    if(broadcast || !isOwner(source) || !GotekAuth::authorize(source,data,len))return;
+    bool wasLoaded=g_disk_loaded;hardDetach();
+    if(g_dirty_count){if(wasLoaded)hardAttach();return;}
     if (g_disk_loaded) { hardDetach(); g_disk_loaded=false; }
     dirtyReset(); digitalWrite(LED_BLUE, LOW);
     oledStatus("Gotek OMEGA " FW_VERSION, "Ejected", "", "Ready");
     return;
   }
 }
-static void onNewPeer(const esp_now_recv_info_t* info, const uint8_t* data, int len, void* arg) { queuePacket(data, len); }
+static void onNewPeer(const esp_now_recv_info_t* info, const uint8_t* data, int len, void* arg) { queuePacket(info->src_addr,data,len,!memcmp(info->des_addr,ESP_NOW.BROADCAST_ADDR,6)); }
 
 // Owner config load (base)
 static void loadConfig() {
@@ -1188,7 +1197,7 @@ static void startEspnowApMode(){
     strncpy(hello.ip, AP_IP, 15); hello.pad[0] = SAVE_PROTO_VER; hello.pad[1] = 1;
     if (_bcastPeer) _bcastPeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     if (_wavePeer)  _wavePeer->send_pkt((uint8_t*)&hello, sizeof(hello));
-    RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len);
+    RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.source,pkt.data,pkt.len,pkt.broadcast);
     WiFiClient c = _tcpServer.accept(); if (c) handleTCPClient(c);
     server.handleClient(); dnsServer.processNextRequest();
     delay(120);
@@ -1263,7 +1272,7 @@ void loop() {
   if (g_dns_up) dnsServer.processNextRequest();
 
   // ESP-NOW control queue (only meaningful in AP/ESP-NOW mode; harmless otherwise)
-  RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len);
+  RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.source,pkt.data,pkt.len,pkt.broadcast);
 
   // TCP app transfers (begun in both modes)
   WiFiClient client = _tcpServer.accept();

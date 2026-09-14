@@ -11,6 +11,7 @@
 #include "WiFi.h"
 #include <esp_mac.h>
 #include <SD_MMC.h>
+#include "../shared/owner_keys.h"
 #include <WiFiClient.h>
 #include <ESPmDNS.h>   // home-WiFi transport: resolve the dongle's gotek.local
 
@@ -90,11 +91,14 @@ static GotekPeer* _xiaoPeer  = nullptr;
 
 // ---------- Incoming handler ----------
 static void handleIncoming(const uint8_t* data, int len) {
-  if (len < 1) return;
+  if(len!=250)return;
   uint8_t type = data[0];
 
   if (type == PKT_PAIR_REPLY) {
+    if(len!=sizeof(PktHello))return;
     const PktHello* p = (const PktHello*)data;
+    if(p->pad[2]==1 && !GotekAuth::acceptReply(SD_MMC,p->mac,data,len))return;
+    if(!memchr(p->ip,0,sizeof(p->ip)))return;
 
     // Scan mode: collect every distinct dongle, don't commit yet
     if (_scan_mode) {
@@ -293,6 +297,7 @@ void espnowScanMacBytes(int i, uint8_t* out){
 // Tell ONE dongle (unicast) to drop THIS GTi from its owner list. Sent 3x (ESP-NOW is lossy).
 void espnowSendUnpair(const uint8_t* mac){
   PktHello pkt = {}; pkt.type = PKT_UNPAIR; WiFi.macAddress(pkt.mac);
+  if(!GotekAuth::signCommand(mac,(uint8_t*)&pkt,sizeof(pkt)))return;
   if (_xiaoPeer && memcmp(_xiao_mac, mac, 6)==0) {
     for(int k=0;k<3;k++){ _xiaoPeer->send_pkt((uint8_t*)&pkt, sizeof(pkt)); delay(30); }
     return;
@@ -304,6 +309,7 @@ void espnowSendUnpair(const uint8_t* mac){
 // Webby: tell ONE dongle (unicast) to LOCK to this GTi (enroll me as sole owner). Sent 3x.
 void espnowSendLock(const uint8_t* mac){
   PktHello pkt = {}; pkt.type = PKT_LOCK; WiFi.macAddress(pkt.mac);
+  if(!GotekAuth::signCommand(mac,(uint8_t*)&pkt,sizeof(pkt)))return;
   if (_xiaoPeer && memcmp(_xiao_mac, mac, 6)==0) {
     for(int k=0;k<3;k++){ _xiaoPeer->send_pkt((uint8_t*)&pkt, sizeof(pkt)); delay(30); }
     return;
@@ -315,6 +321,7 @@ void espnowSendLock(const uint8_t* mac){
 // Webby: tell ONE dongle (unicast) to UNLOCK (clear owners -> open to any GTi). Sent 3x.
 void espnowSendUnlock(const uint8_t* mac){
   PktHello pkt = {}; pkt.type = PKT_UNLOCK; WiFi.macAddress(pkt.mac);
+  if(!GotekAuth::signCommand(mac,(uint8_t*)&pkt,sizeof(pkt)))return;
   if (_xiaoPeer && memcmp(_xiao_mac, mac, 6)==0) {
     for(int k=0;k<3;k++){ _xiaoPeer->send_pkt((uint8_t*)&pkt, sizeof(pkt)); delay(30); }
     return;
