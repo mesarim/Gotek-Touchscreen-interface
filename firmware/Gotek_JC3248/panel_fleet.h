@@ -20,8 +20,11 @@
 #define PF_STALE_MS   40000UL
 #define PF_MAX_PEERS  16
 #ifndef PF_MDNS_DEFAULT
-#define PF_MDNS_DEFAULT "GTi"   // the name a screen answers to unless MDNS_NAME says otherwise;
-#endif                          // with two screens the lower MAC keeps it and the other becomes <name>-<mac>
+#define PF_MDNS_DEFAULT "gotekomega"   // the name a screen answers to unless MDNS_NAME says otherwise.
+#endif   // The dongles cede this exact name to a screen and their portal points users at it,
+         // so it has to match theirs. With two screens the lower MAC keeps it and the other
+         // becomes <name>-<mac>. (Mez's tree also registers "GTi" for the web panel - the two
+         // names disagree in HIS tree; see the branch note.)
 #define PF_CMD_EJECT   0x03
 #define PF_CMD_SETNAME 0x06   // #24: tell the dongle the pretty display name for the NEXT disk (its FAT12 root stays DISK.ADF)
 #define PF_CMD_ENROLL  0x07   // #lock: enroll this panel's token as an owner (dongle's enroll window must be open)
@@ -65,7 +68,9 @@ static void pfAddMine(const String &id){ if(!id.length()||pfIsMine(id)) return; 
 static void pfDelMine(const String &id){ for(int i=0;i<g_mineN;i++) if(g_mineIds[i]==id){ for(int j=i;j<g_mineN-1;j++) g_mineIds[j]=g_mineIds[j+1]; g_mineN--; return; } }
 // #console: a locked dongle is only visible on a screen that owns it — EXCEPT while it is in
 // pairing mode (enr), so any screen can still claim a dongle whose BOOT was just tapped.
+static int  pfVisibleCount();   // defined below, next to the roster
 static bool pfPeerVisible(const PfPeer &p){ return p.enr || pfIsMine(p.id) || !p.lkd; }
+static int  pfVisibleCount(){ int n=0; for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])) n++; return n; }
 static int  pfPeerIdx(const String &id){ for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].id==id) return i; return -1; }   // rows are held by id: a prune must not shift one under your finger
 
 // ── Panel-vs-panel election (#clubday: many screens on one Wi-Fi, one <name>.local) ──
@@ -275,6 +280,10 @@ static bool pfWriteAuth(WiFiClient &c, String &err) {
 }
 
 // Push the loaded disk to a dongle. BLOCKING — loop() only.
+static void pfNoteTarget(const String &ip) {   // NOW PLAYING shows where the disk went
+  g_pfTargetName = ip;
+  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip && g_pfPeers[i].name.length()) { g_pfTargetName = g_pfPeers[i].name; return; }
+}
 static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
   if (!g_loaded || g_img_bytes == 0) { err = "no disk loaded"; return false; }
   const uint8_t *data = g_disk + DATA_LBA * 512;
@@ -298,6 +307,7 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
     if (w == 0) { if (millis() - stall > 15000) { err = "send stalled"; c.stop(); return false; } delay(2); continue; }
     sent += w; stall = millis();
   }
+  pfNoteTarget(ip);
   g_pfLastMs = millis() - tSend0; g_pfLastBytes = size;
   g_pfLastKbps = g_pfLastMs ? (uint32_t)((uint64_t)size * 1000ULL / g_pfLastMs / 1024ULL) : 0;
   const uint32_t t0 = millis();
@@ -387,7 +397,10 @@ static bool pfSendUnenroll(const String &ip, uint16_t port, String &err) {
 // so the panel does not keep a UDP listener alive in a mode that has no LAN.
 static void pfStop() {
   if (g_pfUdpUp) { g_pfUdp.stop(); g_pfUdpUp = false; }
-  g_pfPeerN = 0; g_pfPanelN = 0; g_pfMdnsDirty = true;
+  g_pfPeerN = 0;                 // dongles go; they re-announce within a beacon period
+  // g_pfPanelN deliberately kept: pfElect() needs to still see the other screens, or this
+  // panel re-claims the leader name while the incumbent is still answering to it.
+  g_pfMdnsDirty = true;
 }
 
 // Drain one queued fling/command. Call from loop().
@@ -414,7 +427,6 @@ static void pfWorker() {
   }
   if (g_pfSendIp.length()) {
     const String ip = g_pfSendIp; g_pfSendIp = ""; const uint16_t tp = g_pfSendTcp;
-    g_pfTargetName = ""; for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) { g_pfTargetName = g_pfPeers[i].name.length() ? g_pfPeers[i].name : ip; break; }
     g_pfBusy = true; String err;
     const String nm = g_loaded_display.length() ? g_loaded_display : g_loaded_name;
     if (nm.length()) { String nerr; pfSendName(ip, tp, nm, nerr); }   // #24: name-on-fling, best-effort — old dongles ignore the escape

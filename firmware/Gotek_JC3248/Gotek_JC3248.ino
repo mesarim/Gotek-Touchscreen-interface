@@ -37,7 +37,8 @@
 
 #define FW_VERSION "5.9.23-JC3248"
 #define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
-#define PF_MDNS_DEFAULT "GTi"   // the name this screen answers to unless MDNS_NAME says otherwise; panel_fleet.h honours it
+#define PF_MDNS_DEFAULT "gotekomega"   // the name this screen answers to unless MDNS_NAME says otherwise.
+                                       // Must match what the dongles cede (their portal points users here).
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -2010,7 +2011,7 @@ static int drawWrapped(int x,int y,const String&s,int maxW,int lineH,int maxLine
 static void drawStatusBar(){
   gfx_fillRect(0,0,VW,STATUS_H,COL_BAR);gfx_setTextSize(1);
   gfx_setTextColor(COL_ORANGE,COL_BAR);gfx_setCursor(6,6);gfx_print("OMEGAWARE");
-  gfx_setTextColor(COL_MID,COL_BAR);gfx_print("  " FW_VERSION);
+  gfx_setTextColor(COL_MID,COL_BAR);gfx_print("  " FW_VERSION " " GTI_WEB_REV);
   if(g_wireless_mode&&g_link_home){   // #clubday: on the LAN the useful thing to show is where to reach this screen
     String ln=pfMdnsName()+".local"; gfx_setTextColor(COL_BLUE==COL_BAR?0x07FF:0x06FF,COL_BAR);
     int tw=gfx_textWidth(ln); gfx_setCursor((VW-tw)/2,6); gfx_print(ln);}
@@ -2313,8 +2314,8 @@ static void drawNowPlayingBar(){
   int y=NOW_Y;
   if(g_loaded&&g_loaded_name.length()){gfx_fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_NOW);gfx_drawRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_GREEN);
     gfx_fillCircle(LIST_X+8,y+NOW_PLAY_H/2,3,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(COL_GREEN,COL_NOW);gfx_setCursor(LIST_X+16,y+3);gfx_print(T(L_NOW_PLAYING));
+    if(g_wireless_mode&&g_link_home&&g_pfTargetName.length()) gfx_print(" > "+g_pfTargetName);   // #console: which dongle this went to
     gfx_setTextColor(TFT_WHITE,COL_NOW);gfx_setCursor(LIST_X+16,y+12);String n=g_loaded_display.length()?g_loaded_display:g_loaded_name;
-    if(g_wireless_mode&&g_link_home&&g_pfTargetName.length()) n+=" > "+g_pfTargetName;   // #console: which dongle this went to
     while(gfx_textWidth(n)>LIST_W-24&&n.length()>3)n=n.substring(0,n.length()-1);gfx_print(n);}
   else{gfx_fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_BG);gfx_setTextSize(1);gfx_setTextColor(COL_MID,COL_BG);gfx_setCursor(LIST_X+8,y+NOW_PLAY_H/2-4);gfx_print(String(g_games.size())+T(L_GAMES_TAP));}
 }
@@ -3164,7 +3165,7 @@ static bool doLoadSelected(const String&adfPath){
   // Hivemind stays blocked too (a mixed fleet may include a DD dongle).
   // Standalone HD load (cable) is unaffected either way.
   bool hdDongleReady = espnowIsPaired() && g_espnow_dongle_board==1 && !g_hivemind;
-  if(g_wireless_mode && g_mode==MODE_ADF && isHDImage(adfPath) && !hdDongleReady){
+  if(g_wireless_mode && !g_link_home && g_mode==MODE_ADF && isHDImage(adfPath) && !hdDongleReady){   // ESP-NOW only: the LAN path checks the peer's own hd flag
     gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
     gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_PANEL);gfx_setCursor(6,STATUS_H+16);gfx_print(T(L_HD_NO_WIRELESS));
     gfx_setTextColor(COL_LIT,COL_PANEL);
@@ -3186,7 +3187,10 @@ static bool doLoadSelected(const String&adfPath){
   gfx_flush();
   // Clean swap: if a disk is already mounted, cleanly eject first so the host re-reads the new media.
   // FORCESWAP=ON skips this and swaps the bytes in place (faster, but the host may not notice).
-  if(!(g_wireless_mode&&g_link_home) && g_loaded && !g_forceswap) hardDetach();   // #console: in LAN-fleet mode the disk goes to a dongle, not to our own USB
+  // #console: this disk goes to a dongle ONLY if one is actually reachable; with none in earshot
+  // the panel stays the local drive, exactly as it does in every other mode.
+  const bool toFleet = (g_wireless_mode && g_link_home && WiFi.status()==WL_CONNECTED && pfVisibleCount()>0);
+  if(!toFleet && g_loaded && !g_forceswap) hardDetach();
   File f=SD_MMC.open(loadPath.c_str(),FILE_READ);if(!f){gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_FAILED));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
   // Use VFS to get real file size (SD_MMC f.size() returns 0 for subdirectory files)
   String vfsLoad="/sdcard"+loadPath;
@@ -3210,7 +3214,7 @@ static bool doLoadSelected(const String&adfPath){
   if(buf)free(buf);f.close();
   // v4.8.0: fresh disk in the RAM disk = fresh save tracking
   g_sv_img_size=(g_mode==MODE_GEN)?0:fsz;svDirtyReset();g_img_bytes=copied;   // v5.2: GEN has no Amiga save-writeback (0 = no dirty tracking)
-  if(!(g_wireless_mode&&g_link_home)) hardAttach();
+  if(!toFleet) hardAttach();
   g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_path=loadPath;g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
   g_loaded_display=(g_sel>=0&&g_sel<(int)g_games.size())?g_games[g_sel].name:g_loaded_name;   // #24: the pretty name that rides along with the fling
   if(g_sel>=0&&g_sel<(int)g_games.size()){if(g_games[g_sel].plays<65535)g_games[g_sel].plays++;saveStats();}
@@ -3239,12 +3243,15 @@ static bool doLoadSelected(const String&adfPath){
   // #console: a staged disk in LAN-fleet mode goes to a dongle, not to our own USB port.
   // More than one reachable dongle -> the multi-select manager (same game on three Amigas);
   // exactly one -> send it straight there; none -> leave it staged and say nothing.
-  if(g_wireless_mode && g_link_home && WiFi.status()==WL_CONNECTED){
+  if(toFleet){
     int vn=0,only=-1; for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])){ vn++; only=i; }
     if(vn>=2){ doFleetPick(); }
     else if(vn==1){ PfPeer&p=g_pfPeers[only]; hwMsg("Sending...",p.name.c_str(),COL_ACCENT,1);
       String nm=g_loaded_display.length()?g_loaded_display:g_loaded_name; if(nm.length()){String ne;pfSendName(p.ip,p.tcp,nm,ne);}
-      String err; bool ok=pfSendDisk(p.ip,p.tcp,err); hwMsg(ok?"Sent":"Not sent",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,ok?1200:2200); }
+      String err; bool ok=pfSendDisk(p.ip,p.tcp,err); hwMsg(ok?"Sent":"Not sent",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,ok?1200:2200);
+      if(!ok) hardAttach();   // the dongle refused or vanished - keep the disk usable on our own port
+    }
+    drawFullUI();gfx_flush();return true;   // a modal owned the screen; repaint all of it
   }
   drawStatusBar();drawListAndCover();gfx_flush();return true;
 }
@@ -3307,7 +3314,7 @@ static void doUnload(){
   // (v4.8.1: own-disk flush in any mode)
   if(g_sv_dirty_count)svFlushStandalone();
   if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
-  hardDetach();g_loaded=false;g_loaded_name="";g_loaded_display="";g_img_bytes=0;g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;svDirtyReset();
+  hardDetach();g_loaded=false;g_loaded_name="";g_loaded_display="";g_img_bytes=0;g_pfTargetName="";g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;svDirtyReset();
   if(g_wireless_mode&&g_espnow_started&&espnowIsPaired())espnowSendEject();drawStatusBar();drawListAndCover();gfx_flush();}
 
 // Expand the zero-RLE embedded ADF straight into the RAM-disk data area. No SD needed.
@@ -4048,12 +4055,19 @@ static void savedWifiManage(){
 // STANDALONE = radio off, ESP-NOW = blind dongles, WiFi = home router + web UI.
 static void applyRadioMode(){
   pfStop();   // #console: release the 51703 listener + roster; the next mode re-opens it if it has a LAN
+  const bool wasFleet = (g_wireless_mode && g_link_home);
   if(g_espnow_started){ espnowStop(); g_espnow_started=false; }   // leave ESP-NOW cleanly
   webPanelStop();                                                 // stop the web server if it was up
   WiFi.disconnect(true,true); delay(60);
   if(!g_wireless_mode){ WiFi.mode(WIFI_OFF); }                     // STANDALONE
   else if(g_link_home){ webPanelBegin(); }                        // WiFi (non-blocking; server comes up in webPanelService)
   else { ensureEspNow(); }                                        // ESP-NOW
+  // #console: a disk staged for the fleet is NOT on our own USB port. Changing mode changes who
+  // owns it, so hand it over rather than leaving it nowhere: leaving fleet mode mounts it here,
+  // entering fleet mode releases it for a dongle.
+  { const bool nowFleet = (g_wireless_mode && g_link_home);
+    if(g_loaded && wasFleet && !nowFleet) hardAttach();
+    else if(g_loaded && !wasFleet && nowFleet && !g_forceswap) hardDetach(); }
 }
 
 static void doWebUiSetup(){
@@ -5121,7 +5135,7 @@ static void handleTap(uint16_t px,uint16_t py){
     if(px<LIST_X+74){ if(g_mode!=MODE_DSK)switchLib(MODE_DSK); return; }
     if(px<LIST_X+110){ if(g_mode!=MODE_GEN)switchLib(MODE_GEN); return; }   // v5.2 GEN library
     }
-    if(px<LIST_X+174){String p=doUserDisks(); if(p.length()){ if(doLoadSelected(p)){g_loaded_game_idx=-1;String nm=p;int s=nm.lastIndexOf('/');if(s>=0)nm=nm.substring(s+1);int d=nm.lastIndexOf('.');if(d>0)nm=nm.substring(0,d);g_loaded_name=nm;} } drawFullUI();gfx_flush();return;}}   // v4.9.7 USR-DSK
+    if(px<LIST_X+174){String p=doUserDisks(); if(p.length()){ if(doLoadSelected(p)){g_loaded_game_idx=-1;String nm=p;int s=nm.lastIndexOf('/');if(s>=0)nm=nm.substring(s+1);int d=nm.lastIndexOf('.');if(d>0)nm=nm.substring(0,d);g_loaded_name=nm;g_loaded_display=nm;} } drawFullUI();gfx_flush();return;}}   // v4.9.7 USR-DSK (display name too: the inserted disk, not whatever was highlighted)
 
   // ── File list ──
   if(px>=LIST_X&&px<AZ_X&&py>=LIST_TOP&&py<LIST_BOTTOM){
@@ -5158,13 +5172,17 @@ void loop(){
   pfService();          // #console: hear dongle beacons so /api/fleet has a roster
   pfWorker();           // #console: run one queued fling/eject/claim per pass (non-blocking)
   { static String mdnsShown; if(pfMdnsName()!=mdnsShown){ mdnsShown=pfMdnsName();
-      if(!g_info_showing) { drawStatusBar(); gfx_flush(); } } }   // #clubday: the election renamed us - repaint the address
+      if(g_info_showing) drawInfoFull(); else { drawStatusBar(); gfx_flush(); } } }   // #clubday: the election renamed us - repaint wherever the address is shown
   // #clubday: the link is gone for a while (moved to another location) -> rejoin the strongest
   // remembered network. setAutoReconnect covers brief same-AP drops; this is for when the AP is truly gone.
-  { static uint32_t wdOut=0;
+  { static uint32_t wdOut=0, wdWait=25000;
     if(g_wireless_mode && g_link_home && !g_known.empty() && WiFi.status()!=WL_CONNECTED){
       if(!wdOut) wdOut=millis();
-      else if(millis()-wdOut>25000){ wdOut=0; if(wifiAutoJoin()) g_pfMdnsDirty=true; }
+      else if(millis()-wdOut>wdWait){
+        wdOut=0;
+        if(wifiAutoJoin()){ g_pfMdnsDirty=true; wdWait=25000; }
+        else if(wdWait<300000) wdWait*=2;   // the AP is really gone: stop freezing the UI every 25 s
+      }
     } else wdOut=0; }
   if(g_pfClaimedId.length()){ setDongleMine(g_pfClaimedId,true); g_pfClaimedId=""; }      // #lock: a CLAIM from the web page persists ownership too
   if(g_pfReleasedId.length()){ setDongleMine(g_pfReleasedId,false); g_pfReleasedId=""; }  // #lock: and an UNCLAIM forgets it (never write SD inside a request handler)
