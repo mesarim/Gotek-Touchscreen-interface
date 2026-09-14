@@ -31,6 +31,7 @@
 
 #include <Arduino.h>
 #include "../shared/disk_lock.h"
+#include "../shared/image_upload.h"
 #include "../shared/dirty_snapshot.h"
 #include "USB.h"
 #include "USBMSC.h"
@@ -227,7 +228,7 @@ static int32_t onRead(uint32_t lba, uint32_t off, void* buf, uint32_t n) {
 }
 static int32_t onWrite(uint32_t lba, uint32_t off, uint8_t* buf, uint32_t n) {
   GotekDiskGuard guard;
-  if(!n)return 0;
+  if(!n || !g_usb_online)return 0;
 
   uint32_t s = lba*SECTOR_SIZE+off;
   if (s+n > TOTAL_SECTORS*SECTOR_SIZE) return 0;
@@ -246,8 +247,12 @@ static int32_t onWrite(uint32_t lba, uint32_t off, uint8_t* buf, uint32_t n) {
   return (int32_t)n;
 }
 static void usbEventCb(void*,esp_event_base_t,int32_t,void*) {}
-static void hardDetach() { MSC.mediaPresent(false); delay(100); tud_disconnect(); delay(500); g_usb_online=false; }
+static void hardDetach() {
+  { GotekDiskGuard guard; g_usb_online=false; }
+ MSC.mediaPresent(false); delay(100); tud_disconnect(); delay(500); g_usb_online=false; }
 static void hardAttach() {
+  { GotekDiskGuard guard; g_usb_online=true; }
+
   char rev[8]; snprintf(rev,sizeof(rev),"%lu",(unsigned long)g_rev_counter++);
   MSC.productRevision(rev); MSC.mediaPresent(true); delay(50); tud_connect(); delay(200);
   g_usb_online=true;
@@ -537,7 +542,9 @@ static uint32_t   g_next_alive_ms = 0;   // FLEET: next "I'm alive" broadcast
 static inline void wrLE32(uint8_t*p,uint32_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);p[2]=(uint8_t)(v>>16);p[3]=(uint8_t)(v>>24);}
 static inline void wrLE16(uint8_t*p,uint16_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);}
 static void doEject(WiFiClient& client, bool force){
-  if (!force && g_dirty_count > 0) { client.write((uint8_t)0x02); client.flush(); return; }
+  bool wasLoaded=g_disk_loaded;
+  hardDetach();
+  if (!force && g_dirty_count > 0) { if(wasLoaded)hardAttach(); client.write((uint8_t)0x02); client.flush(); return; }
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   dirtyReset(); g_loaded_name=""; ledBlue(false);
   oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (app)", "", "Ready");
@@ -620,13 +627,21 @@ static void handleTCPClient(WiFiClient& client) {
   // filename+ext via CMD_SET_NAME immediately before the fling; absent that
   // (older panel), fall back to the historic DISK.ADF.
   String fatName = g_next_name.length() ? to83keepext(g_next_name) : String("DISK.ADF");
-  build_volume(fatName.c_str(), size);
   uint8_t* dst = g_disk + DATA_LBA * SECTOR_SIZE;
   uint32_t received = 0; const size_t BUF = 4096;
   uint8_t* buf = (uint8_t*)malloc(BUF); if (!buf) { client.write((uint8_t)0x00); return; }
+  bool wasLoaded=g_disk_loaded;
+  hardDetach();
+  if(g_dirty_count){
+    if(wasLoaded)hardAttach();
+    free(buf);client.write((uint8_t)0x02);return;
+  }
+  g_disk_loaded=false;g_image_size=0;dirtyReset();
+  g_loaded_name="";
+  build_volume(fatName.c_str(), size);
   t0 = millis();
-  while (received < size && millis()-t0 < 30000) {   // 30s = max STALL (no progress), not total  a slow-but-steady fling completes; t0 resets on every read below
-    if (!client.connected()) break;
+  while (received < size && millis()-t0 < 30000) {   // 30s = max STALL (no progress), not total — a slow-but-steady fling completes; t0 resets on every read below
+    if (!client.connected() && !client.available()) break;
     int avail = client.available(); if (avail <= 0) { delay(1); continue; }
     size_t toRead = min((size_t)avail, min(BUF, (size_t)(size-received)));
     int rd = client.read(buf, toRead);
@@ -693,30 +708,44 @@ static void webFinishLoad(){
   oledStatus("LOADED!", "", "USB: attached", "Gotek ready");
   sendSimple(PKT_XIAO_DONE);   // harmless if no ESP-NOW peer
 }
+static GotekImageUpload g_upload;
+static bool prepareWebChange(){
+  bool wasLoaded=g_disk_loaded;
+  hardDetach();
+  if(g_dirty_count){if(wasLoaded)hardAttach();return false;}
+  g_disk_loaded=false;g_loaded_name="";g_image_size=0;dirtyReset();
+  return true;
+}
 static void handleUpload(){
-  HTTPUpload& up = server.upload();
-  if (up.status == UPLOAD_FILE_START) {
-    g_up_recv = 0; g_up_overflow = false;
-    g_up_name = up.filename; if (g_up_name.length()==0) g_up_name = "DISK.ADF";
-    // detach first so the Amiga isn't reading the disk while we rewrite its data region
-    if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; ledBlue(false); }
-  } else if (up.status == UPLOAD_FILE_WRITE) {
-    if (!g_up_overflow && g_up_recv + up.currentSize <= MAX_FILE_BYTES) {
-      memcpy(g_disk + DATA_LBA*SECTOR_SIZE + g_up_recv, up.buf, up.currentSize);
-      g_up_recv += up.currentSize;
-    } else { g_up_overflow = true; }
-  } else if (up.status == UPLOAD_FILE_END) {
-    // finalized by the POST responder below
-  }
+  HTTPUpload& up=server.upload();
+  if(up.status==UPLOAD_FILE_START){
+    if(!g_upload.start())return;
+    g_up_recv=0;g_up_overflow=false;g_up_name=up.filename;
+    if(!prepareWebChange()){g_upload.reject(409);return;}
+  }else if(up.status==UPLOAD_FILE_WRITE){
+    if(g_upload.write(up.currentSize,MAX_FILE_BYTES)){
+      memcpy(g_disk+DATA_LBA*SECTOR_SIZE+g_up_recv,up.buf,up.currentSize);
+      g_up_recv+=up.currentSize;
+    }
+  }else if(up.status==UPLOAD_FILE_END){g_upload.end(up.totalSize);}
+  else if(up.status==UPLOAD_FILE_ABORTED){g_upload.abort();}
+}
+static bool acceptWebUpload(){
+  int code=g_upload.consume();
+  if(code==200)return true;
+  const char* error=code==409 ? "Pending saves; save the current disk first" :
+    code==413 ? "Image exceeds the RAM disk capacity" : "Upload is missing or incomplete";
+  server.send(code,"application/json",String("{\"error\":\"")+error+"\"}");
+  return false;
 }
 static void handleUploadDone(){
-  if (g_up_overflow) { server.send(413,"application/json","{\"ok\":false,\"err\":\"image too big for the 1MB ramdisk (DD only)\"}"); return; }
-  if (g_up_recv == 0) { server.send(400,"application/json","{\"ok\":false,\"err\":\"empty upload\"}"); return; }
+  if(!acceptWebUpload())return;
   g_loaded_name = g_up_name;
   webFinishLoad();
   server.send(200,"application/json", statusJson());
 }
 static void handleEjectWeb(){
+  if(!prepareWebChange()){server.send(409,"application/json","{\"error\":\"Pending saves\"}");return;}
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   dirtyReset(); g_loaded_name=""; ledBlue(false);
   oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (web)", "", "Ready");
@@ -943,13 +972,13 @@ static void apiDiskStatus(){
   server.send(200,"application/json", j);
 }
 static void apiDiskUnload(){
+  if(!prepareWebChange()){server.send(409,"application/json","{\"error\":\"Pending saves\"}");return;}
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   dirtyReset(); g_loaded_name=""; ledBlue(false);
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiGamesUploadDone(){
-  if (g_up_overflow) { server.send(413,"application/json","{\"error\":\"image too big for the HD ramdisk\"}"); return; }
-  if (g_up_recv == 0) { server.send(400,"application/json","{\"error\":\"empty upload\"}"); return; }
+  if(!acceptWebUpload())return;
   g_loaded_name = g_up_name;
   webFinishLoad();
   String j = "{\"name\":\""; j += jsonEsc(g_up_name); j += "\",\"bytes\":"; j += String((unsigned)g_up_recv); j += "}";

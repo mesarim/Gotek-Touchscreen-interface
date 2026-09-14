@@ -588,7 +588,7 @@ static KGfx tft;
 static void drawFullUI();
 static void drawListAndCover();
 static bool doLoadSelected(const String& adfPath);
-static void doUnload();
+static bool doUnload();
 
 
 
@@ -732,7 +732,7 @@ static inline void svSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
 static void svDirtyReset(){GotekDiskGuard guard;memset(g_sv_dirty,0,sizeof(g_sv_dirty));g_sv_dirty_count=0;g_sv_last_write=0;}
 static int32_t onWrite(uint32_t lba,uint32_t off,uint8_t* buf,uint32_t n) {
   GotekDiskGuard guard;
-  if(!n)return 0;
+  if(!n || !g_usb_online)return 0;
 
   uint32_t s=lba*SECTOR_SIZE+off; if(s+n>TOTAL_SECTORS*SECTOR_SIZE) return 0;
   memcpy(g_disk+s,buf,n);
@@ -755,10 +755,14 @@ static void bumpInquiryRevision(){
   MSC.productRevision(rev);
 }
 static void hardDetach(){
+  { GotekDiskGuard guard; g_usb_online=false; }
+
   MSC.mediaPresent(false); delay(100); tud_disconnect(); delay(500);
   g_usb_online=false;
 }
 static void hardAttach(){
+  { GotekDiskGuard guard; g_usb_online=true; }
+
   bumpInquiryRevision(); MSC.mediaPresent(true); delay(50); tud_connect(); delay(200);
   g_usb_online=true;
 }
@@ -2528,9 +2532,9 @@ static void svToast(const String&msg){
   delay(1200);drawStatusBar();uiFlush();
 }
 // Standalone flush: persist our RAM disk's dirty sectors to SD.
-static void svFlushStandalone(){
-  if(g_sv_dirty_count==0)return;
-  if(g_saves_mode==0||!g_loaded||!g_loaded_path.length()){svDirtyReset();return;}   // OFF / diag disk: discard
+static bool svFlushStandalone(){
+  if(g_sv_dirty_count==0)return true;
+  if(g_saves_mode==0||!g_loaded||!g_loaded_path.length()){svDirtyReset();return true;}   // OFF / diag disk: discard
   String master=g_loaded_path;
   String sav=(g_saves_mode==2)?master:savPathFor(master);
   uint32_t imgSecs=(g_sv_img_size+511)/512;if(imgSecs>SV_IMG_MAX_SECTORS)imgSecs=SV_IMG_MAX_SECTORS;
@@ -2542,12 +2546,29 @@ static void svFlushStandalone(){
     g_sv_fail=0;svToast("SAVED: "+g_loaded_name);
   }else{
     g_sv_last_write=millis();                       // back off one settle window, then retry
-    if(++g_sv_fail>=5){svDirtyReset();g_sv_fail=0;svToast("SAVE FAILED - GAVE UP");}
+    if(++g_sv_fail>=5)g_sv_fail=0;
+    svToast("SAVE FAILED - RETRY REQUIRED");
   }
+  return saved;
+}
+// Freeze USB before the final save so no write can race the change.
+static bool svPrepareChange(){
+  bool wasOnline=g_usb_online;
+  if(wasOnline)hardDetach();
+  if(!svFlushStandalone()){
+    if(wasOnline)hardAttach();
+    return false;
+  }
+  return true;
+}
+static void invalidateLocalImage(){
+  g_loaded=false;g_loaded_name="";g_loaded_path="";
+  g_loaded_game_idx=-1;g_loaded_disk_idx=-1;g_sv_img_size=0;
+  svDirtyReset();
 }
 static bool doLoadSelected(const String& adfPath){
-  if(g_sv_dirty_count) svFlushStandalone();          // persist the OUTGOING disk before g_disk is overwritten
-  if(!GotekSave::recover(SD_MMC))return false;
+  if(!svPrepareChange())return false;
+  if(!GotekSave::recover(SD_MMC)){if(g_loaded && !g_usb_online)hardAttach();return false;}
   String loadPath=adfPath;
   if(g_saves_mode==1 && savExistsFor(adfPath)) loadPath=savPathFor(adfPath);   // SAVES=COPY: resume from the .sav
   // Loading overlay in cover panel
@@ -2565,11 +2586,15 @@ static bool doLoadSelected(const String& adfPath){
   File f=openNamedImage(loadPath);
   if(!f){
     UG->setTextColor(0xE8C4,COL_PANEL); UG->setCursor(8,STATUS_H+56);
-    UG->print("Open failed"); delay(1000); drawListAndCover(); return false;
+    UG->print("Open failed"); delay(1000); drawListAndCover(); if(g_loaded && !g_usb_online)hardAttach();return false;
   }
   uint32_t fsz=f.size();
-  if(fsz==0){ f.close(); drawListAndCover(); return false; }
-  if(fsz>MAX_FILE_BYTES) fsz=MAX_FILE_BYTES;
+  if(fsz==0){ f.close(); drawListAndCover(); if(g_loaded && !g_usb_online)hardAttach();return false; }
+  if(fsz>MAX_FILE_BYTES){f.close();if(g_loaded && !g_usb_online)hardAttach();return false;}
+  const size_t BUFSZ=4096;
+  uint8_t* buf=(uint8_t*)malloc(BUFSZ);
+  if(!buf){ f.close(); if(g_loaded && !g_usb_online)hardAttach();return false; }
+  invalidateLocalImage();
   build_volume_with_file(g_mode==MODE_GEN?filenameOnly(adfPath).c_str():getOutputFilename(),fsz);   // GEN keeps the real name+ext so FlashFloppy detects the format
 
   int barX=8,barY=STATUS_H+58,barW=COVER_W-16,barH=14;
@@ -2577,9 +2602,6 @@ static bool doLoadSelected(const String& adfPath){
 
   uint32_t copied=0;
   uint8_t* dst=g_disk+DATA_LBA*SECTOR_SIZE;
-  const size_t BUFSZ=4096;
-  uint8_t* buf=(uint8_t*)malloc(BUFSZ);
-  if(!buf){ f.close(); return false; }
   uint32_t remain=fsz;
   int _pcTick=0;
   while(remain){
@@ -2591,7 +2613,7 @@ static bool doLoadSelected(const String& adfPath){
     if((++_pcTick & 7)==0) uiFlush();   // throttled flip so the progress bar animates
   }
   free(buf);
-  if(fsz>copied) memset(dst+copied,0,fsz-copied);
+  if(copied!=fsz){f.close();svToast("IMAGE READ FAILED");return false;}
   f.close();
 
   UG->setFont(&lgfx::fonts::DejaVu9);
@@ -2631,6 +2653,8 @@ static void diagInflate(const uint8_t* src, uint32_t slen, uint8_t* dst){
 }
 // Mount the built-in Amiga Test Kit as the emulated disk — works with no SD card.
 static void doLoadDiag(){
+  if(!svPrepareChange())return;
+  invalidateLocalImage();
   g_info_showing=false;
   if(g_loaded) hardDetach();
   build_volume_with_file("DISK.ADF", DIAG_ADF_SIZE);          // force an .ADF image regardless of MODE
@@ -2641,14 +2665,15 @@ static void doLoadDiag(){
   drawFullUI();
 }
 
-static void doUnload(){
-  if(g_sv_dirty_count) svFlushStandalone();     // persist before eject
+static bool doUnload(){
+  if(!svPrepareChange())return false;
   hardDetach();
   g_loaded=false; g_loaded_name=""; g_loaded_path="";
   g_loaded_game_idx=-1; g_loaded_disk_idx=-1; svDirtyReset();
   if (g_wireless_mode && espnowIsPaired()) espnowSendEject();
   drawStatusBar();
   drawListAndCover();
+return true;
 }
 
 // ============================================================================
@@ -3335,7 +3360,7 @@ static void gridHandleTap(uint16_t px,uint16_t py){
   int gi=g_car_list[li];
   if(g_grid_sel==gi){                                     // second tap on the selected tile -> mount/eject
     g_sel=gi; g_disk_sel=0;
-    if(g_loaded&&g_loaded_game_idx==gi) doUnload();
+    if(g_loaded&&g_loaded_game_idx==gi && !doUnload())return;
     else { GameEntry&gm=g_games[gi]; doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[0]]); }
     if(g_car_active) drawCarousel();                      // repaint over the loader's list redraw
   } else {

@@ -364,7 +364,7 @@ static uint32_t g_sv_img_size=0;                         // bytes of the mounted
 
 static int32_t onWrite(uint32_t lba,uint32_t off,uint8_t*buf,uint32_t n){
   GotekDiskGuard guard;
-  if(!n)return 0;
+  if(!n || !g_usb_online)return 0;
 uint32_t s=lba*512+off;if(s+n>TOTAL_SECTORS*512)return 0;memcpy(g_disk+s,buf,n);
   // v4.8.0: tick the dirty scorecard for every image sector this write touches
   // (assignment form, not ++ — C++20 deprecates ++ on volatile)
@@ -379,8 +379,12 @@ uint32_t s=lba*512+off;if(s+n>TOTAL_SECTORS*512)return 0;memcpy(g_disk+s,buf,n);
   return n;}
 static void usbEventCB(void*,esp_event_base_t,int32_t,void*){}
 static uint32_t g_rev=1;
-static void hardDetach(){MSC.mediaPresent(false);delay(100);tud_disconnect();delay(500);g_usb_online=false;}
-static void hardAttach(){char r[8];snprintf(r,8,"%lu",(unsigned long)g_rev++);MSC.productRevision(r);MSC.mediaPresent(true);delay(50);tud_connect();delay(200);g_usb_online=true;}
+static void hardDetach(){
+  { GotekDiskGuard guard; g_usb_online=false; }
+MSC.mediaPresent(false);delay(100);tud_disconnect();delay(500);g_usb_online=false;}
+static void hardAttach(){
+  { GotekDiskGuard guard; g_usb_online=true; }
+char r[8];snprintf(r,8,"%lu",(unsigned long)g_rev++);MSC.productRevision(r);MSC.mediaPresent(true);delay(50);tud_connect();delay(200);g_usb_online=true;}
 
 // ── SD ACCESS (v5.1) ─────────────────────────────────────────────────────────
 // Plug the GTi into a PC to add games without cracking the case. The native USB-MSC
@@ -1073,7 +1077,7 @@ static String savPathFor(const String&adfPath);   // v4.8.0 saves — defined wi
 static bool savExistsFor(const String&adfPath);
 static void drawListAndCover();
 static bool doLoadSelected(const String&p);
-static void doUnload();
+static bool doUnload();
 
 static void cycleTheme(){applyTheme((g_theme_idx+1)%NUM_THEMES);saveConfigKey("THEME",String(g_theme_idx));drawFullUI();gfx_flush();}
 static bool g_espnow_started=false;
@@ -2715,7 +2719,7 @@ static void carHandleTap(uint16_t px,uint16_t py){
     if(d<(int)gm.disk_indices.size()){
       if(g_loaded&&g_loaded_game_idx==gi){
         if(d!=g_loaded_disk_idx){                    // clean swap: flush saves + eject, then reload the chosen disk
-          doUnload(); g_sel=gi;g_disk_sel=d;g_disk_page=0;
+          if(!doUnload())return; g_sel=gi;g_disk_sel=d;g_disk_page=0;
           doLoadSelected(g_files[gm.disk_indices[d]]);
         }
       } else { g_disk_sel=d; }                        // not loaded yet — just select; INSERT will mount it
@@ -2728,7 +2732,7 @@ static void carHandleTap(uint16_t px,uint16_t py){
      py>=(uint16_t)g_car_ins_y&&py<(uint16_t)(g_car_ins_y+g_car_ins_h)){
     int gi=g_car_list[ci];
     g_sel=gi;g_disk_page=0;setActiveLetter(bucketOf(g_games[gi].name));
-    if(g_loaded&&g_loaded_game_idx==gi)doUnload();
+    if(g_loaded&&g_loaded_game_idx==gi && !doUnload())return;
     else{auto&gm=g_games[gi];int d=(g_disk_sel>=0&&g_disk_sel<(int)gm.disk_indices.size())?g_disk_sel:0;doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[d]]);}
     if(g_car_active){drawCarousel();gfx_flush();}        // repaint over the list redraw the loader did
     return;
@@ -2872,9 +2876,9 @@ static void svToast(const String&msg){
 }
 // Standalone flush: persist our own RAM disk's dirty sectors to SD.
 static uint8_t g_sv_fail=0;
-static void svFlushStandalone(){
-  if(g_sv_dirty_count==0)return;
-  if(g_saves_mode==0||!g_loaded||!g_loaded_path.length()){svDirtyReset();return;}   // OFF / diag disk: discard
+static bool svFlushStandalone(){
+  if(g_sv_dirty_count==0)return true;
+  if(g_saves_mode==0||!g_loaded||!g_loaded_path.length()){svDirtyReset();return true;}   // OFF / diag disk: discard
   String master=g_loaded_path;
   String sav=(g_saves_mode==2)?master:savPathFor(master);
   uint32_t imgSecs=(g_sv_img_size+511)/512;if(imgSecs>SV_IMG_MAX_SECTORS)imgSecs=SV_IMG_MAX_SECTORS;
@@ -2886,8 +2890,10 @@ static void svFlushStandalone(){
     g_sv_fail=0;svToast("SAVED: "+g_loaded_name);
   }else{
     g_sv_last_write=millis();                       // back off one settle window, then retry
-    if(++g_sv_fail>=5){svDirtyReset();g_sv_fail=0;svToast("SAVE FAILED - GAVE UP");}
+    if(++g_sv_fail>=5)g_sv_fail=0;
+    svToast("SAVE FAILED - RETRY REQUIRED");
   }
+  return saved;
 }
 // Wireless persist callback — runs inside espnowFetchSave, between CRC-verify and ack.
 static bool svPersistWireless(uint32_t load_id,uint32_t img_size,const uint8_t*map,uint16_t mapLen,const uint8_t*packed,uint32_t nSec){
@@ -2901,9 +2907,9 @@ static bool svPersistWireless(uint32_t load_id,uint32_t img_size,const uint8_t*m
   return svPatchCore(master,sav,map,(uint32_t)mapLen*8,packed,nullptr);
 }
 // Wireless fetch driver: overlay + dance + repaint. Called from loop/interlocks.
-static void svFetchWireless(){
-  if(g_saves_mode==0){g_espnow_dirty=false;return;}                   // SAVES=OFF: ignore beacons
-  if(!g_wireless_mode||!g_espnow_started||!espnowIsPaired())return;
+static bool svFetchWireless(){
+  if(g_saves_mode==0){g_espnow_dirty=false;return true;}                   // SAVES=OFF: ignore beacons
+  if(!g_wireless_mode||!g_espnow_started||!espnowIsPaired())return false;
   gfx_fillRect(0,VH/2-24,VW,48,COL_ACCENT);gfx_setTextSize(2);gfx_setTextColor(TFT_WHITE,COL_ACCENT);
   {const char*m="SAVING GAME...";int tw=gfx_textWidth(m);gfx_setCursor((VW-tw)/2,VH/2-8);gfx_print(m);}gfx_flush();
   bool ok=espnowFetchSave(svPersistWireless);
@@ -2911,8 +2917,28 @@ static void svFetchWireless(){
   gfx_flush();
   if(ok){String nm=g_sv_wl_path.length()?basenameNoExt(filenameOnly(g_sv_wl_path)):String("disk");svToast("SAVED: "+nm);}
   else svToast("SAVE FETCH FAILED");
+  return ok;
 }
 
+// Freeze USB before the final save so no write can race the change.
+static bool svPrepareChange(){
+  bool wasOnline=g_usb_online;
+  if(wasOnline)hardDetach();
+  if(!svFlushStandalone()){
+    if(wasOnline)hardAttach();
+    return false;
+  }
+  if(g_wireless_mode && (g_espnow_dirty || g_sv_wl_path.length()) && !svFetchWireless()){
+    if(wasOnline)hardAttach();
+    return false;
+  }
+  return true;
+}
+static void invalidateLocalImage(){
+  g_loaded=false;g_loaded_name="";g_loaded_path="";
+  g_loaded_game_idx=-1;g_loaded_disk_idx=-1;g_sv_img_size=0;
+  svDirtyReset();
+}
 static bool doLoadSelected(const String&adfPath){
   // v4.9 / v5.x: HD (1.76MB) over wireless is now gated by the dongle's advertised
   // capability (pad[1] of the pairing reply). An HD-capable XIAO (2MB ramdisk,
@@ -2928,14 +2954,13 @@ static bool doLoadSelected(const String&adfPath){
     gfx_setCursor(6,STATUS_H+30);gfx_print(T(L_NO_WIRELESS_DEV));
     gfx_setCursor(6,STATUS_H+42);gfx_print(T(L_AVAIL_HD));
     gfx_setCursor(6,STATUS_H+56);gfx_print(T(L_USE_CABLE));
-    gfx_flush();delay(2200);drawFullUI();gfx_flush();return false;
+    gfx_flush();delay(2200);drawFullUI();gfx_flush();if(g_loaded && !g_usb_online)hardAttach();return false;
   }
   // v4.8.0 interlocks: pending saves die when the RAM disk is rebuilt — drain first
   // (v4.8.1: own-disk flush runs in ANY mode — a wireless GTi can still be USB-attached)
-  if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
-  if(g_sv_dirty_count&&g_loaded)svFlushStandalone();
   // Prefer the save-copy when one exists (COPY mode): saves accumulate in the .sav
-  if(!GotekSave::recover(SD_MMC))return false;
+  if(!svPrepareChange())return false;
+  if(!GotekSave::recover(SD_MMC)){if(g_loaded && !g_usb_online)hardAttach();return false;}
   String loadPath=adfPath;
   if(g_saves_mode==1&&savExistsFor(adfPath))loadPath=savPathFor(adfPath);
   gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
@@ -2943,13 +2968,12 @@ static bool doLoadSelected(const String&adfPath){
   gfx_setCursor(6,STATUS_H+16);gfx_print(tn);gfx_setTextColor(COL_LIT,COL_PANEL);gfx_setCursor(6,STATUS_H+28);gfx_print(T(L_LOADING));
   gfx_flush();
   // Clean swap: if a disk is already mounted, cleanly eject first so the host re-reads the new media.
-  // FORCESWAP=ON skips this and swaps the bytes in place (faster, but the host may not notice).
-  if(g_loaded && !g_forceswap) hardDetach();
-  File f=SD_MMC.open(loadPath.c_str(),FILE_READ);if(!f){gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_FAILED));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
+  // Replacement always freezes USB to protect reads and the final save.
+  File f=SD_MMC.open(loadPath.c_str(),FILE_READ);if(!f){gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_FAILED));gfx_flush();delay(1000);drawFullUI();gfx_flush();if(g_loaded && !g_usb_online)hardAttach();return false;}
   // Use VFS to get real file size (SD_MMC f.size() returns 0 for subdirectory files)
   String vfsLoad="/sdcard"+loadPath;
   struct stat stLoad;
-  if(stat(vfsLoad.c_str(),&stLoad)!=0||stLoad.st_size==0) {f.close();gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_SIZE_ERR));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
+  if(stat(vfsLoad.c_str(),&stLoad)!=0||stLoad.st_size==0) {f.close();gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_SIZE_ERR));gfx_flush();delay(1000);drawFullUI();gfx_flush();if(g_loaded && !g_usb_online)hardAttach();return false;}
   uint32_t fsz=(uint32_t)stLoad.st_size;
   if(fsz>MAX_FILE_BYTES){
     f.close();
@@ -2959,13 +2983,17 @@ static bool doLoadSelected(const String&adfPath){
     gfx_setTextColor(COL_LIT,COL_PANEL);
     gfx_setCursor(6,STATUS_H+30);gfx_print(String(fsz/1024)+"KB > "+String(MAX_FILE_BYTES/1024)+"KB");
     gfx_setCursor(6,STATUS_H+44);gfx_print(T(L_MAX_DD));
-    gfx_flush();delay(1800);drawFullUI();gfx_flush();return false;
+    gfx_flush();delay(1800);drawFullUI();gfx_flush();if(g_loaded && !g_usb_online)hardAttach();return false;
   }
+  uint8_t*buf=(uint8_t*)malloc(16384);
+  if(!buf){f.close();if(g_loaded && !g_usb_online)hardAttach();return false;}
+  invalidateLocalImage();
   if(g_mode==MODE_GEN){String gon=filenameOnly(adfPath);build_volume(gon.c_str(),fsz);}   // v5.2: keep the real name+ext so FlashFloppy detects the format
   else build_volume(getOutputFilename(),fsz);
-  uint8_t*dst=g_disk+DATA_LBA*512;uint8_t*buf=(uint8_t*)malloc(16384);uint32_t copied=0,remain=fsz;
+  uint8_t*dst=g_disk+DATA_LBA*512;uint32_t copied=0,remain=fsz;
   while(remain&&buf){size_t n=remain>16384?16384:remain;int rd=f.read(buf,n);if(rd<=0)break;memcpy(dst+copied,buf,rd);remain-=rd;copied+=rd;}
-  if(buf)free(buf);f.close();
+  free(buf);f.close();
+  if(copied!=fsz){svToast("IMAGE READ FAILED");return false;}
   // v4.8.0: fresh disk in the RAM disk = fresh save tracking
   g_sv_img_size=(g_mode==MODE_GEN)?0:fsz;svDirtyReset();   // v5.2: GEN has no Amiga save-writeback (0 = no dirty tracking)
   hardAttach();g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_path=loadPath;g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
@@ -3019,14 +3047,14 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
     if(WiFi.status()!=WL_CONNECTED){g_dav_fail="WiFi join failed";Serial.println("[DAV] "+g_dav_fail);WiFi.disconnect();WiFi.mode(WIFI_OFF);return false;}
   }
   davApplyConfig();
-  if(g_loaded&&!g_forceswap)hardDetach();
+  if(!svPrepareChange()){g_dav_fail="Save failed; previous disk retained";return false;}
+  invalidateLocalImage();
   long got=davClient.streamToBuffer(remotePath,g_disk+DATA_LBA*512,MAX_FILE_BYTES,false);
   davClient.closeIdle();                          // the pooled TLS context is ~50KB of internal heap
   if(!keepUp){WiFi.disconnect();delay(100);WiFi.mode(WIFI_OFF);}   // standalone: same leave discipline as espnowSendDiskHome
   if(got<=0||davClient.lastTruncated()){
     g_dav_fail=davClient.lastError();
     Serial.printf("[DAV] fetch failed: %s\n",davClient.lastError().c_str());
-    if(g_loaded)hardAttach();                     // put the previous disk back
     return false;
   }
   // build_volume() would memset the data region we just filled — build the
@@ -3046,13 +3074,13 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
 // WEBUI=ON. Placed here because it calls doLoadWebdav and the disk builders.
 #include "../shared/web_panel.h"
 
-static void doUnload(){
+static bool doUnload(){
+  if(!svPrepareChange())return false;
   // v4.8.0: EJECT is a save point — drain before the disk goes away
   // (v4.8.1: own-disk flush in any mode)
-  if(g_sv_dirty_count)svFlushStandalone();
-  if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
   hardDetach();g_loaded=false;g_loaded_name="";g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;svDirtyReset();
-  if(g_wireless_mode&&g_espnow_started&&espnowIsPaired())espnowSendEject();drawStatusBar();drawListAndCover();gfx_flush();}
+  if(g_wireless_mode&&g_espnow_started&&espnowIsPaired())espnowSendEject();drawStatusBar();drawListAndCover();gfx_flush();return true;
+}
 
 // Expand the zero-RLE embedded ADF straight into the RAM-disk data area. No SD needed.
 static void diagInflate(const uint8_t*src,uint32_t slen,uint8_t*dst){
@@ -3063,6 +3091,8 @@ static void diagInflate(const uint8_t*src,uint32_t slen,uint8_t*dst){
 }
 // Mount the built-in Amiga Test Kit as the emulated disk — works with no SD card inserted.
 static void doLoadDiag(){
+  if(!svPrepareChange())return;
+  invalidateLocalImage();
   g_info_showing=false;
   gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
   gfx_setTextSize(1);gfx_setTextColor(TFT_CYAN,COL_PANEL);gfx_setCursor(6,STATUS_H+16);gfx_print("AMIGA TEST KIT");

@@ -147,7 +147,7 @@ static int32_t onRead(uint32_t lba, uint32_t off, void* buf, uint32_t n) {
 }
 static int32_t onWrite(uint32_t lba, uint32_t off, uint8_t* buf, uint32_t n) {
   GotekDiskGuard guard;
-  if(!n)return 0;
+  if(!n || !g_usb_online)return 0;
 
   uint32_t s = lba*SECTOR_SIZE+off;
   if (s+n > TOTAL_SECTORS*SECTOR_SIZE) return 0;
@@ -170,9 +170,13 @@ static int32_t onWrite(uint32_t lba, uint32_t off, uint8_t* buf, uint32_t n) {
 }
 static void usbEventCb(void*,esp_event_base_t,int32_t,void*) {}
 static void hardDetach() {
+  { GotekDiskGuard guard; g_usb_online=false; }
+
   MSC.mediaPresent(false); delay(100); tud_disconnect(); delay(500); g_usb_online=false;
 }
 static void hardAttach() {
+  { GotekDiskGuard guard; g_usb_online=true; }
+
   char rev[8]; snprintf(rev,sizeof(rev),"%lu",(unsigned long)g_rev_counter++);
   MSC.productRevision(rev); MSC.mediaPresent(true); delay(50); tud_connect(); delay(200);
   g_usb_online=true;
@@ -412,7 +416,10 @@ static inline void wrLE16(uint8_t*p,uint16_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v
 // EJECT_FORCE. Replies: 0x01 = ejected ("nothing loaded" is also success),
 // 0x02 = refused, unsaved writes pending (0x03 only). Old dongles reply 0x00 (unknown).
 static void doEject(WiFiClient& client, bool force){
+  bool wasLoaded=g_disk_loaded;
+  hardDetach();
   if (!force && g_dirty_count > 0) {
+    if(wasLoaded)hardAttach();
     Serial.printf("[TCP] Eject refused — %u dirty sectors pending\n",(unsigned)g_dirty_count);
     client.write((uint8_t)0x02); client.flush();
     return;
@@ -530,7 +537,6 @@ static void handleTCPClient(WiFiClient& client) {
   // Determine filename from size
   const char* outName = (size == 901120) ? "DISK.ADF" : 
                         (size <= MAX_FILE_BYTES) ? "DISK.ADF" : "DISK.DSK";
-  build_volume(outName, size);
 
   // Receive data directly into ramdisk
   uint8_t* dst = g_disk + DATA_LBA * SECTOR_SIZE;
@@ -539,16 +545,24 @@ static void handleTCPClient(WiFiClient& client) {
   uint8_t* buf = (uint8_t*)malloc(BUF);
   if (!buf) { client.write((uint8_t)0x00); return; }
 
+  bool wasLoaded=g_disk_loaded;
+  hardDetach();
+  if(g_dirty_count){
+    if(wasLoaded)hardAttach();
+    free(buf);client.write((uint8_t)0x02);return;
+  }
+  g_disk_loaded=false;g_image_size=0;dirtyReset();
+  build_volume(outName, size);
   t0 = millis();
   while (received < size && millis()-t0 < 30000) {
-    if (!client.connected()) break;
+    if (!client.connected() && !client.available()) break;
     int avail = client.available();
     if (avail <= 0) { delay(1); continue; }
     size_t toRead = min((size_t)avail, min(BUF, (size_t)(size-received)));
     int rd = client.read(buf, toRead);
     if (rd > 0) {
       memcpy(dst + received, buf, rd);
-      received += rd;
+      received += rd; t0=millis();
       oledProgress(received, size);
     }
   }

@@ -1313,7 +1313,11 @@ static bool doLoadSelected(const String& adfPath){
   }
   uint32_t fsz=f.size();
   if(fsz==0){ f.close(); drawListAndCover(); return false; }
-  if(fsz>MAX_FILE_BYTES) fsz=MAX_FILE_BYTES;
+  if(fsz>MAX_FILE_BYTES){f.close();return false;}
+  const size_t BUFSZ=4096;
+  uint8_t* buf=(uint8_t*)malloc(BUFSZ);
+  if(!buf){ f.close(); return false; }
+  hardDetach();g_loaded=false;g_loaded_name="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
   build_volume_with_file(getOutputFilename(),fsz);
 
   int barX=4,barY=STATUS_H+40,barW=COVER_W-8,barH=10;
@@ -1321,9 +1325,6 @@ static bool doLoadSelected(const String& adfPath){
 
   uint32_t copied=0;
   uint8_t* dst=g_disk+DATA_LBA*SECTOR_SIZE;
-  const size_t BUFSZ=4096;
-  uint8_t* buf=(uint8_t*)malloc(BUFSZ);
-  if(!buf){ f.close(); return false; }
   uint32_t remain=fsz;
   while(remain){
     size_t n=remain>BUFSZ?BUFSZ:remain;
@@ -1333,7 +1334,7 @@ static bool doLoadSelected(const String& adfPath){
     tft.fillRoundRect(barX+2,barY+2,fill,barH-4,2,COL_GREEN);
   }
   free(buf);
-  if(fsz>copied) memset(dst+copied,0,fsz-copied);
+  if(copied!=fsz){f.close();drawListAndCover();return false;}
   f.close();
 
   tft.setTextColor(COL_GREEN,COL_PANEL); tft.setTextSize(1);
