@@ -88,3 +88,5 @@ bool   espnowSendEject(bool force=false);
 
 void espnowSetHome(bool enabled,const String& ssid,const String& pass,const String& ip);
 bool espnowPollStatus();
+
+void espnowStop();

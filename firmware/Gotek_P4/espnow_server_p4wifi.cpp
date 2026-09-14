@@ -145,6 +145,7 @@ static void blockingScanHarvest() {
 // ---------- Multi-dongle scan API ----------
 // UI: espnowScanBegin(), then loop { espnowBroadcastHello(); espnowScanCount(); } ~4s, then End().
 void espnowScanBegin()      { _scanned_count = 0; blockingScanHarvest(); }  // first pass immediately
+void espnowStop() {}
 void espnowBroadcastHello() { blockingScanHarvest(); }                      // each poll = one rescan
 void espnowScanEnd()        { WiFi.scanDelete(); }
 int  espnowScanCount()      { return _scanned_count; }

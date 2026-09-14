@@ -2559,6 +2559,9 @@ static bool svPrepareChange(){
     if(wasOnline)hardAttach();
     return false;
   }
+  if(g_wireless_mode && g_saves_mode==0 && espnowIsPaired() && !espnowSendEject(true)){
+    if(wasOnline)hardAttach();return false;
+  }
   return true;
 }
 static void invalidateLocalImage(){

@@ -1189,6 +1189,11 @@ static bool doUnload();
 
 static bool g_espnow_started=false;
 static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=true;}}
+static void configureTransport(){
+  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+  if(g_link_home && g_espnow_started){espnowStop();g_espnow_started=false;}
+  if(g_wireless_mode && !g_link_home && !g_espnow_started){WiFi.disconnect();ensureEspNow();}
+}
 
 // ============================================================================
 // LANGUAGE / LOCALISATION (v5.5.0) — LANG= in CONFIG.TXT (SD-editable, persisted).
@@ -3071,7 +3076,7 @@ static bool svPersistWireless(uint32_t load_id,uint32_t img_size,const uint8_t*m
 }
 // Wireless fetch driver: overlay + dance + repaint. Called from loop/interlocks.
 static bool svFetchWireless(){
-  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+  configureTransport();
 
   if(g_saves_mode==0){g_espnow_dirty=false;return true;}                   // SAVES=OFF: ignore beacons
   if(!g_wireless_mode||(!g_link_home && (!g_espnow_started||!espnowIsPaired())))return false;
@@ -3087,7 +3092,7 @@ static bool svFetchWireless(){
 
 // Freeze USB before the final save so no write can race the change.
 static bool svPrepareChange(){
-  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+  configureTransport();
   bool wasOnline=g_usb_online;
   if(wasOnline)hardDetach();
   if(!svFlushStandalone()){
@@ -3109,7 +3114,7 @@ static void invalidateLocalImage(){
   svDirtyReset();
 }
 static bool doLoadSelected(const String&adfPath){
-  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+  configureTransport();
   if(g_wireless_mode && g_link_home && isHDImage(adfPath))espnowPollStatus();
 
   // v4.9 / v5.x: HD (1.76MB) over wireless is now gated by the dongle's advertised
@@ -3209,6 +3214,7 @@ static bool doLoadSelected(const String&adfPath){
 // radio-coexistence question deliberately parked for a later step.
 static String g_dav_fail="";   // why the last doLoadWebdav gave up, for on-screen reporting
 static bool doLoadWebdav(const String&remotePath,const String&showName){
+  configureTransport();
   if(!g_dav_on||g_dav_host.length()==0){g_dav_fail="not configured (DAV=ON + DAV_HOST=)";Serial.println("[DAV] "+g_dav_fail);return false;}
   if(g_espnow_started){g_dav_fail="wireless dongle link active";Serial.println("[DAV] "+g_dav_fail);return false;}
   if(g_home_ssid.length()==0){g_dav_fail="HOME_SSID not set";Serial.println("[DAV] "+g_dav_fail);return false;}
@@ -4941,7 +4947,7 @@ void loop(){
     static uint32_t lastStatusPoll=0;
     if(g_wireless_mode && g_link_home && g_sv_wl_path.length() &&
        now-lastStatusPoll>=10000 && now-g_last_touch_ms>1200){
-  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+      configureTransport();
       espnowPollStatus();lastStatusPoll=millis();now=millis();
     }
 

@@ -1082,6 +1082,11 @@ static bool doUnload();
 static void cycleTheme(){applyTheme((g_theme_idx+1)%NUM_THEMES);saveConfigKey("THEME",String(g_theme_idx));drawFullUI();gfx_flush();}
 static bool g_espnow_started=false;
 static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=true;}}
+static void configureTransport(){
+  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+  if(g_link_home && g_espnow_started){espnowStop();g_espnow_started=false;}
+  if(g_wireless_mode && !g_link_home && !g_espnow_started){WiFi.disconnect();ensureEspNow();}
+}
 
 // ============================================================================
 // LANGUAGE / LOCALISATION (v5.5.0) — LANG= in CONFIG.TXT (SD-editable, persisted).
@@ -2910,7 +2915,7 @@ static bool svPersistWireless(uint32_t load_id,uint32_t img_size,const uint8_t*m
 }
 // Wireless fetch driver: overlay + dance + repaint. Called from loop/interlocks.
 static bool svFetchWireless(){
-  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+  configureTransport();
 
   if(g_saves_mode==0){g_espnow_dirty=false;return true;}                   // SAVES=OFF: ignore beacons
   if(!g_wireless_mode||(!g_link_home && (!g_espnow_started||!espnowIsPaired())))return false;
@@ -2926,7 +2931,7 @@ static bool svFetchWireless(){
 
 // Freeze USB before the final save so no write can race the change.
 static bool svPrepareChange(){
-  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+  configureTransport();
   bool wasOnline=g_usb_online;
   if(wasOnline)hardDetach();
   if(!svFlushStandalone()){
@@ -2948,7 +2953,7 @@ static void invalidateLocalImage(){
   svDirtyReset();
 }
 static bool doLoadSelected(const String&adfPath){
-  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+  configureTransport();
   if(g_wireless_mode && g_link_home && isHDImage(adfPath))espnowPollStatus();
 
   // v4.9 / v5.x: HD (1.76MB) over wireless is now gated by the dongle's advertised
@@ -3042,6 +3047,7 @@ static bool doLoadSelected(const String&adfPath){
 // radio-coexistence question deliberately parked for a later step.
 static String g_dav_fail="";   // why the last doLoadWebdav gave up, for on-screen reporting
 static bool doLoadWebdav(const String&remotePath,const String&showName){
+  configureTransport();
   if(!g_dav_on||g_dav_host.length()==0){g_dav_fail="not configured (DAV=ON + DAV_HOST=)";Serial.println("[DAV] "+g_dav_fail);return false;}
   if(g_espnow_started){g_dav_fail="wireless dongle link active";Serial.println("[DAV] "+g_dav_fail);return false;}
   if(g_home_ssid.length()==0){g_dav_fail="HOME_SSID not set";Serial.println("[DAV] "+g_dav_fail);return false;}
@@ -4171,7 +4177,7 @@ void setup(){
     if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
     scanScreensaver();
   } else {gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,200);gfx_print(T(L_SD_MOUNT_FAIL));gfx_flush();delay(2000);relayout();}   // no card: still init layout so INFO/LOAD DIAG work
-  if(g_wireless_mode&&!sdAccessReq){espnowBegin();g_espnow_started=true;}   // v5.1: don't arm the radio when booting into SD access — no stray FATFS writes while the PC holds the card
+  if(g_wireless_mode&&!g_link_home&&!sdAccessReq){espnowBegin();g_espnow_started=true;}   // v5.1: don't arm the radio when booting into SD access — no stray FATFS writes while the PC holds the card
   if(g_cracktro>=0)drawCracktro(g_cracktro);   // CRACKTRO=OFF/NONE (-1) skips the boot demo entirely
   USB.onEvent(usbEventCB);
   if(sdAccessReq){runSDAccessBoot(sdok);}   // v5.1: SD-access boot mode — never returns (reboots to normal)
@@ -4386,7 +4392,7 @@ static void infoAction(uint8_t act){
     case IA_COMPACT: g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_DONGLE: doPairNow();drawInfoFull();break;
     case IA_HIVEMIND: g_hivemind=!g_hivemind;saveConfigKey("HIVEMIND",g_hivemind?"ON":"OFF");drawInfoFull();break;
-    case IA_LINK: g_link_home=!g_link_home;saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW");drawInfoFull();break;   // 5.8.6: ESP-NOW <-> HOME WIFI transport
+    case IA_LINK: g_link_home=!g_link_home;saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW");configureTransport();drawInfoFull();break;   // 5.8.6: ESP-NOW <-> HOME WIFI transport
     case IA_RESCAN: doRescan();break;
     case IA_RESET: {gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0xE8C4,COL_BG);const char*m=T(L_RESETTING);gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();delay(700);ESP.restart();}break;
     case IA_DIAG: if(g_loaded&&g_loaded_name=="AMIGA TEST KIT"){g_info_showing=false;doUnload();drawFullUI();gfx_flush();}else doLoadDiag();break;
@@ -4509,7 +4515,7 @@ void loop(){
     static uint32_t lastStatusPoll=0;
     if(g_wireless_mode && g_link_home && g_sv_wl_path.length() &&
        now-lastStatusPoll>=10000 && now-g_last_touch_ms>1200){
-  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+      configureTransport();
       espnowPollStatus();lastStatusPoll=millis();now=millis();
     }
 

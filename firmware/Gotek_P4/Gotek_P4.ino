@@ -1149,7 +1149,11 @@ static bool doUnload();
 static void cycleTheme(){applyTheme((g_theme_idx+1)%NUM_THEMES);saveConfigKey("THEME",String(g_theme_idx));drawFullUI();gfx_flush();}
 static bool g_espnow_started=false;
 static bool g_c6_ready=false;   // 5.9.12: set true only when the C6 is confirmed up-to-date and STA is up; gates arming the radio
-static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=true;}}
+static void ensureEspNow(){if(g_c6_ready&&!g_espnow_started){espnowBegin();g_espnow_started=true;}}
+static void configureTransport(){
+  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+  ensureEspNow();   // The P4 uses the same initialized C6 radio for both links.
+}
 
 // ============================================================================
 // LANGUAGE / LOCALISATION (v5.5.0) — LANG= in CONFIG.TXT (SD-editable, persisted).
@@ -2948,7 +2952,7 @@ static bool svPersistWireless(uint32_t load_id,uint32_t img_size,const uint8_t*m
 }
 // Wireless fetch driver: overlay + dance + repaint. Called from loop/interlocks.
 static bool svFetchWireless(){
-  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+  configureTransport();
 
   if(g_saves_mode==0){g_espnow_dirty=false;return true;}                   // SAVES=OFF: ignore beacons
   if(!g_wireless_mode||(!g_link_home && (!g_espnow_started||!espnowIsPaired())))return false;
@@ -2964,7 +2968,7 @@ static bool svFetchWireless(){
 
 // Freeze USB before the final save so no write can race the change.
 static bool svPrepareChange(){
-  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+  configureTransport();
   bool wasOnline=g_usb_online;
   if(wasOnline)hardDetach();
   if(!svFlushStandalone()){
@@ -2986,7 +2990,7 @@ static void invalidateLocalImage(){
   svDirtyReset();
 }
 static bool doLoadSelected(const String&adfPath){
-  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+  configureTransport();
   if(g_wireless_mode && isHDImage(adfPath))espnowPollStatus();
 
   // v4.9 / v5.x: HD (1.76MB) over wireless is now gated by the dongle's advertised
@@ -4444,7 +4448,7 @@ static void drawInfoFull(){
 }
 static void infoAction(uint8_t act){
   switch(act){
-    case IA_MODE: g_wireless_mode=!g_wireless_mode; saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE"); drawInfoFull(); break;   // 5.9.12: radio is armed at boot in both modes; MODE is a pure UI gate now - no reboot, never touches the radio
+    case IA_MODE: if(!doUnload())break; g_wireless_mode=!g_wireless_mode; saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE"); drawInfoFull(); break;   // 5.9.12: radio is armed at boot in both modes; MODE is a pure UI gate now - no reboot, never touches the radio
     case IA_FONT: applyFont((g_font+1)%3);saveConfigKey("FONT",fontKey(g_font));drawInfoFull();break;
     case IA_THEME: applyTheme((g_theme_idx+1)%NUM_THEMES);saveConfigKey("THEME",String(g_theme_idx));drawInfoFull();break;   // Vince test: theme cycling lives in CONFIG now
     case IA_LANG: g_lang=(g_lang+1)%LANG_N;saveConfigKey("LANG",LANG_NAMES[g_lang]);drawInfoFull();break;
@@ -4452,7 +4456,7 @@ static void infoAction(uint8_t act){
     case IA_COMPACT: g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_DONGLE: doPairNow();drawInfoFull();break;
     case IA_HIVEMIND: g_hivemind=!g_hivemind;saveConfigKey("HIVEMIND",g_hivemind?"ON":"OFF");drawInfoFull();break;
-    case IA_LINK: g_link_home=!g_link_home;saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW");drawInfoFull();break;   // 5.8.6: ESP-NOW <-> HOME WIFI transport
+    case IA_LINK: g_link_home=!g_link_home;saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW");configureTransport();drawInfoFull();break;   // 5.8.6: ESP-NOW <-> HOME WIFI transport
     case IA_RESCAN: doRescan();break;
     case IA_RESET: {gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0xE8C4,COL_BG);const char*m=T(L_RESETTING);gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();delay(700);ESP.restart();}break;
     case IA_DIAG: if(g_loaded&&g_loaded_name=="AMIGA TEST KIT"){g_info_showing=false;doUnload();drawFullUI();gfx_flush();}else doLoadDiag();break;
@@ -4574,7 +4578,7 @@ void loop(){
     static uint32_t lastStatusPoll=0;
     if(g_wireless_mode && true && g_sv_wl_path.length() &&
        now-lastStatusPoll>=10000 && now-g_last_touch_ms>1200){
-  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+      configureTransport();
       espnowPollStatus();lastStatusPoll=millis();now=millis();
     }
 

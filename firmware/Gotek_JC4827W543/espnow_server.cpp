@@ -224,6 +224,11 @@ void espnowBegin() {
   }
 }
 
+void espnowStop(){
+  ESP_NOW.end();
+  if(_bcastPeer){delete _bcastPeer;_bcastPeer=nullptr;}
+  if(_xiaoPeer){delete _xiaoPeer;_xiaoPeer=nullptr;}
+}
 void espnowBroadcastHello() {
   if (!_bcastPeer) return;
   PktHello pkt = {};
