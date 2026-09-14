@@ -4,6 +4,8 @@
 // N16R8: Flash 16MB QIO 80MHz | PSRAM OPI (Octal 8MB) | Partition: sketch-local partitions.csv = 6.9MB APP x2 (dual-OTA for SD-update) + 2.8MB SPIFFS — maximises the 16MB | 240MHz
 
 #include <Arduino.h>
+#include "../shared/disk_lock.h"
+#include "../shared/dirty_snapshot.h"
 #include "USB.h"
 #include "USBMSC.h"
 // Merge step 1: the shared WebDAV client (see firmware/shared/README.md).
@@ -461,10 +463,13 @@ static String   g_sv_wl_path="";                         // SD path of the disk 
 static uint32_t g_sv_wl_loadid=0;                        // dongle load_id it acked with
 static inline bool svGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void svSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
-static void svDirtyReset(){memset(g_sv_dirty,0,sizeof(g_sv_dirty));g_sv_dirty_count=0;g_sv_last_write=0;}
+static void svDirtyReset(){GotekDiskGuard guard;memset(g_sv_dirty,0,sizeof(g_sv_dirty));g_sv_dirty_count=0;g_sv_last_write=0;}
 static uint32_t g_sv_img_size=0;                         // bytes of the mounted image (standalone tracking)
 
-static int32_t onWrite(uint32_t lba,uint32_t off,uint8_t*buf,uint32_t n){uint32_t s=lba*512+off;if(s+n>TOTAL_SECTORS*512)return 0;memcpy(g_disk+s,buf,n);
+static int32_t onWrite(uint32_t lba,uint32_t off,uint8_t*buf,uint32_t n){
+  GotekDiskGuard guard;
+  if(!n)return 0;
+uint32_t s=lba*512+off;if(s+n>TOTAL_SECTORS*512)return 0;memcpy(g_disk+s,buf,n);
   // v4.8.0: tick the dirty scorecard for every image sector this write touches
   // (assignment form, not ++ — C++20 deprecates ++ on volatile)
   g_sv_total_writes=g_sv_total_writes+1;
@@ -3016,6 +3021,7 @@ static bool svPatchCore(const String&master,const String&sav,const uint8_t*map,u
   return GotekSave::patch(SD_MMC, master, sav, map, mapBits,
     [&](uint32_t sector, uint32_t k, uint8_t* dst) {
       const uint8_t* src = packed ? packed + (size_t)k * 512 : ram + (size_t)(DATA_LBA + sector) * 512;
+      GotekDiskGuard guard;
       memcpy(dst, src, 512);
       return true;
     });
@@ -3033,8 +3039,12 @@ static void svFlushStandalone(){
   String master=g_loaded_path;
   String sav=(g_saves_mode==2)?master:savPathFor(master);
   uint32_t imgSecs=(g_sv_img_size+511)/512;if(imgSecs>SV_IMG_MAX_SECTORS)imgSecs=SV_IMG_MAX_SECTORS;
-  if(svPatchCore(master,sav,g_sv_dirty,imgSecs,nullptr,g_disk)){
-    svDirtyReset();g_sv_fail=0;svToast("SAVED: "+g_loaded_name);
+  uint8_t snapshot[sizeof(g_sv_dirty)];
+  { GotekDiskGuard guard; GotekDirty::begin(g_sv_dirty,snapshot,sizeof(snapshot),g_sv_dirty_count); }
+  bool saved=svPatchCore(master,sav,snapshot,imgSecs,nullptr,g_disk);
+  { GotekDiskGuard guard; GotekDirty::finish(g_sv_dirty,snapshot,sizeof(snapshot),g_sv_dirty_count,saved); }
+  if(saved){
+    g_sv_fail=0;svToast("SAVED: "+g_loaded_name);
   }else{
     g_sv_last_write=millis();                       // back off one settle window, then retry
     if(++g_sv_fail>=5){svDirtyReset();g_sv_fail=0;svToast("SAVE FAILED - GAVE UP");}

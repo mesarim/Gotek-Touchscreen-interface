@@ -33,6 +33,8 @@
 // ============================================================================
 
 #include <Arduino.h>
+#include "../shared/disk_lock.h"
+#include "../shared/dirty_snapshot.h"
 #include "USB.h"
 #include "USBMSC.h"
 #include "ESP32_NOW.h"
@@ -137,7 +139,7 @@ static uint32_t g_next_status_ms = 0;
 static inline bool dGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void dSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
 static inline void dClr(uint8_t*m,uint32_t i){m[i>>3]&=(uint8_t)~(1u<<(i&7));}
-static void dirtyReset(){memset(g_dirty,0,sizeof(g_dirty));g_dirty_count=0;g_last_write_ms=0;g_next_beacon_ms=0;}
+static void dirtyReset(){GotekDiskGuard guard;memset(g_dirty,0,sizeof(g_dirty));g_dirty_count=0;g_last_write_ms=0;g_next_beacon_ms=0;}
 static uint32_t crc32sw(uint32_t crc,const uint8_t*p,size_t n){
   crc=~crc;
   while(n--){crc^=*p++;for(int k=0;k<8;k++)crc=(crc>>1)^(0xEDB88320UL&(uint32_t)(-(int32_t)(crc&1)));}
@@ -167,6 +169,9 @@ static int32_t onRead(uint32_t lba, uint32_t off, void* buf, uint32_t n) {
   memcpy(buf, g_disk+s, n); return (int32_t)n;
 }
 static int32_t onWrite(uint32_t lba, uint32_t off, uint8_t* buf, uint32_t n) {
+  GotekDiskGuard guard;
+  if(!n)return 0;
+
   uint32_t s = lba*SECTOR_SIZE+off;
   if (s+n > TOTAL_SECTORS*SECTOR_SIZE) return 0;
   memcpy(g_disk+s, buf, n);
@@ -470,20 +475,31 @@ static void doGetStatus(WiFiClient& client){
   client.write(r,21); client.flush();
 }
 static void doGetSave(WiFiClient& client){
-  uint32_t imgSecs=(g_image_size+SECTOR_SIZE-1)/SECTOR_SIZE; if(imgSecs>IMG_MAX_SECTORS)imgSecs=IMG_MAX_SECTORS;
+  uint32_t imgSecs=(g_image_size+SECTOR_SIZE-1)/SECTOR_SIZE;
+  if(imgSecs>IMG_MAX_SECTORS)imgSecs=IMG_MAX_SECTORS;
   uint16_t mapLen=(uint16_t)((imgSecs+7)/8);
-  memcpy(g_snap,g_dirty,mapLen);
-  uint8_t hdr[14]; hdr[0]='S';hdr[1]='V';hdr[2]='1';hdr[3]=0;
+  { GotekDiskGuard guard; GotekDirty::begin(g_dirty,g_snap,mapLen,g_dirty_count); }
+  uint8_t hdr[14]={'S','V','1',0};
   wrLE32(hdr+4,g_load_id); wrLE32(hdr+8,g_image_size); wrLE16(hdr+12,mapLen);
-  client.write(hdr,14);
+  bool sent=client.write(hdr,sizeof(hdr))==sizeof(hdr);
   uint32_t crc=crc32sw(0,g_snap,mapLen);
-  client.write(g_snap,mapLen);
-  uint32_t sent=0;
-  for(uint32_t i=0;i<imgSecs;i++){ if(!dGet(g_snap,i))continue; uint8_t* sec=g_disk+(DATA_LBA+i)*SECTOR_SIZE; client.write(sec,SECTOR_SIZE); crc=crc32sw(crc,sec,SECTOR_SIZE); sent++; oledProgress(sent,g_dirty_count); }
-  uint8_t cb[4]; wrLE32(cb,crc); client.write(cb,4); client.flush();
-  uint32_t t0=millis(); while(!client.available()&&millis()-t0<10000)delay(5);
-  bool ok=(client.available()&&client.read()==0x01);
-  if(ok){ for(uint32_t i=0;i<imgSecs;i++) if(dGet(g_snap,i)&&dGet(g_dirty,i)){dClr(g_dirty,i);if(g_dirty_count)g_dirty_count=g_dirty_count-1;} g_next_beacon_ms=0; if(g_dirty_count==0) setLeds(false,g_disk_loaded); }
+  sent=sent && client.write(g_snap,mapLen)==mapLen;
+  uint8_t sector[SECTOR_SIZE];
+  for(uint32_t i=0;sent && i<imgSecs;i++){
+    if(!dGet(g_snap,i))continue;
+    { GotekDiskGuard guard; memcpy(sector,g_disk+(DATA_LBA+i)*SECTOR_SIZE,SECTOR_SIZE); }
+    // Send and checksum the same stable bytes; USB may now rewrite RAM.
+    sent=client.write(sector,SECTOR_SIZE)==SECTOR_SIZE;
+    crc=crc32sw(crc,sector,SECTOR_SIZE);
+  }
+  uint8_t cb[4]; wrLE32(cb,crc);
+  sent=sent && client.write(cb,sizeof(cb))==sizeof(cb); client.flush();
+  uint32_t t0=millis();
+  while(sent && client.connected() && !client.available() && millis()-t0<10000)delay(5);
+  bool ok=sent && client.available() && client.read()==0x01;
+  { GotekDiskGuard guard; GotekDirty::finish(g_dirty,g_snap,mapLen,g_dirty_count,ok); }
+  g_next_beacon_ms=0;
+  if(g_dirty_count==0)setLeds(false,g_disk_loaded);
 }
 static void sendDirtyBeacon(){
   PktDirty pkt={}; pkt.type=PKT_XIAO_DIRTY; pkt.load_id=g_load_id; pkt.dirty_count=g_dirty_count;
