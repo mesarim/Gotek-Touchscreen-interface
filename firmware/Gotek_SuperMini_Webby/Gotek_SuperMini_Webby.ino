@@ -44,8 +44,9 @@
 #include "esp_heap_caps.h"   // HD test: internal-heap readout
 #include <LittleFS.h>
 #include "../shared/owner_keys.h"
-#include <Update.h>   // OMEGAWARE: web OTA
-#include <WebServer.h>     // WEBBY: built-in (ESP32 core)  no external lib
+#include "../shared/ota_upload.h"
+#include "../shared/fleet_mdns.h"
+#include <WebServer.h>     // WEBBY: built-in (ESP32 core) — no external lib
 #include <ESPmDNS.h>       // WEBBY: gotekomega.local
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
@@ -53,7 +54,7 @@
 
 #define FW_VERSION     "Webby-1.6.3"
 #define ESPNOW_CHANNEL 6
-//  Board profile 
+//  Board profile
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
 // USB broken out to a usable connector (it IS the USB drive), and >=4MB flash.
 // The SuperMini is just the cheapest board that packages those three. To port to
@@ -113,7 +114,7 @@
 #define CMD_EJECT       0x03
 #define CMD_EJECT_FORCE 0x04
 #define CMD_SET_NAME    0x06   // #24: set the pretty display name for the NEXT flung disk (g_loaded_name only; FAT12 stays DISK.ADF)
-//  FLEET: UDP discovery beacon (shared port: dongle, app, JC, browser-master) 
+//  FLEET: UDP discovery beacon (shared port: dongle, app, JC, browser-master)
 #define GTI_DISCO_PORT   51703
 #define ALIVE_BEACON_MS  12000   // "I'm alive" cadence, home-WiFi only
 
@@ -544,7 +545,7 @@ static void wipeWifiCreds() {
   g_ssid = ""; g_pass = ""; g_modeStr = "ESPNOW";
 }
 
-//  base TCP save/eject/status handlers (unchanged) 
+//  base TCP save/eject/status handlers (unchanged)
 static WiFiServer _tcpServer(TCP_PORT);
 static WiFiUDP    _disco;                // FLEET: discovery beacon socket
 static uint32_t   g_next_alive_ms = 0;   // FLEET: next "I'm alive" broadcast
@@ -767,17 +768,23 @@ static void handleEjectWeb(){
 }
 static void handleScan(){
   // A scan needs the STA interface. In ESP-NOW/AP-only mode there is no
-  // STA, so scanNetworks returns -2 and the portal shows "scan failed" 
+  // STA, so scanNetworks returns -2 and the portal shows "scan failed"
   // exactly what a user hits on a fresh dongle. Add STA for the scan.
   wifi_mode_t pm = WiFi.getMode();
   if (!(pm & WIFI_MODE_STA)) WiFi.mode((wifi_mode_t)(pm | WIFI_MODE_STA));
   int n = WiFi.scanNetworks(false, true, false, 200);
+  if (n < 0) {
+    WiFi.scanDelete();
+    server.send(503, "application/json", "{\"error\":\"Wi-Fi scan could not start; please retry\"}");
+    return;
+  }
   String jj = "{\"networks\":[";
   for (int i = 0; i < n && i < 30; i++) {
     if (i) jj += ",";
     jj += "{\"ssid\":\""; jj += jsonEsc(WiFi.SSID(i));
     jj += "\",\"rssi\":"; jj += String(WiFi.RSSI(i));
     jj += ",\"enc\":"; jj += (WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "false" : "true");
+    jj += ",\"encrypted\":"; jj += (WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "false" : "true");
     jj += "}";
     yield();
   }
@@ -918,7 +925,7 @@ drop.addEventListener('drop',function(ev){if(ev.dataTransfer.files[0])picked(ev.
 setInterval(poll,1500);poll();
 </script></body></html>)HTML";
 
-//  PANEL: Dimmy shared-UI adapter 
+//  PANEL: Dimmy shared-UI adapter
 // Serves webui.h (his single-page app) and answers the /api/* calls its
 // card-less "has_sd:false" dongle surface makes, mapped onto our Webby state.
 // This is a thin shim  NOT web_panel.h  so the JC-only globals stay out.
@@ -937,22 +944,32 @@ static void loadTheme(){
 //  Web OTA (added by OMEGAWARE): flash a new firmware over WiFi into the
 // inactive OTA slot. Uses the WebServer upload stream (Webby is not our
 // client-parser firmware). First byte must be 0xE9 (an ESP32 image).
-static bool g_ota_ok=false, g_ota_run=false, g_ota_first=false;
+static GotekOtaUpload g_ota;
 static void onOtaUpload(){
   HTTPUpload& up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
-    g_ota_ok=false; g_ota_first=true;
-    g_ota_run = Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
-  } else if (up.status == UPLOAD_FILE_WRITE && g_ota_run) {
-    if (g_ota_first) { g_ota_first=false; if (up.currentSize>0 && up.buf[0]!=0xE9) { Update.abort(); g_ota_run=false; return; } }
-    if (Update.write(up.buf, up.currentSize) != up.currentSize) { g_ota_run=false; }
-  } else if (up.status == UPLOAD_FILE_END && g_ota_run) {
-    g_ota_ok = Update.end(true);
+    if (g_disk_loaded || g_dirty_count) {
+      g_ota.reject(409, "Save and eject the loaded disk before updating firmware");
+      return;
+    }
+    if (up.filename.endsWith(".merged.bin")) {
+      g_ota.reject(400, "Select the application .ino.bin file; merged images are for USB");
+      return;
+    }
+    g_ota.start();
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    g_ota.write(up.buf, up.currentSize);
+  } else if (up.status == UPLOAD_FILE_END) {
+    g_ota.end(up.totalSize);
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    g_ota.abort();
   }
 }
 static void onOtaDone(){
-  server.send(200, "application/json", g_ota_ok ? "{\"status\":\"ok\"}" : "{\"error\":\"firmware update failed - not an ESP32 image?\"}");
-  if (g_ota_ok) { delay(600); ESP.restart(); }
+  int code = g_ota.consume();
+  server.send(code, "application/json", code == 200 ? String("{\"status\":\"ok\"}")
+    : String("{\"error\":\"") + jsonEsc(g_ota.error()) + "\"}");
+  if (code == 200) { delay(600); ESP.restart(); }
 }
 
 static void apiSystemInfo(){
@@ -1003,11 +1020,22 @@ static void apiGamesUploadDone(){
   server.send(200,"application/json", j);
 }
 static void apiWifiStatus(){
-  bool sta = (WiFi.status()==WL_CONNECTED);
-  String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
-  String j = "{\"sta\":"; j += (sta?"true":"false");
-  j += ",\"ip\":\""; j += ip; j += "\",\"sta_ssid\":\""; j += jsonEsc(g_ssid); j += "\"}";
-  server.send(200,"application/json", j);
+  bool sta = (WiFi.status() == WL_CONNECTED);
+  bool ap = (WiFi.getMode() & WIFI_MODE_AP) != 0;
+  String staIp = sta ? WiFi.localIP().toString() : String("");
+  String apIp = ap ? WiFi.softAPIP().toString() : String("");
+  String ssid = sta ? WiFi.SSID() : g_ssid;
+  // Keep the original fields for older clients, and supply the dashboard API.
+  String j = "{\"sta\":"; j += (sta ? "true" : "false");
+  j += ",\"ip\":\""; j += (sta ? staIp : apIp);
+  j += "\",\"sta_connected\":"; j += (sta ? "true" : "false");
+  j += ",\"sta_ip\":\""; j += staIp;
+  j += "\",\"sta_ssid\":\""; j += jsonEsc(ssid);
+  j += "\",\"ap_active\":"; j += (ap ? "true" : "false");
+  j += ",\"ap_ip\":\""; j += apIp;
+  j += "\",\"ap_clients\":"; j += String((unsigned)WiFi.softAPgetStationNum());
+  j += "}";
+  server.send(200, "application/json", j);
 }
 static void apiConfig(){
   String j = "{";
@@ -1049,13 +1077,13 @@ static void handleWebUI(){
 
 static void handleRoot(){ server.send_P(200, "text/html", PAGE_HTML); }
 
-//  FLEET: per-device identity from the STA MAC 
+//  FLEET: per-device identity from the STA MAC
 static String discoId(){ uint8_t m[6]; WiFi.macAddress(m);
   char b[13]; snprintf(b,sizeof(b),"%02X%02X%02X%02X%02X%02X",m[0],m[1],m[2],m[3],m[4],m[5]); return String(b); }
 // #name: sanitizeName + discoName are defined up top (before statusJson) so
 // there is no forward-reference  that avoided arduino's prototype generator
 // running and mis-emitting prototypes for the raw-string portal JS.
-//  FLEET: "I'm alive" discovery beacon  home-WiFi (STA) only, every 12 s 
+//  FLEET: "I'm alive" discovery beacon  home-WiFi (STA) only, every 12 s
 // JSON per the Fleet Discovery design; consumed by the app (direct listen) and
 // the browser-master (/api/fleet). NOT sent in AP/ESP-NOW mode (no LAN to serve).
 static void sendAliveBeacon(){
@@ -1078,9 +1106,10 @@ static void sendAliveBeacon(){
   _disco.beginPacket(IPAddress(255,255,255,255), GTI_DISCO_PORT);  _disco.write((const uint8_t*)j.c_str(), j.length()); _disco.endPacket();
 }
 
-//  FLEET: peer roster (from beacons) + lowest-MAC master election 
+//  FLEET: peer roster (from beacons) + lowest-MAC master election
 struct FleetPeer { String id, name, ip, fw; bool hd; bool loaded; bool isPanel; uint32_t seen; };   // #rule: isPanel = a screen; a screen always leads, so dongles defer
 static FleetPeer g_peers[16]; static int g_peer_n = 0;
+static GotekFleetAlias g_fleet_alias;
 static bool      g_is_master = false;
 static uint32_t  g_next_elect_ms = 0;
 #define FLEET_STALE_MS 40000   // drop a peer unheard for >40 s (~3 missed beacons)
@@ -1116,11 +1145,11 @@ static void doElection(){   // a screen always leads; otherwise the lowest MAC w
   String me=discoId(); bool master=true;
   for(int i=0;i<g_peer_n;i++) if(g_peers[i].isPanel){ master=false; break; }   // #rule: a panel (screen) is present -> it is the leader, dongles defer (stay gotekomega-<mac>.local)
   if(master) for(int i=0;i<g_peer_n;i++) if(g_peers[i].id < me){ master=false; break; }
+  // Keep the per-device hostname while adding the fleet leader alias.
+  if (discoName() != MDNS_NAME &&
+      !g_fleet_alias.setLeader(master, MDNS_NAME, (uint32_t)WiFi.localIP())) return;
   if(master!=g_is_master){
     g_is_master=master;
-    MDNS.end();
-    if(master) MDNS.begin(MDNS_NAME); else MDNS.begin(discoName().c_str());
-    MDNS.addService("http","tcp",80);
     Serial.printf("[FLEET] now %s -> %s.local\n", master?"MASTER":"slave", master?MDNS_NAME:discoName().c_str());
   }
 }
@@ -1157,6 +1186,7 @@ static void startWebServer(){
   server.on("/api/games/upload", HTTP_POST, apiGamesUploadDone, handleUpload);
   server.on("/api/games/list",   HTTP_GET,  [](){ server.send(200,"application/json","{\"games\":[]}"); });
   server.on("/api/wifi/status",  HTTP_GET,  apiWifiStatus);
+  server.on("/api/wifi/scan",    HTTP_GET,  handleScan);
   server.on("/api/config",       HTTP_GET,  apiConfig);
   server.on("/api/config",       HTTP_POST, apiConfigSave);
   server.on("/api/system/reboot",HTTP_POST, apiReboot);
@@ -1180,7 +1210,7 @@ static void startWebServer(){
   server.begin();
 }
 
-//  base BOOT-button owner-lock gesture (unchanged) 
+//  base BOOT-button owner-lock gesture (unchanged)
 #define BOOT_PAIR_MS   5000
 #define BOOT_WIPE_MS   15000
 #define BOOT_REVERT_MS   3000    // WEBBY: in Wi-Fi mode, hold BOOT >=3s to revert to ESP-NOW (keeps creds)
@@ -1329,7 +1359,7 @@ void setup() {
     if (WiFi.status() == WL_CONNECTED) {
       g_webmode = 1;
       g_is_master = false;
-      if (MDNS.begin(discoName().c_str())) MDNS.addService("http","tcp",80);   // start as self; election may promote to gotekomega.local
+      if (MDNS.begin(discoName().c_str())) MDNS.addService("http","tcp",80);   // permanent device name; election adds gotekomega.local as an alias
       _tcpServer.begin();        // app can reach us over the LAN too
       _disco.begin(GTI_DISCO_PORT);   // FLEET: open discovery socket
       g_next_alive_ms = 0;            // FLEET: beacon on the next loop tick
