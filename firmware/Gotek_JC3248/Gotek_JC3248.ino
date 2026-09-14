@@ -1435,6 +1435,7 @@ static void generateDefaultConfig(){
   f.println("# --- Advanced (optional; not active - add the line yourself to switch on) ---");
   f.println("# WEBUI=ON  : serve the built-in web page over home WiFi (needs LINK=HOMEWIFI + HOME_SSID/PASS). Off by default.");
   f.println("# LOG=OFF   : turn off the /gti.log diagnostic log (on by default).");
+  f.println("# MDNS_NAME=woonkamer : this screen's own name, so it answers at <name>.local. Leave it out and screens sort it out between themselves (lowest MAC keeps gotekomega.local).");
   f.close();
 }
 
