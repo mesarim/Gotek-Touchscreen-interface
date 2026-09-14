@@ -36,6 +36,8 @@
 #include <sys/stat.h>
 
 #define FW_VERSION "5.9.23-JC3248"
+#define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
+#define PF_MDNS_DEFAULT "GTi"   // the name this screen answers to unless MDNS_NAME says otherwise; panel_fleet.h honours it
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -462,6 +464,7 @@ static inline bool svGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void svSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
 static void svDirtyReset(){memset(g_sv_dirty,0,sizeof(g_sv_dirty));g_sv_dirty_count=0;g_sv_last_write=0;}
 static uint32_t g_sv_img_size=0;                         // bytes of the mounted image (standalone tracking)
+static uint32_t g_img_bytes=0;                           // raw bytes of the mounted image - the size to FLING
 
 static int32_t onWrite(uint32_t lba,uint32_t off,uint8_t*buf,uint32_t n){uint32_t s=lba*512+off;if(s+n>TOTAL_SECTORS*512)return 0;memcpy(g_disk+s,buf,n);
   // v4.8.0: tick the dirty scorecard for every image sector this write touches
@@ -951,6 +954,7 @@ static int g_cracktro=0;      // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or
 static int g_car_bootmode=0;  // CONFIG.TXT CAROUSEL= : default boot VIEW — 0/OFF=list, 1/ON=reel, 2=LAST (restore last view, remembered in /.gtiview). v4.8.5+: carousel is ALWAYS available via the flip toggle regardless.
 // ── 5.8.6: home-WiFi dongle transport (LINK=HOMEWIFI) — route the FLING via the home router to a Webby dongle's gotek.local, instead of hopping to the dongle's own AP ──
 static bool   g_link_home=false;                                    // LINK: false=ESP-NOW/AP (default), true=HOME WIFI
+static String g_mdns_name=PF_MDNS_DEFAULT;   // MDNS_NAME: this screen's own mDNS name. Two screens on one network sort it out between them (lowest MAC keeps it).
 static String g_home_ssid="", g_home_pass="", g_dongle_home_ip="";  // HOME_SSID / HOME_PASS (set in CONFIG.TXT) + cached DONGLE_HOME_IP
 static String g_dav_host="",g_dav_user="",g_dav_pass="",g_dav_path="/";static int g_dav_port=443;static bool g_dav_https=true,g_dav_on=false;   // DAV_* in CONFIG.TXT (merge step 1)
 static String g_dav_test="";   // DAV_TEST= : smoke test — fetch this remote path once at boot. Proves the wiring without UI; remove the key (or the hook) once real UI exists.
@@ -969,6 +973,8 @@ static int g_sel=0,g_scroll=0,g_disk_sel=0,g_loaded_game_idx=-1,g_loaded_disk_id
 static int g_disk_page=0;  // current page of disk selector (6 disks/page)
 #define DISKS_PER_PAGE 6
 static String g_loaded_name="";static bool g_loaded=false;
+static String g_loaded_display="";   // #24: the pretty NFO/meta name we FLING (FAT12 root stays DISK.ADF)
+#include "panel_fleet.h"             // OMEGAWARE: LAN dongle roster, fling + owner bookkeeping
 // ── Smooth list scroll + A-Z index state ──
 static float g_scrollPx=0;                 // pixel scroll offset (source of truth)
 static int   g_az_page=0;                  // 0 = #/A-M, 1 = N-Z
@@ -1129,6 +1135,57 @@ static void saveConfigKey(const String&key,const String&val){
   String lines="";bool written=false;File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
   if(fr){while(fr.available()){String l=fr.readStringUntil('\n');l.trim();if(l.startsWith(key+"=")){lines+=key+"="+val+"\n";written=true;}else lines+=l+"\n";}fr.close();}
   if(!written)lines+=key+"="+val+"\n";File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);if(fw){fw.print(lines);fw.close();}
+}
+
+//    Stored on SD like the rest of the panel config (dongles have no SD; their equivalent lives in LittleFS). ──
+struct KnownNet { String ssid, pass; };
+static std::vector<KnownNet> g_known;   // most-recently-used first
+#define WIFI_MAX_KNOWN 8
+static bool   netIsKnown(const String&s){ for(auto&k:g_known) if(k.ssid==s) return true; return false; }
+static String netKnownPass(const String&s){ for(auto&k:g_known) if(k.ssid==s) return k.pass; return String(""); }
+static void saveKnownNets(){
+  File fw=SD_MMC.open("/NETWORKS.TXT",FILE_WRITE); if(!fw) return;
+  fw.print("# Remembered WiFi networks: SSID<TAB>password, most-recent first (max 8). Edit or delete lines to forget.\n");
+  int n=0; for(auto&k:g_known){ if(n++>=WIFI_MAX_KNOWN) break; fw.print(k.ssid); fw.print('\t'); fw.print(k.pass); fw.print('\n'); }
+  fw.close();
+}
+static void loadKnownNets(){
+  g_known.clear();
+  File fr=SD_MMC.open("/NETWORKS.TXT",FILE_READ);
+  if(fr){ while(fr.available()){ String l=fr.readStringUntil('\n'); if(l.endsWith("\r")) l.remove(l.length()-1);
+      if(l.length()==0||l.startsWith("#")) continue;
+      int t=l.indexOf('\t'); String ss,pw; if(t<0){ss=l;pw="";}else{ss=l.substring(0,t);pw=l.substring(t+1);}
+      ss.trim(); if(ss.length()&&!netIsKnown(ss)&&(int)g_known.size()<WIFI_MAX_KNOWN) g_known.push_back({ss,pw}); }
+    fr.close(); }
+  if(g_known.empty() && g_home_ssid.length()){ g_known.push_back({g_home_ssid,g_home_pass}); saveKnownNets(); }   // migrate the single HOME_SSID/HOME_PASS in
+}
+static void rememberNet(const String&ssid,const String&pass){
+  if(!ssid.length()) return;
+  for(size_t i=0;i<g_known.size();i++) if(g_known[i].ssid==ssid){ g_known.erase(g_known.begin()+i); break; }
+  g_known.insert(g_known.begin(), (KnownNet){ssid,pass});               // most-recent first
+  while((int)g_known.size()>WIFI_MAX_KNOWN) g_known.pop_back();
+  saveKnownNets();
+  g_home_ssid=ssid; g_home_pass=pass;                                    // the active network the rest of the firmware uses
+  saveConfigKey("HOME_SSID",ssid); saveConfigKey("HOME_PASS",pass);
+}
+static void forgetNet(const String&ssid){
+  for(size_t i=0;i<g_known.size();i++) if(g_known[i].ssid==ssid){ g_known.erase(g_known.begin()+i); break; }
+  saveKnownNets();
+}
+
+// #lock: load this panel's owner token from CONFIG.TXT (PANEL_TOKEN=<32 hex>); generate + persist if absent.
+static void pfEnsureToken(){
+  String hex="";
+  File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);
+  if(f){ while(f.available()){ String l=f.readStringUntil('\n'); l.trim(); if(l.startsWith("PANEL_TOKEN=")){ hex=l.substring(12); hex.trim(); break; } } f.close(); }
+  if((int)hex.length()>=PF_TOKEN_LEN*2){
+    for(int i=0;i<PF_TOKEN_LEN;i++){ char h[3]={hex[i*2],hex[i*2+1],0}; g_panel_token[i]=(uint8_t)strtol(h,nullptr,16); }
+    g_panel_token_ok=true; return;
+  }
+  for(int i=0;i<PF_TOKEN_LEN;i++) g_panel_token[i]=(uint8_t)(esp_random()&0xFF);
+  char b[PF_TOKEN_LEN*2+1]; for(int i=0;i<PF_TOKEN_LEN;i++) sprintf(b+i*2,"%02x",g_panel_token[i]);
+  saveConfigKey("PANEL_TOKEN", String(b));
+  g_panel_token_ok=true;
 }
 
 // ── Dongle friendly names (touchscreen-side only; keyed to the dongle MAC) ──
@@ -1410,6 +1467,9 @@ HOME_SSID=
 HOME_PASS=
 # DONGLE_HOME_IP: auto-filled cache of the dongle's home IP (mDNS gotek.local is primary).
 DONGLE_HOME_IP=
+# MDNS_NAME=woonkamer : the name this screen answers to at <name>.local.
+#   Leave it out and screens sort it out between themselves: the lowest MAC keeps the plain
+#   name, the others become <name>-<mac>.local. Set it only if you want a fixed address.
 
 # WEBUI: serve the built-in web page over home WiFi (needs LINK=HOMEWIFI + HOME_SSID/PASS).
 #        Off by default - uncomment the next line to switch it on.
@@ -1495,6 +1555,7 @@ static void selfHealConfig(){
     {"HOME_SSID",      "# HOME_SSID: your home WiFi name (only used when LINK=HOMEWIFI).\nHOME_SSID=\n"},
     {"HOME_PASS",      "# HOME_PASS: your home WiFi password (only used when LINK=HOMEWIFI).\nHOME_PASS=\n"},
     {"DONGLE_HOME_IP", "# DONGLE_HOME_IP: auto-filled cache of the dongle's home-network IP (mDNS gotek.local is the primary lookup).\nDONGLE_HOME_IP=\n"},
+    {"MDNS_NAME",      "# MDNS_NAME=woonkamer : the name this screen answers to at <name>.local. Leave it out and screens sort it out between themselves (lowest MAC keeps the plain name).\n"},
     {"DAV",       "\n# --- WebDAV client (optional) ---\n# HTTPS here is encrypted but NOT certificate-authenticated; DAV_PASS is stored in plain text on this card.\n# DAV: ON = enable the WebDAV client (DAV_ENABLED is accepted as the same switch).\nDAV=OFF\n"},
     {"DAV_HOST",  "# DAV_HOST: WebDAV server hostname or IP.\nDAV_HOST=\n"},
     {"DAV_PORT",  "# DAV_PORT: server port (default 443).\nDAV_PORT=443\n"},
@@ -1555,6 +1616,7 @@ static void loadConfig(){
     else if(k=="CATEGORIES"){String cv=v;cv.toUpperCase();g_categories=(cv=="ON"||cv=="1"||cv=="TRUE");}
     else if(k=="NESTING"){String nv=v;nv.toUpperCase();g_nesting=(nv=="ON"||nv=="1"||nv=="TRUE");}
     else if(k=="LINK"){String lv=v;lv.toUpperCase();g_link_home=(lv=="HOMEWIFI"||lv=="HOME"||lv=="WIFI");}
+    else if(k=="MDNS_NAME"){if(v.length())g_mdns_name=v;}   // the name this screen answers to at <name>.local
     else if(k=="HOME_SSID"||k=="WIFI_CLIENT_SSID"){if(v.length())g_home_ssid=v;}   // WIFI_CLIENT_SSID: the OMEGAWARE tree stores the same credential under this name; empty never erases a value another key already set
     else if(k=="HOME_PASS"||k=="WIFI_CLIENT_PASS"){if(v.length())g_home_pass=v;}
     else if(k=="DAV"||k=="DAV_ENABLED"){String dv=v;dv.toUpperCase();g_dav_on=(dv=="ON"||dv=="1");}   // DAV_ENABLED: the OMEGAWARE tree writes this name for the same switch — cards travel between firmwares, so accept both
@@ -1949,7 +2011,10 @@ static void drawStatusBar(){
   gfx_fillRect(0,0,VW,STATUS_H,COL_BAR);gfx_setTextSize(1);
   gfx_setTextColor(COL_ORANGE,COL_BAR);gfx_setCursor(6,6);gfx_print("OMEGAWARE");
   gfx_setTextColor(COL_MID,COL_BAR);gfx_print("  " FW_VERSION);
-  if(g_wireless_mode){gfx_setTextColor(espnowIsPaired()?0x07E0:0xFD20,COL_BAR);gfx_setCursor(VW/2-40,6);gfx_print(espnowIsPaired()?"WIRELESS:PAIRED":"WIRELESS:PAIR");}
+  if(g_wireless_mode&&g_link_home){   // #clubday: on the LAN the useful thing to show is where to reach this screen
+    String ln=pfMdnsName()+".local"; gfx_setTextColor(COL_BLUE==COL_BAR?0x07FF:0x06FF,COL_BAR);
+    int tw=gfx_textWidth(ln); gfx_setCursor((VW-tw)/2,6); gfx_print(ln);}
+  else if(g_wireless_mode){gfx_setTextColor(espnowIsPaired()?0x07E0:0xFD20,COL_BAR);gfx_setCursor(VW/2-40,6);gfx_print(espnowIsPaired()?"WIRELESS:PAIRED":"WIRELESS:PAIR");}
   else{gfx_setTextColor(0x07FF,COL_BAR);int tw=gfx_textWidth("STANDALONE");gfx_setCursor((VW-tw)/2,6);gfx_print(T(L_STANDALONE));}
   // v5.7.x: load-status indicator (top-right). Standalone reads g_loaded; wireless reads
   // the dongle's heartbeat so it reflects reality. green=disk present, dim=empty,
@@ -2098,11 +2163,15 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVEDWIFI, IA_FLEET, IA_ORPHAN };
+static int  pfOrphanCount();     // #lock: locked dongles this screen does not own (defined with the fleet console below)
+static void doReleaseOrphans();  // #lock: offer our token to each of them - only a real owner token releases one
+static void doFleetPick();       // #console: the multi-select fleet manager (called from doLoadSelected, far above its definition)
+static void savedWifiManage();   // #clubday: remembered-networks manager
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
-static InfoItem g_ii[20]; static int g_ii_n=0;
+static InfoItem g_ii[28]; static int g_ii_n=0;
 struct InfoRect { int x,y,w,h; uint8_t act; };
-static InfoRect g_ir[20]; static int g_ir_n=0;
+static InfoRect g_ir[28]; static int g_ir_n=0;
 static int g_info_page=0, g_info_pages=1;
 static void drawInfoFull();   // paginated settings + INFO bottom bar + flush
 // v5.6.7: readable ink for a key's colour on the dim fill — dark key colours
@@ -2118,7 +2187,7 @@ static void drawInfoPanel(){
   // record their rects in g_ir[] so the tap handler hits exactly what's drawn.
   g_ii_n=0;
   auto add=[&](const String&l,uint16_t bg,uint16_t fg,uint8_t act){
-    if(g_ii_n>=20)return; strncpy(g_ii[g_ii_n].lbl,l.c_str(),31); g_ii[g_ii_n].lbl[31]=0;
+    if(g_ii_n>=28)return; strncpy(g_ii[g_ii_n].lbl,l.c_str(),31); g_ii[g_ii_n].lbl[31]=0;
     g_ii[g_ii_n].bg=bg; g_ii[g_ii_n].fg=fg; g_ii[g_ii_n].act=act; g_ii_n++; };
   // 5.9.12: single 3-way MODE — STANDALONE (radio off) / ESP-NOW (blind dongles, no router) / WiFi (home router).
   {const char* mlbl = !g_wireless_mode ? "STANDALONE" : (g_link_home ? "WiFi" : "ESP-NOW");
@@ -2133,6 +2202,10 @@ static void drawInfoPanel(){
     add(String("HOME WIFI: ")+(g_home_ssid.length()?g_home_ssid:String("set up")), COL_ACCENT, TFT_WHITE, IA_HOMEWIFI);
     add(String("WEB UI: ")+(g_web_on?(g_home_ssid.length()?String("ON"):String("ON *set wifi*")):String("OFF")), g_web_on?COL_GREEN:COL_BAR, g_web_on?TFT_BLACK:COL_LIT, IA_WEBUI);
     if(g_home_ssid.length()) add(String("WIFI CHECK"), COL_BLUE, TFT_WHITE, IA_WIFICHECK);
+    { pfPrune(); String fl=String("FLEET: ")+String(g_pfPeerN); if(g_pfTargetName.length())fl+=" > "+g_pfTargetName;
+      add(fl, g_pfPeerN?COL_GREEN:COL_AMBER, TFT_BLACK, IA_FLEET); }   // #console: dongles heard over the LAN
+    add(String("SAVED WIFI: ")+String((int)g_known.size()), COL_BLUE, TFT_WHITE, IA_SAVEDWIFI);   // #clubday: remembered networks
+    { int orp=pfOrphanCount(); if(orp) add(String("RELEASE LOCKS: ")+String(orp), COL_AMBER, TFT_BLACK, IA_ORPHAN); }   // #lock: only when there is something to release
   }
   add(String(T(L_CFG_FONT))+": "+fontName(g_font), COL_AMBER, TFT_BLACK, IA_FONT);
   add(String(T(L_THEME))+": "+THEMES[g_theme_idx].name, COL_ACCENT, TFT_WHITE, IA_THEME);   // Vince test: moved off the bottom bar
@@ -2153,13 +2226,15 @@ static void drawInfoPanel(){
   int ix=0,iy=STATUS_H,iw=VW,ih=VH-STATUS_H-BOTTOM_H;
   gfx_fillRect(ix,iy,iw,ih,COL_BG);
   gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,iy+5);gfx_print(T(L_SETTINGS));
-  int headerH=18, footerH=14, pad=8, gap=6, colGap=8, bh=34, cols=(g_portrait?1:2);   // v5.5.5: 2 cols landscape (half-width), 1 col portrait (full-width, paginates)
+  int headerH=(g_wireless_mode&&g_link_home)?30:18, footerH=14, pad=8, gap=6, colGap=8, bh=34, cols=(g_portrait?1:2);   // v5.5.5: 2 cols landscape (half-width), 1 col portrait (full-width, paginates)
   int areaTop=iy+headerH, areaH=ih-headerH-footerH;
   int colW=(iw-pad*2-colGap*(cols-1))/cols;
   int rowsPP=(areaH+gap)/(bh+gap); if(rowsPP<1)rowsPP=1;
   int perPage=rowsPP*cols;
   g_info_pages=(g_ii_n+perPage-1)/perPage; if(g_info_pages<1)g_info_pages=1;
   if(g_info_page>=g_info_pages)g_info_page=g_info_pages-1; if(g_info_page<0)g_info_page=0;
+  if(g_wireless_mode&&g_link_home){ gfx_setTextColor(TFT_CYAN,COL_BG); gfx_setCursor(8,iy+18);
+    gfx_print("WEB: "+pfMdnsName()+".local  ("+String(g_mdns_name!=PF_MDNS_DEFAULT?"named":(g_pfIsLeader?"LEADER":"secondary"))+")"); gfx_setTextColor(COL_DIM,COL_BG); }
   {String pn="PAGE "+String(g_info_page+1)+"/"+String(g_info_pages);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(iw-8-gfx_textWidth(pn),iy+5);gfx_print(pn);}
   int startI=g_info_page*perPage, endI=min(g_ii_n,startI+perPage);
   g_ir_n=0;
@@ -2174,10 +2249,12 @@ static void drawInfoPanel(){
     if(tw>colW-8){ sz=1; gfx_setTextSize(sz); tw=gfx_textWidth(g_ii[i2].lbl); }   // shrink an over-long label to fit the half-width cell
     gfx_setTextColor(kink,kdim);
     gfx_setCursor(bx+(colW-tw)/2,by+(bh-8*sz)/2);gfx_print(g_ii[i2].lbl);
-    if(g_ir_n<20){g_ir[g_ir_n].x=bx;g_ir[g_ir_n].y=by;g_ir[g_ir_n].w=colW;g_ir[g_ir_n].h=bh;g_ir[g_ir_n].act=g_ii[i2].act;g_ir_n++;}
+    if(g_ir_n<28){g_ir[g_ir_n].x=bx;g_ir[g_ir_n].y=by;g_ir[g_ir_n].w=colW;g_ir[g_ir_n].h=bh;g_ir[g_ir_n].act=g_ii[i2].act;g_ir_n++;}
   }
   gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
-  gfx_setCursor(8,iy+ih-11);gfx_print("Heap:"+String(ESP.getFreeHeap()/1024)+"K PSRAM:"+String(ESP.getFreePsram()/1024)+"K  Games:"+String(g_games.size()));
+  gfx_setCursor(8,iy+ih-11);
+  if(g_wireless_mode&&g_link_home) gfx_print("IP:"+WiFi.localIP().toString()+"  Heap:"+String(ESP.getFreeHeap()/1024)+"K  Games:"+String(g_games.size()));
+  else gfx_print("Heap:"+String(ESP.getFreeHeap()/1024)+"K PSRAM:"+String(ESP.getFreePsram()/1024)+"K  Games:"+String(g_games.size()));
 }
 
 static void drawModeBar(){
@@ -2236,7 +2313,9 @@ static void drawNowPlayingBar(){
   int y=NOW_Y;
   if(g_loaded&&g_loaded_name.length()){gfx_fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_NOW);gfx_drawRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_GREEN);
     gfx_fillCircle(LIST_X+8,y+NOW_PLAY_H/2,3,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(COL_GREEN,COL_NOW);gfx_setCursor(LIST_X+16,y+3);gfx_print(T(L_NOW_PLAYING));
-    gfx_setTextColor(TFT_WHITE,COL_NOW);gfx_setCursor(LIST_X+16,y+12);String n=g_loaded_name;while(gfx_textWidth(n)>LIST_W-24&&n.length()>3)n=n.substring(0,n.length()-1);gfx_print(n);}
+    gfx_setTextColor(TFT_WHITE,COL_NOW);gfx_setCursor(LIST_X+16,y+12);String n=g_loaded_display.length()?g_loaded_display:g_loaded_name;
+    if(g_wireless_mode&&g_link_home&&g_pfTargetName.length()) n+=" > "+g_pfTargetName;   // #console: which dongle this went to
+    while(gfx_textWidth(n)>LIST_W-24&&n.length()>3)n=n.substring(0,n.length()-1);gfx_print(n);}
   else{gfx_fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_BG);gfx_setTextSize(1);gfx_setTextColor(COL_MID,COL_BG);gfx_setCursor(LIST_X+8,y+NOW_PLAY_H/2-4);gfx_print(String(g_games.size())+T(L_GAMES_TAP));}
 }
 
@@ -3107,7 +3186,7 @@ static bool doLoadSelected(const String&adfPath){
   gfx_flush();
   // Clean swap: if a disk is already mounted, cleanly eject first so the host re-reads the new media.
   // FORCESWAP=ON skips this and swaps the bytes in place (faster, but the host may not notice).
-  if(g_loaded && !g_forceswap) hardDetach();
+  if(!(g_wireless_mode&&g_link_home) && g_loaded && !g_forceswap) hardDetach();   // #console: in LAN-fleet mode the disk goes to a dongle, not to our own USB
   File f=SD_MMC.open(loadPath.c_str(),FILE_READ);if(!f){gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_FAILED));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
   // Use VFS to get real file size (SD_MMC f.size() returns 0 for subdirectory files)
   String vfsLoad="/sdcard"+loadPath;
@@ -3130,8 +3209,10 @@ static bool doLoadSelected(const String&adfPath){
   while(remain&&buf){size_t n=remain>16384?16384:remain;int rd=f.read(buf,n);if(rd<=0)break;memcpy(dst+copied,buf,rd);remain-=rd;copied+=rd;}
   if(buf)free(buf);f.close();
   // v4.8.0: fresh disk in the RAM disk = fresh save tracking
-  g_sv_img_size=(g_mode==MODE_GEN)?0:fsz;svDirtyReset();   // v5.2: GEN has no Amiga save-writeback (0 = no dirty tracking)
-  hardAttach();g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_path=loadPath;g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
+  g_sv_img_size=(g_mode==MODE_GEN)?0:fsz;svDirtyReset();g_img_bytes=copied;   // v5.2: GEN has no Amiga save-writeback (0 = no dirty tracking)
+  if(!(g_wireless_mode&&g_link_home)) hardAttach();
+  g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_path=loadPath;g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
+  g_loaded_display=(g_sel>=0&&g_sel<(int)g_games.size())?g_games[g_sel].name:g_loaded_name;   // #24: the pretty name that rides along with the fling
   if(g_sel>=0&&g_sel<(int)g_games.size()){if(g_games[g_sel].plays<65535)g_games[g_sel].plays++;saveStats();}
   if(g_wireless_mode&&g_espnow_started){
     uint8_t mcMacs[64][6]; int mcN=enumMuCaDongles(mcMacs,g_dongle_cap);
@@ -3154,6 +3235,16 @@ static bool doLoadSelected(const String&adfPath){
         g_sv_wl_path=loadPath;g_sv_wl_loadid=g_espnow_load_id;
       }
     }
+  }
+  // #console: a staged disk in LAN-fleet mode goes to a dongle, not to our own USB port.
+  // More than one reachable dongle -> the multi-select manager (same game on three Amigas);
+  // exactly one -> send it straight there; none -> leave it staged and say nothing.
+  if(g_wireless_mode && g_link_home && WiFi.status()==WL_CONNECTED){
+    int vn=0,only=-1; for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])){ vn++; only=i; }
+    if(vn>=2){ doFleetPick(); }
+    else if(vn==1){ PfPeer&p=g_pfPeers[only]; hwMsg("Sending...",p.name.c_str(),COL_ACCENT,1);
+      String nm=g_loaded_display.length()?g_loaded_display:g_loaded_name; if(nm.length()){String ne;pfSendName(p.ip,p.tcp,nm,ne);}
+      String err; bool ok=pfSendDisk(p.ip,p.tcp,err); hwMsg(ok?"Sent":"Not sent",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,ok?1200:2200); }
   }
   drawStatusBar();drawListAndCover();gfx_flush();return true;
 }
@@ -3199,8 +3290,8 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
   build_fat(g_disk+RESERVED_SECTORS*512,(uint32_t)got);
   String outn=(g_mode==MODE_GEN)?showName:String(getOutputFilename());
   build_root(g_disk+(RESERVED_SECTORS+SECTORS_PER_FAT)*512,outn.c_str(),(uint32_t)got);
-  g_sv_img_size=0;svDirtyReset();                 // no SD path to write saves back to — tracking off for now
-  hardAttach();g_loaded=true;g_loaded_name=showName;g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
+  g_sv_img_size=0;g_img_bytes=(uint32_t)got;svDirtyReset();                 // no SD path to write saves back to — tracking off for now
+  hardAttach();g_loaded=true;g_loaded_name=showName;g_loaded_display=showName;g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
   Serial.printf("[DAV] mounted %s (%ld bytes)\n",showName.c_str(),got);
   return true;
 }
@@ -3208,6 +3299,7 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
 // Merge step 2: the shared web interface + OTA, served over HOME_SSID when
 // WEBUI=ON. Placed here because it calls doLoadWebdav and the disk builders.
 #define GTI_WEB_SD_FILES 1   // 5.9.9: WiFi SD file-access endpoints (JC3.5 only for now)
+#define GTI_WEB_FLEET 1      // OMEGAWARE: LAN dongle roster + fling endpoints (needs panel_fleet.h)
 #include "../shared/web_panel.h"
 
 static void doUnload(){
@@ -3215,7 +3307,7 @@ static void doUnload(){
   // (v4.8.1: own-disk flush in any mode)
   if(g_sv_dirty_count)svFlushStandalone();
   if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
-  hardDetach();g_loaded=false;g_loaded_name="";g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;svDirtyReset();
+  hardDetach();g_loaded=false;g_loaded_name="";g_loaded_display="";g_img_bytes=0;g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;svDirtyReset();
   if(g_wireless_mode&&g_espnow_started&&espnowIsPaired())espnowSendEject();drawStatusBar();drawListAndCover();gfx_flush();}
 
 // Expand the zero-RLE embedded ADF straight into the RAM-disk data area. No SD needed.
@@ -3235,7 +3327,7 @@ static void doLoadDiag(){
   build_volume("DISK.ADF",DIAG_ADF_SIZE);                 // force an .ADF image regardless of MODE
   diagInflate(DIAG_RLE,DIAG_RLE_LEN,g_disk+DATA_LBA*512);
   hardAttach();
-  g_loaded=true;g_loaded_name="AMIGA TEST KIT";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
+  g_loaded=true;g_loaded_name="AMIGA TEST KIT";g_loaded_display="AMIGA TEST KIT";g_img_bytes=DIAG_ADF_SIZE;g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
   g_loaded_path="";g_sv_img_size=0;svDirtyReset();   // diag disk: writes are never persisted
   drawFullUI();gfx_flush();
 }
@@ -3544,6 +3636,7 @@ static void runSlideshow(std::vector<String>&pool){
   if(ssSlideHold(g_ss_time_ms)){ ssSlideFree(); return; }
   while(true){
     webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
+    pfService(); pfWorker();   // #console: and the fleet roster + queued fling
     if(pool.size()<=1){ if(ssSlideHold(g_ss_time_ms))break; else continue; }
     int ni=(idx+1)%(int)pool.size();
     if(dbl){
@@ -3577,6 +3670,7 @@ static void runMatrixRain(){
   uint32_t last=millis(), seed=1;
   while(true){
     webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
+    pfService(); pfWorker();   // #console: and the fleet roster + queued fling
     if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
     uint32_t nf=millis();
     if(nf-last>=60){ last=nf; seed++;
@@ -3655,6 +3749,7 @@ static void runScreensaver(){                                // blocking bounce 
   uint32_t last=millis();
   while(true){
     webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
+    pfService(); pfWorker();   // #console: and the fleet roster + queued fling
     if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
     uint32_t nf=millis();
     if(nf-last>=33){ last=nf;
@@ -3742,6 +3837,7 @@ static bool kbInput(const char* title, String& io, int maxlen){
       gfx_fillRect(0,0,VW,22,COL_BAR);
       gfx_setTextSize(1); gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER, COL_BAR);
       gfx_setCursor(6,7); gfx_print(title);
+      gfx_fillRoundRect(VW-62,3,56,16,4,(uint16_t)0x8000); gfx_setTextColor(TFT_WHITE,(uint16_t)0x8000); gfx_setCursor(VW-62+(56-gfx_textWidth("CANCEL"))/2,7); gfx_print("CANCEL");   // #clubday: without this a wrong password locks the screen out until a power-cycle
       // input box
       gfx_fillRoundRect(8,26,VW-16,32,6,COL_PANEL); gfx_drawRoundRect(8,26,VW-16,32,6,COL_AMBER);
       gfx_setTextSize(2); gfx_setTextColor(inkFor(COL_PANEL), COL_PANEL);
@@ -3781,6 +3877,7 @@ static bool kbInput(const char* title, String& io, int maxlen){
     uint16_t tx=0, ty=0; bool have = Touch_ReadFrame() && getTouchXY(&tx,&ty);
     if (have) { rel = 0;
       if (!pressed) { pressed = true; bool handled = false;
+        if (ty < 22 && (int)tx >= VW-62) { kbWaitRelease(); return false; }   // #clubday: top-bar CANCEL -> the caller's cancel path (no save/connect)
         const char** ROWS = sym ? SY : AL;
         int ky = kbTop;
         for (int r=0; r<4 && !handled; r++) {
@@ -3824,65 +3921,124 @@ static void hwMsg(const char* l1, const char* l2, uint16_t col, uint32_t ms){
 
 // 5.9.13: scan for WiFi networks and let the user TAP one (kills SSID typos and
 // case mismatches). Returns the chosen SSID, or "" if the user picks Type-manually.
-static String doWifiScanPick(){
-  for(;;){
-    hwMsg("Scanning WiFi...", "", COL_ACCENT, 10);
+static bool wifiJoin(const String&ssid,const String&pass,uint32_t timeoutMs){
+  WiFi.mode(WIFI_STA); WiFi.persistent(false);
+  WiFi.disconnect(false,true); delay(150);
+  if(pass.length()) WiFi.begin(ssid.c_str(),pass.c_str()); else WiFi.begin(ssid.c_str());
+  uint32_t t0=millis(); while(WiFi.status()!=WL_CONNECTED && millis()-t0<timeoutMs) delay(150);
+  return WiFi.status()==WL_CONNECTED;
+}
+static bool wifiAutoJoin(){
+  if(g_known.empty()) return WiFi.status()==WL_CONNECTED;
+  WiFi.mode(WIFI_STA);
+  int n=WiFi.scanNetworks(); if(n<0)n=0;
+  static const int MAXC=16; String cand[MAXC]; int rssi[MAXC]; int cn=0;
+  for(int i=0;i<n && cn<MAXC;i++){ String s=WiFi.SSID(i); if(!netIsKnown(s))continue; bool dup=false; for(int j=0;j<cn;j++) if(cand[j]==s){dup=true;break;} if(!dup){cand[cn]=s;rssi[cn]=WiFi.RSSI(i);cn++;} }
+  WiFi.scanDelete();
+  for(int a=0;a<cn;a++){ int best=a; for(int b=a+1;b<cn;b++) if(rssi[b]>rssi[best])best=b; if(best!=a){int tr=rssi[a];rssi[a]=rssi[best];rssi[best]=tr;String ts=cand[a];cand[a]=cand[best];cand[best]=ts;} }
+  for(int a=0;a<cn;a++){ if(wifiJoin(cand[a],netKnownPass(cand[a]),10000)){ rememberNet(cand[a],netKnownPass(cand[a])); g_link_home=true; return true; } }
+  return WiFi.status()==WL_CONNECTED;
+}
+static void wifiPickBestKnownInto(){
+  if(g_known.empty()) return;
+  WiFi.mode(WIFI_STA);
+  int n=WiFi.scanNetworks(); if(n<=0){ WiFi.scanDelete(); return; }
+  String best=""; int bestR=-999;
+  for(int i=0;i<n;i++){ String s=WiFi.SSID(i); if(netIsKnown(s)&&WiFi.RSSI(i)>bestR){ bestR=WiFi.RSSI(i); best=s; } }
+  WiFi.scanDelete();
+  if(best.length()){ g_home_ssid=best; g_home_pass=netKnownPass(best); }
+}
+
+static int wifiPickFromScan(String& outSsid, bool& outSecured){
+  const int hdr=24, rowH=32, gap=4, ctlH=34, bm=6;
+  while(true){                                            // outer loop = Rescan
+    gfx_fillScreen(COL_BG); gfx_setTextSize(2); gfx_setTextColor(COL_ACCENT,COL_BG);
+    { const char* s="Scanning WiFi..."; gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8); gfx_print(s); } gfx_flush();
     WiFi.mode(WIFI_STA);
-    WiFi.disconnect(false,false);      // 5.9.20: drop the active link so the scan actually runs (ESP32 returns 0 while associated+serving)
+    WiFi.disconnect(false,false);      // 5.9.20 (his): drop the active link or the scan returns 0 while associated+serving
     delay(120);
-    int n = WiFi.scanNetworks(false,true);   // blocking, include hidden
-    if(n<0) n=0;
-    String names[8]; int cnt=0;
-    for(int i=0;i<n && cnt<8;i++){
-      String sn = WiFi.SSID(i); if(sn.length()==0) continue;
-      bool dup=false; for(int j=0;j<cnt;j++) if(names[j]==sn){dup=true;break;}
-      if(!dup) names[cnt++]=sn;
-    }
+    int n=WiFi.scanNetworks(false,true); if(n<0)n=0;   // blocking, include hidden
+    String ss[24]; int rs[24]; bool en[24]; int m=0;
+    for(int i=0;i<n && m<24;i++){ String s=WiFi.SSID(i); if(s.length()==0)continue; int r=WiFi.RSSI(i); bool sec=(WiFi.encryptionType(i)!=WIFI_AUTH_OPEN);
+      int f=-1; for(int j=0;j<m;j++) if(ss[j]==s){f=j;break;}
+      if(f<0){ss[m]=s;rs[m]=r;en[m]=sec;m++;} else if(r>rs[f]){rs[f]=r;en[f]=sec;} }
     WiFi.scanDelete();
-    gfx_fillScreen(COL_BG);
-    gfx_setTextSize(2); gfx_setTextColor(COL_ACCENT,COL_BG); gfx_setCursor(10,10); gfx_print("Pick WiFi network");
-    gfx_setTextSize(1);
-    const int top=40, rh=26;
-    for(int i=0;i<cnt;i++){ int y=top+i*rh; gfx_drawRoundRect(8,y,VW-16,rh-4,5,COL_SEP); gfx_setTextColor(COL_LIT,COL_BG); gfx_setCursor(14,y+7); gfx_print(names[i]); }
-    int listRows=cnt;
-    if(cnt==0){ gfx_setTextColor(COL_AMBER,COL_BG); gfx_setCursor(14,top+7); gfx_print("(none found - tap Rescan)"); listRows=1; }
-    const int ym=top+listRows*rh;     gfx_fillRoundRect(8,ym,VW-16,rh-4,5,COL_BAR); gfx_setTextColor(COL_LIT,COL_BAR); gfx_setCursor(14,ym+7); gfx_print("[ Type manually ]");
-    const int yr=top+(listRows+1)*rh; gfx_fillRoundRect(8,yr,VW-16,rh-4,5,COL_BAR); gfx_setTextColor(COL_LIT,COL_BAR); gfx_setCursor(14,yr+7); gfx_print("[ Rescan ]");
-    gfx_flush();
-    bool pressed=false; int rel=0; bool rescan=false;
-    for(;;){
+    for(int a=0;a<m;a++){ int best=a; for(int b=a+1;b<m;b++) if(rs[b]>rs[best])best=b; if(best!=a){int tr=rs[a];rs[a]=rs[best];rs[best]=tr;String ts=ss[a];ss[a]=ss[best];ss[best]=ts;bool tb=en[a];en[a]=en[best];en[best]=tb;} }
+    int avail=(VH-hdr-(ctlH+gap+bm))/(rowH+gap); if(avail<1)avail=1; int vis=m<avail?m:avail;
+    bool dirty=true,pressed=true; int rel=0; kbWaitRelease(600);   // #clubday: start "pressed" + drain -> no phantom tap from the opening touch landing on a network
+    while(true){
+      if(dirty){ dirty=false; gfx_fillScreen(COL_BG);
+        gfx_fillRect(0,0,VW,hdr,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_BAR),COL_BAR); gfx_setCursor(6,8); gfx_print("Choose WiFi network");
+        if(m==0){ gfx_setTextColor(COL_AMBER,COL_BG); gfx_setCursor(14,hdr+gap+6); gfx_print("No networks found"); }
+        for(int i=0;i<vis;i++){ int y=hdr+gap+i*(rowH+gap);
+          gfx_fillRoundRect(6,y,VW-12,rowH,6,COL_PANEL); gfx_drawRoundRect(6,y,VW-12,rowH,6,COL_BAR);
+          gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL);
+          String label=ss[i]; if(netIsKnown(ss[i])) label=String("*")+label;   // * = remembered
+          gfx_setCursor(14,y+(rowH-8)/2); gfx_print(label);
+          String meta=String(en[i]?"[L] ":"    ")+String(rs[i])+"dBm"; gfx_setTextColor(COL_DIM,COL_PANEL); gfx_setCursor(VW-14-gfx_textWidth(meta),y+(rowH-8)/2); gfx_print(meta); }
+        int cy=hdr+gap+vis*(rowH+gap); const char* CTL[3]={"Rescan","Type...","Cancel"}; uint16_t cc[3]={COL_BLUE,COL_BAR,(uint16_t)0x8000};
+        int cw=(VW-4*gap)/3, cx=gap;
+        for(int i=0;i<3;i++){ gfx_fillRoundRect(cx,cy,cw,ctlH,6,cc[i]); gfx_setTextSize(1); gfx_setTextColor(inkFor(cc[i]),cc[i]); gfx_setCursor(cx+(cw-gfx_textWidth(CTL[i]))/2,cy+(ctlH-8)/2); gfx_print(CTL[i]); cx+=cw+gap; }
+        gfx_flush(); }
       uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
-      if(have){ if(!pressed){ pressed=true;
-        if((int)ty>=top){
-          int idx=((int)ty-top)/rh;
-          if(idx>=0 && idx<cnt){ kbWaitRelease(); return names[idx]; }
-          if(idx==listRows){ kbWaitRelease(); return String(""); }
-          if(idx==listRows+1){ kbWaitRelease(); rescan=true; break; }
-        }
-      }} else { if(pressed && ++rel>=3) pressed=false; }
+      if(have){ rel=0; if(!pressed){ pressed=true;
+        for(int i=0;i<vis;i++){ int y=hdr+gap+i*(rowH+gap); if(ty>=y&&ty<y+rowH){ outSsid=ss[i]; outSecured=en[i]; kbWaitRelease(); return 1; } }
+        int cy=hdr+gap+vis*(rowH+gap);
+        if(ty>=cy&&ty<cy+ctlH){ int cw=(VW-4*gap)/3; int i=((int)tx-gap)/(cw+gap); int cxi=gap+i*(cw+gap);
+          if(i>=0&&i<3&&(int)tx>=cxi&&(int)tx<cxi+cw){ if(i==0){ kbWaitRelease(300); break; } else if(i==1){ kbWaitRelease(); return 2; } else { kbWaitRelease(); return 0; } } }
+      } } else { if(pressed&&++rel>=3)pressed=false; }
       delay(12);
     }
-    if(rescan) continue;
   }
 }
 
 // The Home-WiFi setup flow: enter SSID, enter password, save + enable HOMEWIFI.
 // Reached from the settings screen (IA_HOMEWIFI).
 static void doHomeWifiSetup(){
-  String ssid = g_home_ssid, pass = g_home_pass;
-  String picked = doWifiScanPick();                                     // 5.9.13: scan + tap (no typos / case mismatch)
-  if (picked.length()) ssid = picked;
-  else if (!kbInput("Home WiFi: network name (SSID)", ssid, 32)) return;   // manual fallback / cancel
-  ssid.trim();
-  if (ssid.length() == 0) { hwMsg("No SSID", "nothing saved", COL_AMBER, 1200); return; }
-  if (!kbInput("Home WiFi: password (blank = open)", pass, 63)) return; // cancel
+  String ssid; bool secured=true;
+  int r=wifiPickFromScan(ssid,secured);
+  if(r==0) return;                                        // cancel
+  if(r==2){ ssid=g_home_ssid; if(!kbInput("WiFi: network name (SSID)",ssid,32)) return; ssid.trim(); if(!ssid.length()){ hwMsg("No SSID","nothing saved",COL_AMBER,1200); return; } secured=true; }
+  else ssid.trim();
+  String pass = secured ? netKnownPass(ssid) : String("");
+  if(secured && pass.length()==0){ if(!kbInput((String("Password: ")+ssid).c_str(),pass,63)) return; }
+  String oldSsid=g_home_ssid, oldPass=g_home_pass;        // remember for fallback
+  hwMsg("Connecting...", ssid.c_str(), COL_ACCENT, 1);
+  bool ok=wifiJoin(ssid,pass,12000);
+  if(!ok && secured){ String p2=pass; if(kbInput((String("Retry password: ")+ssid).c_str(),p2,63)){ pass=p2; hwMsg("Connecting...",ssid.c_str(),COL_ACCENT,1); ok=wifiJoin(ssid,pass,12000); } }
+  if(ok){ rememberNet(ssid,pass); g_link_home=true; saveConfigKey("LINK","HOMEWIFI"); g_pfMdnsDirty=true;   // #clubday: new IP -> re-announce mDNS so <name>.local resolves after the switch
+    if(g_web_on) webPanelBegin();   // 5.9.13 (his): re-join with the new creds now, no reboot
+    hwMsg("Connected", (ssid+"  "+WiFi.localIP().toString()).c_str(), COL_GREEN, 1800); }
+  else { if(oldSsid.length()&&oldSsid!=ssid) wifiJoin(oldSsid,oldPass,12000);
+    hwMsg("Could not join", (oldSsid.length()?("back on "+oldSsid):String("no connection")).c_str(), COL_AMBER, 2200); }
+}
 
-  g_home_ssid = ssid; g_home_pass = pass; g_link_home = true;
-  saveConfigKey("HOME_SSID", ssid);
-  saveConfigKey("HOME_PASS", pass);
-  saveConfigKey("LINK", "HOMEWIFI");
-  hwMsg("Home WiFi saved", ("SSID: " + ssid).c_str(), COL_ACCENT, 1600);
-  if (g_web_on) webPanelBegin();   // 5.9.13: re-join with the new creds now (non-blocking, no reboot)
+static void savedWifiManage(){
+  const int hdr=24,rowH=34,gap=5,bm=6,ctlH=34,FGW=84;   // FGW = width of the FORGET button
+  bool dirty=true,pressed=true; int rel=0; kbWaitRelease(600);   // start "pressed": the opening tap must be released before anything here counts (no phantom tap)
+  while(true){
+    int m=g_known.size(); int avail=(VH-hdr-(ctlH+gap+bm))/(rowH+gap); if(avail<1)avail=1; int vis=m<avail?m:avail;
+    if(dirty){ dirty=false; gfx_fillScreen(COL_BG);
+      gfx_fillRect(0,0,VW,hdr,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_BAR),COL_BAR); gfx_setCursor(6,8); gfx_print("Saved WiFi  -  tap FORGET to remove");
+      if(m==0){ gfx_setTextColor(COL_DIM,COL_BG); gfx_setCursor(14,hdr+gap+8); gfx_print("(none remembered yet)"); }
+      String curSsid=(WiFi.status()==WL_CONNECTED && WiFi.SSID().length())?WiFi.SSID():g_home_ssid;   // #clubday: mark the net we are ACTUALLY on, not just list slot 0
+      for(int i=0;i<vis;i++){ int y=hdr+gap+i*(rowH+gap);
+        gfx_fillRoundRect(6,y,VW-12,rowH,6,COL_PANEL); gfx_drawRoundRect(6,y,VW-12,rowH,6,COL_BAR);
+        gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL);
+        String nm=g_known[i].ssid; int maxw=VW-12-FGW-24; while(gfx_textWidth(nm)>maxw&&nm.length()>3)nm=nm.substring(0,nm.length()-1);
+        gfx_setCursor(14,y+(rowH-8)/2); gfx_print(nm);
+        if(g_known[i].ssid==curSsid){ gfx_setTextColor(COL_GREEN,COL_PANEL); gfx_print("  (current)"); }
+        int bx=VW-12-FGW; gfx_fillRoundRect(bx,y+4,FGW-4,rowH-8,6,(uint16_t)0x8000); gfx_setTextColor(TFT_WHITE,(uint16_t)0x8000); gfx_setCursor(bx+(FGW-4-gfx_textWidth("FORGET"))/2,y+(rowH-8)/2); gfx_print("FORGET"); }
+      int cy=hdr+gap+vis*(rowH+gap); gfx_fillRoundRect(gap,cy,VW-2*gap,ctlH,6,COL_SEL); gfx_setTextColor(inkFor(COL_SEL),COL_SEL); gfx_setCursor((VW-gfx_textWidth("Back"))/2,cy+(ctlH-8)/2); gfx_print("Back");
+      gfx_flush(); }
+    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){ rel=0; if(!pressed){ pressed=true;
+      bool acted=false;
+      for(int i=0;i<vis;i++){ int y=hdr+gap+i*(rowH+gap); int bx=VW-12-FGW; if(ty>=y&&ty<y+rowH&&(int)tx>=bx){ forgetNet(g_known[i].ssid); dirty=true; acted=true; break; } }
+      if(!acted){ int cy=hdr+gap+vis*(rowH+gap); if(ty>=cy&&ty<cy+ctlH){ kbWaitRelease(); return; } }
+    } } else { if(pressed&&++rel>=3)pressed=false; }
+    delay(12);
+  }
 }
 
 // 5.9.9: Web UI / WiFi SD-access setup (STANDALONE only — the web server can't
@@ -3891,6 +4047,7 @@ static void doHomeWifiSetup(){
 // 5.9.17: switch the radio between the three MODE states LIVE (no reboot).
 // STANDALONE = radio off, ESP-NOW = blind dongles, WiFi = home router + web UI.
 static void applyRadioMode(){
+  pfStop();   // #console: release the 51703 listener + roster; the next mode re-opens it if it has a LAN
   if(g_espnow_started){ espnowStop(); g_espnow_started=false; }   // leave ESP-NOW cleanly
   webPanelStop();                                                 // stop the web server if it was up
   WiFi.disconnect(true,true); delay(60);
@@ -3916,7 +4073,7 @@ static void doWebUiSetup(){
     saveConfigKey("HOME_PASS", pass);
   }
   g_web_on=true; saveConfigKey("WEBUI","ON");
-  hwMsg("Web UI on", "rebooting to GTi.local", COL_ACCENT, 1400);
+  hwMsg("Web UI on", ("rebooting to "+pfMdnsName()+".local").c_str(), COL_ACCENT, 1400);
   delay(700); ESP.restart();
 }
 
@@ -3938,7 +4095,7 @@ static void doWifiCheck(){
       line(String("Signal: ")+String((int)WiFi.RSSI())+" dBm", COL_LIT);
       line(String("Web server: ")+(g_web_up?"UP":"not started"), g_web_up?COL_GREEN:COL_AMBER);
       line("Open on your phone/PC:", COL_DIM);
-      line(String("  http://GTi.local/files"), COL_LIT);
+      line(String("  http://")+pfMdnsName()+".local/files", COL_LIT);
       line(String("  http://")+WiFi.localIP().toString()+"/files", COL_LIT);
     } else {
       line("Not on the network.", COL_AMBER);
@@ -4339,6 +4496,121 @@ static void doScanDongles(){
 // Legacy single-pair (kept for compatibility, now routes to scan)
 static void doPairNow(){ doScanDongles(); }
 
+// #lock: which dongles THIS screen owns over WiFi (CONFIG.TXT DONGLE_<mac>.MINE=1).
+// The dongle keeps the authoritative list; this is only our memory of it, and without it
+// a claimed dongle hides itself from the very screen that claimed it after a reboot.
+static void setDongleMine(const String& id, bool on){ saveConfigKey(macKey(id)+".MINE", on?"1":"0"); }
+static void loadMineIds(){
+  g_mineN=0; File f=SD_MMC.open("/CONFIG.TXT",FILE_READ); if(!f) return;
+  while(f.available()){ String l=f.readStringUntil('\n'); l.trim();
+    if(l.startsWith("DONGLE_") && l.endsWith(".MINE=1")){ pfAddMine(l.substring(7, l.length()-7)); } }
+  f.close();
+}
+
+static void fleetSendChecked(String* ids, int n){
+  if(!g_loaded || g_img_bytes==0){ hwMsg("No disk staged","load a game first",COL_AMBER,1800); return; }
+  String nm = g_loaded_display.length()?g_loaded_display:g_loaded_name;
+  int ok=0, fail=0; String lastErr="";
+  for(int k=0;k<n;k++){ int pi=-1; for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].id==ids[k]){pi=i;break;} if(pi<0) continue;
+    PfPeer&p=g_pfPeers[pi];
+    hwMsg("Sending...",(p.name+"  ("+String(k+1)+"/"+String(n)+")").c_str(),COL_ACCENT,1);
+    if(nm.length()){ String ne; pfSendName(p.ip,p.tcp,nm,ne); }
+    String err; if(pfSendDisk(p.ip,p.tcp,err)) ok++; else { fail++; lastErr=p.name+": "+err; }
+  }
+  hwMsg(fail?"Some refused":"Sent", (fail?lastErr:("to "+String(ok)+" dongle(s)")).c_str(), fail?COL_AMBER:COL_GREEN, 2400);
+}
+static void fleetEjectChecked(String* ids, int n){
+  int ok=0; for(int k=0;k<n;k++){ int pi=-1; for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].id==ids[k]){pi=i;break;} if(pi<0) continue;
+    String err; if(pfSendCommand(g_pfPeers[pi].ip,g_pfPeers[pi].tcp,PF_CMD_EJECT,err)) ok++; }
+  hwMsg("Ejected",("on "+String(ok)+" dongle(s)").c_str(),COL_AMBER,1500);
+}
+
+static int pfOrphanCount(){ int n=0; for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].lkd && !pfIsMine(g_pfPeers[i].id)) n++; return n; }
+static void doReleaseOrphans(){
+  pfService(); pfPrune();
+  int tried=0, freed=0;
+  for(int i=0;i<g_pfPeerN;i++){ PfPeer&p=g_pfPeers[i];
+    if(!(p.lkd && !pfIsMine(p.id))) continue;
+    tried++; hwMsg("Releasing...",(p.name.length()?p.name:p.ip).c_str(),COL_ACCENT,1);
+    String err; if(pfSendUnenroll(p.ip,pfPeerTcp(p.ip),err)){ freed++; setDongleMine(p.id,false); } }
+  if(!tried) hwMsg("Nothing to release","no locked dongles",COL_AMBER,1500);
+  else hwMsg(freed?"Released":"Not ours",(String(freed)+" of "+String(tried)+" dongle(s)").c_str(),freed?COL_GREEN:COL_AMBER,1800);
+}
+
+static void doFleetPick(){
+  pfService(); pfPrune();
+  static String chk[16]; int chkN=0;   // #console: checked dongle ids (multi-select target set)
+  auto isChk=[&](const String&id)->bool{ for(int i=0;i<chkN;i++) if(chk[i]==id) return true; return false; };
+  auto toggleChk=[&](const String&id){ for(int i=0;i<chkN;i++) if(chk[i]==id){ for(int j=i;j<chkN-1;j++)chk[j]=chk[j+1]; chkN--; return; } if(chkN<16) chk[chkN++]=id; };
+  const int rowH=50, listTop=26, btnBarY=VH-40, actW=92; const int actX=VW-10-actW;
+  int maxRows=(btnBarY-listTop-4)/rowH; if(maxRows<1)maxRows=1;
+  int scroll=0; bool dirty=true, down=false, moved=false; int downX=0,downY=0,downScroll=0;
+  uint32_t lastPoll=millis();
+  String visId[PF_MAX_PEERS]; int vn=0, maxScroll=0; String drawnSig;   // #console: the list AS DRAWN, held by id
+  auto drainTouch=[&](){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); down=false; moved=true; };
+  while(true){
+    webPanelService(); pfService(); pfWorker();
+    if(millis()-lastPoll>1200){ pfPrune(); lastPoll=millis(); }
+    // candidate visible set; only repaint (and re-freeze the rows) when it really changed, so a
+    // dongle appearing/vanishing between frames can never move a row under a finger already down.
+    int cand[PF_MAX_PEERS], cn=0; String sig;
+    for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])){ cand[cn++]=i; sig+=g_pfPeers[i].id; sig+=','; }   // #console: hide locked-not-mine
+    if(sig!=drawnSig) dirty=true;
+    if(dirty){ dirty=false;
+      vn=0; for(int k=0;k<cn;k++) visId[vn++]=g_pfPeers[cand[k]].id; drawnSig=sig;
+      for(int i=chkN-1;i>=0;i--){ bool live=false; for(int k=0;k<vn;k++) if(visId[k]==chk[i]){live=true;break;}   // a dongle that went away (or got claimed elsewhere) leaves the selection
+        if(!live){ for(int j=i;j<chkN-1;j++)chk[j]=chk[j+1]; chkN--; } }
+      maxScroll=(vn>maxRows)?(vn-maxRows):0; if(scroll>maxScroll)scroll=maxScroll; if(scroll<0)scroll=0;
+      gfx_fillScreen(COL_BG);
+      gfx_setTextSize(1);gfx_setTextColor(COL_ORANGE,COL_BG);gfx_setCursor(8,7);
+      gfx_print(vn?("FLEET ("+String(vn)+")  tap = select  |  checked: "+String(chkN)):String("FLEET - searching for dongles..."));
+      if(vn==0){ gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,30);gfx_print(T(L_NO_DONGLES)); }
+      for(int r=0;r<maxRows&&(scroll+r)<vn;r++){ int i=pfPeerIdx(visId[scroll+r]); if(i<0) continue; int y=listTop+r*rowH; PfPeer&p=g_pfPeers[i]; bool ck=isChk(p.id);
+        uint16_t bg=ck?COL_SEL:COL_PANEL;
+        gfx_fillRoundRect(8,y,VW-16,rowH-4,6,bg);gfx_drawRoundRect(8,y,VW-16,rowH-4,6,ck?COL_AMBER:COL_ACCENT);
+        gfx_drawRoundRect(16,y+rowH/2-13,20,20,4,inkFor(bg)); if(ck) gfx_fillRoundRect(19,y+rowH/2-10,14,14,3,COL_AMBER);   // checkbox
+        gfx_setTextColor(inkFor(bg),bg);gfx_setCursor(44,y+7);gfx_print(p.name.length()?p.name:("Dongle "+String(i+1)));
+        uint16_t sub=(inkFor(bg)==TFT_BLACK)?COL_MID:COL_DIM;
+        gfx_setTextColor(p.loaded?COL_GREEN:sub,bg);gfx_setCursor(44,y+23);gfx_print(p.loaded?(String("* ")+(p.disk.length()?p.disk:String("disk"))):String("empty"));
+        gfx_setTextColor(sub,bg);gfx_setCursor(44,y+35);gfx_print(p.ip+(pfIsMine(p.id)?"  (mine)":(p.lkd?"  (locked)":"")));
+        if(p.enr){ gfx_fillRoundRect(actX,y+9,actW,rowH-22,6,COL_GREEN);gfx_setTextColor(TFT_BLACK,COL_GREEN);gfx_setCursor(actX+(actW-gfx_textWidth("CLAIM"))/2,y+rowH/2-8);gfx_print("CLAIM"); }
+        else if(pfIsMine(p.id)){ gfx_fillRoundRect(actX,y+9,actW,rowH-22,6,(uint16_t)0x8000);gfx_setTextColor(TFT_WHITE,(uint16_t)0x8000);gfx_setCursor(actX+(actW-gfx_textWidth("UNCLAIM"))/2,y+rowH/2-8);gfx_print("UNCLAIM"); }
+      }
+      if(vn>maxRows){ int trackY=listTop,trackH=maxRows*rowH-4,thumbH=trackH*maxRows/vn;if(thumbH<10)thumbH=10;
+        int thumbY=trackY+(trackH-thumbH)*scroll/(maxScroll?maxScroll:1);
+        gfx_fillRect(VW-4,trackY,3,trackH,COL_PANEL);gfx_fillRect(VW-4,thumbY,3,thumbH,COL_AMBER); }
+      int bw=(VW-4*4)/3,bx=4;const char* BL[3]={"SEND","EJECT","BACK"};uint16_t BC[3]={COL_GREEN,COL_AMBER,COL_BAR};
+      for(int i=0;i<3;i++){ bool dis=(chkN==0&&i<2);
+        gfx_fillRoundRect(bx,btnBarY+2,bw,34,6,dis?COL_PANEL:BC[i]);gfx_setTextColor(dis?COL_DIM:inkFor(BC[i]),dis?COL_PANEL:BC[i]);
+        gfx_setTextSize(1);gfx_setCursor(bx+(bw-gfx_textWidth(BL[i]))/2,btnBarY+14);gfx_print(BL[i]);bx+=bw+4; }
+      gfx_flush();
+    }
+    bool t=Touch_ReadFrame(); uint16_t tx=0,ty=0; if(t)t=getTouchXY(&tx,&ty);
+    if(t){ if(!down){down=true;downX=tx;downY=ty;downScroll=scroll;moved=false;}
+      else{ if(maxScroll>0){int ns=downScroll+((int)downY-(int)ty)/rowH; if(ns<0)ns=0; if(ns>maxScroll)ns=maxScroll; if(ns!=scroll){scroll=ns;dirty=true;}}
+        if(abs((int)ty-downY)>8||abs((int)tx-downX)>8)moved=true; }
+    } else if(down){ down=false;
+      if(!moved){
+        if(downY>=btnBarY){ int bw=(VW-4*4)/3,i=(downX-4)/(bw+4);
+          if(i==0){ if(chkN>0){ fleetSendChecked(chk,chkN); drainTouch(); dirty=true; } }
+          else if(i==1){ if(chkN>0){ fleetEjectChecked(chk,chkN); drainTouch(); dirty=true; } }
+          else break; // BACK
+        } else if(downY>=listTop&&downY<listTop+maxRows*rowH){ int slot=(downY-listTop)/rowH,vidx=scroll+slot;
+          if(vidx>=0&&vidx<vn){ int i=pfPeerIdx(visId[vidx]); if(i<0){ dirty=true; } else { PfPeer&p=g_pfPeers[i];
+            if((int)downX>=actX && (p.enr||pfIsMine(p.id))){   // per-row CLAIM / UNCLAIM
+              String err;
+              if(p.enr){ hwMsg("Claiming...",p.name.c_str(),COL_ACCENT,1); bool ok=pfSendEnroll(p.ip,p.tcp,err); if(ok){pfAddMine(p.id);setDongleMine(p.id,true);} hwMsg(ok?"Claimed":"Not claimed",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,1500); }
+              else { hwMsg("Releasing...",p.name.c_str(),COL_ACCENT,1); bool ok=pfSendUnenroll(p.ip,p.tcp,err); if(ok){pfDelMine(p.id);setDongleMine(p.id,false);} hwMsg(ok?"Released":"Failed",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,1500); }
+              drainTouch(); dirty=true;
+            } else { toggleChk(p.id); dirty=true; }   // toggle select
+          } }
+        }
+      }
+    }
+    delay(15);
+  }
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // SETUP
 // ════════════════════════════════════════════════════════════════════════════
@@ -4528,6 +4800,9 @@ void setup(){
     generateDefaultConfig();
     selfHealConfig();           // append any documented keys an older CONFIG.TXT is missing
     loadConfig();
+    pfEnsureToken();            // #lock: this screen's owner identity (PANEL_TOKEN in CONFIG.TXT)
+    loadMineIds();              // #lock: which dongles we have claimed
+    loadKnownNets();            // #clubday: remembered WiFi networks (NETWORKS.TXT)
     if(g_sd_freq==40000){           // 5.3.5: SDSPEED=40 opt-in — remount fast, fall back to 20 if it won't take
       SD_MMC.end();delay(30);SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);
       if(!SD_MMC.begin("/sdcard",true,false,40000)){g_sd_freq=20000;SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);SD_MMC.begin("/sdcard",true,false,20000);}
@@ -4556,7 +4831,10 @@ void setup(){
   bool bootCar=(g_car_bootmode==1)||(g_car_bootmode==2&&readLastView()==1);   // v4.8.6: CAROUSEL= 0=list / 1=reel / LAST=restore
   if(bootCar&&!g_games.empty())carEnter();else{drawFullUI();gfx_flush();}
   esp_ota_mark_app_valid_cancel_rollback();   // v5.3: confirm this image booted OK (satisfies the A/B rollback handshake; harmless no-op on non-rollback bootloaders)
-  if(g_wireless_mode && g_link_home && !sdAccessReq) webPanelBegin();   // 5.9.12: web only in Wireless + WiFi (Standalone = radio off)
+  if(g_wireless_mode && g_link_home && !sdAccessReq){
+    wifiPickBestKnownInto();   // #clubday: join the strongest network we recognise (home, club, a friend's)
+    webPanelBegin();           // 5.9.12: web only in Wireless + WiFi (Standalone = radio off)
+  }
   // Merge step 1 smoke test: DAV_TEST=<remote path> in CONFIG.TXT fetches that
   // file over WebDAV right after boot and mounts it — the whole shared-client
   // wiring, visible on a Gotek, with zero UI. Skipped in wireless mode (the
@@ -4779,6 +5057,9 @@ static void infoAction(uint8_t act){
     case IA_SSFAV: g_ss_fav=!g_ss_fav; saveConfigKey("SSFAV", g_ss_fav?"ON":"OFF"); drawInfoFull(); break;   // 5.8.3
     case IA_WEBUI: doWebUiSetup(); drawInfoFull(); break;   // 5.9.9
     case IA_WIFICHECK: doWifiCheck(); drawInfoFull(); break;   // 5.9.10
+    case IA_FLEET: doFleetPick(); g_info_showing=true; drawInfoFull(); break;        // #console: multi-select fleet manager
+    case IA_ORPHAN: doReleaseOrphans(); g_info_showing=true; drawInfoFull(); break;  // #lock: release a claim this screen has forgotten
+    case IA_SAVEDWIFI: savedWifiManage(); drawInfoFull(); break;                     // #clubday: remembered networks
     default: break;
   }
 }
@@ -4874,6 +5155,19 @@ static void handleTap(uint16_t px,uint16_t py){
 
 void loop(){
   webPanelService();   // one web client + one queued DAV load per pass (merge step 2)
+  pfService();          // #console: hear dongle beacons so /api/fleet has a roster
+  pfWorker();           // #console: run one queued fling/eject/claim per pass (non-blocking)
+  { static String mdnsShown; if(pfMdnsName()!=mdnsShown){ mdnsShown=pfMdnsName();
+      if(!g_info_showing) { drawStatusBar(); gfx_flush(); } } }   // #clubday: the election renamed us - repaint the address
+  // #clubday: the link is gone for a while (moved to another location) -> rejoin the strongest
+  // remembered network. setAutoReconnect covers brief same-AP drops; this is for when the AP is truly gone.
+  { static uint32_t wdOut=0;
+    if(g_wireless_mode && g_link_home && !g_known.empty() && WiFi.status()!=WL_CONNECTED){
+      if(!wdOut) wdOut=millis();
+      else if(millis()-wdOut>25000){ wdOut=0; if(wifiAutoJoin()) g_pfMdnsDirty=true; }
+    } else wdOut=0; }
+  if(g_pfClaimedId.length()){ setDongleMine(g_pfClaimedId,true); g_pfClaimedId=""; }      // #lock: a CLAIM from the web page persists ownership too
+  if(g_pfReleasedId.length()){ setDongleMine(g_pfReleasedId,false); g_pfReleasedId=""; }  // #lock: and an UNCLAIM forgets it (never write SD inside a request handler)
   if(g_espnow_link_just_established){g_espnow_link_just_established=false;
     gfx_fillRect(0,0,VW,STATUS_H,0x07E0);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0x07E0);
     gfx_setCursor(VW/2-57,6);gfx_print(T(L_DONGLE_LINKED));gfx_flush();delay(2000);drawStatusBar();gfx_flush();}

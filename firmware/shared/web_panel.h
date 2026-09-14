@@ -20,7 +20,9 @@
 
 // Bumped on every change to this file or the embedded page, appended to the
 // reported firmware string so a device tells you WHICH web build it runs.
-#define GTI_WEB_REV "r16"
+#ifndef GTI_WEB_REV
+#define GTI_WEB_REV "r16"   // the sketch may define this first (JC3248 does, so it shows on-screen too)
+#endif
 
 #include <Update.h>
 #include <ESPmDNS.h>
@@ -140,6 +142,9 @@ static void hConfigGet() {
   j += "\"WIFI_CLIENT_ENABLED\":\"1\",";
   j += "\"WIFI_CLIENT_SSID\":\"" + wpJsonEscape(g_home_ssid) + "\",";
   j += "\"WIFI_CLIENT_PASS\":\"" + wpJsonEscape(g_home_pass) + "\",";
+#if defined(GTI_WEB_FLEET)
+  j += "\"MDNS_NAME\":\"" + wpJsonEscape(g_mdns_name) + "\",";
+#endif
   j += "\"DAV_ENABLED\":\"" + String(g_dav_on ? "1" : "0") + "\",";
   j += "\"DAV_HOST\":\"" + wpJsonEscape(g_dav_host) + "\",";
   j += "\"DAV_PORT\":\"" + String(g_dav_port) + "\",";
@@ -189,6 +194,14 @@ static void hConfigPost() {
   if (webPanelHttp.hasArg("DAV_ENABLED")) { g_dav_on = (webPanelHttp.arg("DAV_ENABLED") == "1"); saveConfigKey("DAV", g_dav_on ? "ON" : "OFF"); }
   if (webPanelHttp.hasArg("WIFI_CLIENT_SSID")) { const String v = webPanelHttp.arg("WIFI_CLIENT_SSID"); if (v.length()) { g_home_ssid = v; saveConfigKey("HOME_SSID", v); } }
   if (webPanelHttp.hasArg("WIFI_CLIENT_PASS")) { const String v = webPanelHttp.arg("WIFI_CLIENT_PASS"); if (v.length()) { g_home_pass = v; saveConfigKey("HOME_PASS", v); } }
+#if defined(GTI_WEB_FLEET)
+  // the rename goes through the dirty flag, never through a second MDNS.begin() - two
+  // owners of one responder is exactly what makes <name>.local stop resolving.
+  if (webPanelHttp.hasArg("MDNS_NAME")) {
+    const String v = webPanelHttp.arg("MDNS_NAME");
+    if (v.length()) { g_mdns_name = v; saveConfigKey("MDNS_NAME", v); g_pfMdnsDirty = true; }
+  }
+#endif
   static const char *passThrough[] = {
     "CAROUSEL", "SCREENSAVER", "SSMODE", "SSTIME", "SSFAV", "LANG",
     "FONT", "ROTATE", "COMPACT", "BTNSTYLE", "TAPLOAD", "HOTSWAP",
@@ -316,6 +329,55 @@ static void hDavLoad() {
   }
 }
 
+// ── Fleet (LAN dongle roster + fling) ──────────────────────────────────────
+// Thin queueing layer over panel_fleet.h: a handler never talks TCP itself, it parks the
+// request in a g_pf* slot and pfWorker() drains it from loop(). Keeps the web server
+// responsive while a fling is in flight, and keeps SD writes out of a request handler.
+#if defined(GTI_WEB_FLEET)
+static void hFleet() { webPanelHttp.send(200, "application/json", pfRosterJson()); }
+
+static void hFleetSend() {
+  const String ip = wpArg("ip");
+  if (ip.length() == 0)                                            webPanelHttp.send(400, "application/json", "{\"error\":\"No ip\"}");
+  else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length())  webPanelHttp.send(409, "application/json", "{\"error\":\"Fleet busy\"}");
+  else {
+    long tcp = wpArg("tcp").toInt(); if (tcp < 1 || tcp > 65535) tcp = PF_TCP_PORT;
+    g_pfSendTcp = (uint16_t)tcp; g_pfSendIp = ip;
+    webPanelHttp.send(200, "application/json", "{\"status\":\"queued\"}");
+  }
+}
+
+static void hFleetCmd() {
+  const String ip  = wpArg("ip");
+  const long   cmd = wpArg("cmd").toInt();
+  if (ip.length() == 0 || cmd < 1 || cmd > 4)                      webPanelHttp.send(400, "application/json", "{\"error\":\"Need ip and cmd\"}");
+  else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length())  webPanelHttp.send(409, "application/json", "{\"error\":\"Fleet busy\"}");
+  else { g_pfCmd = (uint8_t)cmd; g_pfCmdIp = ip; webPanelHttp.send(200, "application/json", "{\"status\":\"queued\"}"); }
+}
+
+// #lock: the token only ever leaves this screen toward a dongle we can SEE with its BOOT
+// pairing window open - never toward a hand-typed address.
+static void hFleetEnroll() {
+  const String ip = wpArg("ip");
+  bool pairing = false;
+  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip && g_pfPeers[i].enr) { pairing = true; break; }
+  if (ip.length() == 0)        webPanelHttp.send(400, "application/json", "{\"error\":\"No ip\"}");
+  else if (!pairing)           webPanelHttp.send(403, "application/json", "{\"error\":\"Not pairing - tap BOOT on the dongle first\"}");
+  else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length() || g_pfEnrollIp.length())
+                               webPanelHttp.send(409, "application/json", "{\"error\":\"Fleet busy\"}");
+  else { g_pfEnrollIp = ip; webPanelHttp.send(200, "application/json", "{\"status\":\"queued\"}"); }
+}
+
+// #lock: releases THIS screen's claim only - the dongle refuses a token that is not one of
+// its owners, so this can never open somebody else's lock.
+static void hFleetUnenroll() {
+  const String ip = wpArg("ip");
+  if (ip.length() == 0)        webPanelHttp.send(400, "application/json", "{\"error\":\"No ip\"}");
+  else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length() || g_pfUnenrollIp.length())
+                               webPanelHttp.send(409, "application/json", "{\"error\":\"Fleet busy\"}");
+  else { g_pfUnenrollIp = ip; webPanelHttp.send(200, "application/json", "{\"status\":\"queued\"}"); }
+}
+#endif
 // ── Firmware OTA (streamed to the inactive slot) ───────────────────────────
 
 static bool   g_otaBad = false, g_otaFail = false;
@@ -362,11 +424,11 @@ static void guDone() {
   build_fat(g_disk + RESERVED_SECTORS * 512, (uint32_t)g_guRecv);
   String outn = (g_mode == MODE_GEN) ? g_guName : String(getOutputFilename());
   build_root(g_disk + (RESERVED_SECTORS + SECTORS_PER_FAT) * 512, outn.c_str(), (uint32_t)g_guRecv);
-  g_sv_img_size = 0; svDirtyReset();
+  g_sv_img_size = 0; g_img_bytes = (uint32_t)g_guRecv; svDirtyReset();
   hardAttach();
   g_loaded = true;
   String bn = g_guName; const int d = bn.lastIndexOf('.'); if (d > 0) bn = bn.substring(0, d);
-  g_loaded_name = bn; g_loaded_path = ""; g_webDavLoaded = "";
+  g_loaded_name = bn; g_loaded_display = bn; g_loaded_path = ""; g_webDavLoaded = "";
   webLog("Web upload mounted: " + g_guName + " (" + String((uint32_t)g_guRecv) + " B)");
   webPanelHttp.send(200, "application/json", "{\"name\":\"" + wpJsonEscape(g_guName) + "\",\"bytes\":" + String((uint32_t)g_guRecv) + "}");
 }
@@ -636,6 +698,13 @@ static void webPanelRegister() {
   webPanelHttp.on("/api/dav/rowmeta",HTTP_GET,  hDavRowmeta);
   webPanelHttp.on("/api/dav/nfo",    HTTP_GET,  hDavNfo);
   webPanelHttp.on("/api/dav/load",   HTTP_POST, hDavLoad);
+#if defined(GTI_WEB_FLEET)
+  webPanelHttp.on("/api/fleet",          HTTP_GET,  hFleet);
+  webPanelHttp.on("/api/fleet/send",     HTTP_POST, hFleetSend);
+  webPanelHttp.on("/api/fleet/cmd",      HTTP_POST, hFleetCmd);
+  webPanelHttp.on("/api/fleet/enroll",   HTTP_POST, hFleetEnroll);
+  webPanelHttp.on("/api/fleet/unenroll", HTTP_POST, hFleetUnenroll);
+#endif
 #if defined(GTI_WEB_SD_FILES)
   webPanelHttp.on("/api/sd/list",    HTTP_GET,  hSdList);
   webPanelHttp.on("/api/sd/get",     HTTP_GET,  hSdGet);
@@ -669,6 +738,9 @@ static void webPanelBegin() {
 // 5.9.17: stop serving + free the listener so a live MODE switch re-inits cleanly.
 static void webPanelStop() {
   if (g_web_srv_started) { webPanelHttp.stop(); MDNS.end(); }
+#if defined(GTI_WEB_FLEET)
+  g_pfMdnsDirty = true;   // the responder is gone; the next bring-up re-registers the elected name
+#endif
   g_web_up = false; g_web_joining = false; g_web_srv_started = false;
 }
 
@@ -677,13 +749,21 @@ static void webPanelService() {
     if (WiFi.status() == WL_CONNECTED) {
       davApplyConfig();
       if (!g_web_srv_started) {                     // register + begin exactly once
+#if defined(GTI_WEB_FLEET)
+        if (MDNS.begin(pfMdnsName().c_str())) MDNS.addService("http", "tcp", 80);   // elected: <name> or <name>-<mac>
+#else
         if (MDNS.begin("GTi")) MDNS.addService("http", "tcp", 80);
+#endif
         webPanelRegister();
         webPanelHttp.begin();
         g_web_srv_started = true;
       }
       g_web_up = true; g_web_joining = false;
+#if defined(GTI_WEB_FLEET)
+      webLog("[WEB] up at http://" + WiFi.localIP().toString() + "/ (" + pfMdnsName() + ".local)");
+#else
       webLog("[WEB] up at http://" + WiFi.localIP().toString() + "/ (GTi.local)");
+#endif
     }
     return;
   }
