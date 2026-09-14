@@ -1011,6 +1011,10 @@ static void apiConfig(){
 static void apiConfigSave(){
   String ssid = server.arg("WIFI_CLIENT_SSID");
   String pass = server.arg("WIFI_CLIENT_PASS");
+  // GET redacts the password. A blank field for the same SSID keeps it;
+  // an explicit clear, a new SSID, or the classic WiFi form can set open WiFi.
+  if(pass.length()==0 && ssid==g_ssid && server.arg("WIFI_CLIENT_PASS_CLEAR")!="1")pass=g_pass;
+  if(ssid==g_ssid && pass==g_pass){server.send(200,"application/json","{\"status\":\"ok\"}");return;}
   if (ssid.length()) { saveWifiCfg(ssid, pass); server.send(200,"application/json","{\"status\":\"ok\",\"reboot\":true}"); delay(400); ESP.restart(); return; }
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
