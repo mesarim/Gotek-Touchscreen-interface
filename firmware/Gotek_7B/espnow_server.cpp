@@ -3,6 +3,7 @@
 // WiFi TCP: disk data transfer (reliable, fast)
 
 #include "espnow_server.h"
+#include "../shared/dongle_wifi.h"
 #include "../shared/save_geometry.h"
 #include <Arduino.h>
 #include "ESP32_NOW.h"
@@ -322,7 +323,7 @@ static bool sendDiskCore(const uint8_t* mac, const char* ipc, uint32_t size, uin
   delay(200);
   // Target the specific dongle by BSSID (all dongles share SSID "GotekXIAO" on channel 6).
   // Without the BSSID, with multiple dongles powered on we'd associate to a random one.
-  WiFi.begin(DONGLE_AP_SSID, DONGLE_AP_PASS, ESPNOW_CHANNEL, (uint8_t*)mac);
+  gotekBeginDongle(mac,DONGLE_AP_PASS);
 
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis()-t0 < connectTimeoutMs) {
@@ -497,7 +498,7 @@ bool espnowFetchSave(SavePersistCb persist) {
   WiFi.setAutoReconnect(false);
   WiFi.disconnect(false, true);
   delay(200);
-  WiFi.begin(DONGLE_AP_SSID, DONGLE_AP_PASS, ESPNOW_CHANNEL, (uint8_t*)_xiao_mac);
+  gotekBeginDongle(_xiao_mac,DONGLE_AP_PASS);
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) delay(200);
   if (WiFi.status() != WL_CONNECTED) { Serial.println("[SAVE] WiFi join failed"); restoreEspNow(); return false; }

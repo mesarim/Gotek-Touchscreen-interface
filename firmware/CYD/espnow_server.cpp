@@ -7,6 +7,7 @@
 //       We use compile-time detection to handle both core 2.x and 3.x.
 
 #include "espnow_server.h"
+#include "../shared/dongle_wifi.h"
 #include <Arduino.h>
 #include <esp_now.h>
 #include <WiFi.h>
@@ -351,7 +352,7 @@ bool espnowSendDisk(uint32_t size) {
 
   esp_now_deinit(); delay(100);
   WiFi.mode(WIFI_STA); delay(100);
-  WiFi.begin(XIAO_AP_SSID, XIAO_AP_PASS);
+  gotekBeginDongle(_xiao_mac,XIAO_AP_PASS);
   uint32_t t0=millis();
   while (WiFi.status()!=WL_CONNECTED && millis()-t0<15000) { delay(200); Serial.print("."); }
   Serial.println();

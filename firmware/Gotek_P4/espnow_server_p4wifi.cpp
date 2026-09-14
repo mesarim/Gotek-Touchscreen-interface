@@ -22,6 +22,7 @@
 // symbols). Rename the stub to .bak and drop this in.
 
 #include "espnow_server.h"
+#include "../shared/dongle_wifi.h"
 #include "../shared/save_geometry.h"
 #include <Arduino.h>
 #include "WiFi.h"
@@ -124,7 +125,7 @@ static void blockingScanHarvest() {
   int n = WiFi.scanNetworks(false /*blocking*/, false /*show_hidden*/, false /*passive*/, 300, DONGLE_AP_CHANNEL);
   if (n <= 0) { WiFi.scanDelete(); return; }
   for (int i = 0; i < n && _scanned_count < _scanCap; i++) {
-    if (!WiFi.SSID(i).startsWith(DONGLE_AP_SSID)) continue;   // 5.9.11: match GotekOMEGA AND GotekOMEGA-<mac> (unique-SSID dongles)
+    if (!gotekDongleSSID(WiFi.SSID(i))) continue;
     uint8_t* b = WiFi.BSSID(i);
     if (!b) continue;
     bool dup=false;
@@ -188,6 +189,20 @@ bool espnowSendNotify(const String&, const String&, uint32_t) {
   return true;
 }
 
+// Use the scan cache when available, and rediscover a saved BSSID after boot.
+static void joinDongleAP(const uint8_t* mac) {
+  bool haveMac = false;
+  for (int i=0; i<6; ++i) if (mac[i]) { haveMac=true; break; }
+  if (!haveMac) { WiFi.begin(DONGLE_AP_SSID, DONGLE_AP_PASS); return; }
+  for (int i=0; i<_scanned_count; ++i) {
+    if (!memcmp(_scanned[i].mac, mac, 6) && _scanned[i].ssid[0]) {
+      WiFi.begin(_scanned[i].ssid, DONGLE_AP_PASS, DONGLE_AP_CHANNEL, mac);
+      return;
+    }
+  }
+  gotekBeginDongle(mac, DONGLE_AP_PASS);
+}
+
 // ---------- Core AP-direct push: join a dongle's SoftAP by BSSID, stream over TCP-3333 ----------
 // ── Wireless DSK fix (matches Webby 1.6.3) ──────────────────────────────────
 // Tell the dongle the flung disk's real filename+extension via the CMD_SET_NAME
@@ -226,11 +241,7 @@ static bool sendDiskCore(const uint8_t* mac, const char* ipc, uint32_t size, uin
   WiFi.disconnect(false, true);     // drop any sticky assoc so we target THIS BSSID
   delay(200);
 
-  bool haveMac = false; for (int i=0;i<6;i++) if(mac[i]){ haveMac=true; break; }
-  const char* joinSsid = DONGLE_AP_SSID;   // 5.9.11: dongles use unique GotekOMEGA-<mac> SSIDs; use this dongle's actual SSID from the scan
-  for (int i=0;i<_scanned_count;i++) if(memcmp(_scanned[i].mac,mac,6)==0 && _scanned[i].ssid[0]){ joinSsid=_scanned[i].ssid; break; }
-  if (haveMac) WiFi.begin(joinSsid, DONGLE_AP_PASS, DONGLE_AP_CHANNEL, (uint8_t*)mac);
-  else         WiFi.begin(joinSsid, DONGLE_AP_PASS);
+  joinDongleAP(mac);
 
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis()-t0 < connectTimeoutMs) { delay(200); Serial.print("."); }
@@ -372,7 +383,7 @@ bool espnowFetchSave(SavePersistCb persist) {
   WiFi.persistent(false); WiFi.setAutoReconnect(false);
   WiFi.disconnect(false, true); delay(200);
   bool haveMac=false; for(int i=0;i<6;i++) if(_dongle_mac[i]){ haveMac=true; break; }
-  if (haveMac) WiFi.begin(DONGLE_AP_SSID, DONGLE_AP_PASS, DONGLE_AP_CHANNEL, (uint8_t*)_dongle_mac);
+  if (haveMac) gotekBeginDongle(_dongle_mac,DONGLE_AP_PASS);
   else         WiFi.begin(DONGLE_AP_SSID, DONGLE_AP_PASS);
   uint32_t t0=millis(); while(WiFi.status()!=WL_CONNECTED && millis()-t0<15000) delay(200);
   if (WiFi.status()!=WL_CONNECTED) { Serial.println("[P4WIFI/SAVE] join failed"); WiFi.disconnect(); return false; }

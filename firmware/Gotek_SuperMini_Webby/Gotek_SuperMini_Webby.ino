@@ -1236,7 +1236,8 @@ static void startEspnowApMode(){
   WiFi.mode(WIFI_AP_STA);
   // Unique AP name per device: two dongles in one room both broadcasting
   // "GotekOMEGA" is impossible to tell apart (you configure the wrong one).
-  uint8_t apm[6]; WiFi.macAddress(apm);
+  uint8_t apm[6];
+  if(esp_read_mac(apm,ESP_MAC_WIFI_STA)!=ESP_OK){Serial.println("Cannot read WiFi MAC");return;}
   char apid[24]; snprintf(apid, sizeof(apid), "%s-%02X%02X", AP_SSID, apm[4], apm[5]);
   char apline[32]; snprintf(apline, sizeof(apline), "AP: %s", apid);
   WiFi.softAP(apid, AP_PASS, ESPNOW_CHANNEL);

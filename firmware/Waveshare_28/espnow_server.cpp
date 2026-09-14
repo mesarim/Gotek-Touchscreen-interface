@@ -3,6 +3,7 @@
 // WiFi TCP: disk data transfer (reliable, fast)
 
 #include "espnow_server.h"
+#include "../shared/dongle_wifi.h"
 #include <Arduino.h>
 #include "ESP32_NOW.h"
 #include "WiFi.h"
@@ -188,7 +189,7 @@ bool espnowSendDisk(uint32_t size) {
   // Switch to pure STA mode to connect to XIAO's AP
   WiFi.mode(WIFI_STA);
   delay(100);
-  WiFi.begin(XIAO_AP_SSID, XIAO_AP_PASS);
+  gotekBeginDongle(_xiao_mac,XIAO_AP_PASS);
 
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) {
