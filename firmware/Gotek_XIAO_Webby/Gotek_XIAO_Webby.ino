@@ -55,7 +55,9 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
+#ifndef FW_VERSION
 #define FW_VERSION     "Webby-1.5-xiao"
+#endif
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -438,6 +440,20 @@ static void loadWifiCfg() {
   }
   f.close();
 }
+// Write the complete settings file before replacing the previous copy.
+static bool writeWifiCfg(const String& ssid, const String& pass,
+                         const String& mode, const String& name) {
+  if (!LittleFS.begin(false)) return false;
+  String data = "SSID=" + ssid + "\nPASS=" + pass + "\nMODE=" + mode
+              + "\nNAME=" + name + "\n";
+  File f = LittleFS.open("/WEBBY.TXT.tmp", "w");
+  if (!f) return false;
+  bool ok = f.write((const uint8_t*)data.c_str(), data.length()) == data.length();
+  f.close();
+  if (ok) ok = LittleFS.rename("/WEBBY.TXT.tmp", "/WEBBY.TXT");
+  if (!ok) LittleFS.remove("/WEBBY.TXT.tmp");
+  return ok;
+}
 static void saveWifiCfg(const String& ssid, const String& pass) {
   if (!LittleFS.begin(true)) return;
   File f = LittleFS.open("/WEBBY.TXT", "w"); if (!f) return;
@@ -609,7 +625,14 @@ static bool     g_up_overflow = false;
 static String   g_up_name = "";
 
 static String jsonEsc(const String& s){
-  String o; for(size_t i=0;i<s.length();i++){ char c=s[i]; if(c=='"'||c=='\\'){o+='\\';o+=c;} else if(c>=32) o+=c; } return o;
+  String out;
+  for (size_t i=0; i<s.length(); ++i) {
+    unsigned char c = (unsigned char)s[i];
+    if (c == '"' || c == '\\') { out += '\\'; out += (char)c; }
+    else if (c < 32) { char escaped[7]; snprintf(escaped, sizeof(escaped), "\\u%04x", c); out += escaped; }
+    else out += (char)c;
+  }
+  return out;
 }
 static String statusJson(){
   String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
@@ -895,6 +918,7 @@ static void apiSystemInfo(){
   String j = "{";
   j += "\"max_image_bytes\":"+String(MAX_FILE_BYTES)+",";
   j += "\"firmware\":\""; j += FW_VERSION; j += "\",";
+  j += "\"build\":\"" __DATE__ " " __TIME__ "\",";
   j += "\"heap_free\":"; j += String((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL)); j += ",";
   j += "\"psram_free\":"; j += String((unsigned)ESP.getFreePsram()); j += ",";
   j += "\"sd_used_mb\":0,\"sd_total_mb\":0,";
@@ -963,19 +987,47 @@ static void apiConfig(){
   j += "\"WIFI_CLIENT_ENABLED\":\""; j += (g_webmode==1?"1":"0"); j += "\",";
   j += "\"WIFI_CLIENT_SSID\":\""; j += jsonEsc(g_ssid); j += "\",";
   j += "\"WIFI_CLIENT_PASS\":\"\",";
+  j += "\"WIFI_CLIENT_PASS_SAVED\":\""; j += (g_pass.length() ? "1" : "0"); j += "\",";
+  j += "\"DEVICE_NAME\":\""; j += jsonEsc(discoName()); j += "\",";
   j += "\"FTP_ENABLED\":\"0\",\"DAV_ENABLED\":\"0\"";
   j += "}";
   server.send(200,"application/json", j);
 }
+static void apiWifiPassword(){
+  // Only an explicit eye-button request returns the stored password.
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", String("{\"password\":\"") + jsonEsc(g_pass) + "\"}");
+}
 static void apiConfigSave(){
-  String ssid = server.arg("WIFI_CLIENT_SSID");
-  String pass = server.arg("WIFI_CLIENT_PASS");
-  // GET redacts the password. A blank field for the same SSID keeps it;
-  // an explicit clear, a new SSID, or the classic WiFi form can set open WiFi.
+  String ssid = server.hasArg("WIFI_CLIENT_SSID") ? server.arg("WIFI_CLIENT_SSID") : g_ssid;
+  String pass = server.hasArg("WIFI_CLIENT_PASS") ? server.arg("WIFI_CLIENT_PASS") : g_pass;
   if(pass.length()==0 && ssid==g_ssid && server.arg("WIFI_CLIENT_PASS_CLEAR")!="1")pass=g_pass;
-  if(ssid==g_ssid && pass==g_pass){server.send(200,"application/json","{\"status\":\"ok\"}");return;}
-  if (ssid.length()) { saveWifiCfg(ssid, pass); server.send(200,"application/json","{\"status\":\"ok\",\"reboot\":true}"); delay(400); ESP.restart(); return; }
-  server.send(200,"application/json","{\"status\":\"ok\"}");
+  String name = server.hasArg("DEVICE_NAME") ? sanitizeName(server.arg("DEVICE_NAME")) : g_devname;
+  if (server.hasArg("DEVICE_NAME") &&
+      ((server.arg("DEVICE_NAME").length() && !name.length()) || name == MDNS_NAME)) {
+    server.send(400, "application/json", "{\"error\":\"Choose a device name with letters or digits; gotekomega is reserved for the fleet\"}");
+    return;
+  }
+  if (name == discoName()) name = g_devname; // Leave an automatic name automatic.
+  String mode = g_modeStr.length() ? g_modeStr : String("ESPNOW");
+  if (server.hasArg("WIFI_CLIENT_ENABLED"))
+    mode = server.arg("WIFI_CLIENT_ENABLED") == "1" ? "WIFI" : "ESPNOW";
+  else if (ssid != g_ssid) mode = "WIFI";
+  if (mode == "WIFI" && !ssid.length()) {
+    server.send(400, "application/json", "{\"error\":\"Enter a Wi-Fi network name\"}"); return;
+  }
+  if(ssid==g_ssid && pass==g_pass && name==g_devname && mode==g_modeStr){
+    server.send(200,"application/json","{\"status\":\"ok\"}"); return;
+  }
+  if (g_disk_loaded || g_dirty_count) {
+    server.send(409, "application/json", "{\"error\":\"Save and eject the loaded disk before changing device settings\"}"); return;
+  }
+  if (!writeWifiCfg(ssid, pass, mode, name)) {
+    server.send(500, "application/json", "{\"error\":\"Could not save device settings; please retry\"}"); return;
+  }
+  g_ssid=ssid; g_pass=pass; g_devname=name; g_modeStr=mode;
+  server.send(200, "application/json", String("{\"status\":\"ok\",\"reboot\":true,\"hostname\":\"") + discoName() + "\"}");
+  delay(400); ESP.restart();
 }
 static void apiReboot(){ server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
 static void apiThemesList(){
@@ -1105,6 +1157,7 @@ static void startWebServer(){
   server.on("/api/games/list",   HTTP_GET,  [](){ server.send(200,"application/json","{\"games\":[]}"); });
   server.on("/api/wifi/status",  HTTP_GET,  apiWifiStatus);
   server.on("/api/wifi/scan",    HTTP_GET,  handleScan);
+  server.on("/api/wifi/password",HTTP_POST, apiWifiPassword);
   server.on("/api/config",       HTTP_GET,  apiConfig);
   server.on("/api/config",       HTTP_POST, apiConfigSave);
   server.on("/api/system/reboot",HTTP_POST, apiReboot);
