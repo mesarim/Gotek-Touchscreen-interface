@@ -47,7 +47,7 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-1.6.3-lock"
+#define FW_VERSION     "Webby-1.6.4-lock"   // on Mez 1.6.3 (his WS2812 radio fix) + the WiFi owner-lock
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -74,6 +74,9 @@
 #endif
 #ifndef LED_NP_BRIGHT
 #define LED_NP_BRIGHT  28     // 0..255, keep low
+#endif
+#ifndef LED_NP_ENABLE
+#define LED_NP_ENABLE  0     // Mez 1.6.2: WS2812/RMT OFF by default - driving the pixel starved the ESP-NOW radio on the SuperMini (pairing died). Discrete red/blue LEDs unaffected. Set 1 only where you accept the wireless risk.
 #endif
 #ifndef BOOT_PIN
 #define BOOT_PIN       0
@@ -187,10 +190,12 @@ static void ledRender() {
   static uint32_t last=0xFFFFFFFFu; if(sig==last) return; last=sig;
   digitalWrite(LED_RED,  dred ? HIGH : LOW);
   digitalWrite(LED_BLUE, dblue? HIGH : LOW);
+#if LED_NP_ENABLE
 #if LED_NP_SWAP_RG
   neopixelWrite(LED_NP_PIN, G, R, B);   // R/G swapped for this Zero's pixel
 #else
   neopixelWrite(LED_NP_PIN, R, G, B);
+#endif
 #endif
 }
 static inline void ledRed(bool on){ g_led_red = on; ledRender(); }
