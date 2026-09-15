@@ -258,6 +258,14 @@ static String pfRosterJson() {
 
 // #lock: send our token ONLY to a lock-capable dongle this screen actually owns. Beacons are
 // unauthenticated, so "lk":1 alone must never be enough to make us hand the token to a stranger.
+// #lock: locked, and not ours -> there is nothing to try. A dongle that refuses mid-stream
+// answers 0x05 and closes while we are still writing, which is a TCP RST - that discards the
+// byte, so the caller sees a dead connection and reports a cable fault. Answer from what the
+// beacon already told us instead, and do not hand our token to somebody else's dongle.
+static bool pfPeerLockedElsewhere(const String &ip) {
+  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) return g_pfPeers[i].lkd && !pfIsMine(g_pfPeers[i].id);
+  return false;
+}
 static bool pfPeerWantsAuth(const String &ip) {
   for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) return g_pfPeers[i].lk && pfIsMine(g_pfPeers[i].id);
   return false;
@@ -285,6 +293,7 @@ static void pfNoteTarget(const String &ip) {   // NOW PLAYING shows where the di
   for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip && g_pfPeers[i].name.length()) { g_pfTargetName = g_pfPeers[i].name; return; }
 }
 static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
+  if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
   if (!g_loaded || g_img_bytes == 0) { err = "no disk loaded"; return false; }
   const uint8_t *data = g_disk + DATA_LBA * 512;
   const uint32_t size = g_img_bytes;
@@ -326,6 +335,7 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
 }
 
 static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &err) {
+  if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
   WiFiClient c;
   if (!c.connect(ip.c_str(), port, 5000)) { err = "connect failed"; return false; }
   c.setNoDelay(true);
@@ -348,6 +358,7 @@ static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &
 // Best-effort: an old dongle ignores the unknown escape (one-sided safe), so a
 // failure here never blocks the fling.
 static bool pfSendName(const String &ip, uint16_t port, const String &name, String &err) {
+  if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
   WiFiClient c;
   if (!c.connect(ip.c_str(), port, 4000)) { err = "connect failed"; return false; }
   c.setNoDelay(true);
