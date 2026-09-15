@@ -300,7 +300,14 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
   uint32_t sent = 0, stall = millis();
   const uint32_t deadline = millis() + 180000UL;   // hard ceiling: a crawling link must not hold the screen hostage for minutes
   while (sent < size) {
-    if (!c.connected()) { err = "connection lost at " + String(sent) + "B"; c.stop(); return false; }
+    // A refusal arrives mid-stream: the dongle answers 0x05 and hangs up while we are still
+    // writing. Read it, or the caller reports a broken cable when it was actually a locked dongle.
+    if (c.available()) { const int r = c.read(); c.stop();
+      err = (r == 0x05) ? "locked to another screen" : (r == 0x00) ? "dongle refused the disk" : ("refused (0x" + String(r, HEX) + ")");
+      return false; }
+    if (!c.connected()) {
+      if (c.available()) { const int r = c.read(); if (r == 0x05) { err = "locked to another screen"; c.stop(); return false; } }
+      err = "connection lost at " + String(sent) + "B"; c.stop(); return false; }
     if ((int32_t)(millis() - deadline) > 0) { err = "too slow - " + String(sent*100/size) + "% in 3 min"; c.stop(); return false; }
     uint32_t chunk = size - sent; if (chunk > 8192) chunk = 8192;
     const size_t w = c.write(data + sent, chunk);
