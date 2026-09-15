@@ -350,7 +350,10 @@ static void hFleetSend() {
 static void hFleetCmd() {
   const String ip  = wpArg("ip");
   const long   cmd = wpArg("cmd").toInt();
-  if (ip.length() == 0 || cmd < 1 || cmd > 4)                      webPanelHttp.send(400, "application/json", "{\"error\":\"Need ip and cmd\"}");
+  // Only the commands pfSendCommand can actually read back. 0x01 GET_SAVE and 0x02 GET_STATUS
+  // answer with a header and then a stream; pfSendCommand reads ONE byte, so it would report
+  // "refused" on the 'S' of SV1/ST and hang up mid-transfer. Eject and force-eject ack a byte.
+  if (ip.length() == 0 || cmd < 3 || cmd > 4)                      webPanelHttp.send(400, "application/json", "{\"error\":\"Need ip and cmd (3=eject, 4=force)\"}");
   else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length())  webPanelHttp.send(409, "application/json", "{\"error\":\"Fleet busy\"}");
   else { g_pfCmd = (uint8_t)cmd; g_pfCmdIp = ip; webPanelHttp.send(200, "application/json", "{\"status\":\"queued\"}"); }
 }
