@@ -453,6 +453,13 @@ static String discoName(){
   uint8_t m[6]; WiFi.macAddress(m);
   char b[24]; snprintf(b,sizeof(b),"gotekomega-%02x%02x",m[4],m[5]); return String(b); }
 static int    g_webmode = 0;
+// #lock: the token gates the SHARED LAN, where every screen in the building can reach us.
+// On our own AP the AP password is the gate - that is why it is configurable, and it is the
+// documented way out of a claim ('use its own AP, or UNCLAIM it first'). The HTTP surface has
+// always drawn the line there; the TCP gates did not, and that refused the panel's own
+// ESP-NOW-mode save fetch with 0x05 - it joins this AP to collect the save.
+static bool wtokGateActive();   // the token helpers are above; the body needs g_webmode, so it lands here
+static bool wtokGateActive(){ return wtokLocked() && g_webmode == 1; }
 static bool   g_join_failed = false;   // resolved at boot: 0 = ESPNOW/AP, 1 = WIFI/STA
 static String g_loaded_name = "";
 
@@ -582,7 +589,7 @@ static void handleTCPClient(WiFiClient& client) {
       }
 
       // -- everything below changes state or reads the user's data: refused while locked without AUTH --
-      if (wtokLocked() && !authed) { client.write((uint8_t)0x05); return; }
+      if (wtokGateActive() && !authed) { client.write((uint8_t)0x05); return; }
 
       if (cmd == CMD_GET_SAVE)    { doGetSave(client);     return; }
       if (cmd == CMD_EJECT)       { doEject(client,false); return; }
@@ -608,7 +615,7 @@ static void handleTCPClient(WiFiClient& client) {
 
     // -- disk payload --
     if (size == 0 || size > MAX_FILE_BYTES) { client.write((uint8_t)0x00); return; }
-    if (wtokLocked() && !authed) { client.write((uint8_t)0x05); return; }   // #lock: locked dongle refuses an unauthenticated fling
+    if (wtokGateActive() && !authed) { client.write((uint8_t)0x05); return; }   // #lock: locked dongle refuses an unauthenticated fling over the shared LAN
     // #safety: detach BEFORE overwriting the RAM disk. The browser-upload path already does this;
     // the TCP path did not, so a re-fling left the host mounted on a half-rewritten volume for the
     // whole transfer (minutes, on a bad link).
@@ -681,10 +688,14 @@ static String statusJson(){
 // ── #lock: while this dongle is locked to a screen AND on the shared home LAN, its own
 // web page is not an auth channel - every WRITE endpoint is refused. Reads stay open.
 // Configure it from its own password-protected AP (g_webmode==0), or UNCLAIM it from the owning screen.
-static bool webWriteAllowed(){ return !(wtokLocked() && g_webmode == 1); }
+// #lock: which web endpoints a claim closes. Only the three that change what a running
+// Amiga sees - upload, eject, unload. Settings, OTA, /espnow and reboot stay open on
+// purpose: they are what you reach for when something is already wrong, and locking them
+// strands the owner more reliably than it stops anyone else.
+static bool webWriteAllowed(){ return !wtokGateActive(); }
 static bool webDenyLocked(){
   if (webWriteAllowed()) return false;
-  server.send(403,"application/json","{\"error\":\"dongle is locked to a screen - use its own AP, or UNCLAIM it first\"}");
+  server.send(403,"application/json","{\"error\":\"disk is locked to a screen - UNCLAIM it there, or use this dongle's own AP\"}");
   return true;
 }
 
@@ -752,7 +763,6 @@ static void handleScan(){
 }
 
 static void handleSaveWifi(){
-  if (webDenyLocked()) return;   // #lock
   String ssid = server.arg("ssid"); String pass = server.arg("pass");
   if (ssid.length()==0) { server.send(400,"application/json","{\"ok\":false,\"err\":\"no SSID\"}"); return; }
   if (server.hasArg("name")) g_devname = sanitizeName(server.arg("name"));   // #name: set at first setup so it joins already-named (no default-name clash)
@@ -763,7 +773,6 @@ static void handleSaveWifi(){
   if (saved) { delay(500); ESP.restart(); }
 }
 static void handleEspnowWeb(){
-  if (webDenyLocked()) return;   // #lock
   setModeEspnow();
   server.send(200,"application/json","{\"ok\":true}");
   delay(400); ESP.restart();
@@ -909,7 +918,6 @@ static void loadTheme(){
 // client-parser firmware). First byte must be 0xE9 (an ESP32 image).
 static bool g_ota_ok=false, g_ota_run=false, g_ota_first=false;
 static void onOtaUpload(){
-  if (!webWriteAllowed()) return;   // #lock: discard the stream; the Done handler answers 403
   HTTPUpload& up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
     g_ota_ok=false; g_ota_first=true;
@@ -922,7 +930,6 @@ static void onOtaUpload(){
   }
 }
 static void onOtaDone(){
-  if (webDenyLocked()) return;   // #lock
   server.send(200, "application/json", g_ota_ok ? "{\"status\":\"ok\"}" : "{\"error\":\"firmware update failed - not an ESP32 image?\"}");
   if (g_ota_ok) { delay(600); ESP.restart(); }
 }
@@ -995,13 +1002,12 @@ static void apiConfig(){
   server.send(200,"application/json", j);
 }
 static void apiConfigSave(){
-  if (webDenyLocked()) return;   // #lock
   String ssid = server.arg("WIFI_CLIENT_SSID");
   String pass = server.arg("WIFI_CLIENT_PASS");
   if (ssid.length()) { saveWifiCfg(ssid, pass); server.send(200,"application/json","{\"status\":\"ok\",\"reboot\":true}"); delay(400); ESP.restart(); return; }
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
-static void apiReboot(){ if (webDenyLocked()) return;   // #lock
+static void apiReboot(){
   server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
 static void apiThemesList(){
   String j = "{\"active\":\""; j += g_active_theme;
@@ -1125,7 +1131,6 @@ static void startWebServer(){
   server.on("/savewifi", HTTP_POST, handleSaveWifi);
   server.on("/espnow", HTTP_POST, handleEspnowWeb);
   server.on("/setap", HTTP_POST, [](){   // #lock: set a custom AP name + password (protects the dongle's own setup AP)
-    if (webDenyLocked()) return;   // #lock
     String name = server.hasArg("apname") ? server.arg("apname") : "";
     String pass = server.hasArg("appass") ? server.arg("appass") : "";
     name.trim();
