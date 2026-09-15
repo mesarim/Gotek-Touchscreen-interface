@@ -955,6 +955,7 @@ static int g_cracktro=0;      // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or
 static int g_car_bootmode=0;  // CONFIG.TXT CAROUSEL= : default boot VIEW — 0/OFF=list, 1/ON=reel, 2=LAST (restore last view, remembered in /.gtiview). v4.8.5+: carousel is ALWAYS available via the flip toggle regardless.
 // ── 5.8.6: home-WiFi dongle transport (LINK=HOMEWIFI) — route the FLING via the home router to a Webby dongle's gotek.local, instead of hopping to the dongle's own AP ──
 static bool   g_link_home=false;                                    // LINK: false=ESP-NOW/AP (default), true=HOME WIFI
+static uint8_t g_wifiNotice=0;   // #clubday: 1 = no known WiFi at boot, fell back to ESP-NOW; 2 = link lost while running
 static String g_mdns_name=PF_MDNS_DEFAULT;   // MDNS_NAME: this screen's own mDNS name. Two screens on one network sort it out between them (lowest MAC keeps it).
 static String g_home_ssid="", g_home_pass="", g_dongle_home_ip="";  // HOME_SSID / HOME_PASS (set in CONFIG.TXT) + cached DONGLE_HOME_IP
 static String g_dav_host="",g_dav_user="",g_dav_pass="",g_dav_path="/";static int g_dav_port=443;static bool g_dav_https=true,g_dav_on=false;   // DAV_* in CONFIG.TXT (merge step 1)
@@ -3948,14 +3949,18 @@ static bool wifiAutoJoin(){
   for(int a=0;a<cn;a++){ if(wifiJoin(cand[a],netKnownPass(cand[a]),10000)){ rememberNet(cand[a],netKnownPass(cand[a])); g_link_home=true; return true; } }
   return WiFi.status()==WL_CONNECTED;
 }
-static void wifiPickBestKnownInto(){
-  if(g_known.empty()) return;
+// #clubday: pick the strongest remembered network out of a scan. Returns whether one is
+// actually in range - the caller uses that to decide about falling back, because the join
+// itself is non-blocking and has not happened yet when this returns.
+static bool wifiPickBestKnownInto(){
+  if(g_known.empty()) return false;
   WiFi.mode(WIFI_STA);
-  int n=WiFi.scanNetworks(); if(n<=0){ WiFi.scanDelete(); return; }
+  int n=WiFi.scanNetworks(); if(n<=0){ WiFi.scanDelete(); return false; }
   String best=""; int bestR=-999;
   for(int i=0;i<n;i++){ String s=WiFi.SSID(i); if(netIsKnown(s)&&WiFi.RSSI(i)>bestR){ bestR=WiFi.RSSI(i); best=s; } }
   WiFi.scanDelete();
-  if(best.length()){ g_home_ssid=best; g_home_pass=netKnownPass(best); }
+  if(best.length()){ g_home_ssid=best; g_home_pass=netKnownPass(best); return true; }
+  return false;
 }
 
 static int wifiPickFromScan(String& outSsid, bool& outSecured){
@@ -4853,8 +4858,16 @@ void setup(){
   if(bootCar&&!g_games.empty())carEnter();else{drawFullUI();gfx_flush();}
   esp_ota_mark_app_valid_cancel_rollback();   // v5.3: confirm this image booted OK (satisfies the A/B rollback handshake; harmless no-op on non-rollback bootloaders)
   if(g_wireless_mode && g_link_home && !sdAccessReq){
-    wifiPickBestKnownInto();   // #clubday: join the strongest network we recognise (home, club, a friend's)
-    webPanelBegin();           // 5.9.12: web only in Wireless + WiFi (Standalone = radio off)
+    const bool haveCreds = !g_known.empty();
+    const bool inRange   = wifiPickBestKnownInto();   // #clubday: is a network we know even here?
+    if(haveCreds && !inRange){
+      // #clubday: moved house, router down, wrong venue - whatever the reason, there is no
+      // network here that we know. ESP-NOW still reaches the dongles, so use it rather than
+      // sit in a mode with nothing on the other end. RAM only: CONFIG.TXT still says
+      // LINK=HOMEWIFI, so the next boot tries WiFi again and MODE stays the user's call.
+      g_link_home=false; g_wifiNotice=1;
+      ensureEspNow();
+    } else webPanelBegin();    // 5.9.12: web only in Wireless + WiFi (Standalone = radio off)
   }
   // Merge step 1 smoke test: DAV_TEST=<remote path> in CONFIG.TXT fetches that
   // file over WebDAV right after boot and mounts it — the whole shared-client
@@ -5182,17 +5195,25 @@ void loop(){
       if(g_info_showing) drawInfoFull(); else { drawStatusBar(); gfx_flush(); } } }   // #clubday: the election renamed us - repaint wherever the address is shown
   // #clubday: the link is gone for a while (moved to another location) -> rejoin the strongest
   // remembered network. setAutoReconnect covers brief same-AP drops; this is for when the AP is truly gone.
-  { static uint32_t wdOut=0, wdWait=25000;
+  { static uint32_t wdOut=0, wdWait=25000; static bool g_wifiToldLost=false;
     if(g_wireless_mode && g_link_home && !g_known.empty() && WiFi.status()!=WL_CONNECTED){
       if(!wdOut) wdOut=millis();
       else if(millis()-wdOut>wdWait){
         wdOut=0;
-        if(wifiAutoJoin()){ g_pfMdnsDirty=true; wdWait=25000; }
-        else if(wdWait<300000) wdWait*=2;   // the AP is really gone: stop freezing the UI every 25 s
+        if(wifiAutoJoin()){ g_pfMdnsDirty=true; wdWait=25000; g_wifiToldLost=false; }
+        else {
+          if(wdWait<300000) wdWait*=2;   // the AP is really gone: stop freezing the UI every 25 s
+          if(!g_wifiToldLost){ g_wifiToldLost=true; g_wifiNotice=2; }   // say it once per outage
+        }
       }
     } else wdOut=0; }
   if(g_pfClaimedId.length()){ setDongleMine(g_pfClaimedId,true); g_pfClaimedId=""; }      // #lock: a CLAIM from the web page persists ownership too
   if(g_pfReleasedId.length()){ setDongleMine(g_pfReleasedId,false); g_pfReleasedId=""; }  // #lock: and an UNCLAIM forgets it (never write SD inside a request handler)
+  if(g_wifiNotice && !g_info_showing){   // #clubday: one notice, once the UI is actually there
+    if(g_wifiNotice==1) hwMsg("No WiFi found","using ESP-NOW instead",COL_AMBER,2500);
+    else                hwMsg("WiFi lost","tap MODE for ESP-NOW",COL_AMBER,2500);
+    g_wifiNotice=0; drawFullUI(); gfx_flush();
+  }
   if(g_espnow_link_just_established){g_espnow_link_just_established=false;
     gfx_fillRect(0,0,VW,STATUS_H,0x07E0);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0x07E0);
     gfx_setCursor(VW/2-57,6);gfx_print(T(L_DONGLE_LINKED));gfx_flush();delay(2000);drawStatusBar();gfx_flush();}
