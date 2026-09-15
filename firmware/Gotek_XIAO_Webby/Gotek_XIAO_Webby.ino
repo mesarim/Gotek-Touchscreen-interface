@@ -90,6 +90,8 @@
 #define SAVE_SETTLE_MS  3000
 #define SAVE_BEACON_MS  10000
 #define STATUS_BEACON_MS 2500
+#define ESPNOW_HELLO_MS  2000   // #pair: keep announcing while unpaired. The 3 s burst at boot
+                                // meant a screen only found us if it scanned in that window.
 #define TCP_CMD_ESCAPE  0xFFFFFFFFUL
 #define CMD_GET_SAVE    0x01
 #define CMD_GET_STATUS  0x02
@@ -139,6 +141,7 @@ static uint32_t g_load_id    = 0;
 static uint32_t g_image_size = ADF_DEFAULT_SIZE;
 static uint32_t g_next_beacon_ms = 0;
 static uint32_t g_next_status_ms = 0;
+static uint32_t g_next_hello_ms  = 0;   // #pair: next unpaired ESP-NOW announcement
 static inline bool dGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void dSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
 static inline void dClr(uint8_t*m,uint32_t i){m[i>>3]&=(uint8_t)~(1u<<(i&7));}
@@ -326,6 +329,13 @@ public:
 };
 static XiaoPeer* _bcastPeer = nullptr;
 static XiaoPeer* _wavePeer  = nullptr;
+// #pair: one hello, broadcast. The boot burst and the keep-announcing timer both use this.
+static void sendPairHello() {
+  if (!_bcastPeer) return;
+  PktHello hello = {}; hello.type = PKT_PAIR_HELLO; WiFi.softAPmacAddress(hello.mac);
+  strncpy(hello.ip, AP_IP, 15); hello.pad[0] = SAVE_PROTO_VER;
+  _bcastPeer->send_pkt((uint8_t*)&hello, sizeof(hello));
+}
 static void sendSimple(uint8_t type) {
   PktSimple pkt = {}; pkt.type = type;
   XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
@@ -1256,10 +1266,10 @@ static void startEspnowApMode(){
   oledStatus("Gotek OMEGA " FW_VERSION, apline, WiFi.softAPIP().toString(), "Broadcasting...");
   uint32_t t0 = millis();
   while (millis()-t0 < (uint32_t)(_paired ? 8000 : 3000)) {
-    PktHello hello = {}; hello.type = PKT_PAIR_HELLO; WiFi.softAPmacAddress(hello.mac);
-    strncpy(hello.ip, AP_IP, 15); hello.pad[0] = SAVE_PROTO_VER;
-    if (_bcastPeer) _bcastPeer->send_pkt((uint8_t*)&hello, sizeof(hello));
-    if (_wavePeer)  _wavePeer->send_pkt((uint8_t*)&hello, sizeof(hello));
+    sendPairHello();
+    if (_wavePeer) { PktHello h = {}; h.type = PKT_PAIR_HELLO; WiFi.softAPmacAddress(h.mac);
+                     strncpy(h.ip, AP_IP, 15); h.pad[0] = SAVE_PROTO_VER;
+                     _wavePeer->send_pkt((uint8_t*)&h, sizeof(h)); }
     RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len);
     WiFiClient c = _tcpServer.accept(); if (c) handleTCPClient(c);
     server.handleClient(); dnsServer.processNextRequest();
@@ -1346,6 +1356,9 @@ void loop() {
   bool dirtyWaiting = (g_dirty_count > 0 && g_last_write_ms && (millis()-g_last_write_ms) > SAVE_SETTLE_MS);
   if (dirtyWaiting && millis() > g_next_beacon_ms) { sendDirtyBeacon(); g_next_beacon_ms = millis()+SAVE_BEACON_MS; }
   if (millis() > g_next_status_ms) { sendStatusBeacon(); g_next_status_ms = millis()+STATUS_BEACON_MS; }
+  // #pair: unpaired and on our own AP -> keep saying we are here, so SCAN DONGLES works
+  // whenever the user asks instead of only in the seconds after we booted.
+  if (g_webmode==0 && !_paired && millis() > g_next_hello_ms) { sendPairHello(); g_next_hello_ms = millis()+ESPNOW_HELLO_MS; }
   if (g_webmode==1 && millis() > g_next_alive_ms) { sendAliveBeacon(); g_next_alive_ms = millis()+ALIVE_BEACON_MS; }   // FLEET beacon
   if (g_webmode==1) pollDisco();                                                                                       // FLEET listen
   if (g_webmode==1 && millis() > g_next_elect_ms) { doElection(); g_next_elect_ms = millis()+4000; }                    // FLEET elect
