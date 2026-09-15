@@ -1037,6 +1037,11 @@ static void apiDiskUnload(){
   dirtyReset(); g_loaded_name=""; ledBlue(false);
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
+static void apiGamesList(){
+  String name = g_disk_loaded ? jsonEsc(g_loaded_name) : String("");
+  server.send(200, "application/json", String("{\"mode\":\"ADF\",\"loaded_game\":\"") + name +
+    "\",\"loaded_file\":\"" + name + "\",\"games\":[]}");
+}
 static void apiGamesUploadDone(){
   if(!acceptWebUpload())return;
   g_loaded_name = g_up_name;
@@ -1237,7 +1242,7 @@ static void startWebServer(){
   server.on("/api/disk/status",  HTTP_GET,  apiDiskStatus);
   server.on("/api/disk/unload",  HTTP_POST, apiDiskUnload);
   server.on("/api/games/upload", HTTP_POST, apiGamesUploadDone, handleUpload);
-  server.on("/api/games/list",   HTTP_GET,  [](){ server.send(200,"application/json","{\"games\":[]}"); });
+  server.on("/api/games/list",   HTTP_GET,  apiGamesList);
   server.on("/api/wifi/status",  HTTP_GET,  apiWifiStatus);
   server.on("/api/wifi/scan",    HTTP_GET,  handleScan);
   server.on("/api/wifi/password",HTTP_POST, apiWifiPassword);

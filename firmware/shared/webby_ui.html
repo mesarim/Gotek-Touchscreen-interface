@@ -1261,7 +1261,7 @@ async function loadGames() {
       <span class="active-indicator"></span>
       <strong>${esc(data.loaded_game)}</strong>
       <span style="color:var(--muted);font-size:13px">${esc(data.loaded_file)}</span>
-      <button class="btn btn-sm" onclick="ejectDisk()">Eject</button>
+      <button class="btn btn-sm" onclick="ejectDisk(this)">Eject</button>
     `;
   } else {
     npCard.style.display = 'none';
@@ -1620,13 +1620,17 @@ async function sdToggleDisk(diskNum, disk, isLoaded, multi, total) {
 }
 
 // Eject disk (global)
-async function ejectDisk() {
+async function ejectDisk(button) {
+  if (button) button.disabled = true;
   try {
     await api('/api/disk/unload', { method: 'POST' });
     toast('Disk ejected');
-    loadGames();
+    try { await loadGames(); }
+    catch (_) { toast('Disk ejected; refresh Games to update the display', 'error'); }
   } catch (e) {
-    toast('Eject failed', 'error');
+    toast('Eject failed: ' + e.message, 'error');
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
