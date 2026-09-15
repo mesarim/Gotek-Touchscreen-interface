@@ -3,11 +3,13 @@
 // WiFi TCP: disk data transfer (reliable, fast)
 
 #include "espnow_server.h"
+#include "../shared/dongle_wifi.h"
 #include <Arduino.h>
 #include "ESP32_NOW.h"
 #include "WiFi.h"
 #include <esp_mac.h>
 #include <SD_MMC.h>
+#include "../shared/owner_keys.h"
 #include <WiFiClient.h>
 
 #define ESPNOW_CHANNEL 6
@@ -56,11 +58,14 @@ static GotekPeer* _xiaoPeer  = nullptr;
 
 // ---------- Incoming handler ----------
 static void handleIncoming(const uint8_t* data, int len) {
-  if (len < 1) return;
+  if(len!=250)return;
   uint8_t type = data[0];
 
   if (type == PKT_PAIR_REPLY) {
+    if(len!=sizeof(PktHello))return;
     const PktHello* p = (const PktHello*)data;
+    if(p->pad[2]==1 && !GotekAuth::acceptReply(SD_MMC,p->mac,data,len))return;
+    if(!memchr(p->ip,0,sizeof(p->ip)))return;
     memcpy(_xiao_mac, p->mac, 6);
     _xiao_ip = String(p->ip);
     g_espnow_paired = true;
@@ -188,7 +193,7 @@ bool espnowSendDisk(uint32_t size) {
   // Switch to pure STA mode to connect to XIAO's AP
   WiFi.mode(WIFI_STA);
   delay(100);
-  WiFi.begin(XIAO_AP_SSID, XIAO_AP_PASS);
+  gotekBeginDongle(_xiao_mac,XIAO_AP_PASS);
 
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) {
@@ -292,5 +297,6 @@ void espnowSendEject() {
   GotekPeer* dst = _xiaoPeer ? _xiaoPeer : _bcastPeer;
   if (!dst) return;
   PktEject pkt = {}; pkt.type = PKT_DISK_EJECT;
+  if(!GotekAuth::signCommand(_xiao_mac,(uint8_t*)&pkt,sizeof(pkt)))return;
   dst->send_pkt((uint8_t*)&pkt, sizeof(pkt));
 }

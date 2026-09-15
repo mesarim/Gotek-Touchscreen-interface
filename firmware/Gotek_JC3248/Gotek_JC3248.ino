@@ -4,6 +4,8 @@
 // N16R8: Flash 16MB QIO 80MHz | PSRAM OPI (Octal 8MB) | Partition: sketch-local partitions.csv = 6.9MB APP x2 (dual-OTA for SD-update) + 2.8MB SPIFFS — maximises the 16MB | 240MHz
 
 #include <Arduino.h>
+#include "../shared/disk_lock.h"
+#include "../shared/dirty_snapshot.h"
 #include "USB.h"
 #include "USBMSC.h"
 // Merge step 1: the shared WebDAV client (see firmware/shared/README.md).
@@ -12,6 +14,7 @@
 #include "../shared/webdav_client.h"
 #include <FS.h>
 #include <SD_MMC.h>
+#include "../shared/save_image.h"
 #include "driver/spi_master.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_vendor.h"
@@ -460,10 +463,13 @@ static String   g_sv_wl_path="";                         // SD path of the disk 
 static uint32_t g_sv_wl_loadid=0;                        // dongle load_id it acked with
 static inline bool svGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void svSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
-static void svDirtyReset(){memset(g_sv_dirty,0,sizeof(g_sv_dirty));g_sv_dirty_count=0;g_sv_last_write=0;}
+static void svDirtyReset(){GotekDiskGuard guard;memset(g_sv_dirty,0,sizeof(g_sv_dirty));g_sv_dirty_count=0;g_sv_last_write=0;}
 static uint32_t g_sv_img_size=0;                         // bytes of the mounted image (standalone tracking)
 
-static int32_t onWrite(uint32_t lba,uint32_t off,uint8_t*buf,uint32_t n){uint32_t s=lba*512+off;if(s+n>TOTAL_SECTORS*512)return 0;memcpy(g_disk+s,buf,n);
+static int32_t onWrite(uint32_t lba,uint32_t off,uint8_t*buf,uint32_t n){
+  GotekDiskGuard guard;
+  if(!n || !g_usb_online)return 0;
+uint32_t s=lba*512+off;if(s+n>TOTAL_SECTORS*512)return 0;memcpy(g_disk+s,buf,n);
   // v4.8.0: tick the dirty scorecard for every image sector this write touches
   // (assignment form, not ++ — C++20 deprecates ++ on volatile)
   g_sv_total_writes=g_sv_total_writes+1;
@@ -477,8 +483,12 @@ static int32_t onWrite(uint32_t lba,uint32_t off,uint8_t*buf,uint32_t n){uint32_
   return n;}
 static void usbEventCB(void*,esp_event_base_t,int32_t,void*){}
 static uint32_t g_rev=1;
-static void hardDetach(){MSC.mediaPresent(false);delay(100);tud_disconnect();delay(500);g_usb_online=false;}
-static void hardAttach(){char r[8];snprintf(r,8,"%lu",(unsigned long)g_rev++);MSC.productRevision(r);MSC.mediaPresent(true);delay(50);tud_connect();delay(200);g_usb_online=true;}
+static void hardDetach(){
+  { GotekDiskGuard guard; g_usb_online=false; }
+MSC.mediaPresent(false);delay(100);tud_disconnect();delay(500);g_usb_online=false;}
+static void hardAttach(){
+  { GotekDiskGuard guard; g_usb_online=true; }
+char r[8];snprintf(r,8,"%lu",(unsigned long)g_rev++);MSC.productRevision(r);MSC.mediaPresent(true);delay(50);tud_connect();delay(200);g_usb_online=true;}
 
 // ── SD ACCESS (v5.1) ─────────────────────────────────────────────────────────
 // Plug the GTi into a PC to add games without cracking the case. The native USB-MSC
@@ -1175,10 +1185,15 @@ static String savPathFor(const String&adfPath);   // v4.8.0 saves — defined wi
 static bool savExistsFor(const String&adfPath);
 static void drawListAndCover();
 static bool doLoadSelected(const String&p);
-static void doUnload();
+static bool doUnload();
 
 static bool g_espnow_started=false;
 static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=true;}}
+static void configureTransport(){
+  espnowSetHome(g_link_home,g_home_ssid,g_home_pass,g_dongle_home_ip);
+  if(g_link_home && g_espnow_started){espnowStop();g_espnow_started=false;}
+  if(g_wireless_mode && !g_link_home && !g_espnow_started){WiFi.disconnect();ensureEspNow();}
+}
 
 // ============================================================================
 // LANGUAGE / LOCALISATION (v5.5.0) — LANG= in CONFIG.TXT (SD-editable, persisted).
@@ -2870,7 +2885,7 @@ static void carHandleTap(uint16_t px,uint16_t py){
     if(d<(int)gm.disk_indices.size()){
       if(g_loaded&&g_loaded_game_idx==gi){
         if(d!=g_loaded_disk_idx){                    // clean swap: flush saves + eject, then reload the chosen disk
-          doUnload(); g_sel=gi;g_disk_sel=d;g_disk_page=0;
+          if(!doUnload())return; g_sel=gi;g_disk_sel=d;g_disk_page=0;
           doLoadSelected(g_files[gm.disk_indices[d]]);
         }
       } else { g_disk_sel=d; }                        // not loaded yet — just select; INSERT will mount it
@@ -2883,7 +2898,7 @@ static void carHandleTap(uint16_t px,uint16_t py){
      py>=(uint16_t)g_car_ins_y&&py<(uint16_t)(g_car_ins_y+g_car_ins_h)){
     int gi=g_car_list[ci];
     g_sel=gi;g_disk_page=0;setActiveLetter(bucketOf(g_games[gi].name));
-    if(g_loaded&&g_loaded_game_idx==gi)doUnload();
+    if(g_loaded&&g_loaded_game_idx==gi && !doUnload())return;
     else{auto&gm=g_games[gi];int d=(g_disk_sel>=0&&g_disk_sel<(int)gm.disk_indices.size())?g_disk_sel:0;doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[d]]);}
     if(g_car_active){drawCarousel();gfx_flush();}        // repaint over the list redraw the loader did
     return;
@@ -3008,30 +3023,17 @@ static String savPathFor(const String&adfPath){
   return adfPath.substring(0,dot)+".sav"+adfPath.substring(dot);
 }
 static bool savExistsFor(const String&adfPath){String sv=savPathFor(adfPath);return sv!=adfPath&&SD_MMC.exists(sv);}
-// Copy base→sav.tmp, patch dirty sectors, atomic rename. Sector source is either
+// Copy base→sav.tmp, patch dirty sectors, recoverable replacement. Sector source is either
 // `packed` (k-th set bit = k-th 512B block; wireless) or `ram` (g_disk; standalone).
 static bool svPatchCore(const String&master,const String&sav,const uint8_t*map,uint32_t mapBits,
                         const uint8_t*packed,const uint8_t*ram){
-  String base=SD_MMC.exists(sav)?sav:master;
-  String tmp=sav+".tmp";
-  SD_MMC.remove(tmp);
-  {File in=SD_MMC.open(base,FILE_READ);if(!in)return false;
-   File out=SD_MMC.open(tmp,FILE_WRITE);if(!out){in.close();return false;}
-   uint8_t*buf=(uint8_t*)malloc(16384);if(!buf){in.close();out.close();return false;}
-   int rd;while((rd=in.read(buf,16384))>0)out.write(buf,rd);
-   free(buf);in.close();out.close();}
-  File f=SD_MMC.open(tmp,"r+");if(!f)return false;
-  uint32_t k=0;bool ok=true;
-  for(uint32_t i=0;i<mapBits;i++){
-    if(!((map[i>>3]>>(i&7))&1))continue;
-    const uint8_t*src=packed?(packed+(size_t)k*512):(ram+(size_t)(DATA_LBA+i)*512);
-    if(!f.seek(i*512UL)||f.write(src,512)!=512){ok=false;break;}
-    k++;
-  }
-  f.flush();f.close();
-  if(!ok){SD_MMC.remove(tmp);return false;}
-  SD_MMC.remove(sav);
-  return SD_MMC.rename(tmp,sav);
+  return GotekSave::patch(SD_MMC, master, sav, map, mapBits,
+    [&](uint32_t sector, uint32_t k, uint8_t* dst) {
+      const uint8_t* src = packed ? packed + (size_t)k * 512 : ram + (size_t)(DATA_LBA + sector) * 512;
+      GotekDiskGuard guard;
+      memcpy(dst, src, 512);
+      return true;
+    });
 }
 static void svToast(const String&msg){
   gfx_fillRect(0,0,VW,STATUS_H,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,COL_GREEN);
@@ -3040,34 +3042,44 @@ static void svToast(const String&msg){
 }
 // Standalone flush: persist our own RAM disk's dirty sectors to SD.
 static uint8_t g_sv_fail=0;
-static void svFlushStandalone(){
-  if(g_sv_dirty_count==0)return;
-  if(g_saves_mode==0||!g_loaded||!g_loaded_path.length()){svDirtyReset();return;}   // OFF / diag disk: discard
+static bool svFlushStandalone(){
+  if(g_sv_dirty_count==0)return true;
+  if(g_saves_mode==0||!g_loaded||!g_loaded_path.length()){svDirtyReset();return true;}   // OFF / diag disk: discard
   String master=g_loaded_path;
   String sav=(g_saves_mode==2)?master:savPathFor(master);
   uint32_t imgSecs=(g_sv_img_size+511)/512;if(imgSecs>SV_IMG_MAX_SECTORS)imgSecs=SV_IMG_MAX_SECTORS;
-  if(svPatchCore(master,sav,g_sv_dirty,imgSecs,nullptr,g_disk)){
-    svDirtyReset();g_sv_fail=0;svToast("SAVED: "+g_loaded_name);
+  uint8_t snapshot[sizeof(g_sv_dirty)];
+  { GotekDiskGuard guard; GotekDirty::begin(g_sv_dirty,snapshot,sizeof(snapshot),g_sv_dirty_count); }
+  bool saved=svPatchCore(master,sav,snapshot,imgSecs,nullptr,g_disk);
+  { GotekDiskGuard guard; GotekDirty::finish(g_sv_dirty,snapshot,sizeof(snapshot),g_sv_dirty_count,saved); }
+  if(saved){
+    g_sv_fail=0;svToast("SAVED: "+g_loaded_name);
   }else{
     g_sv_last_write=millis();                       // back off one settle window, then retry
-    if(++g_sv_fail>=5){svDirtyReset();g_sv_fail=0;svToast("SAVE FAILED - GAVE UP");}
+    if(++g_sv_fail>=5)g_sv_fail=0;
+    svToast("SAVE FAILED - RETRY REQUIRED");
   }
+  return saved;
 }
 // Wireless persist callback — runs inside espnowFetchSave, between CRC-verify and ack.
 static bool svPersistWireless(uint32_t load_id,uint32_t img_size,const uint8_t*map,uint16_t mapLen,const uint8_t*packed,uint32_t nSec){
-  (void)img_size;
   if(g_saves_mode==0)return false;
   if(!g_sv_wl_path.length())return false;                             // no mapping (multicast / pre-save FLING)
   if(g_sv_wl_loadid&&load_id&&g_sv_wl_loadid!=load_id)return false;   // stale — not the disk we flung
+  File source=SD_MMC.open(g_sv_wl_path,FILE_READ);
+  if(!source || source.size()!=img_size){source.close();return false;}
+  source.close();
   if(nSec==0)return true;                                             // nothing to write; ack quiets the beacon
   String master=g_sv_wl_path;
   String sav=(g_saves_mode==2)?master:savPathFor(master);
   return svPatchCore(master,sav,map,(uint32_t)mapLen*8,packed,nullptr);
 }
 // Wireless fetch driver: overlay + dance + repaint. Called from loop/interlocks.
-static void svFetchWireless(){
-  if(g_saves_mode==0){g_espnow_dirty=false;return;}                   // SAVES=OFF: ignore beacons
-  if(!g_wireless_mode||!g_espnow_started||!espnowIsPaired())return;
+static bool svFetchWireless(){
+  configureTransport();
+
+  if(g_saves_mode==0){g_espnow_dirty=false;return true;}                   // SAVES=OFF: ignore beacons
+  if(!g_wireless_mode||(!g_link_home && (!g_espnow_started||!espnowIsPaired())))return false;
   gfx_fillRect(0,VH/2-24,VW,48,COL_ACCENT);gfx_setTextSize(2);gfx_setTextColor(TFT_WHITE,COL_ACCENT);
   {const char*m="SAVING GAME...";int tw=gfx_textWidth(m);gfx_setCursor((VW-tw)/2,VH/2-8);gfx_print(m);}gfx_flush();
   bool ok=espnowFetchSave(svPersistWireless);
@@ -3075,16 +3087,43 @@ static void svFetchWireless(){
   gfx_flush();
   if(ok){String nm=g_sv_wl_path.length()?basenameNoExt(filenameOnly(g_sv_wl_path)):String("disk");svToast("SAVED: "+nm);}
   else svToast("SAVE FETCH FAILED");
+  return ok;
 }
 
+// Freeze USB before the final save so no write can race the change.
+static bool svPrepareChange(){
+  configureTransport();
+  bool wasOnline=g_usb_online;
+  if(wasOnline)hardDetach();
+  if(!svFlushStandalone()){
+    if(wasOnline)hardAttach();
+    return false;
+  }
+  if(g_wireless_mode && (g_espnow_dirty || g_sv_wl_path.length()) && !svFetchWireless()){
+    if(wasOnline)hardAttach();
+    return false;
+  }
+  if(g_wireless_mode && g_saves_mode==0 && (g_link_home||espnowIsPaired()) && !espnowSendEject(true)){
+    if(wasOnline)hardAttach();return false;
+  }
+  return true;
+}
+static void invalidateLocalImage(){
+  g_loaded=false;g_loaded_name="";g_loaded_path="";
+  g_loaded_game_idx=-1;g_loaded_disk_idx=-1;g_sv_img_size=0;
+  svDirtyReset();
+}
 static bool doLoadSelected(const String&adfPath){
+  configureTransport();
+  if(g_wireless_mode && g_link_home && isHDImage(adfPath))espnowPollStatus();
+
   // v4.9 / v5.x: HD (1.76MB) over wireless is now gated by the dongle's advertised
   // capability (pad[1] of the pairing reply). An HD-capable XIAO (2MB ramdisk,
   // g_espnow_dongle_board==1) may receive it; the Super Mini and old DD-only
   // dongles (board 0) still can't hold it, so they stay blocked. Multicast/
   // Hivemind stays blocked too (a mixed fleet may include a DD dongle).
   // Standalone HD load (cable) is unaffected either way.
-  bool hdDongleReady = espnowIsPaired() && g_espnow_dongle_board==1 && !g_hivemind;
+  bool hdDongleReady = (g_link_home || espnowIsPaired()) && g_espnow_dongle_board==1 && !g_hivemind;
   if(g_wireless_mode && g_mode==MODE_ADF && isHDImage(adfPath) && !hdDongleReady){
     gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
     gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_PANEL);gfx_setCursor(6,STATUS_H+16);gfx_print(T(L_HD_NO_WIRELESS));
@@ -3092,13 +3131,13 @@ static bool doLoadSelected(const String&adfPath){
     gfx_setCursor(6,STATUS_H+30);gfx_print(T(L_NO_WIRELESS_DEV));
     gfx_setCursor(6,STATUS_H+42);gfx_print(T(L_AVAIL_HD));
     gfx_setCursor(6,STATUS_H+56);gfx_print(T(L_USE_CABLE));
-    gfx_flush();delay(2200);drawFullUI();gfx_flush();return false;
+    gfx_flush();delay(2200);drawFullUI();gfx_flush();if(g_loaded && !g_usb_online)hardAttach();return false;
   }
   // v4.8.0 interlocks: pending saves die when the RAM disk is rebuilt — drain first
   // (v4.8.1: own-disk flush runs in ANY mode — a wireless GTi can still be USB-attached)
-  if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
-  if(g_sv_dirty_count&&g_loaded)svFlushStandalone();
   // Prefer the save-copy when one exists (COPY mode): saves accumulate in the .sav
+  if(!svPrepareChange())return false;
+  if(!GotekSave::recover(SD_MMC)){if(g_loaded && !g_usb_online)hardAttach();return false;}
   String loadPath=adfPath;
   if(g_saves_mode==1&&savExistsFor(adfPath))loadPath=savPathFor(adfPath);
   gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
@@ -3106,13 +3145,12 @@ static bool doLoadSelected(const String&adfPath){
   gfx_setCursor(6,STATUS_H+16);gfx_print(tn);gfx_setTextColor(COL_LIT,COL_PANEL);gfx_setCursor(6,STATUS_H+28);gfx_print(T(L_LOADING));
   gfx_flush();
   // Clean swap: if a disk is already mounted, cleanly eject first so the host re-reads the new media.
-  // FORCESWAP=ON skips this and swaps the bytes in place (faster, but the host may not notice).
-  if(g_loaded && !g_forceswap) hardDetach();
-  File f=SD_MMC.open(loadPath.c_str(),FILE_READ);if(!f){gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_FAILED));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
+  // Replacement always freezes USB to protect reads and the final save.
+  File f=SD_MMC.open(loadPath.c_str(),FILE_READ);if(!f){gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_FAILED));gfx_flush();delay(1000);drawFullUI();gfx_flush();if(g_loaded && !g_usb_online)hardAttach();return false;}
   // Use VFS to get real file size (SD_MMC f.size() returns 0 for subdirectory files)
   String vfsLoad="/sdcard"+loadPath;
   struct stat stLoad;
-  if(stat(vfsLoad.c_str(),&stLoad)!=0||stLoad.st_size==0) {f.close();gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_SIZE_ERR));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
+  if(stat(vfsLoad.c_str(),&stLoad)!=0||stLoad.st_size==0) {f.close();gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_SIZE_ERR));gfx_flush();delay(1000);drawFullUI();gfx_flush();if(g_loaded && !g_usb_online)hardAttach();return false;}
   uint32_t fsz=(uint32_t)stLoad.st_size;
   if(fsz>MAX_FILE_BYTES){
     f.close();
@@ -3122,18 +3160,22 @@ static bool doLoadSelected(const String&adfPath){
     gfx_setTextColor(COL_LIT,COL_PANEL);
     gfx_setCursor(6,STATUS_H+30);gfx_print(String(fsz/1024)+"KB > "+String(MAX_FILE_BYTES/1024)+"KB");
     gfx_setCursor(6,STATUS_H+44);gfx_print(T(L_MAX_DD));
-    gfx_flush();delay(1800);drawFullUI();gfx_flush();return false;
+    gfx_flush();delay(1800);drawFullUI();gfx_flush();if(g_loaded && !g_usb_online)hardAttach();return false;
   }
+  uint8_t*buf=(uint8_t*)malloc(16384);
+  if(!buf){f.close();if(g_loaded && !g_usb_online)hardAttach();return false;}
+  invalidateLocalImage();
   if(g_mode==MODE_GEN){String gon=filenameOnly(adfPath);build_volume(gon.c_str(),fsz);}   // v5.2: keep the real name+ext so FlashFloppy detects the format
   else build_volume(getOutputFilename(),fsz);
-  uint8_t*dst=g_disk+DATA_LBA*512;uint8_t*buf=(uint8_t*)malloc(16384);uint32_t copied=0,remain=fsz;
+  uint8_t*dst=g_disk+DATA_LBA*512;uint32_t copied=0,remain=fsz;
   while(remain&&buf){size_t n=remain>16384?16384:remain;int rd=f.read(buf,n);if(rd<=0)break;memcpy(dst+copied,buf,rd);remain-=rd;copied+=rd;}
-  if(buf)free(buf);f.close();
+  free(buf);f.close();
+  if(copied!=fsz){svToast("IMAGE READ FAILED");return false;}
   // v4.8.0: fresh disk in the RAM disk = fresh save tracking
   g_sv_img_size=(g_mode==MODE_GEN)?0:fsz;svDirtyReset();   // v5.2: GEN has no Amiga save-writeback (0 = no dirty tracking)
   hardAttach();g_loaded=true;g_loaded_name=basenameNoExt(filenameOnly(adfPath));g_loaded_path=loadPath;g_loaded_game_idx=g_sel;g_loaded_disk_idx=g_disk_sel;
   if(g_sel>=0&&g_sel<(int)g_games.size()){if(g_games[g_sel].plays<65535)g_games[g_sel].plays++;saveStats();}
-  if(g_wireless_mode&&g_espnow_started){
+  if(g_wireless_mode){
     // 1.6.3 wireless DSK fix: tell the dongle the FAT12 name+extension to build,
     // matching what standalone would use (getOutputFilename / real name for GEN),
     // so a CPC .dsk mounts as DISK.DSK not DISK.ADF (FlashFloppy Error 34).
@@ -3141,25 +3183,25 @@ static bool doLoadSelected(const String&adfPath){
                                      : (basenameNoExt(filenameOnly(adfPath)) + (g_mode==MODE_ADF ? ".adf" : ".dsk"));
       espnowSetFlingName(fn); }
     uint8_t mcMacs[64][6]; int mcN=enumMuCaDongles(mcMacs,g_dongle_cap);
-    if(mcN>0&&g_hivemind){                                  // multicast: fan the disk out to every MuCa- dongle in turn (v4.8.1: only when HIVEMIND=ON)
+    if(!g_link_home && mcN>0&&g_hivemind){                                  // multicast: fan the disk out to every MuCa- dongle in turn (v4.8.1: only when HIVEMIND=ON)
       g_sv_wl_path="";g_sv_wl_loadid=0;                     // Hivemind saves: PINNED — no writeback mapping for multicast
       for(int i=0;i<mcN;i++){
         gfx_setTextSize(1);gfx_setTextColor(TFT_CYAN,COL_PANEL);gfx_fillRect(4,STATUS_H+24,150,12,COL_PANEL);
         gfx_setCursor(6,STATUS_H+26);gfx_print("Multicast "+String(i+1)+"/"+String(mcN));gfx_flush();
-        espnowSendDiskTo(mcMacs[i],copied);
+        if(!espnowSendDiskTo(mcMacs[i],copied)){svToast("TRANSFER FAILED");return false;}
       }
     } else if(g_link_home && g_home_ssid.length()){         // 5.8.6: home-WiFi transport — route via the router to the dongle's gotek.local
       String prevIp=g_dongle_home_ip;
       if(espnowSendDiskHome(g_home_ssid,g_home_pass,g_dongle_home_ip,copied)){
         g_sv_wl_path=loadPath;g_sv_wl_loadid=g_espnow_load_id;
-      }
+      }else{svToast("TRANSFER FAILED");return false;}
       if(g_dongle_home_ip!=prevIp&&g_dongle_home_ip.length())saveConfigKey("DONGLE_HOME_IP",g_dongle_home_ip);  // persist the resolved IP for next time
     } else if(espnowIsPaired()){                            // single paired dongle — unchanged
       espnowSendNotify(g_loaded_name,g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN",copied);
       if(espnowSendDisk(copied)){                           // v4.8.0: remember what we flung, keyed by the dongle's load_id
         g_sv_wl_path=loadPath;g_sv_wl_loadid=g_espnow_load_id;
-      }
-    }
+      }else{svToast("TRANSFER FAILED");return false;}
+    }else{svToast("NO DONGLE SELECTED");return false;}
   }
   drawStatusBar();drawListAndCover();gfx_flush();return true;
 }
@@ -3172,6 +3214,7 @@ static bool doLoadSelected(const String&adfPath){
 // radio-coexistence question deliberately parked for a later step.
 static String g_dav_fail="";   // why the last doLoadWebdav gave up, for on-screen reporting
 static bool doLoadWebdav(const String&remotePath,const String&showName){
+  configureTransport();
   if(!g_dav_on||g_dav_host.length()==0){g_dav_fail="not configured (DAV=ON + DAV_HOST=)";Serial.println("[DAV] "+g_dav_fail);return false;}
   if(g_espnow_started){g_dav_fail="wireless dongle link active";Serial.println("[DAV] "+g_dav_fail);return false;}
   if(g_home_ssid.length()==0){g_dav_fail="HOME_SSID not set";Serial.println("[DAV] "+g_dav_fail);return false;}
@@ -3188,14 +3231,14 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
     if(WiFi.status()!=WL_CONNECTED){g_dav_fail="WiFi join failed";Serial.println("[DAV] "+g_dav_fail);WiFi.disconnect();WiFi.mode(WIFI_OFF);return false;}
   }
   davApplyConfig();
-  if(g_loaded&&!g_forceswap)hardDetach();
+  if(!svPrepareChange()){g_dav_fail="Save failed; previous disk retained";return false;}
+  invalidateLocalImage();
   long got=davClient.streamToBuffer(remotePath,g_disk+DATA_LBA*512,MAX_FILE_BYTES,false);
   davClient.closeIdle();                          // the pooled TLS context is ~50KB of internal heap
   if(!keepUp){WiFi.disconnect();delay(100);WiFi.mode(WIFI_OFF);}   // standalone: same leave discipline as espnowSendDiskHome
   if(got<=0||davClient.lastTruncated()){
     g_dav_fail=davClient.lastError();
     Serial.printf("[DAV] fetch failed: %s\n",davClient.lastError().c_str());
-    if(g_loaded)hardAttach();                     // put the previous disk back
     return false;
   }
   // build_volume() would memset the data region we just filled — build the
@@ -3216,13 +3259,18 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
 #define GTI_WEB_SD_FILES 1   // 5.9.9: WiFi SD file-access endpoints (JC3.5 only for now)
 #include "../shared/web_panel.h"
 
-static void doUnload(){
+static bool doUnload(){
+  if(!svPrepareChange())return false;
+  if(g_wireless_mode && (g_link_home||espnowIsPaired()) && !espnowSendEject(g_saves_mode==0)){
+    if(g_loaded)hardAttach();svToast("EJECT FAILED - DISK RETAINED");return false;
+  }
+  g_sv_wl_path="";g_sv_wl_loadid=0;
+
   // v4.8.0: EJECT is a save point — drain before the disk goes away
   // (v4.8.1: own-disk flush in any mode)
-  if(g_sv_dirty_count)svFlushStandalone();
-  if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
   hardDetach();g_loaded=false;g_loaded_name="";g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;svDirtyReset();
-  if(g_wireless_mode&&g_espnow_started&&espnowIsPaired())espnowSendEject();drawStatusBar();drawListAndCover();gfx_flush();}
+  drawStatusBar();drawListAndCover();gfx_flush();return true;
+}
 
 // Expand the zero-RLE embedded ADF straight into the RAM-disk data area. No SD needed.
 static void diagInflate(const uint8_t*src,uint32_t slen,uint8_t*dst){
@@ -3233,6 +3281,8 @@ static void diagInflate(const uint8_t*src,uint32_t slen,uint8_t*dst){
 }
 // Mount the built-in Amiga Test Kit as the emulated disk — works with no SD card inserted.
 static void doLoadDiag(){
+  if(!svPrepareChange())return;
+  invalidateLocalImage();
   g_info_showing=false;
   gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
   gfx_setTextSize(1);gfx_setTextColor(TFT_CYAN,COL_PANEL);gfx_setCursor(6,STATUS_H+16);gfx_print("AMIGA TEST KIT");
@@ -4527,6 +4577,10 @@ void setup(){
   build_volume(getOutputFilename(),g_mode==MODE_ADF?ADF_DEFAULT_SIZE:64);
   SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);delay(100);
   bool sdok=SD_MMC.begin("/sdcard",true,false,20000);if(!sdok){delay(200);sdok=SD_MMC.begin("/sdcard",true,false,20000);}
+  if(sdok && !GotekSave::recover(SD_MMC)){
+    Serial.println("Save recovery failed; SD disabled to preserve files");
+    SD_MMC.end(); sdok=false;
+  }
   if(sdok){
     if(!SD_MMC.exists("/ADF")){SD_MMC.mkdir("/ADF");ensureSampleFolder();SD_MMC.mkdir("/screensaver");}   // blank card: SAMPLE example + arm the screensaver by default (v4.8.5 — DELETE /screensaver to disable it; empty = the bouncing starburst, drop in JPGs for a gallery)
     if(!SD_MMC.exists("/DSK"))SD_MMC.mkdir("/DSK");
@@ -4890,9 +4944,16 @@ void loop(){
 
   // ── Save-game housekeeping (v4.8.0) — runs in list AND carousel mode ──
   if(!touch){
+    static uint32_t lastStatusPoll=0;
+    if(g_wireless_mode && g_link_home && g_sv_wl_path.length() &&
+       now-lastStatusPoll>=10000 && now-g_last_touch_ms>1200){
+      configureTransport();
+      espnowPollStatus();lastStatusPoll=millis();now=millis();
+    }
+
     // Wireless: the dongle beaconed settled unsaved sectors — fetch once the finger is off the glass
     static uint32_t svNextTry=0;
-    if(g_espnow_dirty&&g_wireless_mode&&g_espnow_started&&now>=svNextTry&&now-g_last_touch_ms>1200){
+    if(g_espnow_dirty&&g_wireless_mode&&(g_link_home||g_espnow_started)&&now>=svNextTry&&now-g_last_touch_ms>1200){
       svFetchWireless();
       if(g_espnow_dirty)svNextTry=now+30000;   // fetch failed — back off; the dongle keeps beaconing
     }

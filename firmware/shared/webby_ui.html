@@ -1,0 +1,3600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Gotek">
+<meta name="theme-color" content="#000000">
+<!-- Inline, because the device serves no other files and a missing manifest is
+     a failed request on a board that answers everything itself. -->
+<link rel="manifest" href='data:application/manifest+json,{"name":"Gotek","short_name":"Gotek","start_url":"/","display":"standalone","background_color":"%23000000","theme_color":"%23000000"}'>
+<title>Gotek Setup</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body.no-sd .needs-sd,body.no-display .needs-display{display:none}
+:root{--muted:#9195a3;--line:#545974;--strong:#c3c7d2;--field:#12162a;--bg:#15182d;--panel:#181c31;--dark:#101428;--light:#3b4570;--blue:#3fe0e8;--cyan:#3eaabe;--orange:#ff8800;--green:#00aa00;--red:#cc0000;--text:#e9ecf5;--white:#3b4570}
+body{font-family:'Segoe UI',Arial,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+.topbar{background:linear-gradient(180deg,#0055aa,#003377);color:var(--white);padding:10px 16px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 4px rgba(0,0,0,.3)}
+.topbar h1{font-size:18px;font-weight:700;letter-spacing:1px}
+.topbar .ip{font-size:13px;opacity:.8;font-family:monospace}
+.tabs{display:flex;background:#505050;border-bottom:2px solid var(--strong)}
+.tab{padding:10px 20px;color:#ccc;cursor:pointer;font-size:14px;font-weight:600;border-right:1px solid #444;transition:all .15s}
+.tab:hover{background:var(--dark);color:var(--light)}
+.tab.active{background:var(--panel);color:var(--text);border-bottom:2px solid var(--orange)}
+.content{padding:16px;max-width:900px;margin:0 auto}
+.card{background:var(--panel);border:2px outset var(--light);padding:16px;margin-bottom:12px;border-radius:2px}
+.card h2{font-size:15px;color:var(--blue);margin-bottom:10px;border-bottom:1px solid var(--dark);padding-bottom:6px}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}
+.stat{background:var(--light);border:1px inset var(--line);padding:8px 10px;border-radius:2px}
+.stat .label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.stat .value{font-size:16px;font-weight:700;color:var(--text);margin-top:2px}
+.stat .value.ok{color:var(--green)}
+.stat .value.warn{color:var(--orange)}
+label{display:block;font-size:13px;font-weight:600;margin:8px 0 4px;color:var(--strong)}
+input[type=text],input[type=number],input[type=password],input[type=url],select,textarea{width:100%;padding:6px 8px;border:2px inset var(--line);background:var(--white);font-size:14px;font-family:inherit;border-radius:1px}
+textarea{min-height:80px;resize:vertical}
+.btn{display:inline-block;padding:8px 16px;border:2px outset var(--light);background:var(--panel);color:var(--text);font-size:13px;font-weight:600;cursor:pointer;border-radius:2px;transition:all .1s}
+.btn:hover{background:var(--light)}
+.btn:active{border-style:inset;transform:translateY(1px)}
+.btn-primary{background:var(--blue);color:var(--white);border-color:#003377}
+.btn-primary:hover{background:#0066cc}
+.btn-danger{background:var(--red);color:var(--white);border-color:#880000}
+.btn-danger:hover{background:#ee0000}
+.btn-success{background:var(--green);color:var(--white);border-color:#006600}
+.btn-success:hover{background:#00cc00}
+.btn-sm{padding:4px 10px;font-size:12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.game-list{display:grid;gap:10px}
+.game-item{display:flex;gap:12px;align-items:center;background:transparent;
+  border:1px solid var(--line);border-left:3px solid transparent;
+  padding:10px;border-radius:2px;cursor:pointer;transition:all .1s}
+.game-item:hover{border-color:var(--blue);border-left-color:var(--blue)}
+.game-item.selected{border-left-color:var(--orange)}
+.game-item.active{border-left-color:var(--green)}
+.game-item.active .game-name{color:var(--green)}
+.active-indicator{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:6px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.game-cover{width:48px;height:48px;object-fit:cover;border:1px solid var(--muted);background:var(--field);border-radius:2px}
+.game-cover.empty{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:10px}
+.game-info{flex:1}
+.game-name{font-weight:700;font-size:14px}
+.game-meta{font-size:12px;color:var(--muted);margin-top:2px}
+.game-actions{display:flex;gap:4px}
+/* Disk selector: one button per disk, like the touchscreen's row. */
+.disk-btn-row{display:flex;flex-wrap:wrap;gap:6px}
+/* --grey was never defined, so these buttons had no background at all and
+   black text: unreadable on any dark theme, and different in the modal only
+   because the modal panel behind them happens to be lighter. */
+/* Fixed height, not content height: the now-playing bar rarely knows the disk
+   sizes (that needs a PROPFIND the modal has already paid for), so without this
+   the same buttons came out shorter there than in the popup. */
+/* Fixed size, not content size: "Disk 1" and "Disk 11" and "Eject" all have to
+   line up, and a grid of buttons that each fit their own label looks broken. */
+.disk-btn{flex:0 0 76px;width:76px;height:46px;padding:4px 6px;font-size:13px;font-weight:600;
+  cursor:pointer;display:inline-flex;flex-direction:column;align-items:center;
+  justify-content:center;line-height:1.2;overflow:hidden;white-space:nowrap;
+  background:var(--panel);border:2px outset var(--light);border-radius:2px;color:var(--text)}
+.disk-btn:active{border-style:inset}
+.disk-btn.loaded{background:var(--green);color:#fff;border-color:#0a0}
+.disk-btn[disabled]{opacity:.5;cursor:default}
+.disk-btn .disk-sub{display:block;font-size:10px;font-weight:400;opacity:.75;line-height:1.1}
+.badge{display:inline-block;padding:2px 6px;font-size:11px;border-radius:2px;font-weight:600}
+.badge-disks{background:var(--cyan);color:var(--white)}
+.badge-nfo{background:var(--green);color:var(--white)}
+.badge-cover{background:var(--orange);color:var(--white)}
+.badge-net{background:#8800aa;color:var(--white)}
+.upload-zone{border:3px dashed var(--muted);padding:30px;text-align:center;background:var(--light);border-radius:4px;cursor:pointer;transition:all .2s}
+.upload-zone:hover,.upload-zone.dragover{border-color:var(--blue);background:#d0d8e8}
+.upload-zone p{font-size:14px;color:var(--muted);margin-top:8px}
+.progress-bar{height:20px;background:var(--line);border:1px inset var(--line);border-radius:2px;overflow:hidden;margin-top:8px;display:none}
+.progress-fill{height:100%;background:linear-gradient(90deg,var(--green),var(--cyan));transition:width .3s;text-align:center;color:#fff;font-size:11px;line-height:20px;font-weight:600}
+.theme-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+.theme-card{background:var(--light);border:2px solid var(--line);padding:12px;text-align:center;cursor:pointer;border-radius:2px;transition:all .15s}
+.theme-card:hover{border-color:var(--blue)}
+.theme-card.active{border-color:var(--orange);border-width:3px;background:#e8dcc8}
+.theme-name{font-weight:700;font-size:14px;margin-top:6px}
+.modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:100;align-items:center;justify-content:center}
+.modal-overlay.show{display:flex}
+.modal{background:var(--panel);border:3px outset var(--light);padding:20px;min-width:300px;max-width:500px;width:90%;max-height:80vh;overflow-y:auto;border-radius:2px}
+.modal h3{font-size:16px;color:var(--blue);margin-bottom:12px;border-bottom:1px solid var(--dark);padding-bottom:6px}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+.hidden{display:none!important}
+.toast{position:fixed;bottom:20px;right:20px;padding:12px 20px;border-radius:4px;color:#fff;font-weight:600;z-index:200;animation:slideIn .3s ease}
+.toast.success{background:var(--green)}
+.toast.error{background:var(--red)}
+.net-row{display:flex;gap:6px;align-items:flex-end;margin-top:4px}
+.net-row input{flex:1}
+.net-row button{white-space:nowrap}
+.wifi-list{max-height:150px;overflow-y:auto;border:1px inset var(--line);background:var(--field);font-size:13px;margin-top:4px}
+.wifi-list div{padding:4px 8px;cursor:pointer;display:flex;justify-content:space-between}
+.wifi-list div:hover{background:#d0d8e8}
+.wifi-signal{color:var(--muted);font-size:12px}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+.alpha-btn{display:inline-block;width:26px;height:26px;text-align:center;line-height:26px;font-size:12px;font-weight:700;cursor:pointer;border:1px solid var(--line);background:var(--light);border-radius:2px;transition:all .1s}
+.alpha-btn:hover{background:var(--blue);color:var(--white);border-color:var(--blue)}
+.alpha-btn.active{background:var(--orange);color:var(--white);border-color:var(--orange)}
+.alpha-btn.disabled{opacity:.3;cursor:default;pointer-events:none}
+
+.dl-btn{padding:4px 12px;font-size:12px;font-weight:600;border:2px outset var(--light);background:var(--green);color:var(--white);cursor:pointer;border-radius:2px;border-color:#006600}
+.dl-btn:hover{background:#00cc00}
+.dl-btn:disabled{opacity:.5;cursor:default}
+.ftp-item{display:flex;gap:12px;align-items:center;background:var(--light);border:1px solid var(--line);padding:10px;border-radius:2px;cursor:pointer;transition:all .1s}
+.ftp-item:hover{border-color:var(--blue);background:#d8d8e8}
+.ftp-item.dir{font-weight:700}
+.ftp-icon{width:32px;text-align:center;font-size:18px}
+.ftp-name{flex:1;font-size:14px}
+.ftp-size{font-size:12px;color:var(--muted);min-width:70px;text-align:right}
+.ftp-breadcrumb{font-size:13px;color:var(--muted);margin-bottom:8px;display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.ftp-breadcrumb a{color:var(--blue);cursor:pointer;text-decoration:underline}
+.ftp-status{font-size:13px;padding:8px 12px;border-radius:2px;margin-bottom:10px}
+.ftp-status.connected{background:#c8e8c8;border:1px solid var(--green);color:#006600}
+.ftp-status.disconnected{background:#e8e0c0;border:1px solid var(--orange);color:#886600}
+.ftp-status.error{background:#ffe8e8;border:1px solid var(--red);color:var(--red)}
+.pass-wrap{position:relative;display:flex;align-items:center}
+.pass-wrap input{flex:1;padding-right:36px}
+.pass-toggle{position:absolute;right:6px;background:none;border:none;cursor:pointer;font-size:16px;color:var(--muted);padding:4px}
+.pass-toggle:hover{color:var(--strong)}
+@media(max-width:600px){.tabs{flex-wrap:wrap}.tab{flex:1;text-align:center;padding:8px 10px;font-size:13px}.stat-grid{grid-template-columns:1fr 1fr}.content{padding:10px}}
+</style>
+<style>
+/* ===== OMEGA reskin: our Webby house style, driven by theme vars ===== */
+/* Colours come from the active theme; only the SHAPE is fixed here, so every  */
+/* theme keeps our rounded/flat/glow look and OMEGA_DARK reads like /classic.  */
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,system-ui,sans-serif;
+  background:radial-gradient(130% 90% at 50% -20%, var(--light), var(--bg) 55%) fixed;color:var(--text)}
+.topbar{background:linear-gradient(180deg,var(--light),var(--panel));color:var(--text);
+  border-bottom:1px solid var(--line);box-shadow:0 4px 18px rgba(0,0,0,.35)}
+.topbar h1{letter-spacing:.5px;color:var(--text)}
+.topbar .ip{opacity:.7}
+.tabs{background:transparent;border-bottom:1px solid var(--line);padding:0 8px;gap:2px}
+.tab{border-right:0;border-radius:10px 10px 0 0;color:var(--muted);background:transparent;transition:all .12s}
+.tab:hover{background:var(--panel);color:var(--text)}
+.tab.active{background:var(--panel);color:var(--text);border-bottom:2px solid var(--cyan)}
+.content{max-width:940px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 6px 22px rgba(0,0,0,.28)}
+.card h2{color:var(--cyan);border-bottom:1px solid var(--line)}
+.stat{background:var(--field);border:1px solid var(--line);border-radius:10px}
+label{color:var(--strong)}
+input[type=text],input[type=number],input[type=password],input[type=url],select,textarea{
+  border:1px solid var(--line);background:var(--field);color:var(--text);border-radius:10px;padding:9px 11px}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 3px rgba(63,224,232,.22)}
+.btn{border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:10px;
+  box-shadow:0 2px 8px rgba(0,0,0,.22);transition:all .12s}
+.btn:hover{background:var(--light);transform:translateY(-1px)}
+.btn:active{transform:translateY(0)}
+.btn-primary{background:linear-gradient(180deg,var(--cyan),var(--blue));color:var(--dark);
+  border-color:transparent;font-weight:700;box-shadow:0 0 16px rgba(63,224,232,.4)}
+.btn-primary:hover{filter:brightness(1.08)}
+.btn-danger{background:linear-gradient(180deg,var(--red),#a03030);color:#fff;border-color:transparent}
+.btn-success{background:linear-gradient(180deg,var(--green),#1f7a44);color:#fff;border-color:transparent}
+.game-item{border:1px solid var(--line);border-radius:12px}
+.game-item:hover{border-color:var(--cyan)}
+.game-cover{border-radius:8px}
+.disk-btn{background:var(--panel);border:1px solid var(--line);border-radius:10px;color:var(--text)}
+.disk-btn.loaded{background:linear-gradient(180deg,var(--green),#1f7a44);border-color:transparent;color:#fff}
+.badge{border-radius:999px;padding:3px 9px}
+.upload-zone{border:2px dashed var(--line);background:var(--field);border-radius:16px}
+.upload-zone:hover,.upload-zone.dragover{border-color:var(--cyan);background:var(--panel)}
+.upload-zone p{color:var(--muted)}
+.progress-bar{border:1px solid var(--line);border-radius:999px;background:var(--field)}
+.progress-fill{background:linear-gradient(90deg,var(--green),var(--cyan))}
+.theme-grid{grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}
+.theme-card{background:var(--field);border:1px solid var(--line);border-radius:12px;transition:all .12s}
+.theme-card:hover{border-color:var(--cyan);transform:translateY(-1px)}
+.theme-card.active{border-color:var(--cyan);border-width:2px;background:var(--panel)}
+.modal{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.modal h3{color:var(--cyan);border-bottom:1px solid var(--line)}
+.toast{border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+.fleet-bar{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;overflow-x:auto;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+.fleet-bar .fleet-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-right:2px;flex:0 0 auto}
+.fleet-chip{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border:1px solid var(--line);border-radius:999px;background:var(--field);color:var(--text);font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer;text-decoration:none;flex:0 0 auto;transition:all .12s}
+a.fleet-chip:hover{border-color:var(--cyan);transform:translateY(-1px)}
+.fleet-chip.self{background:var(--panel);border-color:var(--cyan);cursor:default}
+.fleet-chip .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:0 0 auto}
+.fleet-chip.master .dot{background:var(--cyan);box-shadow:0 0 8px var(--cyan)}
+.fleet-chip .sub{font-size:11px;color:var(--muted);font-weight:400}
+</style>
+</head>
+<body class="no-sd no-display">
+
+<div class="topbar">
+  <h1>GOTEK SETUP</h1>
+  <span class="ip" id="ip-display">connecting...</span>
+</div>
+
+<div class="fleet-bar" id="fleet-bar" hidden></div>
+
+<div class="tabs" id="tab-bar">
+  <div class="tab active" data-view="dashboard">Dashboard</div>
+  <div class="tab" data-view="config">Config</div>
+  <div class="tab" data-view="games" id="tab-games">Games</div>
+  <div class="tab" data-view="themes" id="tab-themes">Themes</div>
+</div>
+
+<!-- DASHBOARD -->
+<div class="content view" id="view-dashboard">
+  <div class="card">
+    <h2>System Status</h2>
+    <div class="stat-grid" id="stats-grid"></div>
+  </div>
+
+  <div class="card" id="install-card" style="display:none">
+    <h2>Add to Home Screen</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:10px" id="install-hint">
+      Opens without browser chrome, and the back button then closes dialogs
+      instead of leaving.
+    </p>
+    <button class="btn btn-primary" id="install-btn">Add to Home Screen</button>
+  </div>
+</div>
+
+<!-- CONFIG -->
+<div class="content view hidden" id="view-config">
+  <div class="card">
+    <h2>Device Configuration</h2>
+    <form id="config-form">
+      <div class="cfg-sec" data-probe="DEVICE_NAME">
+        <label for="cfg-device-name">Device name</label>
+        <input type="text" name="DEVICE_NAME" id="cfg-device-name" maxlength="24"
+               pattern="[A-Za-z0-9]+(-[A-Za-z0-9]+)*" placeholder="gti-a3000d">
+        <div class="hint">Address: <span id="cfg-device-name-preview"></span>.local.
+          Saving a new name restarts the device. Leave blank to use its automatic name.</div>
+      </div>
+      <div id="config-status" role="status"></div>
+      <!-- Each section names the config key(s) that prove the device supports
+           it; populate hides (and disables, so Save skips them) the rest.
+           Data-driven on purpose: no device list to keep in sync. -->
+      <div class="cfg-sec" data-probe="THEME,SAVES,LASTMODE">
+      <div class="needs-display">
+        <label>Display Type</label>
+        <select name="DISPLAY" id="cfg-display">
+          <option value="JC3248">JC3248W535C</option>
+          <option value="WAVESHARE">Waveshare 2.8"</option>
+        </select>
+      </div>
+
+      <div class="needs-sd">
+        <label>Default Mode</label>
+        <select name="LASTMODE" id="cfg-lastmode">
+          <option value="ADF">ADF (Amiga)</option>
+          <option value="DSK">DSK (ZX/CPC)</option>
+        </select>
+      </div>
+
+      <div class="needs-sd">
+        <label>Active Theme</label>
+        <select name="THEME" id="cfg-theme"></select>
+      </div>
+
+      <div class="needs-display">
+        <label>Game artwork as backdrop</label>
+        <div style="display:flex;align-items:center;gap:10px">
+          <input type="range" name="WALLPAPER_PCT" id="cfg-wallpaper" min="0" max="60" step="5"
+                 style="flex:1;max-width:260px"
+                 oninput="document.getElementById('cfg-wallpaper-val').textContent =
+                          this.value === '0' ? 'Off' : this.value + '%'">
+          <span id="cfg-wallpaper-val" style="font-size:13px;color:var(--muted);min-width:40px">20%</span>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin:4px 0 0">
+          Shows the loaded game's cover behind the game list, dimmed and cropped to
+          fill the screen. 0 turns it off. Above about 30% the artwork starts
+          competing with the list text.
+        </p>
+      </div>
+
+      <div class="needs-sd">
+        <label title="What happens when the Amiga writes to the disk that is in">Disk saves</label>
+        <select name="SAVES" id="cfg-saves">
+          <option value="COPY">Copy — write &lt;game&gt;.sav.adf next to the original</option>
+          <option value="OVERWRITE">Overwrite — write back into the original image</option>
+          <option value="OFF">Off — discard writes (disk behaves read-only)</option>
+        </select>
+        <div style="font-size:12px;color:var(--muted);margin:4px 0 8px">
+          High scores and save games only survive if this is on. WebDAV disks always
+          save to <code>/SAVES</code>, never back to the server.
+        </div>
+      </div>
+      </div>
+      <div class="cfg-sec" data-probe="WIFI_SSID,WIFI_AP_SSID,WIFI_TX_DBM">
+      <h2 style="margin-top:16px">WiFi Access Point</h2>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">Direct connection hotspot — always active for setup</p>
+
+      <label>Transmit power</label>
+      <div style="display:flex;align-items:center;gap:10px">
+        <input type="range" name="WIFI_TX_DBM" id="cfg-wifi-tx" min="2" max="20" step="1"
+               style="flex:1;max-width:260px"
+               oninput="document.getElementById('cfg-wifi-tx-val').textContent = this.value + ' dBm'">
+        <span id="cfg-wifi-tx-val" style="font-size:13px;color:var(--muted);min-width:56px">15 dBm</span>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin:4px 0 8px">
+        Higher means the router hears the device better, which is what improves
+        transfer speed &mdash; at the cost of peak current, so lower it if the
+        device is powered from an old machine's USB port and misbehaves.
+        This does <em>not</em> change the signal strengths shown when scanning:
+        those are how well this device hears each network, which is a property
+        of its receiver. Takes effect after a reboot.
+      </p>
+
+      <label>AP Enabled</label>
+      <select name="WIFI_ENABLED" id="cfg-wifi-enabled">
+        <option value="1">Yes</option>
+        <option value="0">No</option>
+      </select>
+
+      <label>AP SSID</label>
+      <input type="text" name="WIFI_SSID" id="cfg-wifi-ssid">
+
+      <label>Device name on the network</label>
+      <input type="text" name="MDNS_NAME" id="cfg-mdns-name" placeholder="gotek">
+      <p style="font-size:12px;color:var(--muted);margin:4px 0 8px">
+        Reachable as <strong><span id="cfg-mdns-preview">gotek</span>.local</strong>.
+        Give every Gotek its own name (gotek1, gotek2, ...) &mdash; two devices
+        with the same name fight over it and only one wins.
+      </p>
+
+      <label>AP Password</label>
+      <input type="text" name="WIFI_PASS" id="cfg-wifi-pass">
+
+      <label>AP Channel (1-13)</label>
+      <input type="number" name="WIFI_CHANNEL" id="cfg-wifi-channel" min="1" max="13">
+
+      </div>
+      <div class="cfg-sec" data-probe="WIFI_CLIENT_SSID">
+      <h2 style="margin-top:16px">WiFi Client (Internet)</h2>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px">Connect to your home network for cover art downloads</p>
+
+      <label>Client Enabled</label>
+      <select name="WIFI_CLIENT_ENABLED" id="cfg-wifi-client-enabled">
+        <option value="0">No</option>
+        <option value="1">Yes</option>
+      </select>
+
+      <label>Home Network SSID</label>
+      <div class="net-row">
+        <input type="text" name="WIFI_CLIENT_SSID" id="cfg-wifi-client-ssid">
+        <button type="button" class="btn btn-sm" onclick="scanNetworks()">Scan</button>
+      </div>
+      <div class="wifi-list hidden" id="wifi-scan-list"></div>
+
+      <label>Home Network Password</label>
+      <div class="pass-wrap"><input type="password" name="WIFI_CLIENT_PASS" id="cfg-wifi-client-pass"><button type="button" class="pass-toggle" onclick="togglePass(this)">&#128065;</button></div>
+
+      <div id="wifi-status-box" style="margin-top:10px;padding:8px;background:var(--light);border:1px inset var(--line);font-size:13px;display:none"></div>
+
+      </div>
+      <!-- Settings of the mesarim panel firmware (the joint tree). Values are
+           written back to CONFIG.TXT; most take effect at the next boot. -->
+      <div class="cfg-sec" data-probe="CAROUSEL">
+      <h2 style="margin-top:16px">Panel Options</h2>
+      <p style="font-size:12px;color:var(--muted);margin:4px 0 8px">
+        Saved to CONFIG.TXT on the card. Most of these apply at the next boot
+        &mdash; use the Reboot button below after saving.
+      </p>
+
+      <label>Boot view</label>
+      <select name="CAROUSEL" id="cfg-p-carousel">
+        <option value="OFF">Game list</option>
+        <option value="ON">Cover carousel</option>
+        <option value="LAST">Remember last view</option>
+      </select>
+
+      <label>Screensaver</label>
+      <select name="SCREENSAVER" id="cfg-p-screensaver">
+        <option value="ON">On</option><option value="OFF">Off</option>
+      </select>
+
+      <label>Screensaver style</label>
+      <select name="SSMODE" id="cfg-p-ssmode">
+        <option value="SLIDES">Slideshow</option>
+        <option value="BOUNCE">Bouncing logo</option>
+        <option value="MATRIX">Matrix rain</option>
+      </select>
+
+      <label>Seconds per slide (2-120)</label>
+      <input type="number" name="SSTIME" id="cfg-p-sstime" min="2" max="120" value="6">
+
+      <label>Slideshow includes favourited covers</label>
+      <select name="SSFAV" id="cfg-p-ssfav">
+        <option value="ON">Yes</option><option value="OFF">No</option>
+      </select>
+
+      <label>Language</label>
+      <select name="LANG" id="cfg-p-lang">
+        <option>EN</option><option>FR</option><option>IT</option>
+        <option>ES</option><option>DE</option>
+      </select>
+
+      <label>Font size</label>
+      <select name="FONT" id="cfg-p-font">
+        <option value="SMALL">Small</option>
+        <option value="NORMAL">Normal</option>
+        <option value="LARGE">Large</option>
+      </select>
+
+      <label>Screen rotation</label>
+      <select name="ROTATE" id="cfg-p-rotate">
+        <option value="0">0&deg;</option><option value="90">90&deg;</option>
+        <option value="180">180&deg;</option><option value="270">270&deg;</option>
+      </select>
+
+      <label>Compact list (collapse cover art)</label>
+      <select name="COMPACT" id="cfg-p-compact">
+        <option value="OFF">Off</option><option value="ON">On</option>
+      </select>
+
+      <label>Reel button style</label>
+      <select name="BTNSTYLE" id="cfg-p-btnstyle">
+        <option value="PILL">Pill</option><option value="FLAT">Flat</option>
+      </select>
+
+      <label>Tap the selected row to load it</label>
+      <select name="TAPLOAD" id="cfg-p-tapload">
+        <option value="OFF">Off</option><option value="ON">On</option>
+      </select>
+
+      <label>Hot-swap disks with one tap</label>
+      <select name="HOTSWAP" id="cfg-p-hotswap">
+        <option value="OFF">Off</option><option value="ON">On</option>
+      </select>
+
+      <label>Force-swap (skip USB re-attach)</label>
+      <select name="FORCESWAP" id="cfg-p-forceswap">
+        <option value="OFF">Off</option><option value="ON">On</option>
+      </select>
+
+      <label>Category browsing</label>
+      <select name="CATEGORIES" id="cfg-p-categories">
+        <option value="OFF">Off</option><option value="ON">On</option>
+      </select>
+
+      <label>Nested categories</label>
+      <select name="NESTING" id="cfg-p-nesting">
+        <option value="OFF">Off</option><option value="ON">On</option>
+      </select>
+
+      <label>Hivemind (FLING to every paired dongle)</label>
+      <select name="HIVEMIND" id="cfg-p-hivemind">
+        <option value="ON">On</option><option value="OFF">Off</option>
+      </select>
+
+      <label>Max wireless dongles (1-64)</label>
+      <input type="number" name="CAP" id="cfg-p-cap" min="1" max="64" value="32">
+
+      <label>Boot cracktro (0 = random, 1-8 = fixed)</label>
+      <input type="number" name="CRACKTRO" id="cfg-p-cracktro" min="0" max="8" value="0">
+
+      <label>Loop cracktro until tapped</label>
+      <select name="LOOP" id="cfg-p-loop">
+        <option value="0">No</option><option value="1">Yes</option>
+      </select>
+
+      <div style="margin-top:10px">
+        <button type="button" class="btn btn-danger" onclick="rebootDevice()">Reboot device</button>
+      </div>
+      </div>
+
+      <div style="margin-top:16px">
+        <button type="submit" class="btn btn-primary">Save Configuration</button>
+        <button type="button" class="btn" onclick="checkWiFiStatus()">Check WiFi Status</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card needs-sd">
+    <h2>SD Card Access</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:10px">
+      Reboots the device into card-reader mode: the SD card appears as a USB
+      drive on whatever computer the device is plugged into &mdash; manage the
+      library without pulling the card. You can unplug and move the cable to
+      a computer after pressing this; the mode survives the power loss. Tap
+      the device's screen to return to normal operation.
+    </p>
+    <button class="btn" onclick="sdAccessMode()">Enter SD access mode</button>
+  </div>
+
+  <div class="card" id="ota-card" style="display:none">
+    <h2>Firmware</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:10px">
+      Update over WiFi, no cable. The image is written to the spare slot and the
+      device restarts into it; if anything goes wrong it keeps running what it
+      is running now.
+    </p>
+    <div class="upload-zone" id="ota-zone">
+      <strong>Drop a .bin firmware here</strong>
+      <p>or click to browse &mdash; takes about a minute, do not remove power</p>
+      <input type="file" id="ota-input" accept=".bin" style="display:none">
+    </div>
+    <div class="progress-bar" id="ota-progress">
+      <div class="progress-fill" id="ota-fill">0%</div>
+    </div>
+  </div>
+</div>
+
+<!-- GAMES -->
+<div class="content view hidden" id="view-games">
+  <div class="card">
+    <h2>Upload Game</h2>
+    <div class="upload-zone" id="upload-zone">
+      <strong>Drop ADF/DSK files here</strong>
+      <p>or click to browse — supports multiple disk images + JPG cover + NFO</p>
+      <input type="file" id="upload-input" multiple accept=".adf,.dsk,.img" style="display:none">
+    </div>
+    <div class="progress-bar" id="upload-progress">
+      <div class="progress-fill" id="upload-fill">0%</div>
+    </div>
+  </div>
+
+  <div class="card" id="now-playing-card" style="display:none">
+    <h2>Now Playing</h2>
+    <div id="now-playing" style="display:flex;align-items:center;gap:12px"></div>
+  </div>
+
+  <div class="card" id="games-library-card">
+    <h2>Game Library <span id="game-count" style="font-weight:400;color:var(--muted)"></span></h2>
+    <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input type="text" id="game-search" placeholder="Search games..." style="flex:1;min-width:150px;max-width:300px" oninput="debouncedFilterGames()">
+      <button class="btn" onclick="loadGames()">Refresh</button>
+      <button class="btn" onclick="rescanGames()">Rescan SD</button>
+    </div>
+    <div id="alpha-filter" style="margin-bottom:8px;display:flex;flex-wrap:wrap;gap:2px"></div>
+    <div class="game-list" id="game-list"></div>
+  </div>
+</div>
+
+<!-- FTP -->
+<div class="content view hidden" id="view-ftp">
+  <div class="card">
+    <h2>FTP Network Source</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:4px">Browse and download games from your NAS or network FTP server</p>
+    <p style="font-size:11px;color:var(--red);margin-bottom:10px;font-weight:600">Plain FTP only — SFTP (SSH) is not supported. Use the WebDAV tab for secure connections.</p>
+    <div id="ftp-status-bar" class="ftp-status disconnected">Not connected</div>
+    <div id="ftp-no-config" style="display:none;padding:16px;background:#ffe8e8;border:1px solid var(--red);border-radius:2px;margin-bottom:12px">
+      <strong style="color:var(--red)">FTP Not Configured</strong>
+      <p style="font-size:13px;margin-top:4px">Add FTP settings to CONFIG.TXT on the SD card:<br>
+      <code style="font-size:12px">FTP_ENABLED=1<br>FTP_HOST=192.168.1.100<br>FTP_USER=amiga<br>FTP_PASS=games<br>FTP_PATH=/amiga/adf/</code></p>
+    </div>
+    <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center">
+      <button class="btn btn-primary" id="ftp-connect-btn" onclick="ftpConnect()">Connect</button>
+      <button class="btn btn-danger" id="ftp-disconnect-btn" onclick="ftpDisconnect()" style="display:none">Disconnect</button>
+      <button class="btn" onclick="ftpRefresh()">Refresh</button>
+    </div>
+    <div id="ftp-breadcrumb" class="ftp-breadcrumb"></div>
+    <div class="game-list" id="ftp-list"></div>
+    <div id="ftp-loading" style="display:none;text-align:center;padding:20px;color:var(--muted)">Loading...</div>
+  </div>
+</div>
+
+<!-- WEBDAV -->
+<div class="content view hidden" id="view-webdav">
+  <div class="card">
+    <h2>WebDAV Network Source</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:10px">Browse and download games from Stackstorage, Nextcloud, or any WebDAV server</p>
+    <div id="dav-status-bar" class="ftp-status disconnected">Not connected</div>
+    <div id="dav-no-config" style="display:none;padding:16px;background:#ffe8e8;border:1px solid var(--red);border-radius:2px;margin-bottom:12px">
+      <strong style="color:var(--red)">WebDAV Not Configured</strong>
+      <p style="font-size:13px;margin-top:4px">Add WebDAV settings in the Config tab<span class="needs-sd">, or in CONFIG.TXT on the SD card</span>.</p>
+    </div>
+    <div id="dav-actions" style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-primary" id="dav-connect-btn" onclick="davConnect()">Connect</button>
+      <button class="btn btn-danger" id="dav-disconnect-btn" onclick="davDisconnect()" style="display:none">Disconnect</button>
+      <button class="btn" onclick="davRefresh()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="card" id="dav-now-playing-card" style="display:none">
+    <h2>Now Playing</h2>
+    <div id="dav-now-playing" style="display:flex;align-items:center;gap:12px"></div>
+  </div>
+
+  <div class="card" id="dav-game-card" style="display:none">
+    <h2>Game Library <span id="dav-game-count" style="font-weight:400;color:var(--muted)"></span></h2>
+    <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input type="text" id="dav-search" placeholder="Search games..." style="flex:1;min-width:150px;max-width:300px" oninput="debouncedDavFilterGames()">
+      <button class="btn" onclick="davRefresh()">Refresh</button>
+    </div>
+    <div id="dav-alpha-filter" style="margin-bottom:8px;display:flex;flex-wrap:wrap;gap:2px"></div>
+    <div class="game-list" id="dav-list"></div>
+    <div id="dav-loading" style="display:none;text-align:center;padding:20px;color:var(--muted)">
+      <div style="font-weight:600;margin-bottom:4px">Reading WebDAV library&hellip;</div>
+      <div style="font-size:12px;color:var(--muted)">Large libraries (1000+ games) can take up to a minute on first load. Follow-up browses use the cached listing and are instant.</div>
+    </div>
+  </div>
+
+  <details id="dav-debug-wrap" style="display:none;margin-top:12px">
+    <summary style="cursor:pointer;font-size:12px;color:var(--muted)">Debug Log</summary>
+    <pre id="dav-debug-log" style="font-size:11px;background:#1a1a2e;color:#0f0;padding:8px;border-radius:4px;max-height:200px;overflow:auto;white-space:pre-wrap;margin-top:4px"></pre>
+  </details>
+</div>
+
+<!-- WEBDAV GAME DETAIL MODAL -->
+<div class="modal-overlay" id="modal-dav-detail">
+  <div class="modal">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <span class="badge" style="background:var(--blue);color:#fff">WebDAV</span>
+      <h3 id="dav-modal-title" style="margin:0">Game Details</h3>
+    </div>
+    <div style="text-align:center;margin-bottom:12px">
+      <img id="dav-modal-cover" class="game-cover" style="width:200px;height:auto;max-height:250px">
+    </div>
+    <div id="dav-modal-disk-loader" style="margin-bottom:12px;padding:10px;background:var(--light);border:1px inset var(--line);border-radius:2px">
+      <!-- One button per disk, mirroring the disk selector on the touchscreen.
+           A dropdown hid how many disks a game had and took two taps to swap;
+           buttons show the whole set at a glance and swap in one. -->
+      <div style="font-weight:600;font-size:13px;margin-bottom:6px">Insert disk</div>
+      <div id="dav-modal-disk-btns" class="disk-btn-row"></div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <span id="dav-modal-load-status" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+    </div>
+    <div id="dav-modal-disks" style="margin-bottom:8px"></div>
+    <div id="dav-modal-nfo" style="margin-bottom:8px"></div>
+    <div id="dav-mirror-status" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
+    <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-primary needs-sd" onclick="davSaveToSd()" title="Download every disk, the notes and the cover of this game into the SD library">Save to SD</button>
+      <button class="btn" onclick="davCloseFolderModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- THEMES -->
+<div class="content view hidden" id="view-themes">
+  <div class="card">
+    <h2>Installed Themes</h2>
+    <div class="theme-grid" id="theme-grid"></div>
+  </div>
+
+  <div class="card needs-sd">
+    <h2>Theme Editor</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:10px">
+      Start from a preset or one of your own saved themes, adjust the style, and
+      save it to the SD card. Buttons are generated from the style, so they always
+      match each other &mdash; and they are rendered at the sizes this panel
+      actually uses. The active theme also colours this web interface.
+    </p>
+
+    <div class="net-row" style="flex-wrap:wrap;gap:10px;align-items:flex-end">
+      <div><label>Start from</label>
+        <select id="te-preset" style="width:auto;min-width:150px"></select></div>
+      <div><label>Save as</label>
+        <input type="text" id="te-name" placeholder="MY_THEME" maxlength="16"
+               style="width:auto;min-width:140px;text-transform:uppercase"></div>
+    </div>
+
+    <div class="net-row" style="flex-wrap:wrap;gap:14px;margin-top:10px">
+      <div><label>Fill</label><input type="color" id="te-fill" style="width:56px;padding:2px"></div>
+      <div><label>Highlight</label><input type="color" id="te-light" style="width:56px;padding:2px"></div>
+      <div><label>Shadow</label><input type="color" id="te-dark" style="width:56px;padding:2px"></div>
+      <div><label>Text</label><input type="color" id="te-text" style="width:56px;padding:2px"></div>
+      <div><label title="Selection bars, links and headings — on the panel and in this web interface">Accent</label>
+        <input type="color" id="te-accent" style="width:56px;padding:2px"></div>
+      <div><label>Edge</label>
+        <select id="te-bevel" style="width:auto">
+          <option value="raised">Raised (Amiga)</option>
+          <option value="flat">Flat border</option>
+          <option value="none">None</option>
+        </select></div>
+      <div><label>Edge width</label>
+        <input type="number" id="te-bevelw" min="0" max="6" value="2" style="width:64px"></div>
+      <div><label>Corner radius</label>
+        <input type="number" id="te-radius" min="0" max="12" value="0" style="width:64px"></div>
+      <div><label>Text size</label>
+        <input type="number" id="te-scale" min="1" max="4" value="2" style="width:64px"></div>
+    </div>
+
+    <label style="margin-top:12px">Preview (actual size)</label>
+    <div id="te-preview"
+         style="background:#000;padding:12px;border:2px inset var(--line);border-radius:2px;
+                display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-height:60px"></div>
+
+    <!-- A game row exactly as the panel draws it: transparent background, a 3px
+         accent bar marking the selection. Same row this web UI renders, so the
+         accent colour has somewhere visible to land. -->
+    <div id="te-rows"
+         style="background:#000;padding:0;border:2px inset var(--line);border-top:0;
+                border-radius:0 0 2px 2px;font-family:monospace;font-size:13px"></div>
+
+    <div class="net-row" style="margin-top:12px">
+      <button class="btn btn-primary" id="te-save">Save theme to device</button>
+      <button class="btn" id="te-apply" title="Save, then make it the active theme">Save &amp; activate</button>
+      <span id="te-status" style="font-size:13px;color:var(--muted)"></span>
+    </div>
+  </div>
+</div>
+
+<!-- LOG VIEWER -->
+<div class="content view hidden" id="view-log">
+  <div class="card">
+    <h2>System Log</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:10px">Device boot log and runtime events, written to <code>/LOG.TXT</code> on the SD card.</p>
+    <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <label style="margin:0;font-size:13px;display:flex;align-items:center;gap:6px;
+                    padding:6px 10px;background:var(--light);border:1px inset var(--line);border-radius:2px">
+        <input type="checkbox" id="log-enabled" onchange="setLogEnabled(this.checked)">
+        <strong>Logging enabled</strong>
+      </label>
+      <button class="btn btn-primary" onclick="loadLog()">Refresh</button>
+      <button class="btn btn-danger" onclick="clearLog()">Clear Log</button>
+      <label style="margin:0;font-size:13px;display:flex;align-items:center;gap:4px"><input type="checkbox" id="log-auto-scroll" checked> Auto-scroll</label>
+    </div>
+    <pre id="log-content" style="font-size:11px;background:#1a1a2e;color:#0f0;padding:12px;border-radius:4px;max-height:500px;overflow:auto;white-space:pre-wrap;min-height:200px;font-family:'Courier New',monospace;border:2px inset var(--line)">Loading...</pre>
+  </div>
+</div>
+
+<!-- GAME DETAIL MODAL -->
+<div class="modal-overlay" id="modal-game-detail">
+  <div class="modal">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <span class="badge" style="background:var(--green);color:#fff">SD</span>
+      <h3 id="modal-game-title" style="margin:0">Game Details</h3>
+    </div>
+    <div id="modal-game-cover-wrap" style="text-align:center;margin-bottom:12px">
+      <img id="modal-game-cover" class="game-cover" style="width:200px;height:auto;max-height:250px">
+    </div>
+    <div id="modal-disk-loader" style="margin-bottom:12px;padding:10px;background:var(--light);border:1px inset var(--line);border-radius:2px">
+      <!-- Same disk-button row as the WebDAV modal and the touchscreen. The SD
+           side kept a dropdown plus separate Insert and Eject, which made the
+           two halves of this UI behave differently for the same task. -->
+      <div style="font-weight:600;font-size:13px;margin-bottom:6px">Insert disk</div>
+      <div id="modal-disk-btns" class="disk-btn-row"></div>
+      <div style="margin-top:8px">
+        <span id="modal-load-status" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+    </div>
+    <div id="modal-game-disks"></div>
+    <label>NFO / Description</label>
+    <textarea id="modal-nfo-editor"></textarea>
+    <div style="margin-top:8px">
+      <label>Upload Cover Art</label>
+      <div class="net-row">
+        <input type="file" id="modal-cover-input" accept=".jpg,.jpeg,.png" style="flex:1">
+        <button type="button" class="btn btn-sm btn-primary" id="modal-cover-upload-btn" disabled>Upload</button>
+      </div>
+      <div id="cover-upload-status" style="font-size:12px;color:var(--muted);margin-top:4px"></div>
+    </div>
+    <div id="cover-url-section" style="margin-top:8px">
+      <label>Or download cover from URL</label>
+      <div class="net-row">
+        <input type="url" id="modal-cover-url" placeholder="https://example.com/cover.jpg">
+        <button type="button" class="btn btn-sm btn-primary" id="modal-cover-url-btn">Download</button>
+      </div>
+      <div id="cover-url-status" style="font-size:12px;color:var(--muted);margin-top:4px"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-danger" id="modal-delete-btn">Delete Game</button>
+      <button class="btn btn-primary" id="modal-save-nfo">Save NFO</button>
+      <button class="btn" onclick="closeModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- DAV BUSY OVERLAY — blocks pointer events over the whole page while a
+     dav* API call is in flight. Prevents the user tapping around and
+     queueing more concurrent requests at the device (each one keeps the
+     TLS + SD + WiFi radio active and drains the aged Amiga USB rail). -->
+<div class="modal-overlay" id="dav-busy-overlay">
+  <div class="modal" style="max-width:360px;text-align:center">
+    <div style="font-size:36px;margin-bottom:6px">&#128225;</div>
+    <h3 style="margin:0 0 6px">Loading WebDAV&hellip;</h3>
+    <div id="dav-busy-msg" style="color:var(--muted);font-size:13px;line-height:1.4"></div>
+    <div style="margin-top:12px">
+      <button class="btn" id="dav-busy-cancel">Cancel</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-top:6px">
+      Cancelling stops the browser waiting. The device finishes the request it
+      already started.
+    </div>
+  </div>
+</div>
+
+<script>
+// Gotek Setup — SPA Controller
+
+const API = '';
+let currentGame = null;
+let systemInfo = {};
+
+// Navigation
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
+    tab.classList.add('active');
+    document.getElementById('view-' + tab.dataset.view).classList.remove('hidden');
+
+    if (tab.dataset.view === 'dashboard') loadDashboard();
+    if (tab.dataset.view === 'config') loadConfig();
+    if (tab.dataset.view === 'games') loadGames();
+    if (tab.dataset.view === 'ftp') ftpLoadStatus();
+    if (tab.dataset.view === 'webdav') davLoadStatus();
+    if (tab.dataset.view === 'themes') { loadThemes(); teInit(); }
+    if (tab.dataset.view === 'log') loadLog();
+  });
+});
+
+// Password visibility toggle
+async function togglePass(btn) {
+  const inp = btn.parentElement.querySelector('input');
+  if (inp.type === 'password') {
+    if (inp.id === 'cfg-wifi-client-pass' && !inp.value && inp.dataset.saved === '1') {
+      btn.disabled = true;
+      try {
+        const data = await api('/api/wifi/password', { method: 'POST', cache: 'no-store' });
+        inp.value = data.password || '';
+      } catch (e) {
+        return;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    inp.type = 'text'; btn.innerHTML = '&#128064;';
+  } else { inp.type = 'password'; btn.innerHTML = '&#128065;'; }
+}
+
+// Toast notifications
+function toast(msg, type = 'success') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+// API helpers
+async function api(path, opts = {}) {
+  try {
+    const res = await fetch(API + path, opts);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'HTTP ' + res.status);
+    }
+    return await res.json();
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+    throw e;
+  }
+}
+
+// DAV busy overlay — every dav* async that hits the device wraps its await
+// with davShowBusy / davHideBusy so the user can't queue a second heavy
+// request while the first is still fighting for TLS + SD + the Amiga rail.
+// Nesting counter so nested calls don't yank the overlay early.
+// Search boxes rebuild their list through innerHTML, so firing on every
+// keystroke discards and recreates every row (and its <img>) as you type.
+// A short debounce means a burst of typing costs one render, not one per
+// character — on a 3000-game library that is the difference between
+// responsive and unusable.
+function debounce(fn, ms) {
+  let t = null;
+  return function () { clearTimeout(t); t = setTimeout(fn, ms); };
+}
+const debouncedFilterGames    = debounce(() => filterGames(), 250);
+const debouncedDavFilterGames = debounce(() => davFilterGames(), 250);
+
+let davBusyDepth = 0;
+// Bumped by Cancel. In-flight awaits compare against the value they captured
+// and bail if it moved — the device cannot be interrupted mid-request, but the
+// browser does not have to keep waiting for it.
+let davBusyGeneration = 0;
+
+function davShowBusy(msg) {
+  davBusyDepth++;
+  document.getElementById('dav-busy-msg').textContent =
+    msg || 'Talking to your WebDAV server. The device touchscreen is unresponsive while this runs.';
+  document.getElementById('dav-busy-overlay').classList.add('show');
+}
+function davHideBusy() {
+  if (davBusyDepth > 0) davBusyDepth--;
+  if (davBusyDepth === 0) {
+    document.getElementById('dav-busy-overlay').classList.remove('show');
+  }
+}
+function davCancelBusy() {
+  davBusyGeneration++;
+  davBusyDepth = 0;
+  document.getElementById('dav-busy-overlay').classList.remove('show');
+  toast('Cancelled — the device may still be finishing the current request');
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('dav-busy-cancel');
+  if (btn) btn.addEventListener('click', davCancelBusy);
+  // Escape is the reflex for a stuck modal; honour it.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && davBusyDepth > 0) davCancelBusy();
+  });
+});
+
+// ═══════════════ DASHBOARD ═══════════════
+
+async function loadDashboard() {
+  const d = await api('/api/system/info');
+  systemInfo = d;
+
+  // Update tab visibility based on feature flags
+  const ftpTab = document.getElementById('tab-ftp');
+  const davTab = document.getElementById('tab-webdav');
+  const logTab = document.getElementById('tab-log');
+  if (ftpTab) ftpTab.style.display = d.ftp_enabled ? '' : 'none';
+  if (davTab) davTab.style.display = d.dav_enabled ? '' : 'none';
+  if (logTab) logTab.style.display = d.log_enabled ? '' : 'none';
+
+  // A device with no card has no library to browse and no theme assets to
+  // store, so those tabs are not merely empty — they are meaningless. Older
+  // firmware does not send has_sd; treat its absence as "yes", which is what
+  // every device that predates the flag actually is.
+  const hasSD = (d.has_sd === undefined) ? true : !!d.has_sd;
+  // The Games tab stays: it holds Upload and Now Playing, which is the whole
+  // interface on a device with no card. Only the library — a list of files on a
+  // card that is not there — goes away, along with themes, whose artwork lives
+  // on that same card.
+  const libraryCard = document.getElementById('games-library-card');
+  const themesTab   = document.getElementById('tab-themes');
+  if (libraryCard) libraryCard.style.display = hasSD ? '' : 'none';
+  if (themesTab)   themesTab.style.display   = '';   // OMEGA: built-in presets need no card
+  // Absent means no, unlike has_sd: a device that never advertised OTA does
+  // not have the endpoint, and offering the button would only produce a 404.
+  const otaCard = document.getElementById('ota-card');
+  if (otaCard) otaCard.style.display = d.has_ota ? '' : 'none';
+
+  const hasDisplay = (d.has_display === undefined) ? true : !!d.has_display;
+  document.body.classList.toggle('no-sd', !hasSD);
+  document.body.classList.toggle('no-display', !hasDisplay);
+
+  const ipEl = document.getElementById('ip-display');
+  let ipText = d.wifi_ip || '?';
+  if (d.internet) ipText += ' | Net: ' + d.internet_ip;
+  ipEl.textContent = ipText;
+
+  // Wear the panel's theme from the first paint. This is the boot request, and
+  // it already reports the active theme, so parity costs one style fetch.
+  syncThemeStyle(d.theme);
+
+  const grid = document.getElementById('stats-grid');
+  const stats = [
+    stat('Firmware', d.firmware),
+    stat('Free Heap', Math.round(d.heap_free / 1024) + ' KB', d.heap_free > 50000 ? 'ok' : 'warn'),
+    stat('Free PSRAM', Math.round(d.psram_free / 1024) + ' KB', d.psram_free > 1000000 ? 'ok' : 'warn'),
+    stat('Loaded', d.loaded_game || 'none', d.loaded_game !== 'none' ? 'ok' : ''),
+    stat('Mode', d.mode),
+    stat('Theme', d.theme),
+    stat('AP Clients', d.wifi_clients),
+    stat('Internet', d.internet ? d.internet_ssid : 'Offline', d.internet ? 'ok' : 'warn')
+  ];
+  grid.innerHTML = stats.join('');
+}
+
+function stat(label, value, cls = '') {
+  return `<div class="stat"><div class="label">${label}</div><div class="value ${cls}">${value}</div></div>`;
+}
+
+// ═══════════════ CONFIG ═══════════════
+
+async function loadConfig() {
+  const cfg = await api('/api/config');
+  document.getElementById('cfg-display').value = cfg.DISPLAY || 'JC3248';
+  document.getElementById('cfg-lastmode').value = cfg.LASTMODE || 'ADF';
+  document.getElementById('cfg-wifi-enabled').value = cfg.WIFI_ENABLED || '1';
+  document.getElementById('cfg-wifi-ssid').value = cfg.WIFI_SSID || '';
+  const mdns = cfg.MDNS_NAME || 'gotek';
+  const mdnsEl = document.getElementById('cfg-mdns-name');
+  if (mdnsEl) {
+    mdnsEl.value = mdns;
+    document.getElementById('cfg-mdns-preview').textContent = mdns;
+    mdnsEl.oninput = () => {
+      document.getElementById('cfg-mdns-preview').textContent = mdnsEl.value.trim() || 'gotek';
+    };
+  }
+  document.getElementById('cfg-wifi-pass').value = cfg.WIFI_PASS || '';
+  document.getElementById('cfg-wifi-channel').value = cfg.WIFI_CHANNEL || '6';
+  document.getElementById('cfg-wifi-client-enabled').value = cfg.WIFI_CLIENT_ENABLED || '0';
+  document.getElementById('cfg-wifi-client-ssid').value = cfg.WIFI_CLIENT_SSID || '';
+  const passEl = document.getElementById('cfg-wifi-client-pass');
+  passEl.value = cfg.WIFI_CLIENT_PASS || '';
+  passEl.type = 'password';
+  passEl.dataset.saved = cfg.WIFI_CLIENT_PASS_SAVED || '0';
+  passEl.placeholder = passEl.dataset.saved === '1' ? 'Saved password — click the eye to reveal' : '';
+  const nameEl = document.getElementById('cfg-device-name');
+  nameEl.value = cfg.DEVICE_NAME || '';
+  const previewName = () => {
+    document.getElementById('cfg-device-name-preview').textContent =
+      nameEl.value.trim().toLowerCase() || 'automatic name';
+  };
+  nameEl.oninput = previewName;
+  previewName();
+
+  // Panel Options (the mesarim tree): fill whatever the device reports.
+  ['CAROUSEL','SCREENSAVER','SSMODE','SSTIME','SSFAV','LANG','FONT','ROTATE',
+   'COMPACT','BTNSTYLE','TAPLOAD','HOTSWAP','FORCESWAP','CATEGORIES','NESTING',
+   'HIVEMIND','CAP','CRACKTRO','LOOP'].forEach(k => {
+    const el = document.getElementById('cfg-p-' + k.toLowerCase());
+    if (el && cfg[k] !== undefined && cfg[k] !== '') el.value = cfg[k];
+  });
+
+  // A section only exists on a device whose /api/config carries its keys.
+  // Hide the rest, and disable their fields so Save does not post empty
+  // values into settings the device never showed. Data-driven: adding a
+  // device means answering with the right keys, not editing this page.
+  document.querySelectorAll('.cfg-sec').forEach(sec => {
+    const present = (sec.dataset.probe || '').split(',')
+      .some(k => cfg[k] !== undefined);
+    sec.style.display = present ? '' : 'none';
+    sec.querySelectorAll('input,select,button').forEach(el => { el.disabled = !present; });
+  });
+
+  // Backdrop strength. Defaults to 20 when the key is absent, matching the
+  // firmware default rather than showing 0 and implying it is off.
+  const wp = (cfg.WALLPAPER_PCT === undefined || cfg.WALLPAPER_PCT === '')
+             ? 20 : parseInt(cfg.WALLPAPER_PCT);
+  document.getElementById('cfg-wallpaper').value = wp;
+  document.getElementById('cfg-wallpaper-val').textContent = wp === 0 ? 'Off' : wp + '%';
+  const tx = (cfg.WIFI_TX_DBM === undefined || cfg.WIFI_TX_DBM === '') ? 15 : parseInt(cfg.WIFI_TX_DBM);
+  document.getElementById('cfg-wifi-tx').value = tx;
+  document.getElementById('cfg-wifi-tx-val').textContent = tx + ' dBm';
+  document.getElementById('cfg-saves').value =
+    ['OFF','COPY','OVERWRITE'].includes(cfg.SAVES) ? cfg.SAVES : 'COPY';
+
+  // Theme dropdown — only on a device that reports THEME at all, and never
+  // allowed to abort the rest of config loading if the endpoint is absent.
+  if (cfg.THEME !== undefined) {
+    try {
+      const themes = await api('/api/themes/list');
+      const sel = document.getElementById('cfg-theme');
+      sel.innerHTML = themes.themes.map(t =>
+        `<option value="${t}" ${t === cfg.THEME ? 'selected' : ''}>${t}</option>`
+      ).join('');
+    } catch (_) { /* section is hidden on such devices anyway */ }
+  }
+}
+
+async function sdAccessMode() {
+  if (!confirm('Reboot into SD access mode?' + String.fromCharCode(10,10) + 'The card becomes a USB drive on the computer the device is plugged into. The Gotek will not see a disk until you tap the device screen to return.')) return;
+  try { await fetch(API + '/api/system/sdaccess', { method: 'POST' }); } catch (_) {}
+  toast('Rebooting into SD access mode');
+}
+
+async function rebootDevice() {
+  if (!confirm('Reboot the device now? Saved options apply after it comes back.')) return;
+  try { await fetch(API + '/api/system/reboot', { method: 'POST' }); } catch (_) {}
+  toast('Rebooting \u2014 the page reconnects when it is back');
+  if (typeof waitForReboot === 'function') waitForReboot();
+}
+
+document.getElementById('config-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const status = document.getElementById('config-status');
+  status.textContent = 'Saving…';
+  try {
+    const params = new URLSearchParams(new FormData(e.target));
+    const j = await api('/api/config', { method: 'POST', body: params });
+    if (j.reboot) {
+      status.textContent = 'Saved. The device is restarting. ';
+      if (j.hostname) {
+        const link = document.createElement('a');
+        link.href = 'http://' + j.hostname + '.local/';
+        link.textContent = 'Open ' + j.hostname + '.local';
+        status.appendChild(link);
+      }
+      toast('Settings saved — device is restarting');
+      if (!j.hostname || !location.hostname.endsWith('.local') ||
+          location.hostname === j.hostname + '.local') waitForReboot();
+    } else {
+      status.textContent = 'Configuration saved.';
+      toast('Configuration saved!');
+    }
+  } catch (e) {
+    status.textContent = 'Could not save: ' + e.message;
+  }
+});
+
+// ── Browser-side DAV cache ────────────────────────────────────────────────
+// The dongles have no SD card, so every NFO and cover normally costs a TLS
+// round trip through the device. The browser, however, has plenty of storage:
+// NFO texts and the last dozen covers live in localStorage, keyed by remote
+// path. A device with a card benefits too — reopening a game is instant.
+const DAV_NFO_TTL = 7 * 24 * 3600 * 1000;   // notes rarely change
+
+function davNfoCached(path) {
+  try {
+    const raw = localStorage.getItem('davnfo:' + path);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (Date.now() - o.ts > DAV_NFO_TTL) return null;
+    return o.t;
+  } catch (_) { return null; }
+}
+function davNfoStore(path, text) {
+  try { localStorage.setItem('davnfo:' + path, JSON.stringify({ t: text, ts: Date.now() })); }
+  catch (_) { /* storage full or blocked — caching is a bonus, never a failure */ }
+}
+
+// Covers: fetch once, keep as a data-URL, evict oldest beyond a dozen. A
+// 60 KB JPEG is ~80 KB base64; a dozen stays well under the 5 MB budget.
+async function davCoverInto(imgEl, url, key) {
+  const k = 'davcov:' + key;
+  try {
+    const hit = localStorage.getItem(k);
+    if (hit) {
+      const o = JSON.parse(hit);
+      imgEl.src = o.d;
+      try { o.ts = Date.now(); localStorage.setItem(k, JSON.stringify(o)); } catch (_) {}
+      return;
+    }
+  } catch (_) {}
+  try {
+    const r = await fetch(url);
+    if (!r.ok) { imgEl.dispatchEvent(new Event('error')); return; }
+    const blob = await r.blob();
+    const dataUrl = await new Promise(res => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.readAsDataURL(blob);
+    });
+    imgEl.src = dataUrl;
+    if (dataUrl.length < 260000) {
+      try {
+        localStorage.setItem(k, JSON.stringify({ d: dataUrl, ts: Date.now() }));
+        // LRU: keep the twelve most recently seen covers.
+        const covers = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const kk = localStorage.key(i);
+          if (kk && kk.startsWith('davcov:')) {
+            try { covers.push({ k: kk, ts: JSON.parse(localStorage.getItem(kk)).ts || 0 }); }
+            catch (_) { covers.push({ k: kk, ts: 0 }); }
+          }
+        }
+        covers.sort((a, b) => b.ts - a.ts).slice(12).forEach(c => localStorage.removeItem(c.k));
+      } catch (_) {}
+    }
+  } catch (_) { imgEl.dispatchEvent(new Event('error')); }
+}
+
+// ── DAV -> SD mirror: button + progress ──────────────────────────────────
+let davMirrorTimer = null;
+async function davSaveToSd() {
+  const path = window.davDetailFolderPath || '';
+  if (!path) return;
+  try {
+    const r = await fetch(API + '/api/dav/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'path=' + encodeURIComponent(path)
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(j.error || 'Could not start the download', 'error'); return; }
+    toast('Saving to SD in the background');
+    davMirrorWatch();
+  } catch (e) { toast('Could not start the download', 'error'); }
+}
+
+function davMirrorWatch() {
+  const el = document.getElementById('dav-mirror-status');
+  if (davMirrorTimer) clearInterval(davMirrorTimer);
+  davMirrorTimer = setInterval(async () => {
+    try {
+      const st = await api('/api/dav/download/status');
+      if (st.active) {
+        if (el) el.textContent = 'Saving to SD: ' + st.done + '/' + st.total +
+                                 (st.current ? ' \u2014 ' + st.current : '');
+      } else {
+        clearInterval(davMirrorTimer);
+        davMirrorTimer = null;
+        if (el) el.textContent = st.error ? ('Save to SD: ' + st.error) : '';
+        if (!st.error && st.total > 0) toast('Game saved to the SD library');
+      }
+    } catch (_) { /* device busy; try again next tick */ }
+  }, 2000);
+}
+
+// WiFi scan
+async function scanNetworks() {
+  const listEl = document.getElementById('wifi-scan-list');
+  listEl.classList.remove('hidden');
+  listEl.innerHTML = '<div style="padding:8px;color:var(--muted)">Scanning...</div>';
+
+  try {
+    const data = await api('/api/wifi/scan');
+    if (data.networks.length === 0) {
+      listEl.innerHTML = '<div style="padding:8px;color:var(--muted)">No networks found</div>';
+      return;
+    }
+    listEl.innerHTML = data.networks
+      .sort((a, b) => b.rssi - a.rssi)
+      .map(n => {
+        const bars = n.rssi > -50 ? '████' : n.rssi > -65 ? '███░' : n.rssi > -75 ? '██░░' : '█░░░';
+        return `<div onclick="selectNetwork('${esc(n.ssid)}')"><span>${esc(n.ssid)} ${n.encrypted ? '🔒' : ''}</span><span class="wifi-signal">${bars} ${n.rssi}dBm</span></div>`;
+      }).join('');
+  } catch (e) {
+    listEl.textContent = 'Scan failed: ' + e.message;
+  }
+}
+
+function selectNetwork(ssid) {
+  document.getElementById('cfg-wifi-client-ssid').value = ssid;
+  document.getElementById('cfg-wifi-client-enabled').value = '1';
+  document.getElementById('wifi-scan-list').classList.add('hidden');
+}
+
+// WiFi status check
+async function checkWiFiStatus() {
+  const box = document.getElementById('wifi-status-box');
+  box.style.display = 'block';
+  box.innerHTML = 'Checking...';
+
+  try {
+    const s = await api('/api/wifi/status');
+    let html = '<strong>AP:</strong> ' + (s.ap_active ? s.ap_ip + ' (' + s.ap_clients + ' clients)' : 'Off');
+    html += '<br><strong>Internet:</strong> ';
+    if (s.sta_connected) {
+      html += '<span style="color:var(--green)">' + s.sta_ip + ' — connected to ' + esc(s.sta_ssid) + '</span>';
+    } else if (s.sta_ssid) {
+      html += '<span style="color:var(--orange)">Connecting to ' + esc(s.sta_ssid) + '...</span>';
+    } else {
+      html += '<span style="color:var(--muted)">Not configured</span>';
+    }
+    box.innerHTML = html;
+  } catch (e) {
+    box.textContent = 'Failed to get status: ' + e.message;
+  }
+}
+
+// ═══════════════ GAMES ═══════════════
+
+let lastGameData = null;
+let activeAlpha = '';  // active letter filter, '' = all
+
+async function loadGames() {
+  const data = await api('/api/games/list');
+  lastGameData = data;
+  // Deliberately NOT clearing the search box or the letter filter here: every
+  // insert/eject refreshes this list, and resetting dumped the user back at
+  // 'A' each time (their words: "heel irritant"). filterGames still
+  // auto-picks the first letter when none was ever chosen.
+
+  // Now Playing bar
+  const npCard = document.getElementById('now-playing-card');
+  const npEl = document.getElementById('now-playing');
+  if (data.loaded_game) {
+    npCard.style.display = 'block';
+    npEl.innerHTML = `
+      <span class="active-indicator"></span>
+      <strong>${esc(data.loaded_game)}</strong>
+      <span style="color:var(--muted);font-size:13px">${esc(data.loaded_file)}</span>
+      <button class="btn btn-sm" onclick="ejectDisk(this)">Eject</button>
+    `;
+  } else {
+    npCard.style.display = 'none';
+  }
+
+  // filterGames handles auto-pick + buildAlphaFilter + renderGameList
+  filterGames();
+}
+
+// Auto-selected letter when the SD games list first opens. Same rationale
+// as davFirstAvailableLetter — never render 1000+ <img> tags at once
+// because each row fires a /api/games/*/cover request at the ESP32 and
+// hangs the touchscreen while every request queues.
+function firstAvailableLetter(games) {
+  for (let i = 0; i < 26; i++) {
+    const l = String.fromCharCode(65 + i);
+    if (games.some(g => g.name.charAt(0).toUpperCase() === l)) return l;
+  }
+  return games.length ? '#' : '';
+}
+
+function buildAlphaFilter(games) {
+  const letters = new Set();
+  games.forEach(g => {
+    const c = g.name.charAt(0).toUpperCase();
+    if (c >= 'A' && c <= 'Z') letters.add(c);
+    else letters.add('#');
+  });
+  const bar = document.getElementById('alpha-filter');
+  let html = '';
+  for (let i = 0; i < 26; i++) {
+    const l = String.fromCharCode(65 + i);
+    const has = letters.has(l);
+    html += `<span class="alpha-btn${!has ? ' disabled' : ''}${activeAlpha === l ? ' active' : ''}" onclick="setAlpha('${l}')">${l}</span>`;
+  }
+  if (letters.has('#')) {
+    html += `<span class="alpha-btn${activeAlpha === '#' ? ' active' : ''}" onclick="setAlpha('#')">#</span>`;
+  }
+  bar.innerHTML = html;
+}
+
+function setAlpha(letter) {
+  activeAlpha = letter;
+  document.getElementById('game-search').value = '';
+  filterGames();
+}
+
+function filterGames() {
+  if (!lastGameData) return;
+  const search = document.getElementById('game-search').value.toLowerCase().trim();
+  if (search) activeAlpha = '';  // clear letter filter when typing
+  // No search AND no letter → auto-pick first available. Same rationale
+  // as davFilterGames: never render the whole library at once because
+  // each row fires a cover request at the ESP32 and freezes the panel.
+  else if (!activeAlpha) activeAlpha = firstAvailableLetter(lastGameData.games);
+
+  let filtered = lastGameData.games;
+  if (search) {
+    filtered = filtered.filter(g => g.name.toLowerCase().includes(search));
+  } else if (activeAlpha) {
+    filtered = filtered.filter(g => {
+      const c = g.name.charAt(0).toUpperCase();
+      if (activeAlpha === '#') return !(c >= 'A' && c <= 'Z');
+      return c === activeAlpha;
+    });
+  }
+
+  buildAlphaFilter(lastGameData.games);
+  renderGameList(filtered, lastGameData.mode);
+}
+
+// ══════════════ SHARED LIST ROW ══════════════
+//
+// One renderer for both sources. The panel already does this with a single
+// ListRow struct and drawListRow(); the web UI had two hand-written row bodies
+// that had drifted — the WebDAV one never grew the NFO badge, the disk count, or
+// any way to pick a disk, and only the WebDAV one had a row-count backstop.
+//
+// A row model, so a caller cannot forget a field:
+//   {source:'sd'|'dav', key, name, coverUrl, playing, sourceLabel,
+//    disks:      number, 0 = not known yet (WebDAV folder nobody has opened)
+//    hasNfo:     true | false | null = unknown
+//    hasCover:   bool
+//    loadedDisk: 1-based number of the mounted disk, 0 if none/unknown}
+const LIST_ROW_MAX = 200;
+
+// What was last rendered, so late-arriving metadata can patch the rows instead
+// of forcing a re-render (which would refire every cover request).
+let listRowState = { host: null, rows: [], onDisk: null };
+
+function listRowBadges(r) {
+  return (r.playing ? '<span class="badge" style="background:var(--green);color:#fff">PLAYING</span> ' : '') +
+    (r.disks > 1 ? `<span class="badge badge-disks">${r.disks} disks</span> ` : '') +
+    (r.hasNfo === true ? '<span class="badge badge-nfo">NFO</span> ' : '') +
+    (r.hasCover ? '<span class="badge badge-cover">Cover</span> ' : '') +
+    (r.sourceLabel ? `<span class="badge" style="background:var(--blue);color:#fff">${esc(r.sourceLabel)}</span>` : '');
+}
+
+function renderListRows(host, rows, onOpen, onDisk) {
+  // Every row emits an <img> at the device and now a few buttons as well, so
+  // rendering a whole library at once is a self-inflicted denial of service on a
+  // single-threaded server. Callers filter by letter first; this is the backstop
+  // for when one forgets, and it now covers both lists rather than just WebDAV's.
+  if (rows.length > LIST_ROW_MAX) {
+    host.innerHTML = '<p style="color:var(--orange);padding:20px;text-align:center">' +
+      'Too many games to show at once (' + rows.length + '). Pick a letter or search.</p>';
+    return;
+  }
+  if (rows.length === 0) {
+    host.innerHTML = '<p style="color:var(--muted);padding:20px;text-align:center">No games found.</p>';
+    return;
+  }
+
+  listRowState = { host: host, rows: rows, onDisk: onDisk };
+
+  host.innerHTML = rows.map((r, i) => {
+    const badges = listRowBadges(r);
+    return `<div class="game-item${r.playing ? ' active' : ''}" data-i="${i}">` +
+      (r.coverUrl
+        ? `<img class="game-cover" src="${r.coverUrl}" loading="lazy" data-fallback="1">`
+        : '<div class="game-cover empty">No Art</div>') +
+      '<div class="game-info">' +
+        `<div class="game-name">${r.playing ? '<span class="active-indicator"></span>' : ''}${esc(r.name)}</div>` +
+        `<div class="game-meta">${badges}</div>` +
+      '</div>' +
+      `<div class="disk-btn-row row-disks" data-i="${i}"></div>` +
+    '</div>';
+  }).join('');
+
+  // Buttons are built as elements, not markup: the click needs the row object,
+  // and interpolating a game name into an onclick is what made "Boppin'"
+  // unopenable before.
+  rows.forEach((r, i) => {
+    const cell = host.querySelector(`.row-disks[data-i="${i}"]`);
+    if (cell) buildDiskButtons(cell, r, onDisk);
+  });
+
+  host.querySelectorAll('.game-item').forEach(el => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('.disk-btn')) return;   // a button is not the row
+      onOpen(rows[parseInt(el.dataset.i)]);
+    });
+  });
+}
+
+// The compact disk selector that sits in a row. Numbered buttons when the disk
+// count is known and greater than one; a bare Insert when it is a single-disk
+// game or the count is still unknown; Eject on the one that is mounted.
+function buildDiskButtons(host, r, onDisk) {
+  host.innerHTML = '';
+  const mk = (label, sub, loaded, diskNum) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'disk-btn' + (loaded ? ' loaded' : '');
+    b.innerHTML = esc(label) + (sub ? `<span class="disk-sub">${esc(sub)}</span>` : '');
+    b.addEventListener('click', (e) => { e.stopPropagation(); onDisk(r, diskNum, loaded, b); });
+    host.appendChild(b);
+  };
+
+  if (r.disks > 1) {
+    for (let n = 1; n <= r.disks; n++) {
+      const loaded = r.playing && r.loadedDisk === n;
+      mk(loaded ? 'Eject' : 'Disk ' + n, loaded ? 'disk ' + n : '', loaded, n);
+    }
+  } else if (r.playing) {
+    mk('Eject', '', true, 1);
+  } else {
+    mk('Insert', '', false, 1);
+  }
+}
+
+function renderGameList(games, mode) {
+  document.getElementById('game-count').textContent = '(' + games.length + ' games)';
+  const list = document.getElementById('game-list');
+
+  // The firmware's game routes only match lowercase mode segments, while the
+  // list API reports "ADF"/"DSK". The cover URL below always lowercased; the
+  // row's Insert/Disk buttons did not, so every SD row answered 404 while the
+  // modal (which lowercases in openGameDetail) worked fine. Normalise once.
+  const m = (mode || 'adf').toLowerCase();
+  const rows = games.map(g => ({
+    source: 'sd',
+    key: g.name,
+    mode: m,
+    name: g.name,
+    coverUrl: g.has_cover
+      ? `${API}/api/games/${m}/${encodeURIComponent(g.name)}/cover` : '',
+    playing: !!g.loaded,
+    sourceLabel: '',              // the SD list needs no source badge; it is all SD
+    disks: g.disks || 1,
+    hasNfo: !!g.has_nfo,
+    hasCover: !!g.has_cover,
+    // Which disk of the set is in. npPoll already fetches this; it was being
+    // served and thrown away.
+    loadedDisk: g.loaded ? (npLoadedDisk || 0) : 0,
+  }));
+
+  renderListRows(list, rows,
+    r => openGameDetail(r.mode, r.name),
+    (r, diskNum, isLoaded, btn) => rowMountSD(r, diskNum, isLoaded, btn));
+}
+
+// Insert or eject straight from a list row. Shares the load contract with the
+// modal's buttons: /load takes a 1-based disk NUMBER, so a row needs no
+// filenames to act.
+async function rowMountSD(r, diskNum, isLoaded, btn) {
+  const host = btn.parentElement;
+  host.querySelectorAll('.disk-btn').forEach(b => b.disabled = true);
+  try {
+    if (isLoaded) {
+      await api('/api/disk/unload', { method: 'POST' });
+      toast('Ejected');
+    } else {
+      const params = new URLSearchParams({ disk: String(diskNum) });
+      const res = await api(`/api/games/${r.mode}/${encodeURIComponent(r.key)}/load`,
+                           { method: 'POST', body: params });
+      toast((r.disks > 1 ? 'Disk ' + diskNum + ' — ' : '') + (res.game || r.name) + ' loaded');
+    }
+    await npRefresh();
+    await loadGames();
+  } catch (e) {
+    host.querySelectorAll('.disk-btn').forEach(b => b.disabled = false);
+  }
+}
+
+async function rescanGames() {
+  await api('/api/rescan', { method: 'POST' });
+  toast('SD card rescanned!');
+  loadGames();
+}
+
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+// Game Detail Modal
+
+async function openGameDetail(mode, name) {
+  const m = mode.toLowerCase();
+  const d = await api(`/api/games/${m}/${encodeURIComponent(name)}`);
+  // Use d.name from API response (guaranteed clean, no HTML escaping)
+  currentGame = { mode: m, name: d.name, folder: d.folder };
+
+  document.getElementById('modal-game-title').textContent = d.name;
+  const coverImg = document.getElementById('modal-game-cover');
+  if (d.has_cover) {
+    const coverUrl = `${API}/api/games/${currentGame.mode}/${encodeURIComponent(d.name)}/cover?t=${Date.now()}`;
+    coverImg.onerror = () => { console.log('Cover failed: ' + coverUrl); coverImg.style.display = 'none'; };
+    coverImg.src = coverUrl;
+    coverImg.style.display = 'block';
+  } else {
+    coverImg.style.display = 'none';
+  }
+
+  // Show/hide cover URL section based on internet availability
+  const urlSection = document.getElementById('cover-url-section');
+  urlSection.style.display = systemInfo.internet ? 'block' : 'none';
+  document.getElementById('modal-cover-url').value = '';
+  document.getElementById('cover-url-status').textContent = '';
+
+  // Disk buttons. The mounted disk offers to eject itself; the others replace
+  // it. Numbered only when there is more than one, since "Disk 1 of 1" is noise.
+  const multi = d.disks.length > 1;
+  const btnHost = document.getElementById('modal-disk-btns');
+  btnHost.innerHTML = '';
+  d.disks.forEach((dk, i) => {
+    const sizeStr = Math.round(dk.size / 1024) + ' KB';
+    const isLoaded = !!(lastGameData && lastGameData.loaded_file &&
+                        lastGameData.loaded_file.endsWith(dk.file));
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'disk-btn' + (isLoaded ? ' loaded' : '');
+    b.title = dk.file + ' (' + sizeStr + ')';
+    b.innerHTML = isLoaded
+      ? ('Eject<span class="disk-sub">' + (multi ? 'disk ' + (i + 1) : sizeStr) + '</span>')
+      : ((multi ? 'Disk ' + (i + 1) : 'Insert') + '<span class="disk-sub">' + sizeStr + '</span>');
+    b.addEventListener('click', () => sdToggleDisk(i + 1, dk, isLoaded, multi, d.disks.length));
+    btnHost.appendChild(b);
+  });
+
+  // Show active status
+  const loadStatus = document.getElementById('modal-load-status');
+  const isLoaded = lastGameData && lastGameData.loaded_game === name;
+  if (isLoaded) {
+    loadStatus.innerHTML = '<span style="color:var(--green)"><span class="active-indicator"></span>Active: ' + esc(lastGameData.loaded_file) + '</span>';
+  } else {
+    loadStatus.textContent = '';
+  }
+
+  // Disks list
+  const disksEl = document.getElementById('modal-game-disks');
+  disksEl.innerHTML = '<label>Disk Files</label>' + d.disks.map((dk, i) =>
+    `<div style="padding:4px 0;font-size:13px;color:var(--strong)">${esc(dk.file)} <span style="color:var(--muted)">(${Math.round(dk.size/1024)} KB)</span></div>`
+  ).join('');
+
+  document.getElementById('modal-nfo-editor').value = d.nfo || '';
+  document.getElementById('modal-game-detail').classList.add('show');
+}
+
+function closeModal() {
+  document.getElementById('modal-game-detail').classList.remove('show');
+  currentGame = null;
+}
+
+// Save NFO
+document.getElementById('modal-save-nfo').addEventListener('click', async () => {
+  if (!currentGame) return;
+  const content = document.getElementById('modal-nfo-editor').value;
+  const params = new URLSearchParams({ content });
+  await fetch(API + `/api/games/${currentGame.mode}/${encodeURIComponent(currentGame.name)}/nfo`, {
+    method: 'POST', body: params
+  });
+  toast('NFO saved!');
+});
+
+// Delete game
+document.getElementById('modal-delete-btn').addEventListener('click', async () => {
+  if (!currentGame) return;
+  if (!confirm('Delete "' + currentGame.name + '" and all its files?')) return;
+  await api(`/api/games/${currentGame.mode}/${encodeURIComponent(currentGame.name)}`, { method: 'DELETE' });
+  toast('Game deleted!');
+  closeModal();
+  loadGames();
+});
+
+// Load disk
+// Insert/eject toggle for an SD disk, matching the WebDAV modal.
+async function sdToggleDisk(diskNum, disk, isLoaded, multi, total) {
+  if (!currentGame) return;
+  const statusEl = document.getElementById('modal-load-status');
+  const host = document.getElementById('modal-disk-btns');
+  const btns = host ? host.querySelectorAll('.disk-btn') : [];
+  btns.forEach(b => b.disabled = true);
+
+  try {
+    if (isLoaded) {
+      statusEl.textContent = 'Ejecting…';
+      await api('/api/disk/unload', { method: 'POST' });
+      statusEl.textContent = '';
+      toast('Ejected');
+    } else {
+      const which = multi ? ('Disk ' + diskNum + '/' + total + ' — ') : '';
+      statusEl.innerHTML = '<span style="color:var(--orange)">' + which + 'loading…</span>';
+      const params = new URLSearchParams({ disk: String(diskNum) });
+      const res = await api(`/api/games/${currentGame.mode}/${encodeURIComponent(currentGame.name)}/load`, {
+        method: 'POST', body: params
+      });
+      statusEl.innerHTML = '<span style="color:var(--green)"><span class="active-indicator"></span>' +
+                           which + 'Playing ' + esc(res.file || disk.file) + '</span>';
+      toast(which + (res.game || currentGame.name) + ' loaded');
+    }
+    await loadGames();                 // refresh the list's active indicator
+    openGameDetail(currentGame.mode, currentGame.name);   // re-render the buttons
+  } catch (e) {
+    statusEl.innerHTML = '<span style="color:var(--red)">Failed</span>';
+    btns.forEach(b => b.disabled = false);
+  }
+}
+
+// Eject disk (global)
+async function ejectDisk(button) {
+  if (button) button.disabled = true;
+  try {
+    await api('/api/disk/unload', { method: 'POST' });
+    toast('Disk ejected');
+    try { await loadGames(); }
+    catch (_) { toast('Disk ejected; refresh Games to update the display', 'error'); }
+  } catch (e) {
+    toast('Eject failed: ' + e.message, 'error');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+// Resize image client-side before upload (ESP32 can't handle large files)
+function resizeImage(file, maxW = 320, maxH = 400, quality = 0.85) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let w = img.width, h = img.height;
+      if (w > maxW || h > maxH) {
+        const ratio = Math.min(maxW / w, maxH / h);
+        w = Math.round(w * ratio);
+        h = Math.round(h * ratio);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      canvas.toBlob(blob => resolve(new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' })), 'image/jpeg', quality);
+    };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+// Cover file upload — enable button when file selected
+document.getElementById('modal-cover-input').addEventListener('change', (e) => {
+  document.getElementById('modal-cover-upload-btn').disabled = !e.target.files.length;
+});
+
+document.getElementById('modal-cover-upload-btn').addEventListener('click', async () => {
+  if (!currentGame) return;
+  const fileInput = document.getElementById('modal-cover-input');
+  if (!fileInput.files.length) { toast('Select an image first', 'error'); return; }
+
+  const statusEl = document.getElementById('cover-upload-status');
+  statusEl.textContent = 'Resizing...';
+  statusEl.style.color = 'var(--muted)';
+
+  try {
+    const resized = await resizeImage(fileInput.files[0]);
+    statusEl.textContent = 'Uploading (' + Math.round(resized.size / 1024) + ' KB)...';
+    const form = new FormData();
+    form.append('cover', resized);
+    const folderParam = currentGame.folder ? `?folder=${encodeURIComponent(currentGame.folder)}` : '';
+    const res = await fetch(API + `/api/games/${currentGame.mode}/${encodeURIComponent(currentGame.name)}/cover${folderParam}`, {
+      method: 'POST', body: form
+    });
+    const data = await res.json();
+    if (res.ok) {
+      statusEl.textContent = 'Uploaded! ' + Math.round(data.bytes / 1024) + ' KB';
+      statusEl.style.color = 'var(--green)';
+      toast('Cover uploaded!');
+      document.getElementById('modal-game-cover').src =
+        `${API}/api/games/${currentGame.mode}/${encodeURIComponent(currentGame.name)}/cover?t=${Date.now()}`;
+      document.getElementById('modal-game-cover').style.display = 'block';
+    } else {
+      statusEl.textContent = data.error || 'Upload failed';
+      statusEl.style.color = 'var(--red)';
+      toast(data.error || 'Upload failed', 'error');
+    }
+  } catch (err) {
+    statusEl.textContent = 'Upload error';
+    statusEl.style.color = 'var(--red)';
+    toast('Upload failed: ' + err.message, 'error');
+  }
+  fileInput.value = '';
+  document.getElementById('modal-cover-upload-btn').disabled = true;
+});
+
+// Cover URL download
+document.getElementById('modal-cover-url-btn').addEventListener('click', async () => {
+  if (!currentGame) return;
+  const url = document.getElementById('modal-cover-url').value.trim();
+  if (!url) { toast('Enter a URL first', 'error'); return; }
+
+  const statusEl = document.getElementById('cover-url-status');
+  statusEl.textContent = 'Downloading...';
+  statusEl.style.color = 'var(--muted)';
+
+  try {
+    const params = new URLSearchParams({ url, folder: currentGame.folder });
+    const res = await fetch(API + `/api/games/${currentGame.mode}/${encodeURIComponent(currentGame.name)}/cover-url`, {
+      method: 'POST', body: params
+    });
+    const data = await res.json();
+
+    if (res.ok) {
+      statusEl.textContent = 'Saved! ' + Math.round(data.bytes / 1024) + ' KB';
+      statusEl.style.color = 'var(--green)';
+      toast('Cover downloaded!');
+      document.getElementById('modal-game-cover').src =
+        `${API}/api/games/${currentGame.mode}/${encodeURIComponent(currentGame.name)}/cover?t=${Date.now()}`;
+      document.getElementById('modal-game-cover').style.display = 'block';
+    } else {
+      statusEl.textContent = data.error || 'Download failed';
+      statusEl.style.color = 'var(--red)';
+    }
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + e.message;
+    statusEl.style.color = 'var(--red)';
+  }
+});
+
+// File Upload (drag & drop + click)
+
+const uploadZone = document.getElementById('upload-zone');
+const uploadInput = document.getElementById('upload-input');
+
+uploadZone.addEventListener('click', () => uploadInput.click());
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('dragover');
+  handleUploadFiles(e.dataTransfer.files);
+});
+uploadInput.addEventListener('change', e => handleUploadFiles(e.target.files));
+
+// ── Firmware over the air ────────────────────────────────────────────────
+const otaZone  = document.getElementById('ota-zone');
+const otaInput = document.getElementById('ota-input');
+if (otaZone && otaInput) {
+  otaZone.addEventListener('click', () => otaInput.click());
+  otaZone.addEventListener('dragover', e => { e.preventDefault(); otaZone.classList.add('dragover'); });
+  otaZone.addEventListener('dragleave', () => otaZone.classList.remove('dragover'));
+  otaZone.addEventListener('drop', e => {
+    e.preventDefault();
+    otaZone.classList.remove('dragover');
+    handleFirmwareFile(e.dataTransfer.files[0]);
+  });
+  otaInput.addEventListener('change', e => handleFirmwareFile(e.target.files[0]));
+}
+
+async function handleFirmwareFile(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.bin') || file.name.toLowerCase().endsWith('.merged.bin')) {
+    toast('Select the application .ino.bin file; merged images are for USB flashing', 'error');
+    return;
+  }
+  if (!confirm('Flash ' + file.name + ' (' + Math.round(file.size / 1024) + ' KB)?' +
+               '\n\nThe device restarts when it finishes. Do not remove power.')) return;
+
+  const bar  = document.getElementById('ota-progress');
+  const fill = document.getElementById('ota-fill');
+  bar.style.display = 'block';
+  fill.style.width = '0%';
+  fill.textContent = 'Starting…';
+
+  const form = new FormData();
+  form.append('firmware', file, file.name);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', API + '/api/system/ota');
+  xhr.timeout = 120000;
+  xhr.upload.onprogress = (e) => {
+    if (!e.lengthComputable) return;
+    const pct = Math.round(e.loaded / e.total * 100);
+    fill.style.width = pct + '%';
+    fill.textContent = pct + '%';
+  };
+
+  try {
+    const reply = await new Promise((resolve, reject) => {
+      xhr.onload  = () => resolve(xhr);
+      xhr.onerror = () => reject(new Error('Connection lost during upload; please retry'));
+      xhr.ontimeout = () => reject(new Error('Firmware upload timed out; please retry'));
+      xhr.send(form);
+    });
+    let result = {};
+    try { result = JSON.parse(reply.responseText); } catch (_) {}
+    if (reply.status !== 200 || result.status !== 'ok') {
+      throw new Error(result.error || 'Firmware update failed (HTTP ' + reply.status + ')');
+    }
+    fill.style.width = '100%';
+    fill.textContent = 'Restarting…';
+    toast('Firmware written — the device is restarting');
+    waitForReboot();
+  } catch (e) {
+    fill.style.width = '100%';
+    fill.textContent = e.message;
+    toast(e.message, 'error');
+  }
+}
+
+// The device drops off the network while it reboots. Poll until it answers
+// again rather than leaving the page looking like the update hung.
+function waitForReboot() {
+  const fill = document.getElementById('ota-fill');
+  let tries = 0;
+  const tick = setInterval(async () => {
+    tries++;
+    try {
+      const r = await fetch(API + '/api/system/info', { cache: 'no-store' });
+      if (r.ok) {
+        clearInterval(tick);
+        fill.textContent = 'Done';
+        toast('Device is back online');
+        setTimeout(() => location.reload(), 1200);
+        return;
+      }
+    } catch (_) { /* still down, expected */ }
+    if (tries > 40) {
+      clearInterval(tick);
+      fill.textContent = 'No answer';
+      toast('It has not come back yet — reload once it does', 'error');
+    }
+  }, 2000);
+}
+
+async function handleUploadFiles(files) {
+  if (!files.length) return;
+
+  const progressBar = document.getElementById('upload-progress');
+  const progressFill = document.getElementById('upload-fill');
+  progressBar.style.display = 'block';
+
+  for (const file of files) {
+    const form = new FormData();
+    form.append('file', file, file.name);
+
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', API + '/api/games/upload');
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round(e.loaded / e.total * 100);
+          progressFill.style.width = pct + '%';
+          progressFill.textContent = file.name + ' \u2014 ' + pct + '%';
+        }
+      };
+
+      await new Promise((resolve, reject) => {
+        xhr.onload = () => { resolve(); };
+        xhr.onerror = () => { reject(new Error('Upload failed')); };
+        xhr.send(form);
+      });
+
+      toast(file.name + ' uploaded!');
+    } catch (e) {
+      toast('Failed to upload ' + file.name, 'error');
+    }
+  }
+
+  progressFill.style.width = '100%';
+  progressFill.textContent = 'Done!';
+  setTimeout(() => { progressBar.style.display = 'none'; }, 2000);
+  loadGames();
+}
+
+// ═══════════════ THEMES ═══════════════
+//
+// Theme parity: this page paints itself from the same style parameters that
+// generated the panel's buttons, so the two do not drift apart. The theme is
+// the parameters — the PNGs on the card are just their output at this panel's
+// geometry — which is why the colours can be shared at all.
+//
+// Semantic colours (green/red/orange) stay put on purpose: they mean ok, danger
+// and warning. A theme gets to choose the furniture, not to recolour a warning.
+
+// Like api(), but a 404 is an answer rather than something to toast about.
+async function apiQuiet(path) {
+  const res = await fetch(API + path);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return await res.json();
+}
+
+// Perceived brightness, 0..1 — enough to tell a dark theme from a light one.
+function teLuma(hex) {
+  const [r, g, b] = teHexToRgb(hex);
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+}
+
+function teMix(a, b, t) {
+  const [ar, ag, ab] = teHexToRgb(a), [br, bg, bb] = teHexToRgb(b);
+  const c = v => Math.max(0, Math.min(255, Math.round(v)));
+  const h = v => c(v).toString(16).padStart(2, '0');
+  return '#' + h(ar + (br - ar) * t) + h(ag + (bg - ag) * t) + h(ab + (bb - ab) * t);
+}
+
+function teRelLuma(hex) {
+  const [r, g, b] = teHexToRgb(hex).map(v => {
+    v /= 255;
+    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function teContrast(a, b) {
+  const x = teRelLuma(a), y = teRelLuma(b);
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+}
+
+// Nudge a derived colour until it can actually be seen against its background.
+//
+// The editor lets anyone pick any five colours, and plenty of pleasant-looking
+// combinations leave a muted grey or a soft accent invisible on the panel. The
+// theme's own choices are honoured first; this only steps in when the result
+// would be unreadable, walking the colour toward the text colour (or away from
+// it, whichever the background allows) until it clears the target.
+function teEnsureContrast(fg, bg, target, toward) {
+  let out = fg;
+  for (let i = 0; i < 6 && teContrast(out, bg) < target; i++) {
+    out = teMix(out, toward, 0.22);
+  }
+  return out;
+}
+
+function applyThemeStyle(style) {
+  const st = teNormalizeStyle(style);
+  const r = document.documentElement.style;
+  const darkTheme = teLuma(st.fill) < 0.45;
+  // On a dark theme every derived colour has to climb toward the light to be
+  // seen, and on a light theme sink toward the dark. The text colour is the
+  // theme's own statement of "maximum contrast against the fill", so it is the
+  // right direction to walk in.
+  const toward = st.text;
+
+  r.setProperty('--panel',  st.fill);
+  r.setProperty('--bg',     teMix(st.fill, st.dark, 0.25));   // desktop behind the windows
+  r.setProperty('--light',  st.light);
+  r.setProperty('--white',  st.light);
+  r.setProperty('--dark',   teMix(st.fill, st.dark, 0.60));   // bevel shade, not pure black
+
+  // A hairline has to be SEEN, which is not the same as being dark: on a dark
+  // theme a border darker than the panel disappears. Bevels keep their
+  // light/dark pair so they still catch the light from the top left; separators
+  // move whichever way is away from the fill.
+  const away = darkTheme ? st.light : st.dark;
+  r.setProperty('--line',   teEnsureContrast(teMix(st.fill, away, 0.50), st.fill, 2.2, toward));
+  r.setProperty('--field',  darkTheme ? teMix(st.fill, st.dark, 0.45)
+                                      : teMix(st.fill, st.light, 0.85));
+  r.setProperty('--text',   st.text);
+  r.setProperty('--muted',  teEnsureContrast(teMix(st.text, st.fill, 0.42), st.fill, 3.5, toward));
+  r.setProperty('--strong', teMix(st.text, st.fill, 0.18));
+  r.setProperty('--blue',   teEnsureContrast(st.accent, st.fill, 3.0, toward));
+  r.setProperty('--cyan',   teEnsureContrast(teMix(st.accent, st.light, 0.35), st.fill, 3.0, toward));
+}
+
+// Read the active theme's style off the card and wear it. Silent on failure:
+// a theme with no stored style (or a device that predates them) simply keeps
+// the built-in Workbench palette, which is what it looked like before.
+async function syncThemeStyle(name) {
+  if (!name) return;
+  // A built-in preset needs no card: apply it first so a card-less dongle
+  // still wears its default theme (e.g. OMEGA_DARK) from the first paint.
+  if (TE_PRESETS[name] && !teSaved[name]) { applyThemeStyle(TE_PRESETS[name]); }
+  if (document.body.classList.contains('no-sd')) return;   // no card: no stored (SD) styles to fetch
+  try {
+    const st = await apiQuiet(`/api/themes/${encodeURIComponent(name)}/style`);
+    teSaved[name] = teNormalizeStyle(st);
+    applyThemeStyle(teSaved[name]);
+  } catch (e) { /* keep whatever is on screen */ }
+}
+
+async function loadThemes() {
+  const data = await api('/api/themes/list');
+  const grid = document.getElementById('theme-grid');
+  grid.innerHTML = data.themes.map(t => `
+    <div class="theme-card ${t === data.active ? 'active' : ''}" onclick="activateTheme('${esc(t)}')">
+      <div class="theme-name">${esc(t)}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px">${t === data.active ? 'Active' : 'Click to activate'}</div>
+    </div>
+  `).join('');
+}
+
+async function activateTheme(name) {
+  await api(`/api/themes/${encodeURIComponent(name)}/activate`, { method: 'POST' });
+  toast('Theme changed to ' + name);
+  syncThemeStyle(name);   // follow the panel without needing a reload
+  loadThemes();
+}
+
+// ══════════════ THEME EDITOR ══════════════
+//
+// A theme is a STYLE, not artwork. The twelve buttons are generated from a
+// handful of parameters, which is what keeps them consistent with each other
+// and what makes a theme portable: the device reports the button sizes its
+// panel uses, and the same style renders to whatever geometry it asks for.
+// tools/make_theme.py renders the shipped default from the identical model,
+// so designing here and building the firmware produce the same look.
+//
+// Labels are drawn with the device's own 6x8 font, fetched from the device,
+// so a generated button matches the fallback the firmware draws when an asset
+// is missing.
+
+const TE_PRESETS = {
+  AMIGA_WB2:   { fill:'#a8a8a8', light:'#ffffff', dark:'#000000', text:'#000000', accent:'#5a6ea0', bevel:'raised', bevelW:2, radius:0, scale:2 },
+  AMIGA_WB13:  { fill:'#0055aa', light:'#ffffff', dark:'#000044', text:'#ffffff', accent:'#ff8800', bevel:'raised', bevelW:2, radius:0, scale:2 },
+  PAPER_WHITE: { fill:'#eeeeea', light:'#ffffff', dark:'#787874', text:'#141414', accent:'#285abe', bevel:'raised', bevelW:2, radius:3, scale:2 },
+  MIDNIGHT:    { fill:'#222630', light:'#485062', dark:'#0c0e14', text:'#dee4f0', accent:'#5aaaff', bevel:'flat',   bevelW:1, radius:4, scale:2 },
+  PHOSPHOR:    { fill:'#08180c', light:'#28c85a', dark:'#040c06', text:'#50ff82', accent:'#50ff82', bevel:'flat',   bevelW:1, radius:0, scale:2 },
+  OMEGA_DARK:  { fill:'#181c31', light:'#3b4570', dark:'#0b0e22', text:'#e9ecf5', accent:'#3fe0e8', bevel:'flat',   bevelW:1, radius:10, scale:2 },
+};
+
+// Themes read back off the SD card, so your own saved themes can be reopened
+// and edited. Keyed by name; the values are the same style objects as above.
+let teSaved = {};
+// Theme names present on the card, so a name that is BOTH a preset and a saved
+// theme resolves to the saved one.
+let teThemeNames = [];
+
+let teFont = null;      // Uint8Array, 95 glyphs x 6 columns
+let teGeom = null;      // [{n,w,h,label,glyph}]
+
+function teHexToRgb(h) {
+  return [parseInt(h.substr(1,2),16), parseInt(h.substr(3,2),16), parseInt(h.substr(5,2),16)];
+}
+
+// Always clamped through the same normaliser the load path uses: min/max on a
+// number input is not enforced when JS reads .value, and a hand-typed bevelW of
+// 99 paints every pixel of a 36px button in the highlight colour.
+function teStyle() {
+  return teNormalizeStyle({
+    fill:   document.getElementById('te-fill').value,
+    light:  document.getElementById('te-light').value,
+    dark:   document.getElementById('te-dark').value,
+    text:   document.getElementById('te-text').value,
+    accent: document.getElementById('te-accent').value,
+    bevel:  document.getElementById('te-bevel').value,
+    bevelW: parseInt(document.getElementById('te-bevelw').value),
+    radius: parseInt(document.getElementById('te-radius').value),
+    scale:  parseInt(document.getElementById('te-scale').value),
+  });
+}
+
+// A style from any source — preset, saved theme, or the device's shipped
+// default. Anything missing falls back to AMIGA_WB2 rather than to undefined,
+// so a hand-edited theme.json cannot leave a colour input blank.
+function teNormalizeStyle(s) {
+  const d = TE_PRESETS.AMIGA_WB2;
+  const hex = (v, f) => (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v)) ? v.toLowerCase() : f;
+  // Out of range clamps to the nearest bound rather than snapping back to the
+  // default: typing 99 in "edge width" means "as thick as it goes", and landing
+  // on 2 reads as the field having ignored you.
+  const num = (v, f, lo, hi) => {
+    const n = parseInt(v);
+    if (!Number.isFinite(n)) return f;
+    return Math.max(lo, Math.min(hi, n));
+  };
+  return {
+    fill:   hex(s && s.fill,   d.fill),
+    light:  hex(s && s.light,  d.light),
+    dark:   hex(s && s.dark,   d.dark),
+    text:   hex(s && s.text,   d.text),
+    accent: hex(s && s.accent, d.accent),
+    bevel:  ['raised','flat','none'].includes(s && s.bevel) ? s.bevel : d.bevel,
+    bevelW: num(s && s.bevelW, d.bevelW, 0, 6),
+    radius: num(s && s.radius, d.radius, 0, 12),
+    scale:  num(s && s.scale,  d.scale,  1, 4),
+  };
+}
+
+function teLoadStyle(s) {
+  const p = teNormalizeStyle(s);
+  document.getElementById('te-fill').value   = p.fill;
+  document.getElementById('te-light').value  = p.light;
+  document.getElementById('te-dark').value   = p.dark;
+  document.getElementById('te-text').value   = p.text;
+  document.getElementById('te-accent').value = p.accent;
+  document.getElementById('te-bevel').value  = p.bevel;
+  document.getElementById('te-bevelw').value = p.bevelW;
+  document.getElementById('te-radius').value = p.radius;
+  document.getElementById('te-scale').value  = p.scale;
+  teRenderPreview();
+}
+
+function teApplyPreset(name) {
+  teLoadStyle(TE_PRESETS[name] || TE_PRESETS.AMIGA_WB2);
+}
+
+// Opening whatever the "Start from" box points at: one of your own themes from
+// the card, or a built-in preset. Picking your own theme also fills in the name,
+// so saving overwrites it instead of silently making a copy.
+//
+// The card is asked FIRST, even for a name that matches a preset. Checking
+// TE_PRESETS first meant a theme called AMIGA_WB2 — the shipped one, which the
+// firmware writes a theme.json for precisely so it can be edited — always came
+// back as the hardcoded preset, and the next save then overwrote the colours the
+// user had put there. The preset is the fallback, not the authority.
+async function teStartFrom(name) {
+  const nameEl = document.getElementById('te-name');
+  const onCard = teThemeNames.includes(name);
+  if (!onCard && TE_PRESETS[name]) { teApplyPreset(name); return; }
+
+  if (teSaved[name]) { teLoadStyle(teSaved[name]); nameEl.value = name; return; }
+
+  const status = document.getElementById('te-status');
+  status.textContent = `Loading ${name}…`;
+  try {
+    const st = await apiQuiet(`/api/themes/${encodeURIComponent(name)}/style`);
+    teSaved[name] = teNormalizeStyle(st);
+    teLoadStyle(teSaved[name]);
+    nameEl.value = name;
+    status.textContent = '';
+  } catch (e) {
+    // Themes written before styles were stored, or artwork assembled by hand:
+    // there is nothing to reopen. Start from the preset it was based on, if the
+    // name says, so editing is still possible.
+    status.textContent = '';
+    const guess = Object.keys(TE_PRESETS).find(k => name.startsWith(k)) || 'AMIGA_WB2';
+    teApplyPreset(guess);
+    nameEl.value = name;
+    toast(`"${name}" has no saved style — starting from ${guess}`, 'error');
+  }
+}
+
+// Every glyph reserves its sixth column as spacing, so measuring len*6 puts
+// short labels visibly left of centre. Mirrors text_width() in make_theme.py.
+function teTextWidth(text, scale) { return text ? (text.length * 6 - 1) * scale : 0; }
+
+function teInRounded(x, y, w, h, r) {
+  if (r <= 0) return true;
+  const cs = [[r,r],[w-1-r,r],[r,h-1-r],[w-1-r,h-1-r]];
+  for (const [cx, cy] of cs) {
+    const nearX = (x < r && cx === r) || (x > w-1-r && cx === w-1-r);
+    const nearY = (y < r && cy === r) || (y > h-1-r && cy === h-1-r);
+    if (nearX && nearY && ((x-cx)**2 + (y-cy)**2) > r*r) return false;
+  }
+  return true;
+}
+
+function teRenderButton(spec, st) {
+  const w = spec.w, h = spec.h;
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(w, h);
+  const D = img.data;
+  const fill = teHexToRgb(st.fill), light = teHexToRgb(st.light),
+        dark = teHexToRgb(st.dark), txt = teHexToRgb(st.text);
+  const bw = st.bevelW, r = st.radius;
+
+  const put = (x, y, c) => {
+    const i = (y * w + x) * 4;
+    D[i] = c[0]; D[i+1] = c[1]; D[i+2] = c[2]; D[i+3] = 255;
+  };
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!teInRounded(x, y, w, h, r)) { put(x, y, [0,0,0]); continue; }
+      let c = fill;
+      if (st.bevel === 'raised') {
+        if (y < bw || x < bw) c = light;
+        if (y >= h-bw || x >= w-bw) c = dark;
+        // Highlight wins along the top-left so the edge reads as lit from
+        // the top-left, the Workbench convention.
+        if ((y < bw && x < w-bw) || (x < bw && y < h-bw)) c = light;
+      } else if (st.bevel === 'flat') {
+        if (x < bw || y < bw || x >= w-bw || y >= h-bw) c = light;
+      }
+      put(x, y, c);
+    }
+  }
+
+  if (spec.glyph === 'up' || spec.glyph === 'down') {
+    const size = Math.floor(Math.min(w, h) / 3);
+    const cx = w >> 1, cy = h >> 1;
+    for (let row = 0; row < size; row++) {
+      // Point at the top widening downwards for 'up'; mirrored for 'down'.
+      const half = spec.glyph === 'up' ? row : size - 1 - row;
+      const yy = cy - (size >> 1) + row;
+      for (let xx = cx - half; xx <= cx + half; xx++) {
+        if (xx >= 0 && xx < w && yy >= 0 && yy < h) put(xx, yy, txt);
+      }
+    }
+  } else if (spec.label && teFont) {
+    let scale = st.scale;
+    while (teTextWidth(spec.label, scale) > w - 8 && scale > 1) scale--;
+    const tx = Math.floor((w - teTextWidth(spec.label, scale)) / 2);
+    const ty = Math.floor((h - 8 * scale) / 2);
+    for (let ci = 0; ci < spec.label.length; ci++) {
+      const code = spec.label.charCodeAt(ci);
+      if (code < 32 || code > 126) continue;
+      const off = (code - 32) * 6;
+      for (let col = 0; col < 6; col++) {
+        const bits = teFont[off + col];
+        for (let row = 0; row < 8; row++) {
+          if (!(bits & (1 << row))) continue;
+          const bx = tx + (ci * 6 + col) * scale, by = ty + row * scale;
+          for (let dy = 0; dy < scale; dy++)
+            for (let dx = 0; dx < scale; dx++) {
+              const px = bx + dx, py = by + dy;
+              if (px >= 0 && px < w && py >= 0 && py < h) put(px, py, txt);
+            }
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(img, 0, 0);
+  return cv;
+}
+
+function teRenderPreview() {
+  const host = document.getElementById('te-preview');
+  if (!host) return;
+  if (!teGeom) { host.textContent = 'Loading panel geometry…'; return; }
+  const st = teStyle();
+  host.innerHTML = '';
+  for (const spec of teGeom) {
+    const cv = teRenderButton(spec, st);
+    cv.title = spec.n + ' — ' + spec.w + '×' + spec.h;
+    cv.style.imageRendering = 'pixelated';
+    host.appendChild(cv);
+  }
+  teRenderRows(st);
+}
+
+// Two game rows the way both the panel and this page draw them: no row fill,
+// text in the theme's colour, a 3px accent bar on the selected one.
+function teRenderRows(st) {
+  const host = document.getElementById('te-rows');
+  if (!host) return;
+  const row = (name, sel) => `
+    <div style="display:flex;align-items:center;height:26px;
+                border-left:3px solid ${sel ? st.accent : 'transparent'};
+                padding-left:8px;color:${sel ? st.accent : st.text}">
+      <span style="flex:1">${esc(name)}</span>
+      <span style="opacity:.65;font-size:11px">2 disks</span>
+    </div>`;
+  // The panel's list sits on the wallpaper, not on the button fill — but the
+  // text has to stay legible against the theme, so preview it over the fill.
+  host.style.background = st.fill;
+  host.innerHTML = row('Lotus Turbo Challenge 2', true) + row('Shadow of the Beast', false);
+}
+
+async function teInit() {
+  const sel = document.getElementById('te-preset');
+  if (!sel || sel.options.length) return;    // already built
+  await teBuildStartFrom();
+  sel.addEventListener('change', () => teStartFrom(sel.value));
+  ['te-fill','te-light','te-dark','te-text','te-accent','te-bevel','te-bevelw','te-radius','te-scale']
+    .forEach(id => document.getElementById(id).addEventListener('input', teRenderPreview));
+  document.getElementById('te-save').addEventListener('click', () => teSave(false));
+  document.getElementById('te-apply').addEventListener('click', () => teSave(true));
+
+  try {
+    const [f, g] = await Promise.all([api('/api/themes/font'), api('/api/themes/geometry')]);
+    const bin = atob(f.data);
+    teFont = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) teFont[i] = bin.charCodeAt(i);
+    teGeom = g.buttons;
+  } catch (e) {
+    document.getElementById('te-preview').textContent =
+      'Could not read font/geometry from the device.';
+    return;
+  }
+  teApplyPreset('AMIGA_WB2');
+}
+
+// Presets plus whatever is on the card, so your own themes are reopenable.
+async function teBuildStartFrom() {
+  const sel = document.getElementById('te-preset');
+  if (!sel) return;
+  const keep = sel.value;
+  let mine = [];
+  try {
+    const d = await api('/api/themes/list');
+    mine = d.themes || [];
+    teThemeNames = mine.slice();
+  } catch (e) { /* offline: presets alone still work */ }
+
+  // A preset is only offered separately when the card has no theme of that name.
+  // Filtering on-card themes OUT when a preset shares the name made the shipped
+  // AMIGA_WB2 — the one the firmware stores a style for — unreachable.
+  const presets = Object.keys(TE_PRESETS).filter(k => !mine.includes(k));
+  const opt = t => `<option value="${esc(t)}">${esc(t)}</option>`;
+  sel.innerHTML =
+    (mine.length ? `<optgroup label="On this card">${mine.map(opt).join('')}</optgroup>` : '') +
+    (presets.length ? `<optgroup label="Presets">${presets.map(opt).join('')}</optgroup>` : '');
+  if (keep) sel.value = keep;
+}
+
+function teCanvasToBlob(cv) {
+  return new Promise(res => cv.toBlob(res, 'image/png'));
+}
+
+async function teSave(activate) {
+  const nameEl = document.getElementById('te-name');
+  const status = document.getElementById('te-status');
+  const name = (nameEl.value || '').toUpperCase().trim();
+  if (!/^[A-Z0-9_]{1,16}$/.test(name)) {
+    toast('Theme name: A-Z, 0-9 and _ only, max 16 characters', 'error');
+    nameEl.focus();
+    return;
+  }
+  if (!teGeom) { toast('Panel geometry not loaded yet', 'error'); return; }
+
+  const st = teStyle();
+  const btns = [document.getElementById('te-save'), document.getElementById('te-apply')];
+  btns.forEach(b => b.disabled = true);
+
+  try {
+    // One asset per request. They are a couple of hundred bytes each, and the
+    // device serves requests one at a time, so this is sent in series rather
+    // than firing twelve at a single-threaded server.
+    for (let i = 0; i < teGeom.length; i++) {
+      const spec = teGeom[i];
+      status.textContent = `Uploading ${spec.n} (${i + 1}/${teGeom.length})…`;
+      // base64url in a form body, not a raw binary POST: the device's HTTP
+      // server reads the body of every non-multipart POST before the handler
+      // runs, so a handler cannot read the socket itself. '+' and '/' are
+      // swapped out because form values get URL-decoded on arrival.
+      const blob = await teCanvasToBlob(teRenderButton(spec, st));
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let bin = '';
+      for (let b = 0; b < bytes.length; b++) bin += String.fromCharCode(bytes[b]);
+      const b64url = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      const res = await fetch(
+        `${API}/api/themes/${encodeURIComponent(name)}/asset`,
+        { method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'file=' + encodeURIComponent(spec.n) + '&data=' + b64url });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(`${spec.n}: ${d.error || 'HTTP ' + res.status}`);
+      }
+    }
+    // The style itself, so the theme can be reopened here later and so this
+    // page can take its colours from whatever the panel is running. Saved last:
+    // its presence is what marks a theme as complete and editable, and a set of
+    // half-uploaded PNGs should not claim to be.
+    status.textContent = 'Saving style…';
+    const styleRes = await fetch(`${API}/api/themes/${encodeURIComponent(name)}/style`,
+      { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(st) });
+    if (!styleRes.ok) {
+      const d = await styleRes.json().catch(() => ({}));
+      throw new Error(`style: ${d.error || 'HTTP ' + styleRes.status}`);
+    }
+    teSaved[name] = teNormalizeStyle(st);
+
+    status.textContent = '';
+    if (activate) {
+      await api(`/api/themes/${encodeURIComponent(name)}/activate`, { method: 'POST' });
+      applyThemeStyle(st);          // this page follows the panel immediately
+      toast(`Theme "${name}" saved and activated`);
+    } else {
+      toast(`Theme "${name}" saved`);
+    }
+    teBuildStartFrom();
+    loadThemes();
+  } catch (e) {
+    status.textContent = '';
+    toast('Save failed: ' + (e.message || 'Unknown'), 'error');
+  } finally {
+    btns.forEach(b => b.disabled = false);
+  }
+}
+
+// ── FTP Functions ──
+
+let ftpCurrentPath = '/';
+let ftpConnected = false;
+
+async function ftpLoadStatus() {
+  try {
+    const status = await api('/api/ftp/status');
+    ftpConnected = status.connected;
+    const bar = document.getElementById('ftp-status-bar');
+    const noConfig = document.getElementById('ftp-no-config');
+    const connectBtn = document.getElementById('ftp-connect-btn');
+    const disconnectBtn = document.getElementById('ftp-disconnect-btn');
+
+    if (!status.enabled || !status.host) {
+      bar.className = 'ftp-status error';
+      bar.textContent = 'FTP not configured';
+      noConfig.style.display = '';
+      connectBtn.style.display = 'none';
+      disconnectBtn.style.display = 'none';
+      return;
+    }
+
+    noConfig.style.display = 'none';
+
+    if (!status.wifi_connected) {
+      bar.className = 'ftp-status disconnected';
+      bar.textContent = 'WiFi client not connected — enable WIFI_CLIENT_ENABLED in Config';
+      connectBtn.style.display = 'none';
+      disconnectBtn.style.display = 'none';
+      return;
+    }
+
+    if (status.connected) {
+      bar.className = 'ftp-status connected';
+      bar.textContent = 'Connected to ' + status.host + ':' + status.port + ' as ' + status.user;
+      connectBtn.style.display = 'none';
+      disconnectBtn.style.display = '';
+    } else {
+      bar.className = 'ftp-status disconnected';
+      bar.textContent = 'Disconnected — ' + status.host + ':' + status.port;
+      connectBtn.style.display = '';
+      disconnectBtn.style.display = 'none';
+    }
+  } catch (e) {
+    document.getElementById('ftp-status-bar').className = 'ftp-status error';
+    document.getElementById('ftp-status-bar').textContent = 'Failed to get FTP status';
+  }
+}
+
+async function ftpConnect() {
+  const btn = document.getElementById('ftp-connect-btn');
+  btn.disabled = true;
+  btn.textContent = 'Connecting...';
+  document.getElementById('ftp-loading').style.display = '';
+
+  try {
+    await api('/api/ftp/connect', { method: 'POST' });
+    ftpConnected = true;
+    toast('FTP connected!');
+    ftpCurrentPath = '/';
+    await ftpLoadStatus();
+    await ftpBrowse('/');
+  } catch (e) {
+    toast('FTP connection failed', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Connect';
+    document.getElementById('ftp-loading').style.display = 'none';
+  }
+}
+
+async function ftpDisconnect() {
+  try {
+    await api('/api/ftp/disconnect', { method: 'POST' });
+    ftpConnected = false;
+    document.getElementById('ftp-list').innerHTML = '';
+    document.getElementById('ftp-breadcrumb').innerHTML = '';
+    await ftpLoadStatus();
+    toast('FTP disconnected');
+  } catch (e) { /* ignore */ }
+}
+
+async function ftpRefresh() {
+  if (ftpConnected) {
+    await ftpBrowse(ftpCurrentPath);
+  } else {
+    await ftpLoadStatus();
+  }
+}
+
+async function ftpBrowse(path) {
+  ftpCurrentPath = path;
+  const list = document.getElementById('ftp-list');
+  const loading = document.getElementById('ftp-loading');
+  loading.style.display = '';
+  list.innerHTML = '';
+  ftpUpdateBreadcrumb(path);
+
+  try {
+    const data = await api('/api/ftp/list?path=' + encodeURIComponent(path));
+    loading.style.display = 'none';
+
+    if (data.entries.length === 0) {
+      list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)">No ADF/DSK files found in this directory</div>';
+      return;
+    }
+
+    // Sort: directories first, then files
+    data.entries.sort((a, b) => {
+      if (a.dir && !b.dir) return -1;
+      if (!a.dir && b.dir) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    let html = '';
+    // Add parent directory link if not at root
+    if (path !== '/' && path !== '') {
+      const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
+      html += '<div class="ftp-item dir" onclick="ftpBrowse(\'' + parentPath.replace(/'/g, "\\'") + '\')">' +
+        '<div class="ftp-icon">&#128193;</div>' +
+        '<div class="ftp-name">..</div>' +
+        '<div class="ftp-size"></div></div>';
+    }
+
+    data.entries.forEach(entry => {
+      const fullPath = (path === '/' ? '/' : path + '/') + entry.name;
+      if (entry.dir) {
+        html += '<div class="ftp-item dir" onclick="ftpBrowse(\'' + fullPath.replace(/'/g, "\\'") + '\')">' +
+          '<div class="ftp-icon">&#128193;</div>' +
+          '<div class="ftp-name">' + esc(entry.name) + '</div>' +
+          '<div class="ftp-size"></div></div>';
+      } else {
+        const sizeStr = entry.size > 1048576 ? (entry.size / 1048576).toFixed(1) + ' MB' :
+                        entry.size > 1024 ? (entry.size / 1024).toFixed(0) + ' KB' : entry.size + ' B';
+        html += '<div class="ftp-item">' +
+          '<div class="ftp-icon">&#128190;</div>' +
+          '<div class="ftp-name">' + esc(entry.name) + '</div>' +
+          '<div class="ftp-size">' + sizeStr + '</div>' +
+          '<button class="dl-btn" onclick="ftpDownload(\'' + fullPath.replace(/'/g, "\\'") + '\',this)">Download</button>' +
+          '</div>';
+      }
+    });
+    list.innerHTML = html;
+  } catch (e) {
+    loading.style.display = 'none';
+    list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--red)">Failed to list directory: ' + esc(e.message || 'Unknown error') + '</div>';
+  }
+}
+
+function ftpUpdateBreadcrumb(path) {
+  const bc = document.getElementById('ftp-breadcrumb');
+  const parts = path.split('/').filter(p => p.length > 0);
+  let html = '<a onclick="ftpBrowse(\'/\')">FTP Root</a>';
+  let buildPath = '';
+  parts.forEach(part => {
+    buildPath += '/' + part;
+    const p = buildPath;
+    html += ' / <a onclick="ftpBrowse(\'' + p.replace(/'/g, "\\'") + '\')">' + esc(part) + '</a>';
+  });
+  bc.innerHTML = html;
+}
+
+async function ftpDownload(remotePath, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Downloading...';
+
+  try {
+    const result = await api('/api/ftp/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'path=' + encodeURIComponent(remotePath)
+    });
+    btn.textContent = 'Done!';
+    toast(result.file + ' downloaded (' + (result.bytes / 1024).toFixed(0) + ' KB)');
+    loadGames();  // refresh game list
+  } catch (e) {
+    btn.textContent = 'Failed';
+    btn.disabled = false;
+    toast('Download failed: ' + (e.message || 'Unknown error'), 'error');
+  }
+}
+
+// ── WebDAV Functions ──
+
+let davCurrentPath = '/';
+let davConnected = false;
+let davAllEntries = [];  // all folder entries from root listing
+let davActiveAlpha = '';
+let davLoadedFile = '';
+
+function davShowDebug(data) {
+  const wrap = document.getElementById('dav-debug-wrap');
+  const log = document.getElementById('dav-debug-log');
+  if (data && data.debug) {
+    wrap.style.display = '';
+    log.textContent = data.debug;
+    log.scrollTop = log.scrollHeight;
+  }
+}
+
+async function davLoadStatus() {
+  try {
+    const status = await api('/api/dav/status');
+    davShowDebug(status);
+    davConnected = status.connected;
+    const bar = document.getElementById('dav-status-bar');
+    const noConfig = document.getElementById('dav-no-config');
+    const connectBtn = document.getElementById('dav-connect-btn');
+    const disconnectBtn = document.getElementById('dav-disconnect-btn');
+
+    // Sync now-playing state from device (global — any source)
+    if (status.now_playing && status.now_playing.source === 'dav') {
+      davLoadedFile = status.now_playing.path;
+    } else {
+      davLoadedFile = '';  // clear if nothing loaded or SD game loaded
+    }
+    // Update now-playing card — show regardless of source (SD or DAV)
+    const npCard = document.getElementById('dav-now-playing-card');
+    const npEl = document.getElementById('dav-now-playing');
+    if (status.now_playing) {
+      npCard.style.display = 'block';
+      let srcLabel = status.now_playing.source.toUpperCase();
+      npEl.innerHTML =
+        '<span class="active-indicator"></span>' +
+        '<strong>' + esc(status.now_playing.name) + '</strong>' +
+        ' <span style="color:var(--muted);font-size:13px">(' + srcLabel + ')</span>' +
+        ' <button class="btn btn-sm" onclick="davEject()">Eject</button>';
+    } else {
+      npCard.style.display = 'none';
+    }
+
+    if (!status.enabled || !status.host) {
+      bar.className = 'ftp-status error';
+      bar.textContent = 'WebDAV not configured';
+      noConfig.style.display = '';
+      connectBtn.style.display = 'none';
+      disconnectBtn.style.display = 'none';
+    } else if (!status.wifi_connected) {
+      bar.className = 'ftp-status disconnected';
+      bar.textContent = 'WiFi not connected — enable WiFi Client in Config';
+      noConfig.style.display = 'none';
+      connectBtn.style.display = 'none';
+    } else if (status.connected) {
+      bar.className = 'ftp-status connected';
+      bar.textContent = 'Connected to ' + status.host + (status.https ? ' (HTTPS)' : ' (HTTP)');
+      noConfig.style.display = 'none';
+      connectBtn.style.display = 'none';
+      disconnectBtn.style.display = '';
+      if (!document.getElementById('dav-list').innerHTML) davBrowse('/');
+    } else {
+      bar.className = 'ftp-status disconnected';
+      bar.textContent = 'Disconnected — ' + status.host;
+      noConfig.style.display = 'none';
+      connectBtn.style.display = '';
+      disconnectBtn.style.display = 'none';
+      // Load cached game list even when disconnected — no need to connect first
+      if (status.has_cache && !document.getElementById('dav-list').innerHTML) davBrowse('/');
+    }
+    // Re-render list if loaded to update playing badges
+    // Must go through the filter, not render the raw array: an unfiltered
+    // render puts every folder in the DOM at once and fires one cover
+    // request per row at the device.
+    if (davAllEntries.length > 0) davFilterGames();
+  } catch (e) {
+    document.getElementById('dav-status-bar').className = 'ftp-status error';
+    document.getElementById('dav-status-bar').textContent = 'Failed to get WebDAV status';
+  }
+}
+
+async function davConnect() {
+  const btn = document.getElementById('dav-connect-btn');
+  btn.disabled = true;
+  btn.textContent = 'Connecting...';
+  document.getElementById('dav-loading').style.display = '';
+  davShowBusy('Handshaking with your WebDAV server…');
+
+  try {
+    const res = await fetch(API + '/api/dav/connect', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    davShowDebug(data);
+    if (!res.ok) {
+      toast('WebDAV connection failed: ' + (data.error || 'HTTP ' + res.status), 'error');
+    } else {
+      davConnected = true;
+      toast('WebDAV connected!');
+      davCurrentPath = '/';
+      await davLoadStatus();
+      await davBrowse('/', true);  // fresh connect — get latest from server
+    }
+  } catch (e) {
+    toast('WebDAV connection failed: ' + (e.message || 'Unknown error'), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Connect';
+    document.getElementById('dav-loading').style.display = 'none';
+    davHideBusy();
+  }
+}
+
+async function davDisconnect() {
+  try {
+    await api('/api/dav/disconnect', { method: 'POST' });
+    davConnected = false;
+    davAllEntries = [];
+    document.getElementById('dav-list').innerHTML = '';
+    document.getElementById('dav-game-card').style.display = 'none';
+    document.getElementById('dav-now-playing-card').style.display = 'none';
+    await davLoadStatus();
+    toast('WebDAV disconnected');
+  } catch (e) { toast('Disconnect failed', 'error'); }
+}
+
+async function davRefresh() {
+  if (davConnected) {
+    await davBrowse('/', true);  // force refresh — bypass cache
+  } else {
+    await davLoadStatus();
+  }
+}
+
+async function davBrowse(path, forceRefresh) {
+  davCurrentPath = path;
+  const list = document.getElementById('dav-list');
+  const loading = document.getElementById('dav-loading');
+  const gameCard = document.getElementById('dav-game-card');
+  loading.style.display = '';
+  gameCard.style.display = '';
+  davShowBusy(forceRefresh
+    ? 'Refreshing library from server. Large collections (~3000 games) can take up to a minute.'
+    : 'Reading library. First open is slow; follow-up browses use the cached listing.');
+
+  try {
+    let url = '/api/dav/list?path=' + encodeURIComponent(path);
+    if (forceRefresh) url += '&refresh=1';
+    const data = await api(url);
+    davShowDebug(data);
+    const entries = data.entries || [];
+
+    // Only show folders as "games" — filter out files at root level
+    const folders = entries.filter(e => e.dir).sort((a, b) => a.name.localeCompare(b.name));
+    davAllEntries = folders;
+
+    // Now Playing bar
+    const npCard = document.getElementById('dav-now-playing-card');
+    const npEl = document.getElementById('dav-now-playing');
+    if (davLoadedFile) {
+      npCard.style.display = 'block';
+      davRenderNowPlaying();
+    } else {
+      npCard.style.display = 'none';
+    }
+
+    // Reset search, then let davFilterGames auto-pick the first available
+    // letter. No "All" default — that fires 1000+ concurrent cover requests
+    // at the device and can drop the Amiga's USB 5V rail below brownout.
+    document.getElementById('dav-search').value = '';
+    davActiveAlpha = '';
+    davFilterGames();
+  } catch (e) {
+    list.innerHTML = '<p style="color:var(--red);padding:12px">Error: ' + esc(e.message || 'Failed to list directory') + '</p>';
+  } finally {
+    loading.style.display = 'none';
+    davHideBusy();
+  }
+}
+
+// First letter in the A-Z bar that actually has entries. Used as the auto-
+// selected filter when the DAV tab opens — never render the full library at
+// once (see davFilterGames comment).
+function davFirstAvailableLetter(folders) {
+  for (let i = 0; i < 26; i++) {
+    const l = String.fromCharCode(65 + i);
+    if (folders.some(f => f.name.charAt(0).toUpperCase() === l)) return l;
+  }
+  return folders.length ? '#' : '';
+}
+
+function davBuildAlphaFilter(folders) {
+  const letters = new Set();
+  folders.forEach(f => {
+    const c = f.name.charAt(0).toUpperCase();
+    if (c >= 'A' && c <= 'Z') letters.add(c);
+    else letters.add('#');
+  });
+  const bar = document.getElementById('dav-alpha-filter');
+  let html = '';
+  for (let i = 0; i < 26; i++) {
+    const l = String.fromCharCode(65 + i);
+    const has = letters.has(l);
+    html += '<span class="alpha-btn' + (!has ? ' disabled' : '') + (davActiveAlpha === l ? ' active' : '') + '" onclick="davSetAlpha(\'' + l + '\')">' + l + '</span>';
+  }
+  if (letters.has('#')) {
+    html += '<span class="alpha-btn' + (davActiveAlpha === '#' ? ' active' : '') + '" onclick="davSetAlpha(\'#\')">#</span>';
+  }
+  bar.innerHTML = html;
+}
+
+function davSetAlpha(letter) {
+  davActiveAlpha = letter;
+  document.getElementById('dav-search').value = '';
+  davFilterGames();
+}
+
+function davFilterGames() {
+  const search = document.getElementById('dav-search').value.toLowerCase().trim();
+  if (search) davActiveAlpha = '';
+  // No search AND no letter → auto-pick the first available letter. Rendering
+  // the whole library at once fires a cover request per game (1000+ ≈ a
+  // steady 100 mA burst on the ESP32 for many seconds), which the Amiga's
+  // aged USB rail can't always deliver without dipping below brownout.
+  else if (!davActiveAlpha) davActiveAlpha = davFirstAvailableLetter(davAllEntries);
+
+  let filtered = davAllEntries;
+  if (search) {
+    filtered = filtered.filter(f => f.name.toLowerCase().includes(search));
+  } else if (davActiveAlpha) {
+    filtered = filtered.filter(f => {
+      const c = f.name.charAt(0).toUpperCase();
+      if (davActiveAlpha === '#') return !(c >= 'A' && c <= 'Z');
+      return c === davActiveAlpha;
+    });
+  }
+
+  davBuildAlphaFilter(davAllEntries);
+  davRenderGameList(filtered);
+  // One cache-only request for the whole visible set, then patch the badges in
+  // place. Deliberately after the first paint so rows never wait on it — and a
+  // patch rather than a re-render, because rebuilding the rows would fire every
+  // cover request a second time.
+  if (filtered.length && filtered.length <= LIST_ROW_MAX) {
+    davLoadRowMeta(search ? '' : davActiveAlpha).then(davApplyRowMeta);
+  }
+}
+
+// Fill in the disk count, the NFO badge and the per-disk buttons once the
+// cache-only metadata lands, touching only the cells that change.
+function davApplyRowMeta() {
+  const host = document.getElementById('dav-list');
+  if (!host || !listRowState.rows.length || listRowState.host !== host) return;
+  listRowState.rows.forEach((r, i) => {
+    const meta = davRowMeta[r.name];
+    if (!meta) return;
+    if (r.disks === meta.disks && r.hasNfo === meta.nfo) return;
+    r.disks = meta.disks;
+    r.hasNfo = meta.nfo;
+    const row = host.querySelector(`.game-item[data-i="${i}"]`);
+    if (!row) return;
+    const metaCell = row.querySelector('.game-meta');
+    if (metaCell) metaCell.innerHTML = listRowBadges(r);
+    const btnCell = row.querySelector('.row-disks');
+    if (btnCell) buildDiskButtons(btnCell, r, listRowState.onDisk);
+  });
+}
+
+function davRenderGameList(folders) {
+  document.getElementById('dav-game-count').textContent = '(' + folders.length + ' games)';
+  const list = document.getElementById('dav-list');
+
+  const rows = folders.map(f => {
+    const fullPath = davCurrentPath.endsWith('/') ? davCurrentPath + f.name
+                                                  : davCurrentPath + '/' + f.name;
+    const meta = davRowMeta[f.name] || null;
+    return {
+      source: 'dav',
+      key: fullPath,
+      name: f.name,
+      coverUrl: API + '/api/dav/cover?path=' + encodeURIComponent(fullPath + '/' + f.name + '.jpg'),
+      playing: !!(davLoadedFile && davLoadedFile.startsWith(fullPath + '/')),
+      sourceLabel: 'WebDAV',
+      // A folder nobody has opened yet has no cached listing, so the count and
+      // the notes flag are genuinely unknown. null/0 means "say nothing" rather
+      // than claiming there are no notes.
+      disks: meta ? meta.disks : 0,
+      hasNfo: meta ? meta.nfo : null,
+      hasCover: false,          // resolved by the <img>, not known up front
+      loadedDisk: davLoadedDiskNum(fullPath),
+    };
+  });
+
+  renderListRows(list, rows,
+    r => davOpenFolder(r.key, r.name),
+    (r, diskNum, isLoaded, btn) => rowMountDAV(r, diskNum, isLoaded, btn));
+
+  // Cover fallback: the device answers 404 for a cover it has not fetched yet
+  // and queues it, so a later render picks it up. One request per cover — the
+  // browser retrying the other extension doubled both the requests and the
+  // queued fetches behind them, and the retry always failed.
+  list.querySelectorAll('img.game-cover[data-fallback]').forEach(img => {
+    img.addEventListener('error', function onErr() {
+      this.removeEventListener('error', onErr);
+      const ph = document.createElement('div');
+      ph.className = 'game-cover empty';
+      ph.textContent = 'No Art';
+      this.replaceWith(ph);
+    });
+  });
+}
+
+// Disk filenames per folder path, filled whenever a listing is fetched (a row
+// button or the detail modal). Without it a playing WebDAV row knows it is
+// playing but not which of its disks is in, so it could not offer Eject.
+let davFolderFiles = {};
+
+function davDiskNames(entries) {
+  return (entries || []).filter(e => !e.dir && /\.(adf|adz|dsk|img)$/i.test(e.name))
+                        .map(e => e.name)
+                        .sort((a, b) => a.localeCompare(b));
+}
+
+// 1-based position of the mounted disk within its folder, or 0 if not known.
+function davLoadedDiskNum(folderPath) {
+  if (!davLoadedFile || !davLoadedFile.startsWith(folderPath + '/')) return 0;
+  const names = davFolderFiles[folderPath];
+  if (!names) return 0;
+  const file = davLoadedFile.slice(folderPath.length + 1);
+  const i = names.indexOf(file);
+  return i < 0 ? 0 : i + 1;
+}
+
+// Per-folder facts for the rows on screen, keyed by folder name. Filled by one
+// cache-only request per render rather than one per row.
+let davRowMeta = {};
+
+async function davLoadRowMeta(prefix) {
+  try {
+    const d = await apiQuiet('/api/dav/rowmeta?prefix=' + encodeURIComponent(prefix || ''));
+    davRowMeta = {};
+    (d.meta || []).forEach(m => { davRowMeta[m.name] = { disks: m.disks || 0, nfo: !!m.nfo }; });
+  } catch (e) { davRowMeta = {}; }
+}
+
+// Insert or eject a WebDAV disk from a list row. The load endpoint needs the
+// remote path of a specific file, which only the folder listing has — so the
+// listing is fetched on the click. The device serves it from its own folder
+// cache now, so a revisit costs no network.
+async function rowMountDAV(r, diskNum, isLoaded, btn) {
+  const host = btn.parentElement;
+  host.querySelectorAll('.disk-btn').forEach(b => b.disabled = true);
+  const reEnable = () => host.querySelectorAll('.disk-btn').forEach(b => b.disabled = false);
+  try {
+    if (isLoaded) {
+      await api('/api/disk/unload', { method: 'POST' });
+      davLoadedFile = '';
+      toast('Ejected');
+      davRenderNowPlaying();
+      davFilterGames();
+      return;
+    }
+
+    davShowBusy('Reading ' + r.name + '…');
+    let disks = [];
+    try {
+      const d = await api('/api/dav/list?path=' + encodeURIComponent(r.key));
+      disks = davDiskNames(d.entries).map(n => ({ name: n }));
+      davFolderFiles[r.key] = disks.map(x => x.name);
+    } finally { davHideBusy(); }
+
+    if (!disks.length) { toast('No disk images in ' + r.name, 'error'); reEnable(); return; }
+    const pick = disks[Math.min(diskNum, disks.length) - 1];
+    const remotePath = r.key + '/' + pick.name;
+
+    davShowBusy('Loading ' + pick.name + '…');
+    try {
+      const res = await fetch(API + '/api/dav/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'path=' + encodeURIComponent(remotePath),
+      });
+      const rdata = await res.json().catch(() => ({}));
+      davShowDebug(rdata);
+      if (!res.ok) throw new Error(rdata.error || 'HTTP ' + res.status);
+      davLoadedFile = remotePath;
+      toast((disks.length > 1 ? 'Disk ' + diskNum + '/' + disks.length + ' — ' : '') +
+            (rdata.name || pick.name) + ' loaded');
+    } finally { davHideBusy(); }
+
+    davRenderNowPlaying();
+    davFilterGames();
+  } catch (e) {
+    toast('Failed: ' + (e.message || 'Unknown'), 'error');
+    reEnable();
+  }
+}
+
+// Row clicks are wired by renderListRows, which hands the row object straight to
+// the handler — the game name never passes through a JavaScript parser, which is
+// what used to make a title like "Boppin'" unopenable.
+
+// Open a DAV folder as a game detail modal (like SD game detail)
+async function davEnsureConnected() {
+  if (davConnected) return true;
+  try {
+    const res = await fetch(API + '/api/dav/connect', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      davConnected = true;
+      davLoadStatus();  // refresh status bar in background
+      return true;
+    }
+    toast('Auto-connect failed: ' + (data.error || 'Unknown'), 'error');
+    return false;
+  } catch(e) {
+    toast('Auto-connect failed: ' + (e.message || 'Unknown'), 'error');
+    return false;
+  }
+}
+
+// Poll the device so NOW PLAYING follows what happens on the touchscreen.
+// Without this the web UI only noticed a disk change on a tab switch or a
+// full page reload, which made the two look like separate devices.
+let npPollTimer = null;
+let npLastSignature = '';
+
+// Which disk of the mounted set is in, so a row can show Eject on the right
+// button. The device has always served this; nothing read it until now.
+let npLoadedDisk = 0;
+
+async function npRefresh() {
+  try {
+    const s = await api('/api/disk/status');
+    npLoadedDisk = s.disk_num || 0;
+    return s;
+  } catch (e) { return null; }
+}
+
+async function npPoll() {
+  try {
+    const s = await api('/api/disk/status');
+    npLoadedDisk = s.disk_num || 0;
+    const sig = (s.source || '') + '|' + (s.name || '') + '|' + (s.np_path || '');
+    if (sig !== npLastSignature) {
+      npLastSignature = sig;
+      // Refresh whichever list is on screen so the PLAYING badge moves with it.
+      const games = document.getElementById('view-games');
+      const dav   = document.getElementById('view-webdav');
+      if (games && !games.classList.contains('hidden')) loadGames();
+      else if (dav && !dav.classList.contains('hidden') && davAllEntries.length) davFilterGames();
+    }
+  } catch (e) { /* device busy or rebooting — try again next tick */ }
+}
+
+function npStartPolling() {
+  if (npPollTimer) return;
+  // 4 s: fast enough that inserting a disk on the panel shows up while you are
+  // still looking at the browser, slow enough not to add to the request load
+  // that was freezing the device in the first place.
+  npPollTimer = setInterval(npPoll, 4000);
+}
+document.addEventListener('DOMContentLoaded', npStartPolling);
+
+// Bumped on every open. An in-flight listing compares against the value it
+// captured and abandons its results if another game has been opened since —
+// otherwise a slow or failed fetch leaves the PREVIOUS game's disks, cover and
+// NFO on screen under the new game's title, and inserting from that dropdown
+// mounts the wrong disk.
+let davDetailToken = 0;
+
+// Insert/eject toggle for one disk of a set.
+//
+// The mounted disk ejects; any other replaces it. That removes the separate
+// Eject button, and more importantly removes the state where Insert and Eject
+// were both live and it was not obvious which applied to what.
+async function davToggleDisk(idx, disks, multi, folderPath) {
+  if (idx < 0 || idx >= disks.length) return;
+  const disk = disks[idx];
+  const remotePath = folderPath + '/' + disk.name;
+  const status = document.getElementById('dav-modal-load-status');
+  const host = document.getElementById('dav-modal-disk-btns');
+  const btns = host ? host.querySelectorAll('.disk-btn') : [];
+  btns.forEach(b => b.disabled = true);
+
+  try {
+    if (davLoadedFile === remotePath) {
+      if (status) status.textContent = 'Ejecting…';
+      await api('/api/disk/unload', { method: 'POST' });
+      davLoadedFile = '';
+      toast('Ejected');
+    } else {
+      const which = multi ? ('Disk ' + (idx + 1) + '/' + disks.length + ' — ') : '';
+      if (status) status.textContent = which + 'loading…';
+      const res = await fetch(API + '/api/dav/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'path=' + encodeURIComponent(remotePath)
+      });
+      const rdata = await res.json().catch(() => ({}));
+      davShowDebug(rdata);
+      if (!res.ok) throw new Error(rdata.error || 'HTTP ' + res.status);
+      davLoadedFile = remotePath;
+      toast(which + (rdata.name || disk.name) +
+            (rdata.bytes ? (' loaded (' + (rdata.bytes / 1024).toFixed(0) + ' KB)') : ' loading…'));
+    }
+    if (status) status.textContent = '';
+    davRenderNowPlaying();
+    davOpenFolder(folderPath, document.getElementById('dav-modal-title').textContent);
+  } catch (e) {
+    if (status) status.textContent = '';
+    toast('Failed: ' + (e.message || 'Unknown'), 'error');
+    btns.forEach(b => b.disabled = false);
+  }
+}
+
+// NOW PLAYING for WebDAV: clickable, and for a multi-disk set it carries the
+// disk buttons too, so swapping disk 2 for disk 3 does not mean navigating back
+// into the game first.
+async function davRenderNowPlaying() {
+  const npEl = document.getElementById('dav-now-playing');
+  const npCard = document.getElementById('dav-now-playing-card');
+  if (!npEl || !npCard) return;
+  if (!davLoadedFile) { npCard.style.display = 'none'; return; }
+  npCard.style.display = 'block';
+
+  const diskName = davLoadedFile.split('/').filter(x => x).pop() || davLoadedFile;
+  const folderPath = davLoadedFile.substring(0, davLoadedFile.lastIndexOf('/'));
+  const folderName = folderPath.split('/').filter(x => x).pop() || folderPath;
+
+  npEl.innerHTML = '';
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;align-items:center;gap:10px;flex-wrap:wrap;cursor:pointer';
+  head.title = 'Open ' + folderName;
+  // The mounted game's art. On a dongle this is the one cover the device keeps,
+  // so here it costs nothing extra; a 404 just leaves the placeholder.
+  const coverUrl = API + '/api/dav/cover?path=' +
+                   encodeURIComponent(folderPath + '/' + folderName + '.jpg');
+  // Built rather than interpolated: an inline onerror needs quotes inside
+  // quotes, and that is exactly the kind of string that breaks silently.
+  const cover = document.createElement('img');
+  cover.className = 'game-cover';
+  cover.loading = 'lazy';
+  // The device keeps only the mounted game's art; a miss just hides it. The
+  // browser cache means a previously seen cover shows even when the device
+  // no longer holds it — which on a dongle is every game but the current one.
+  cover.addEventListener('error', () => cover.remove());
+  davCoverInto(cover, API + '/api/dav/cover?path=' +
+               encodeURIComponent(folderPath + '/' + folderName + '.jpg'),
+               folderPath + '/' + folderName + '.jpg');
+  head.appendChild(cover);
+
+  const label = document.createElement('div');
+  label.style.cssText = 'display:flex;align-items:center;gap:10px;flex-wrap:wrap';
+  label.innerHTML = '<span class="active-indicator"></span>' +
+                    '<strong>' + esc(folderName) + '</strong>' +
+                    '<span style="color:var(--muted);font-size:13px">' +
+                    esc(diskName) + '</span>';
+  head.appendChild(label);
+  head.addEventListener('click', () => davOpenFolder(folderPath, folderName));
+  npEl.appendChild(head);
+
+  // Sibling disks, from the cached listing. Best-effort: if the device cannot
+  // answer we simply show no buttons rather than blocking the bar.
+  try {
+    const data = await api('/api/dav/list?path=' + encodeURIComponent(folderPath));
+    const diskExts = ['ADF','DSK','ADZ','IMG'];
+    const disks = (data.entries || [])
+      .filter(e => !e.dir && diskExts.includes(e.name.split('.').pop().toUpperCase()))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    if (disks.length > 1) {
+      const row = document.createElement('div');
+      row.className = 'disk-btn-row';
+      row.style.marginTop = '8px';
+      disks.forEach((d, i) => {
+        const thisPath = folderPath + '/' + d.name;
+        const isLoaded = (davLoadedFile === thisPath);
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'disk-btn' + (isLoaded ? ' loaded' : '');
+        b.title = d.name;
+        b.innerHTML = isLoaded
+          ? ('Eject<span class="disk-sub">disk ' + (i + 1) + '</span>')
+          : ('Disk ' + (i + 1));
+        b.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          davToggleDisk(i, disks, true, folderPath);
+        });
+        row.appendChild(b);
+      });
+      npEl.appendChild(row);
+    }
+  } catch (e) { /* leave the bar without disk buttons */ }
+}
+
+async function davOpenFolder(folderPath, folderName) {
+  const myToken = ++davDetailToken;
+
+  document.getElementById('dav-modal-title').textContent = folderName;
+  document.getElementById('dav-modal-load-status').textContent = '';
+
+  // Wipe the previous game out before anything can be awaited. Leaving it up
+  // as a "loading state" is what made stale disks look like real ones.
+  document.getElementById('dav-modal-disk-btns').innerHTML =
+    '<span style="font-size:13px;color:var(--muted)">Reading disks…</span>';
+  document.getElementById('dav-modal-disks').innerHTML =
+    '<p style="color:var(--muted);font-size:13px">Reading folder…</p>';
+  document.getElementById('dav-modal-nfo').innerHTML = '';
+
+  // Show modal immediately with loading state
+  const modal = document.getElementById('modal-dav-detail');
+  modal.classList.add('show');
+  // Real characters, not HTML entities: this goes through textContent, which
+  // does not decode them — the overlay literally read "Opening &laquo;...".
+  davShowBusy('Opening “' + folderName + '”…');
+
+  // Cover
+  const coverImg = document.getElementById('dav-modal-cover');
+  let coverUrl = API + '/api/dav/cover?path=' + encodeURIComponent(folderPath + '/' + folderName + '.jpg');
+  coverImg.style.display = 'block';
+  window.davDetailFolderPath = folderPath;   // for the Save-to-SD button
+  davCoverInto(coverImg, coverUrl, folderPath + '/' + folderName + '.jpg');
+  // No .png retry: the device resolves the extension itself, so a 404 here
+  // genuinely means there is no cover yet.
+  coverImg.onerror = function() { this.style.display = 'none'; };
+
+  // Auto-connect if needed (user clicked game from cache while disconnected)
+  if (!davConnected) {
+    document.getElementById('dav-modal-disks').innerHTML = '<p style="color:var(--orange)">Connecting to WebDAV...</p>';
+    if (!await davEnsureConnected()) {
+      document.getElementById('dav-modal-disks').innerHTML = '<p style="color:var(--red)">Could not connect to WebDAV server</p>';
+      return;
+    }
+  }
+
+  // PROPFIND the folder to find disk files and NFO
+  try {
+    const data = await api('/api/dav/list?path=' + encodeURIComponent(folderPath));
+    if (myToken !== davDetailToken) return;   // a newer open won; drop these results
+    davShowDebug(data);
+    const entries = data.entries || [];
+    const diskExts = ['ADF','DSK','ADZ','IMG'];
+    const disks = entries.filter(e => !e.dir && diskExts.includes(e.name.split('.').pop().toUpperCase()));
+    // Opening the detail also teaches the LIST which disk of this folder is in,
+    // so its row can offer Eject on the right button.
+    davFolderFiles[folderPath] = davDiskNames(entries);
+    disks.sort((a, b) => a.name.localeCompare(b.name));
+
+    // One button per disk, mirroring the touchscreen's selector. Numbered only
+    // for a multi-disk set — on a single-disk game "Disk 1 of 1" is noise.
+    const multi = disks.length > 1;
+    const btnHost = document.getElementById('dav-modal-disk-btns');
+    btnHost.innerHTML = '';
+    if (disks.length === 0) {
+      btnHost.innerHTML = '<span style="font-size:13px;color:var(--orange)">' +
+                          'No disk images in this folder</span>';
+    }
+    disks.forEach((d, i) => {
+      const sizeStr = d.size > 1048576 ? (d.size/1048576).toFixed(1)+' MB'
+                                       : (d.size/1024).toFixed(0)+' KB';
+      const b = document.createElement('button');
+      b.className = 'disk-btn';
+      b.type = 'button';
+      b.title = d.name + ' (' + sizeStr + ')';
+      b.dataset.idx = String(i);
+      // Toggle, not a separate Eject: the disk that is mounted offers to
+      // eject itself, any other offers to replace it. One control, and its
+      // label always describes what pressing it does.
+      const thisPath = folderPath + '/' + d.name;
+      const isLoaded = (davLoadedFile === thisPath);
+      if (isLoaded) b.classList.add('loaded');
+      const face = multi ? ('Disk ' + (i + 1)) : 'Insert';
+      b.innerHTML = isLoaded
+        ? ('Eject<span class="disk-sub">' + (multi ? 'disk ' + (i + 1) : sizeStr) + '</span>')
+        : (esc(face) + '<span class="disk-sub">' + sizeStr + '</span>');
+      b.addEventListener('click', () => davToggleDisk(i, disks, multi, folderPath));
+      btnHost.appendChild(b);
+    });
+
+    // Disk file list
+    const disksEl = document.getElementById('dav-modal-disks');
+    if (disks.length > 1) {
+      disksEl.innerHTML = '<label>Disk Files</label>' + disks.map(d => {
+        let sizeStr = d.size > 1048576 ? (d.size/1048576).toFixed(1)+' MB' : (d.size/1024).toFixed(0)+' KB';
+        return '<div style="padding:4px 0;font-size:13px;color:var(--strong)">' + esc(d.name) + ' <span style="color:var(--muted)">(' + sizeStr + ')</span></div>';
+      }).join('');
+    } else {
+      disksEl.innerHTML = '';
+    }
+
+    // NFO
+    const nfoFile = entries.find(e => !e.dir && e.name.toLowerCase().endsWith('.nfo'));
+    const nfoEl = document.getElementById('dav-modal-nfo');
+    if (nfoFile) {
+      try {
+        const nfoPath = folderPath + '/' + nfoFile.name;
+        const cachedNfo = davNfoCached(nfoPath);
+        const nfoData = cachedNfo !== null
+          ? { nfo: cachedNfo }
+          : await api('/api/dav/nfo?path=' + encodeURIComponent(nfoPath));
+        if (cachedNfo === null && nfoData && typeof nfoData.nfo === 'string') davNfoStore(nfoPath, nfoData.nfo);
+        if (myToken !== davDetailToken) return;   // superseded while fetching
+        // The endpoint returns {"nfo": "..."}. This read .content, so DAV
+        // notes were silently blank in the web UI no matter what the file said.
+        nfoEl.innerHTML = '<label>NFO / Description</label><pre style="font-size:12px;background:var(--light);padding:8px;border:1px inset var(--line);border-radius:2px;max-height:150px;overflow:auto;white-space:pre-wrap">' + esc(nfoData.nfo || '') + '</pre>';
+      } catch(e) {
+        nfoEl.innerHTML = '<label>NFO</label><span class="badge badge-nfo">Available</span>';
+      }
+    } else {
+      nfoEl.innerHTML = '';
+    }
+
+    // Check if currently playing
+    const isPlaying = davLoadedFile && davLoadedFile.startsWith(folderPath + '/');
+    if (isPlaying) {
+      const loadedName = davLoadedFile.split('/').pop();
+      const at = disks.findIndex(d => d.name === loadedName);
+      // Which disk, not just that something is playing — the point of asking
+      // is to know where you are in a multi-disk set.
+      const which = (multi && at >= 0) ? ('Disk ' + (at + 1) + ' of ' + disks.length + ': ') : '';
+      document.getElementById('dav-modal-load-status').innerHTML =
+        '<span style="color:var(--green)"><span class="active-indicator"></span>Playing ' +
+        which + esc(loadedName) + '</span>';
+    }
+
+  } catch(e) {
+    document.getElementById('dav-modal-disks').innerHTML = '<p style="color:var(--red)">Failed to load folder contents</p>';
+  } finally {
+    davHideBusy();
+  }
+}
+
+function davCloseFolderModal() {
+  document.getElementById('modal-dav-detail').classList.remove('show');
+  // Refresh list to update playing status
+  if (davConnected && davAllEntries.length > 0) {
+    davFilterGames();   // never render the unfiltered array — see davFilterGames
+  }
+}
+
+async function davInsert(remotePath, displayName, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Loading...';
+
+  try {
+    const res = await fetch(API + '/api/dav/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'path=' + encodeURIComponent(remotePath)
+    });
+    const data = await res.json().catch(() => ({}));
+    davShowDebug(data);
+    if (!res.ok) {
+      throw new Error(data.error || 'HTTP ' + res.status);
+    }
+    davLoadedFile = remotePath;
+    btn.textContent = 'Playing!';
+    btn.style.background = 'var(--green)';
+    toast(data.name + ' loaded! (' + (data.bytes / 1024).toFixed(0) + ' KB)');
+    // Show eject button
+    document.getElementById('dav-disconnect-btn').style.display = '';
+    // Update status bar
+    const bar = document.getElementById('dav-status-bar');
+    bar.className = 'ftp-status connected';
+    bar.innerHTML = '<span class="active-indicator"></span>Playing: ' + esc(displayName) +
+      ' <button class="btn btn-danger" style="font-size:11px;padding:2px 8px;margin-left:8px" onclick="davEject()">Eject</button>';
+  } catch (e) {
+    btn.textContent = 'Insert';
+    btn.disabled = false;
+    toast('Load failed: ' + (e.message || 'Unknown error'), 'error');
+  }
+}
+
+async function davEject() {
+  try {
+    await api('/api/disk/unload', { method: 'POST' });
+    davLoadedFile = '';
+    toast('Disk ejected');
+    await davLoadStatus();
+  } catch (e) {
+    toast('Eject failed', 'error');
+  }
+}
+
+async function davDownload(remotePath, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  try {
+    const result = await api('/api/dav/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'path=' + encodeURIComponent(remotePath)
+    });
+    btn.textContent = 'Saved!';
+    toast(result.file + ' saved to SD (' + (result.bytes / 1024).toFixed(0) + ' KB)');
+    loadGames();
+  } catch (e) {
+    btn.textContent = 'Save to SD';
+    btn.disabled = false;
+    toast('Download failed: ' + (e.message || 'Unknown error'), 'error');
+  }
+}
+
+// Enter key on game search
+document.getElementById('game-search').addEventListener('keyup', e => {
+  if (e.key === 'Enter') filterGames();
+});
+document.getElementById('dav-search').addEventListener('keyup', e => {
+  if (e.key === 'Enter') davFilterGames();
+});
+
+// Close modal on overlay click
+document.getElementById('modal-game-detail').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeModal();
+});
+document.getElementById('modal-dav-detail').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) davCloseFolderModal();
+});
+
+// Keyboard shortcut
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeModal(); davCloseFolderModal(); }
+});
+
+// ═══════════════ LOG VIEWER ═══════════════
+
+async function loadLog() {
+  const el = document.getElementById('log-content');
+  // Reflect the device's current setting rather than assuming, so the box
+  // is right even after a reboot or a change made on the device.
+  try {
+    const info = await api('/api/system/info');
+    document.getElementById('log-enabled').checked = !!info.log_enabled;
+  } catch (e) { /* the log fetch below reports connection trouble */ }
+  try {
+    const data = await api('/api/log');
+    el.textContent = data.log || 'Empty log';
+    if (document.getElementById('log-auto-scroll').checked) {
+      el.scrollTop = el.scrollHeight;
+    }
+  } catch (e) {
+    el.textContent = 'Failed to load log: ' + e.message;
+  }
+}
+
+// Toggle /LOG.TXT writing without pulling the SD card out to edit CONFIG.TXT
+// by hand — which was the only way to do it before.
+async function setLogEnabled(on) {
+  const box = document.getElementById('log-enabled');
+  box.disabled = true;
+  try {
+    const res = await fetch(API + '/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'LOG_ENABLED=' + (on ? '1' : '0')
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    toast(on ? 'Logging enabled' : 'Logging disabled');
+    if (on) loadLog();
+  } catch (e) {
+    box.checked = !on;                  // put the box back where it was
+    toast('Could not change logging: ' + (e.message || 'Unknown'), 'error');
+  } finally {
+    box.disabled = false;
+  }
+}
+
+async function clearLog() {
+  if (!confirm('Clear the log file?')) return;
+  await api('/api/log/clear', { method: 'POST' });
+  toast('Log cleared');
+  loadLog();
+}
+
+// ═══════════════ CONDITIONAL TABS ═══════════════
+// Hide FTP/WebDAV/Log tabs when the corresponding feature is disabled in config
+
+async function updateTabVisibility() {
+  try {
+    const d = await api('/api/system/info');
+    systemInfo = d;
+
+    const ftpTab = document.getElementById('tab-ftp');
+    const davTab = document.getElementById('tab-webdav');
+    const logTab = document.getElementById('tab-log');
+
+    if (ftpTab) ftpTab.style.display = d.ftp_enabled ? '' : 'none';
+    if (davTab) davTab.style.display = d.dav_enabled ? '' : 'none';
+    if (logTab) logTab.style.display = d.log_enabled ? '' : 'none';
+  } catch (e) {
+    // If API fails, show all tabs as fallback
+  }
+}
+
+// ══════════════ FLEET: roster tab-bar (reads /api/fleet) ══════════════
+async function loadFleet(){
+  const bar = document.getElementById('fleet-bar');
+  if (!bar) return;
+  let d;
+  try { d = await api('/api/fleet'); } catch(e){ bar.hidden = true; return; }
+  const devs = (d && d.devices) ? d.devices.filter(x=>x && x.id) : [];
+  if (devs.length < 1) { bar.hidden = true; return; }
+  const masterId = devs.map(x=>x.id).sort()[0];   // lowest MAC = master (matches firmware election)
+  let html = '<span class="fleet-label">Fleet</span>';
+  for (const dev of devs){
+    const isMaster = dev.id === masterId;
+    const cls = 'fleet-chip' + (dev.self ? ' self' : '') + (isMaster ? ' master' : '');
+    const star = isMaster ? ' \u2605' : '';
+    const sub = dev.self ? 'you' : (dev.ip || '');
+    const inner = `<span class="dot"></span>${esc(dev.name||dev.id)}${star}<span class="sub">${esc(sub)}</span>`;
+    html += dev.self
+      ? `<span class="${cls}">${inner}</span>`
+      : `<a class="${cls}" href="http://${esc(dev.ip)}/" title="Open ${esc(dev.name||dev.ip)}">${inner}</a>`;
+  }
+  bar.innerHTML = html;
+  bar.hidden = false;
+}
+
+// Init
+updateTabVisibility();
+loadDashboard();
+loadFleet(); setInterval(loadFleet, 15000);
+
+// ══════════════ MOBILE: BACK BUTTON AND INSTALLING ══════════════
+//
+// This is one page. On a phone the back button therefore leaves the whole
+// interface, which is jarring when all you wanted was to shut a dialog. So an
+// open dialog gets a history entry of its own: back closes it and stays put.
+//
+// Once added to the home screen there is no browser chrome to go back to at
+// all, so back never leaves — it closes a dialog, then returns to the
+// dashboard, then does nothing. In an ordinary browser tab the last back still
+// leaves, because trapping someone in a page they opened is rude.
+
+const isStandalone = () =>
+  window.matchMedia('(display-mode: standalone)').matches ||
+  window.navigator.standalone === true;
+
+let navPushed = false;      // we own one history entry
+let navClosing = false;     // suppress re-entry while popstate closes something
+
+function openModals() {
+  return [...document.querySelectorAll('.modal-overlay.show')];
+}
+
+function navSync() {
+  const anyOpen = openModals().length > 0;
+  if (anyOpen && !navPushed) {
+    navPushed = true;
+    history.pushState({ gotekModal: true }, '');
+  } else if (!anyOpen && navPushed && !navClosing) {
+    // Closed with a button rather than Back: consume our entry so the next
+    // Back does not have to be pressed twice.
+    navPushed = false;
+    history.back();
+  }
+}
+
+window.addEventListener('popstate', () => {
+  const open = openModals();
+  if (open.length) {
+    navPushed = false;
+    navClosing = true;
+    open.forEach(el => el.classList.remove('show'));
+    if (typeof davBusyDepth !== 'undefined') davBusyDepth = 0;
+    navClosing = false;
+    return;
+  }
+  if (isStandalone()) {
+    // Nowhere to go back to. Land on the dashboard rather than a blank frame.
+    const dash = document.querySelector('[data-view="dashboard"]');
+    if (dash) dash.click();
+    history.pushState({ gotekRoot: true }, '');
+  }
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Watch the class rather than every open/close call site: there are seven of
+  // those and a new dialog would quietly miss the behaviour.
+  document.querySelectorAll('.modal-overlay').forEach(el => {
+    new MutationObserver(navSync).observe(el, {
+      attributes: true, attributeFilter: ['class'],
+    });
+  });
+  if (isStandalone()) history.pushState({ gotekRoot: true }, '');
+
+  // Installing. Chrome offers a real prompt; iOS has never exposed one, so
+  // there the honest thing is to say which menu item to use rather than show a
+  // button that does nothing.
+  const card = document.getElementById('install-card');
+  const btn  = document.getElementById('install-btn');
+  const hint = document.getElementById('install-hint');
+  if (!card || isStandalone()) return;
+
+  let deferred = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferred = e;
+    card.style.display = '';
+  });
+
+  const iOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  if (iOS) {
+    card.style.display = '';
+    btn.style.display = 'none';
+    hint.innerHTML = 'Tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>. ' +
+                     'It then opens without browser chrome, and the back button closes ' +
+                     'dialogs instead of leaving.';
+  }
+
+  btn.addEventListener('click', async () => {
+    if (deferred) {
+      deferred.prompt();
+      await deferred.userChoice;
+      deferred = null;
+      card.style.display = 'none';
+    } else {
+      hint.innerHTML = 'Open the browser menu and choose <strong>Add to Home screen</strong>. ' +
+                       'Chrome only offers its own button on secure origins, which a device ' +
+                       'on your own network is not.';
+    }
+  });
+});
+
+</script>
+</body>
+</html>
