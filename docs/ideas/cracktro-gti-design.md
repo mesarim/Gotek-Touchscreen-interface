@@ -150,6 +150,7 @@ Bronnen: [manual (Goldstar PD)](http://www.classicamiga.com/images/stories/jrevi
 | 4 | Patternlijst van 2–4 delen per bestand | Wat een cracktro als cracktro laat voelen; saver valt er gratis uit |
 | 5 | Eén zelfstandig tekstbestand, logo als hex | Deelbaar in één Discord-bericht; hand-bewerkbaar; te versionen in git |
 | 6 | Preview in de web-builder draait de **echte** engine via WASM | Eén implementatie in plaats van twee; kan niet driften. Zie §8.1 |
+| 7 | Effecten via een **registry**, niet via een `switch` | Een nieuw effect is één regel + één functie, inplugbaar zonder de rest te raken. Zie §5.4 |
 
 ---
 
@@ -222,6 +223,64 @@ Om boot eerlijk te houden op een ESP32-S3:
 
 Over de grens → afkeuren en terugvallen (zie §6).
 
+### 5.4 Effecten worden pluggable (registry in plaats van `switch`)
+
+Een effect is nu een `crkXxx(float t)` achter een `switch`, met hardgecodeerde
+teksten en kleuren. Daardoor kost een nieuw effect wijzigingen op meerdere
+plekken, en is een effect principieel niet vanuit een bestand te sturen.
+
+De `switch` gaat eruit, er komt een **registry** voor in de plaats:
+
+```c
+struct CrkPattern {                 // één geparsed [PATTERN]-blok
+  uint8_t  fx;
+  uint32_t timeMs;
+  const char *title, *sub;
+  uint16_t col;
+  int8_t   logo;                    // index in de logo's van het bestand, -1 = geen
+  bool     scroll;
+};
+
+typedef void (*CrkFxFn)(float t, const CrkPattern& p);
+
+struct CrkFx { const char *name; CrkFxFn fn; };
+
+static const CrkFx CRK_FX[] = {
+  { "COPPER",    fxCopper    },
+  { "STARFIELD", fxStarfield },
+  { "RASTER",    fxRaster    },
+  { "PLASMA",    fxPlasma    },
+  { "BOING",     fxBoing     },
+  { "SYNTH",     fxSynth     },
+  { "LOGO",      fxLogo      },
+};
+```
+
+`FX=` zoekt op naam in die tabel. **Een nieuw effect is één regel plus één
+functie** — geen `switch` om te wijzigen, geen nummering die synchroon moet
+blijven, en geen wijziging aan het bestandsformaat.
+
+Twee gevolgen die we expliciet willen:
+
+**De bestaande effecten krijgen parameters.** `fxCopper(t, p)` leest `p.title`,
+`p.sub` en `p.col` in plaats van `"OMEGAWARE"` hard te coderen. Dat is precies
+dezelfde ingreep die `.gti` überhaupt mogelijk maakt — pluggable en
+parametriseerbaar zijn één klus, geen twee.
+
+**De ingebouwde cracktro's worden zélf patternlijsten.** Niet één codepad voor
+ingebouwd en één voor bestanden, maar de ingebouwde stijlen als `CrkPattern`-
+arrays door dezelfde engine. Eén pad in plaats van twee — waardoor het
+bestandspad bij elke boot gebruikt wordt, niet alleen door mensen met een
+bestand. Dezelfde redenering als bij de WASM-preview (§8.1).
+
+**Eerlijke uitzondering:** `RETRONAUT` decodeert een PROGMEM-JPEG in plaats van
+een 1bpp wordmark. Die past niet in het patternmodel zonder het formaat ook een
+kleurafbeelding-begrip te geven. Die laten we voorlopig een speciaal geval, in
+plaats van het formaat op te blazen voor één thema.
+
+**Gevolg voor de tooling:** een nieuw effect krijgt zijn preview gratis — rij
+toevoegen aan `CRK_FX`, WASM herbouwen, klaar (§8.1).
+
 ---
 
 ## 6. Vindplaats en faalgedrag
@@ -262,7 +321,7 @@ Te raken plekken:
 
 ### 7.1 De ingreep in de engine
 
-`drawCracktro` splitsen in **`drawCracktroFrame(style, t)`** plus twee
+`drawCracktro` splitsen in **`drawCracktroFrame(pattern, t)`** plus twee
 aanroepers: de boot-splash en de saver. Klein, want de effect-`switch` staat al
 geïsoleerd; alleen de lus eromheen verschilt.
 
@@ -296,7 +355,7 @@ de font-editor van diezelfde gereedschapskist.
 ### 8.1 De preview is de echte engine (WASM)
 
 De web-builder krijgt een preview die **exact** toont wat het paneel toont. Niet
-"een goede benadering": we compileren **`drawCracktroFrame(style, t)` naar
+"een goede benadering": we compileren **`drawCracktroFrame(pattern, t)` naar
 WebAssembly** en draaien die in de browser met een `gfx_*`-shim naar een canvas.
 
 Reden: een preview in JavaScript zou een **tweede implementatie van de engine**
