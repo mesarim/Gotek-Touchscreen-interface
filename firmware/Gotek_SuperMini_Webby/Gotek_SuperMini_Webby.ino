@@ -752,14 +752,35 @@ static String statusJson(){
 // #lock: a LOCKED dongle on a SHARED network (STA mode) closes its own HTTP write surface.
 // The panel drives it over TCP 3333 with an owner token; its web page is not an auth channel.
 // Configure it from its own password-protected AP (g_webmode==0), or UNCLAIM it from the owning screen.
-// #lock: which web endpoints a claim closes. Only the three that change what a running
-// Amiga sees - upload, eject, unload. Settings, OTA, /espnow and reboot stay open on
-// purpose: they are what you reach for when something is already wrong, and locking them
-// strands the owner more reliably than it stops anyone else.
+// #lock: which web endpoints a claim closes on the shared LAN. Two groups:
+//   the disk itself      - upload, eject, unload
+//   and whatever can take the disk or the gate away - /espnow, /savewifi, POST /api/config,
+//                          /api/system/reboot
+// The second group is not paranoia, it is arithmetic: /espnow and the two creds routes push us
+// to g_webmode 0, after which wtokGateActive() is false forever and the first group is open
+// again; and reboot drops the ps_malloc RAM disk, which is exactly the effect /eject returns 403
+// for. Leaving them open made the lock advisory - one unauthenticated request and it was gone.
+// We had them open on purpose ("what you reach for when something is already wrong") and that
+// reasoning was sound; it was the conclusion that was wrong, because the recovery path does not
+// have to be the network. It is the BOOT button: tap-and-release 3 s = back to ESP-NOW, 10 s =
+// wipe creds and owners. So a claim can never strand the owner, only inconvenience them.
+//
+// Still open, and no amount of gating here changes it: POST /api/system/ota takes any
+// 0xE9-prefixed image from any LAN client. So this is accident prevention and fleet hygiene, not
+// a security boundary, and it should not be described as one.
 static bool webWriteAllowed(){ return !wtokGateActive(); }
 static bool webDenyLocked(){
   if (webWriteAllowed()) return false;
   server.send(403,"application/json","{\"error\":\"disk is locked to a screen - UNCLAIM it there, or use this dongle's own AP\"}");
+  return true;
+}
+
+// #lock: same gate, honest recovery. The disk message points at the dongle's own AP, but while we
+// are joined to home WiFi there IS no soft-AP to fall back to - startEspnowApMode() is the only
+// thing that raises one. For the config and recovery routes the way out is physical.
+static bool webDenyLockedCfg(){
+  if (webWriteAllowed()) return false;
+  server.send(403,"application/json","{\"error\":\"locked to a screen - UNCLAIM it there, or use the dongle's BOOT button (3s = ESP-NOW, 10s = wipe creds+owners)\"}");
   return true;
 }
 
@@ -826,6 +847,7 @@ static void handleScan(){
 }
 
 static void handleSaveWifi(){
+  if (webDenyLockedCfg()) return;   // #lock: pointing a claimed dongle at another SSID drops the gate
   String ssid = server.arg("ssid"); String pass = server.arg("pass");
   if (ssid.length()==0) { server.send(400,"application/json","{\"ok\":false,\"err\":\"no SSID\"}"); return; }
   if (server.hasArg("name")) g_devname = sanitizeName(server.arg("name"));   // #name: set at first setup so it joins already-named (no default-name clash)
@@ -836,6 +858,7 @@ static void handleSaveWifi(){
   if (saved) { delay(500); ESP.restart(); }
 }
 static void handleEspnowWeb(){
+  if (webDenyLockedCfg()) return;   // #lock: this is THE gate-dropper - g_webmode 0 disables wtokGateActive()
   setModeEspnow();
   server.send(200,"application/json","{\"ok\":true}");
   delay(400); ESP.restart();
@@ -1065,12 +1088,14 @@ static void apiConfig(){
   server.send(200,"application/json", j);
 }
 static void apiConfigSave(){
+  if (webDenyLockedCfg()) return;   // #lock: takes WIFI_CLIENT_SSID/PASS, so same effect as /savewifi
   String ssid = server.arg("WIFI_CLIENT_SSID");
   String pass = server.arg("WIFI_CLIENT_PASS");
   if (ssid.length()) { saveWifiCfg(ssid, pass); server.send(200,"application/json","{\"status\":\"ok\",\"reboot\":true}"); delay(400); ESP.restart(); return; }
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiReboot(){
+  if (webDenyLockedCfg()) return;   // #lock: the RAM disk does not survive this - same effect as /eject
   server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
 static void apiThemesList(){
   String j = "{\"active\":\""; j += g_active_theme;
@@ -1194,6 +1219,7 @@ static void startWebServer(){
   server.on("/savewifi", HTTP_POST, handleSaveWifi);
   server.on("/espnow", HTTP_POST, handleEspnowWeb);
   server.on("/setap", HTTP_POST, [](){   // #lock: set a custom AP name + password (protects the dongle's own setup AP)
+    if (webDenyLockedCfg()) return;   // #lock: choosing the fallback AP password before pushing us into AP mode
     String name = server.hasArg("apname") ? server.arg("apname") : "";
     String pass = server.hasArg("appass") ? server.arg("appass") : "";
     name.trim();
