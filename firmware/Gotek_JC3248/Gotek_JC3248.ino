@@ -29,6 +29,7 @@
 #undef MOTOLONG
 #include <PNGdec.h>      // cover art may be PNG as well as JPEG (v4.8.4) — needs the "PNGdec" library (Larry Bank) installed
 #include <Wire.h>
+#include "../shared/cracktro_gti.h"   // .gti cracktro file format (host-testable, no Arduino deps)
 #include <vector>
 #include <algorithm>
 #include <set>
@@ -1711,41 +1712,44 @@ static void crk_copperBar(int cy,int h,float hue){
   for(int i=-h/2;i<h/2;i++){float l=62.0f-fabsf((float)i)/(h/2.0f)*56.0f; gfx_fillRect(0,cy+i,gW,1,crk_hsl(hue,100.0f,l));}}
 
 // 1: COPPER CLASSIC
-static void crkCopper(float t){
+typedef void (*CrkFxFn)(float t, const gti::Pattern& p);
+struct CrkFx { const char* name; CrkFxFn fn; };
+
+static void crkCopper(float t, const gti::Pattern& p){
   gfx_fillScreen(CRK_RGB(4,6,13)); crk_stars();
   for(int b=0;b<3;b++){int cy=150+b*34+(int)(sinf(t*0.0022f+b*1.4f)*26); crk_copperBar(cy,30,t*0.06f+b*70);}
-  crk_txtC(gW/2,34,"OMEGAWARE",4,crk_hue(t*0.12f));
-  crk_txtC(gW/2,82,"* MEZ & DIMMY *",2,CRK_RGB(174,187,208));
-  crk_scroller(t,CRK_RGB(255,224,0),13,false);
+  crk_txtC(gW/2,34,p.title[0]?p.title:"OMEGAWARE",4,p.col?p.col:crk_hue(t*0.12f));
+  crk_txtC(gW/2,82,p.sub[0]?p.sub:"* MEZ & DIMMY *",2,CRK_RGB(174,187,208));
+  if(p.scroll) crk_scroller(t,CRK_RGB(255,224,0),13,false);
 }
 // 2: STARFIELD
-static void crkStarfield(float t){
+static void crkStarfield(float t, const gti::Pattern& p){
   gfx_fillScreen(CRK_RGB(2,3,10)); crk_stars(); crk_stars();
   int bx=gW/2+(int)(sinf(t*0.0016f)*150), by=120+(int)(sinf(t*0.0025f)*54);
-  crk_txtShadow(bx,by,"OMEGAWARE",3,crk_hsl(t*0.1f,100.0f,60.0f));
-  crk_txtC(bx,by+34,"INTO THE VOID",1,CRK_RGB(127,208,255));
-  crk_scroller(t,0,10,true);
+  crk_txtShadow(bx,by,p.title[0]?p.title:"OMEGAWARE",3,p.col?p.col:crk_hsl(t*0.1f,100.0f,60.0f));
+  crk_txtC(bx,by+34,p.sub[0]?p.sub:"INTO THE VOID",1,CRK_RGB(127,208,255));
+  if(p.scroll) crk_scroller(t,0,10,true);
 }
 // 3: RAINBOW RASTER
-static void crkRaster(float t){
+static void crkRaster(float t, const gti::Pattern& p){
   for(int y=0;y<gH-30;y++) gfx_fillRect(0,y,gW,1,crk_hsl(y*1.4f+t*0.16f,100.0f,50.0f));
   gfx_fillRect(48,104,gW-96,92,CRK_RGB(6,8,18)); gfx_drawRect(48,104,gW-96,92,TFT_WHITE);
-  crk_txtC(gW/2,124,"OMEGAWARE",4,TFT_WHITE);
-  crk_txtC(gW/2,172,"CRACKED - TRAINED - LOADED",1,CRK_RGB(255,233,168));
-  crk_scroller(t,TFT_WHITE,10,false);
+  crk_txtC(gW/2,124,p.title[0]?p.title:"OMEGAWARE",4,p.col?p.col:TFT_WHITE);
+  crk_txtC(gW/2,172,p.sub[0]?p.sub:"CRACKED - TRAINED - LOADED",1,CRK_RGB(255,233,168));
+  if(p.scroll) crk_scroller(t,TFT_WHITE,10,false);
 }
 // 4: PLASMA
-static void crkPlasma(float t){
+static void crkPlasma(float t, const gti::Pattern& p){
   const int bs=8;
   for(int y=0;y<gH-30;y+=bs)for(int x=0;x<gW;x+=bs){
     float v=sinf(x*0.035f+t*0.003f)+sinf(y*0.05f+t*0.0042f)+sinf((x+y)*0.028f+t*0.002f);
     gfx_fillRect(x,y,bs,bs,crk_hsl(v*60.0f+t*0.12f,90.0f,56.0f));}
-  crk_txtShadow(gW/2,54,"OMEGAWARE",4,TFT_WHITE);
-  crk_txtC(gW/2,104,"MELT YOUR EYES",2,CRK_RGB(10,10,20));
-  crk_scroller(t,TFT_WHITE,12,false);
+  crk_txtShadow(gW/2,54,p.title[0]?p.title:"OMEGAWARE",4,p.col?p.col:TFT_WHITE);
+  crk_txtC(gW/2,104,p.sub[0]?p.sub:"MELT YOUR EYES",2,CRK_RGB(10,10,20));
+  if(p.scroll) crk_scroller(t,TFT_WHITE,12,false);
 }
 // 5: BOING BALL
-static void crkBoing(float t){
+static void crkBoing(float t, const gti::Pattern& p){
   gfx_fillScreen(CRK_RGB(12,12,22));
   uint16_t grd=CRK_RGB(70,36,96);
   for(int x=0;x<=gW;x+=32) gfx_vline(x,60,gH-30-60,grd);
@@ -1757,11 +1761,12 @@ static void crkBoing(float t){
     for(int xx=-hw;xx<=hw;xx++){int cc=(((int)floorf((xx+ph)/cell))+((int)floorf(yy/cell)))&1;
       gfx_drawPixel(bx+xx,by+yy, cc?CRK_RGB(255,38,38):CRK_RGB(242,242,242));}}
   gfx_drawCircle(bx,by,r,CRK_RGB(122,0,0));
-  crk_txtC(gW/2,26,"OMEGAWARE",3,CRK_RGB(255,59,59));
-  crk_scroller(t,CRK_RGB(255,102,102),9,false);
+  crk_txtC(gW/2,26,p.title[0]?p.title:"OMEGAWARE",3,p.col?p.col:CRK_RGB(255,59,59));
+  if(p.sub[0]) crk_txtC(gW/2,56,p.sub,1,CRK_RGB(255,160,160));
+  if(p.scroll) crk_scroller(t,CRK_RGB(255,102,102),9,false);
 }
 // 6: SYNTHWAVE
-static void crkSynth(float t){
+static void crkSynth(float t, const gti::Pattern& p){
   for(int y=0;y<gH;y++){float f=(float)y/gH; uint16_t col;
     if(f<0.52f) col=crk_lerp(24,11,51, 90,26,110, f/0.52f);
     else        col=crk_lerp(11,10,26, 4,4,12, (f-0.53f)/0.47f);
@@ -1773,9 +1778,41 @@ static void crkSynth(float t){
   uint16_t grc=CRK_RGB(0,229,255); int hz=176;
   for(int i=0;i<8;i++){int yy=hz+(int)(i*i*2.4f); if(yy<gH) gfx_hline(0,yy,gW,grc);}
   for(int x=-6;x<=12;x++){int px=gW/2+(x*70); int x0=gW/2+(int)((px-gW/2)*0.18f); crk_line(x0,hz,px,gH,grc);}
-  crk_txtShadow(gW/2,40,"OMEGAWARE",3,CRK_RGB(49,232,255));
-  crk_txtC(gW/2,74,"RETRO FUTURE",1,CRK_RGB(255,122,176));
-  crk_scroller(t,CRK_RGB(255,79,160),8,false);
+  crk_txtShadow(gW/2,40,p.title[0]?p.title:"OMEGAWARE",3,p.col?p.col:CRK_RGB(49,232,255));
+  crk_txtC(gW/2,74,p.sub[0]?p.sub:"RETRO FUTURE",1,CRK_RGB(255,122,176));
+  if(p.scroll) crk_scroller(t,CRK_RGB(255,79,160),8,false);
+}
+
+// ── Effect registry. A new effect is one row plus one function: no switch to
+// edit, no numbering to keep in sync, no change to the .gti format. ──
+static const CrkFx CRK_FX[] = {
+  { "COPPER",    crkCopper    },
+  { "STARFIELD", crkStarfield },
+  { "RASTER",    crkRaster    },
+  { "PLASMA",    crkPlasma    },
+  { "BOING",     crkBoing     },
+  { "SYNTH",     crkSynth     },
+};
+static const int CRK_FX_N = (int)(sizeof(CRK_FX)/sizeof(CRK_FX[0]));
+
+static int crkFxIndex(const char* name){
+  for(int i=0;i<CRK_FX_N;i++) if(strcasecmp(name,CRK_FX[i].name)==0) return i;
+  return -1;
+}
+static void drawCracktroFrame(const gti::Pattern& p, float t){
+  int i = crkFxIndex(p.fx);
+  if(i < 0) i = 0;   // unknown effect name -> first built-in, never a blank screen
+  CRK_FX[i].fn(t, p);
+}
+// Built-in styles expressed as patterns, so built-ins and .gti files run the
+// same path -- that path is then exercised on every boot, not only by people
+// who have a file.
+static bool crkBuiltIn(int style, gti::Pattern* out, int* count){
+  if(style<1||style>CRK_FX_N) return false;
+  memset(out,0,sizeof(gti::Pattern)); out->logo=-1;
+  strncpy(out->fx, CRK_FX[style-1].name, sizeof(out->fx)-1);
+  out->timeMs=6000; out->scroll=true;
+  *count=1; return true;
 }
 
 // ── 5.4.0: hidden custom cracktros (CRACKTRO=DENISE / CRACKTRO=WRANGLER) ──
@@ -1917,8 +1954,7 @@ static void drawCracktro(int style){
     else if(denise)crkDenise(t);
     else if(wrangler)crkWrangler(t);
     else if(retronaut)crkRetronaut(t);
-    else switch(s){case 0:crkCopper(t);break;case 1:crkStarfield(t);break;case 2:crkRaster(t);break;
-      case 3:crkPlasma(t);break;case 4:crkBoing(t);break;default:crkSynth(t);break;}
+    else { gti::Pattern bp; int bn=1; crkBuiltIn(s+1,&bp,&bn); drawCracktroFrame(bp,t); }
     if(((int)(t/450.0f))%2) crk_txtC(gW/2,gH-46,"TAP TO CONTINUE",1,CRK_RGB(150,168,200));
     gfx_flush();delay(6);
   }
