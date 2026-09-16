@@ -166,6 +166,26 @@ static void test_scroll_text_is_truncated_not_overflowed() {
   CHECK(std::strlen(f.scroll) == gti::MAX_SCROLL - 1);
 }
 
+// Not in the plan, added during execution: these files get edited in Notepad
+// on Windows, so CRLF is the likeliest real-world difference from the test
+// inputs above. Cheaper to pin here than to lose an evening to it on glass.
+static void test_crlf_line_endings() {
+  gti::File f;
+  const char* src =
+    "GTICRACK 1\r\n"
+    "NAME=Omegaware\r\n"
+    "[PATTERN]\r\n"
+    "FX=COPPER\r\n"
+    "TITLE=OMEGAWARE\r\n"
+    "COL=FFE000\r\n";
+  CHECK(parseStr(src, f) == gti::OK);
+  CHECK(std::strcmp(f.name, "Omegaware") == 0);
+  CHECK(f.patternCount == 1);
+  CHECK(std::strcmp(f.patterns[0].fx, "COPPER") == 0);
+  CHECK(std::strcmp(f.patterns[0].title, "OMEGAWARE") == 0);
+  CHECK(f.patterns[0].col == gti::rgb565(0xFF, 0xE0, 0x00));
+}
+
 int main() {
   test_empty_is_rejected();
   test_wrong_magic_is_rejected();
@@ -183,6 +203,7 @@ int main() {
   test_too_many_logos_is_rejected();
   test_file_over_size_limit_is_rejected();
   test_scroll_text_is_truncated_not_overflowed();
+  test_crlf_line_endings();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }
