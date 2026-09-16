@@ -155,7 +155,7 @@ inline Err parse(const char* buf, size_t len, File& out) {
   if (len > MAX_FILE)             return ERR_TOO_BIG;
 
   detail::Lines lines(buf, len);
-  char line[256];
+  char line[MAX_SCROLL + 64];
 
   bool haveMagic = false;
   while (lines.next(line, sizeof(line))) {
@@ -165,20 +165,63 @@ inline Err parse(const char* buf, size_t len, File& out) {
   }
   if (!haveMagic) return ERR_MAGIC;
 
-  Pattern* cur = nullptr;
+  Pattern* cur       = nullptr;
+  Logo*    curLogo   = nullptr;
+  size_t   logoWrote = 0;
+  bool     inScroll  = false;
+
   while (lines.next(line, sizeof(line))) {
     if (detail::isSkippable(line)) continue;
 
     if (detail::isSection(line, "PATTERN")) {
       if (out.patternCount >= MAX_PATTERNS) return ERR_TOO_MANY_PATTERNS;
       cur = &out.patterns[out.patternCount++];
+      curLogo = nullptr; inScroll = false;
       continue;
     }
-    if (line[0] == '[') { cur = nullptr; continue; }   // other sections: later tasks
+    if (detail::isSection(line, "SCROLL")) {
+      cur = nullptr; curLogo = nullptr; inScroll = true;
+      continue;
+    }
+    if (detail::isSection(line, "LOGO")) {
+      if (out.logoCount >= MAX_LOGOS) return ERR_TOO_MANY_LOGOS;
+      curLogo = &out.logos[out.logoCount++];
+      logoWrote = 0; cur = nullptr; inScroll = false;
+      continue;
+    }
+    if (line[0] == '[') { cur = nullptr; curLogo = nullptr; inScroll = false; continue; }
+
+    // A line inside [LOGO n] that is not KEY=value is bitmap data.
+    if (curLogo != nullptr && strchr(line, '=') == nullptr) {
+      for (const char* h = line; h[0] && h[1]; h += 2) {
+        int hi = detail::hexNib(h[0]), lo = detail::hexNib(h[1]);
+        if (hi < 0 || lo < 0) return ERR_BAD_HEX;
+        if (logoWrote >= LOGO_BYTES) return ERR_LOGO_SIZE;
+        curLogo->bits[logoWrote++] = (uint8_t)(hi * 16 + lo);
+      }
+      curLogo->len = logoWrote;
+      continue;
+    }
 
     char *k, *v;
     if (!detail::splitKV(line, &k, &v)) continue;
 
+    if (inScroll) {
+      if (strcmp(k, "TEXT") == 0) detail::copyStr(out.scroll, MAX_SCROLL, v);
+      continue;
+    }
+    if (curLogo != nullptr) {
+      if (strcmp(k, "W") == 0) {
+        curLogo->w = (int)detail::parseU32(v);
+        const char* hp = strstr(v, "H=");
+        if (hp) curLogo->h = (int)detail::parseU32(hp + 2);
+      } else if (strcmp(k, "H") == 0) {
+        curLogo->h = (int)detail::parseU32(v);
+      }
+      if (curLogo->w > LOGO_MAX_W || curLogo->h > LOGO_MAX_H ||
+          curLogo->w < 0 || curLogo->h < 0) return ERR_LOGO_SIZE;
+      continue;
+    }
     if (cur == nullptr) {
       if      (strcmp(k, "NAME")   == 0) detail::copyStr(out.name,   MAX_NAME, v);
       else if (strcmp(k, "AUTHOR") == 0) detail::copyStr(out.author, MAX_NAME, v);
