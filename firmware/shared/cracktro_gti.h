@@ -96,6 +96,56 @@ inline bool isSkippable(const char* line) {
   return line[0] == 0 || line[0] == ';';
 }
 
+// Splits "KEY=value" in place. Returns false if there is no '='.
+inline bool splitKV(char* line, char** key, char** val) {
+  char* eq = strchr(line, '=');
+  if (!eq) return false;
+  *eq = 0;
+  *key = line; *val = eq + 1;
+  while (**val == ' ') ++(*val);
+  return true;
+}
+
+inline bool isSection(const char* line, const char* name) {
+  if (line[0] != '[') return false;
+  size_t n = strlen(name);
+  return strncmp(line + 1, name, n) == 0 && (line[1 + n] == ']' || line[1 + n] == ' ');
+}
+
+inline void copyStr(char* dst, size_t cap, const char* src) {
+  size_t n = strlen(src);
+  if (n >= cap) n = cap - 1;
+  memcpy(dst, src, n); dst[n] = 0;
+}
+
+inline uint32_t parseU32(const char* s) {
+  uint32_t v = 0;
+  while (*s >= '0' && *s <= '9') { v = v * 10 + (uint32_t)(*s - '0'); ++s; }
+  return v;
+}
+
+inline int hexNib(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  return -1;
+}
+
+// "FFE000" -> RGB565. Returns false on malformed input.
+inline bool parseColour(const char* s, uint16_t* out) {
+  int v[6];
+  for (int i = 0; i < 6; ++i) { v[i] = hexNib(s[i]); if (v[i] < 0) return false; }
+  if (s[6] != 0) return false;
+  *out = rgb565((uint8_t)(v[0] * 16 + v[1]),
+                (uint8_t)(v[2] * 16 + v[3]),
+                (uint8_t)(v[4] * 16 + v[5]));
+  return true;
+}
+
+inline bool isOn(const char* s) {
+  return strcmp(s, "ON") == 0 || strcmp(s, "1") == 0 || strcmp(s, "TRUE") == 0;
+}
+
 } // namespace detail
 
 inline Err parse(const char* buf, size_t len, File& out) {
@@ -114,6 +164,35 @@ inline Err parse(const char* buf, size_t len, File& out) {
     break;
   }
   if (!haveMagic) return ERR_MAGIC;
+
+  Pattern* cur = nullptr;
+  while (lines.next(line, sizeof(line))) {
+    if (detail::isSkippable(line)) continue;
+
+    if (detail::isSection(line, "PATTERN")) {
+      if (out.patternCount >= MAX_PATTERNS) return ERR_TOO_MANY_PATTERNS;
+      cur = &out.patterns[out.patternCount++];
+      continue;
+    }
+    if (line[0] == '[') { cur = nullptr; continue; }   // other sections: later tasks
+
+    char *k, *v;
+    if (!detail::splitKV(line, &k, &v)) continue;
+
+    if (cur == nullptr) {
+      if      (strcmp(k, "NAME")   == 0) detail::copyStr(out.name,   MAX_NAME, v);
+      else if (strcmp(k, "AUTHOR") == 0) detail::copyStr(out.author, MAX_NAME, v);
+      continue;
+    }
+
+    if      (strcmp(k, "FX")     == 0) detail::copyStr(cur->fx,    sizeof(cur->fx), v);
+    else if (strcmp(k, "TITLE")  == 0) detail::copyStr(cur->title, MAX_TEXT, v);
+    else if (strcmp(k, "SUB")    == 0) detail::copyStr(cur->sub,   MAX_TEXT, v);
+    else if (strcmp(k, "TIME")   == 0) cur->timeMs = detail::parseU32(v);
+    else if (strcmp(k, "SCROLL") == 0) cur->scroll = detail::isOn(v);
+    else if (strcmp(k, "LOGO")   == 0) cur->logo   = (int8_t)detail::parseU32(v);
+    else if (strcmp(k, "COL")    == 0) detail::parseColour(v, &cur->col);
+  }
 
   if (out.patternCount == 0) return ERR_NO_PATTERNS;
   return OK;
