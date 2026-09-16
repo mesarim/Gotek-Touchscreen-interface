@@ -336,7 +336,18 @@ static void hDavLoad() {
 #if defined(GTI_WEB_FLEET)
 static void hFleet() { webPanelHttp.send(200, "application/json", pfRosterJson()); }
 
+// #standalone: the roster is readable in any mode (it lists this screen and what it holds), but the
+// ACTIONS belong to the mode that drives dongles. In STANDALONE the disk goes to our own USB port,
+// so queueing a fling would contradict the MODE the user set. Say that instead of doing it.
+static bool wpFleetOff() {
+  if (g_wireless_mode && g_link_home) return false;
+  webPanelHttp.send(409, "application/json",
+    "{\"error\":\"this screen is not driving dongles - set MODE to Wireless + WiFi on the screen\"}");
+  return true;
+}
+
 static void hFleetSend() {
+  if (wpFleetOff()) return;
   const String ip = wpArg("ip");
   if (ip.length() == 0)                                            webPanelHttp.send(400, "application/json", "{\"error\":\"No ip\"}");
   else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length())  webPanelHttp.send(409, "application/json", "{\"error\":\"Fleet busy\"}");
@@ -348,6 +359,7 @@ static void hFleetSend() {
 }
 
 static void hFleetCmd() {
+  if (wpFleetOff()) return;
   const String ip  = wpArg("ip");
   const long   cmd = wpArg("cmd").toInt();
   // Only the commands pfSendCommand can actually read back. 0x01 GET_SAVE and 0x02 GET_STATUS
@@ -361,6 +373,7 @@ static void hFleetCmd() {
 // #lock: the token only ever leaves this screen toward a dongle we can SEE with its BOOT
 // pairing window open - never toward a hand-typed address.
 static void hFleetEnroll() {
+  if (wpFleetOff()) return;
   const String ip = wpArg("ip");
   bool pairing = false;
   for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip && g_pfPeers[i].enr) { pairing = true; break; }
@@ -374,6 +387,7 @@ static void hFleetEnroll() {
 // #lock: releases THIS screen's claim only - the dongle refuses a token that is not one of
 // its owners, so this can never open somebody else's lock.
 static void hFleetUnenroll() {
+  if (wpFleetOff()) return;
   const String ip = wpArg("ip");
   if (ip.length() == 0)        webPanelHttp.send(400, "application/json", "{\"error\":\"No ip\"}");
   else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length() || g_pfUnenrollIp.length())

@@ -209,7 +209,10 @@ static void pfService() {
       if (pid.length() && pid != g_pfMyId) pfPanelUpsert(pid, pfJf(s, "mdns"));
       continue;
     }
-    pfUpsert(s);
+    // #standalone: a screen serving the web UI in STANDALONE still needs the election - two screens
+    // claiming <name>.local is exactly what it exists to stop - but it is NOT driving dongles, so it
+    // keeps no roster. Empty roster => pfVisibleCount()==0 => disks mount on our own USB port.
+    if (g_wireless_mode && g_link_home) pfUpsert(s);
   }
   pfElect();        // #clubday: pick our mDNS name from the screens we hear (lowest MAC keeps the undecorated one)
   pfApplyMdns();    // re-register if it changed — no reboot

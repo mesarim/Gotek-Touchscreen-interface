@@ -961,6 +961,18 @@ static String g_home_ssid="", g_home_pass="", g_dongle_home_ip="";  // HOME_SSID
 static String g_dav_host="",g_dav_user="",g_dav_pass="",g_dav_path="/";static int g_dav_port=443;static bool g_dav_https=true,g_dav_on=false;   // DAV_* in CONFIG.TXT (merge step 1)
 static String g_dav_test="";   // DAV_TEST= : smoke test — fetch this remote path once at boot. Proves the wiring without UI; remove the key (or the hook) once real UI exists.
 static bool g_web_on=false;    // WEBUI= : serve the shared web interface over HOME_SSID (merge step 2)
+static bool g_web_cfg=false;   // what the USER asked for. webPanelBegin() force-sets g_web_on in WiFi
+                               // mode (5.9.17 "no separate toggle to miss"), so that flag cannot say
+                               // what was wanted - and in STANDALONE that is exactly the question.
+// #standalone: the web surface does not belong to a MODE. MODE says where the DISK goes (our own USB
+// port / an ESP-NOW dongle / a LAN dongle); WEBUI says whether there is a web interface at all. The
+// only real conflict is ESP-NOW vs STA on one radio (#26), and STANDALONE uses neither - so it can
+// carry the radio too, which is what WebDAV, the web UI and the wireless OTA need. doLoadWebdav()
+// already assumes as much ("joining is only for the standalone case where the radio is otherwise
+// off") and refuses outright while ESP-NOW is up. STANDALONE + WEBUI=OFF still powers the radio all
+// the way down, so the quiet default is unchanged.
+static inline bool webModePossible(){ return !g_wireless_mode || g_link_home; }      // anything but ESP-NOW
+static inline bool webWanted(){ return g_wireless_mode ? g_link_home : g_web_cfg; }  // does THIS mode serve
 static void davLogSerial(const String&m){Serial.println(m);}
 static void davApplyConfig(){DavConfig c;c.host=g_dav_host;c.port=(uint16_t)g_dav_port;c.https=g_dav_https;c.user=g_dav_user;c.pass=g_dav_pass;c.basePath=g_dav_path;c.enabled=g_dav_on;davClient.configure(c,davLogSerial);}
 // ── Item 4: load/eject behaviour toggles (all default OFF = safest) ──
@@ -1629,7 +1641,7 @@ static void loadConfig(){
     else if(k=="DAV_PATH"){g_dav_path=v;}
     else if(k=="DAV_HTTPS"){String hv=v;hv.toUpperCase();g_dav_https=!(hv=="OFF"||hv=="0");}
     else if(k=="DAV_TEST"){g_dav_test=v;}
-    else if(k=="WEBUI"){String wv=v;wv.toUpperCase();g_web_on=(wv=="ON"||wv=="1");}
+    else if(k=="WEBUI"){String wv=v;wv.toUpperCase();g_web_on=g_web_cfg=(wv=="ON"||wv=="1");}
     else if(k=="DONGLE_HOME_IP"){g_dongle_home_ip=v;}}
   f.close();
   davApplyConfig();   // hand the DAV_* settings to the shared client (merge step 1)
@@ -2013,7 +2025,7 @@ static void drawStatusBar(){
   gfx_fillRect(0,0,VW,STATUS_H,COL_BAR);gfx_setTextSize(1);
   gfx_setTextColor(COL_ORANGE,COL_BAR);gfx_setCursor(6,6);gfx_print("OMEGAWARE");
   gfx_setTextColor(COL_MID,COL_BAR);gfx_print("  " FW_VERSION " " GTI_WEB_REV);
-  if(g_wireless_mode&&g_link_home){   // #clubday: on the LAN the useful thing to show is where to reach this screen
+  if(webWanted()){   // #clubday: wherever we serve, the useful thing to show is where to reach this screen
     String ln=pfMdnsName()+".local"; gfx_setTextColor(COL_BLUE==COL_BAR?0x07FF:0x06FF,COL_BAR);
     int tw=gfx_textWidth(ln); gfx_setCursor((VW-tw)/2,6); gfx_print(ln);}
   else if(g_wireless_mode){gfx_setTextColor(espnowIsPaired()?0x07E0:0xFD20,COL_BAR);gfx_setCursor(VW/2-40,6);gfx_print(espnowIsPaired()?"WIRELESS:PAIRED":"WIRELESS:PAIR");}
@@ -2200,16 +2212,17 @@ static void drawInfoPanel(){
     uint8_t mm[64][6]; int mcN=enumMuCaDongles(mm,g_dongle_cap);
     if(mcN>0) add(String(T(L_CFG_HIVEMIND))+": "+(g_hivemind?T(L_ON):T(L_OFF)), g_hivemind?COL_ACCENT:COL_BAR, g_hivemind?TFT_WHITE:COL_LIT, IA_HIVEMIND);
   }
-  if(g_wireless_mode && g_link_home){    // WiFi: home router — web UI / SD access
+  if(webModePossible()){    // #standalone: home router, web UI and SD access - in STANDALONE as well as WiFi mode
     add(String("HOME WIFI: ")+(g_home_ssid.length()?g_home_ssid:String("set up")), COL_ACCENT, TFT_WHITE, IA_HOMEWIFI);
-    add(String("WEB UI: ")+(g_web_on?(g_home_ssid.length()?String("ON"):String("ON *set wifi*")):String("OFF")), g_web_on?COL_GREEN:COL_BAR, g_web_on?TFT_BLACK:COL_LIT, IA_WEBUI);
+    { const bool won = g_wireless_mode ? g_web_on : g_web_cfg;   // WiFi mode forces it on (5.9.17); standalone shows what was asked for
+      add(String("WEB UI: ")+(won?(g_home_ssid.length()?String("ON"):String("ON *set wifi*")):String("OFF")), won?COL_GREEN:COL_BAR, won?TFT_BLACK:COL_LIT, IA_WEBUI); }
     if(g_home_ssid.length()) add(String("WIFI CHECK"), COL_BLUE, TFT_WHITE, IA_WIFICHECK);
-    { pfPrune(); const int vis=pfVisibleCount();
+    if(g_wireless_mode){ pfPrune(); const int vis=pfVisibleCount();   // #standalone: no dongles here, so no fleet row
       String fl=String("FLEET: ")+String(vis); if(vis<g_pfPeerN) fl+=" of "+String(g_pfPeerN);   // the rest is claimed by another screen
       if(g_pfTargetName.length())fl+=" > "+g_pfTargetName;
       add(fl, vis?COL_GREEN:COL_AMBER, TFT_BLACK, IA_FLEET); }   // #console: dongles we may drive / dongles heard
     add(String("SAVED WIFI: ")+String((int)g_known.size()), COL_BLUE, TFT_WHITE, IA_SAVEDWIFI);   // #clubday: remembered networks
-    { int orp=pfOrphanCount(); if(orp) add(String("RELEASE LOCKS: ")+String(orp), COL_AMBER, TFT_BLACK, IA_ORPHAN); }   // #lock: only when there is something to release
+    if(g_wireless_mode){ int orp=pfOrphanCount(); if(orp) add(String("RELEASE LOCKS: ")+String(orp), COL_AMBER, TFT_BLACK, IA_ORPHAN); }   // #lock: only when there is something to release
   }
   add(String(T(L_CFG_FONT))+": "+fontName(g_font), COL_AMBER, TFT_BLACK, IA_FONT);
   add(String(T(L_THEME))+": "+THEMES[g_theme_idx].name, COL_ACCENT, TFT_WHITE, IA_THEME);   // Vince test: moved off the bottom bar
@@ -2230,14 +2243,14 @@ static void drawInfoPanel(){
   int ix=0,iy=STATUS_H,iw=VW,ih=VH-STATUS_H-BOTTOM_H;
   gfx_fillRect(ix,iy,iw,ih,COL_BG);
   gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,iy+5);gfx_print(T(L_SETTINGS));
-  int headerH=(g_wireless_mode&&g_link_home)?30:18, footerH=14, pad=8, gap=6, colGap=8, bh=34, cols=(g_portrait?1:2);   // v5.5.5: 2 cols landscape (half-width), 1 col portrait (full-width, paginates)
+  int headerH=webWanted()?30:18, footerH=14, pad=8, gap=6, colGap=8, bh=34, cols=(g_portrait?1:2);   // v5.5.5: 2 cols landscape (half-width), 1 col portrait (full-width, paginates)
   int areaTop=iy+headerH, areaH=ih-headerH-footerH;
   int colW=(iw-pad*2-colGap*(cols-1))/cols;
   int rowsPP=(areaH+gap)/(bh+gap); if(rowsPP<1)rowsPP=1;
   int perPage=rowsPP*cols;
   g_info_pages=(g_ii_n+perPage-1)/perPage; if(g_info_pages<1)g_info_pages=1;
   if(g_info_page>=g_info_pages)g_info_page=g_info_pages-1; if(g_info_page<0)g_info_page=0;
-  if(g_wireless_mode&&g_link_home){ gfx_setTextColor(TFT_CYAN,COL_BG); gfx_setCursor(8,iy+18);
+  if(webWanted()){ gfx_setTextColor(TFT_CYAN,COL_BG); gfx_setCursor(8,iy+18);
     gfx_print("WEB: "+pfMdnsName()+".local  ("+String(g_mdns_name!=PF_MDNS_DEFAULT?"named":(g_pfIsLeader?"LEADER":"secondary"))+")"); gfx_setTextColor(COL_DIM,COL_BG); }
   {String pn="PAGE "+String(g_info_page+1)+"/"+String(g_info_pages);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(iw-8-gfx_textWidth(pn),iy+5);gfx_print(pn);}
   int startI=g_info_page*perPage, endI=min(g_ii_n,startI+perPage);
@@ -2257,7 +2270,7 @@ static void drawInfoPanel(){
   }
   gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
   gfx_setCursor(8,iy+ih-11);
-  if(g_wireless_mode&&g_link_home) gfx_print("IP:"+WiFi.localIP().toString()+"  Heap:"+String(ESP.getFreeHeap()/1024)+"K  Games:"+String(g_games.size()));
+  if(webWanted()) gfx_print("IP:"+WiFi.localIP().toString()+"  Heap:"+String(ESP.getFreeHeap()/1024)+"K  Games:"+String(g_games.size()));
   else gfx_print("Heap:"+String(ESP.getFreeHeap()/1024)+"K PSRAM:"+String(ESP.getFreePsram()/1024)+"K  Games:"+String(g_games.size()));
 }
 
@@ -4066,7 +4079,9 @@ static void applyRadioMode(){
   if(g_espnow_started){ espnowStop(); g_espnow_started=false; }   // leave ESP-NOW cleanly
   webPanelStop();                                                 // stop the web server if it was up
   WiFi.disconnect(true,true); delay(60);
-  if(!g_wireless_mode){ WiFi.mode(WIFI_OFF); }                     // STANDALONE
+  // #standalone: WEBUI=ON means serve here too - STA, web UI, WebDAV, OTA. No ESP-NOW in this
+  // mode, so there is nothing to collide with. WEBUI=OFF (or no creds) still powers the radio down.
+  if(!g_wireless_mode){ if(g_web_cfg && g_home_ssid.length()) webPanelBegin(); else WiFi.mode(WIFI_OFF); }
   else if(g_link_home){ webPanelBegin(); }                        // WiFi (non-blocking; server comes up in webPanelService)
   else { ensureEspNow(); }                                        // ESP-NOW
   // #console: a disk staged for the fleet is NOT on our own USB port. Changing mode changes who
@@ -4078,9 +4093,11 @@ static void applyRadioMode(){
 }
 
 static void doWebUiSetup(){
-  if(g_web_on){                                   // currently on -> turn off
-    g_web_on=false; saveConfigKey("WEBUI","OFF");
-    hwMsg("Web UI off", "reboot to apply", COL_AMBER, 1400);
+  const bool wasOn = g_wireless_mode ? g_web_on : g_web_cfg;
+  if(wasOn){                                      // currently on -> turn off
+    g_web_cfg=false; g_web_on=false; saveConfigKey("WEBUI","OFF");
+    if(!g_wireless_mode){ applyRadioMode(); hwMsg("Web UI off", "radio off", COL_AMBER, 1200); }   // #standalone: live, no reboot
+    else hwMsg("Web UI off", "reboot to apply", COL_AMBER, 1400);
     return;
   }
   if(g_home_ssid.length()==0){                    // need creds first
@@ -4093,7 +4110,12 @@ static void doWebUiSetup(){
     saveConfigKey("HOME_SSID", ssid);
     saveConfigKey("HOME_PASS", pass);
   }
-  g_web_on=true; saveConfigKey("WEBUI","ON");
+  g_web_cfg=true; g_web_on=true; saveConfigKey("WEBUI","ON");
+  if(!g_wireless_mode){   // #standalone: applyRadioMode() joins and serves live - only wireless mode needs the reboot
+    applyRadioMode();
+    hwMsg("Web UI on", ("http://"+pfMdnsName()+".local").c_str(), COL_ACCENT, 1600);
+    return;
+  }
   hwMsg("Web UI on", ("rebooting to "+pfMdnsName()+".local").c_str(), COL_ACCENT, 1400);
   delay(700); ESP.restart();
 }
@@ -4867,7 +4889,14 @@ void setup(){
       // LINK=HOMEWIFI, so the next boot tries WiFi again and MODE stays the user's call.
       g_link_home=false; g_wifiNotice=1;
       ensureEspNow();
-    } else webPanelBegin();    // 5.9.12: web only in Wireless + WiFi (Standalone = radio off)
+    } else webPanelBegin();
+  }
+  // #standalone: same surface, no dongles. There is nothing to fall back TO here (ESP-NOW would be
+  // a mode change the user did not ask for), so pick the strongest remembered network and join it;
+  // if none answers the watchdog below keeps trying and the screen simply works as a local drive.
+  else if(!g_wireless_mode && g_web_cfg && !sdAccessReq){
+    wifiPickBestKnownInto();   // #clubday: prefer whichever known network is actually here
+    webPanelBegin();
   }
   // Merge step 1 smoke test: DAV_TEST=<remote path> in CONFIG.TXT fetches that
   // file over WebDAV right after boot and mounts it — the whole shared-client
@@ -5196,7 +5225,7 @@ void loop(){
   // #clubday: the link is gone for a while (moved to another location) -> rejoin the strongest
   // remembered network. setAutoReconnect covers brief same-AP drops; this is for when the AP is truly gone.
   { static uint32_t wdOut=0, wdWait=25000; static bool g_wifiToldLost=false;
-    if(g_wireless_mode && g_link_home && !g_known.empty() && WiFi.status()!=WL_CONNECTED){
+    if(webWanted() && !g_known.empty() && WiFi.status()!=WL_CONNECTED){
       if(!wdOut) wdOut=millis();
       else if(millis()-wdOut>wdWait){
         wdOut=0;
