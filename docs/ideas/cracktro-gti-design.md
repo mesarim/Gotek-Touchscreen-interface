@@ -149,6 +149,7 @@ Bronnen: [manual (Goldstar PD)](http://www.classicamiga.com/images/stories/jrevi
 | 3 | Map `/cracktro/` met meerdere bestanden | Sluit aan op het bestaande `/screensaver`-patroon; `CRACKTRO=0` (random) pikt ze mee; saver kan doorcyclen |
 | 4 | Patternlijst van 2–4 delen per bestand | Wat een cracktro als cracktro laat voelen; saver valt er gratis uit |
 | 5 | Eén zelfstandig tekstbestand, logo als hex | Deelbaar in één Discord-bericht; hand-bewerkbaar; te versionen in git |
+| 6 | Preview in de web-builder draait de **echte** engine via WASM | Eén implementatie in plaats van twee; kan niet driften. Zie §8.1 |
 
 ---
 
@@ -291,6 +292,32 @@ Feature A en feature B delen dus vrijwel alle code.
 
 RSI had palette-editor + teksteditor; de font-tool die er al staat is feitelijk
 de font-editor van diezelfde gereedschapskist.
+
+### 8.1 De preview is de echte engine (WASM)
+
+De web-builder krijgt een preview die **exact** toont wat het paneel toont. Niet
+"een goede benadering": we compileren **`drawCracktroFrame(style, t)` naar
+WebAssembly** en draaien die in de browser met een `gfx_*`-shim naar een canvas.
+
+Reden: een preview in JavaScript zou een **tweede implementatie van de engine**
+zijn. Elk effect zou dan twee keer bestaan — C++ op het paneel, JS in de browser
+— en die twee lopen uit elkaar zodra iemand een effect tweakt. Met WASM is de
+preview definitiegewijs identiek, want het ís dezelfde code.
+
+De seam die dit nodig heeft is **dezelfde opsplitsing die §7.1 toch al vraagt**
+voor de screensaver. Eén refactor, twee opbrengsten.
+
+Drie dingen die stil falen als we ze missen:
+
+| | waarom het misgaat |
+| --- | --- |
+| **Resolutie** | `gW=480, gH=320` (**:54**), portrait 320×480. Vast; canvas exact zo groot. |
+| **Font** | De engine tekent alles met `font6x8[95][6]` (**:131**). Dat is precies het formaat van de bestaande 6x8-bitmap-font-generator — beide tools delen dus dezelfde letterdata. |
+| **Kleur** | `CRK_RGB` is **RGB565** (**:1658**): 5 bits rood, 6 groen, 5 blauw. Een canvas is 8 bits per kanaal. Zonder dezelfde quantisatie kies je in de tool een kleur die op het paneel nét anders uitkomt. |
+
+En: de preview haalt `t` uit de **wandklok**, net als `millis()-startMs` in de
+engine — niet uit een frameteller. Anders loopt de animatie in de browser op
+60 fps en op het paneel op iets anders, en klopt de snelheid niet.
 
 **Daarnaast:** het ontbrekende `CRACKTRO`-knopje in de web-UI (§2.4), inclusief
 een zichtbare `OFF`-optie. Dat is Mez' tweede helft.
