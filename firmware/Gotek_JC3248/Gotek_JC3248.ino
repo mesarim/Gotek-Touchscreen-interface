@@ -939,6 +939,7 @@ static uint32_t g_ss_idle_ms=SS_IDLE_MS, g_ss_load_ms=SS_LOAD_MS;   // hidden SS
 //    PLUS the cover art of every FAVOURITED game (SSFAV=ON). If the pool is empty
 //    (no folder images, no favourites) it falls through to the sprite bounce as before.
 static bool g_ss_slides=true;         // SSMODE: true=slideshow, false=classic bounce
+static bool g_ss_cracktro=false;      // SSMODE=CRACKTRO: run the cracktro as the saver
 static bool g_ss_matrix=false;        // SSMODE=MATRIX: falling-code screensaver (5.8.3)
 static bool g_btn_pill=true;          // BTNSTYLE: coloured rounded pill reel buttons (5.8.3)
 static int  g_ss_fx=0;                // SSFX: 0=SHUFFLE 1=FADE 2=DISSOLVE 3=SLIDE 4=CUT
@@ -949,6 +950,8 @@ static uint16_t* g_slB=NULL;          // slideshow double-buffer: incoming frame
 static int g_dongle_cap=32;   // CONFIG.TXT CAP= : max wireless dongles to discover/cast (1..64)
 static int g_hivemind=1;      // v4.8.1 (undocumented HIVEMIND=): 1 = FLING fans out to all MuCa dongles (classic), 0 = paired dongle only
 static int g_cracktro=0;      // CONFIG.TXT CRACKTRO= : boot demo style 1..6, or 0 = pick one at random each boot
+static gti::File* g_crk_file=NULL;   // 11 = a .gti from /cracktro/ ; parsed lazily into PSRAM
+static String g_crk_want="";         // filename stem when CRACKTRO= named one, empty = pick at random
 static int g_car_bootmode=0;  // CONFIG.TXT CAROUSEL= : default boot VIEW — 0/OFF=list, 1/ON=reel, 2=LAST (restore last view, remembered in /.gtiview). v4.8.5+: carousel is ALWAYS available via the flip toggle regardless.
 // ── 5.8.6: home-WiFi dongle transport (LINK=HOMEWIFI) — route the FLING via the home router to a Webby dongle's gotek.local, instead of hopping to the dongle's own AP ──
 static bool   g_link_home=false;                                    // LINK: false=ESP-NOW/AP (default), true=HOME WIFI
@@ -1192,7 +1195,7 @@ static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=
 enum { LANG_EN=0, LANG_FR, LANG_IT, LANG_ES, LANG_DE, LANG_NL, LANG_N };
 static int g_lang=0;
 static const char* const LANG_NAMES[LANG_N]={"EN","FR","IT","ES","DE","NL"};
-enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_CFG_MODE, L_CFG_FONT, L_CFG_LANG, L_CFG_ROTATE, L_CFG_COMPACT, L_CFG_LIBRARY, L_CFG_CATEG, L_CFG_BUTTONS, L_CFG_SAVER, L_CFG_FAVSAVER, L_CFG_HIVEMIND, L_ON, L_OFF, L_PORTRAIT, L_LANDSCAPE, L_FONT_SMALL, L_FONT_NORMAL, L_FONT_LARGE, L_PILL, L_FLAT, L_SLIDES, L_BOUNCE, L_MATRIX, L_SWITCH_DONGLE, L_SCAN_DONGLES, L_STR_N };
+enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_CFG_MODE, L_CFG_FONT, L_CFG_LANG, L_CFG_ROTATE, L_CFG_COMPACT, L_CFG_LIBRARY, L_CFG_CATEG, L_CFG_BUTTONS, L_CFG_SAVER, L_CFG_FAVSAVER, L_CFG_HIVEMIND, L_ON, L_OFF, L_PORTRAIT, L_LANDSCAPE, L_FONT_SMALL, L_FONT_NORMAL, L_FONT_LARGE, L_PILL, L_FLAT, L_SLIDES, L_BOUNCE, L_MATRIX, L_CRACKTRO, L_SWITCH_DONGLE, L_SCAN_DONGLES, L_STR_N };
 static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_PREV          */ {"PREV","PREC","PREC","ANT","VORH","VORIG"},
   /*L_NEXT          */ {"NEXT","SUIV","SUCC","SIG","WEIT","VOLG"},
@@ -1273,6 +1276,7 @@ static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_SLIDES       */ {"SLIDES","DIAPO.","SLIDES","DIAPOS.","DIASHOW","DIA'S"},
   /*L_BOUNCE       */ {"BOUNCE","REBOND","BOUNCE","REBOTE","HUEPFEN","STUITER"},
   /*L_MATRIX       */ {"MATRIX","MATRIX","MATRIX","MATRIX","MATRIX","MATRIX"},
+  /*L_CRACKTRO     */ {"CRACKTRO","CRACKTRO","CRACKTRO","CRACKTRO","CRACKTRO","CRACKTRO"},
   /*L_SWITCH_DONGLE*/ {"SWITCH DONGLE","CHANGER DONGLE","SWITCH DONGLE","CAMBIAR DONGLE","DONGLE WECHSELN","WISSEL DONGLE"},
   /*L_SCAN_DONGLES */ {"SCAN DONGLES","SCAN DONGLES","SCAN DONGLES","BUSCAR DONGLES","DONGLES SUCHEN","ZOEK DONGLES"},
 };
@@ -1540,7 +1544,7 @@ static void loadConfig(){
     else if(k=="SCREENSAVER"){g_ss_enabled=(v!="OFF"&&v!="0");}
     else if(k=="SS_IDLE"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_idle_ms=s*1000UL;}
     else if(k=="SS_LOAD"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_load_ms=s*1000UL;}
-    else if(k=="SSMODE"){String u=v;u.toUpperCase();g_ss_matrix=(u=="MATRIX"||u=="RAIN");g_ss_slides=!(u=="BOUNCE"||u=="0"||u=="SPRITES"||g_ss_matrix);}   // v5.7.2 slideshow; 5.8.3 matrix
+    else if(k=="SSMODE"){String u=v;u.toUpperCase();g_ss_cracktro=(u=="CRACKTRO");g_ss_matrix=(u=="MATRIX"||u=="RAIN");g_ss_slides=!(u=="BOUNCE"||u=="0"||u=="SPRITES"||g_ss_matrix||g_ss_cracktro);}   // v5.7.2 slideshow; 5.8.3 matrix; cracktro saver
     else if(k=="BTNSTYLE"){String u=v;u.toUpperCase();g_btn_pill=!(u=="FLAT"||u=="0"||u=="BAR");}   // 5.8.3 reel button style
     else if(k=="SSFX"){String u=v;u.toUpperCase();
       if(u=="FADE")g_ss_fx=1; else if(u=="DISSOLVE"||u=="DISS")g_ss_fx=2;
@@ -1548,7 +1552,7 @@ static void loadConfig(){
     else if(k=="SSTIME"){uint32_t s=(uint32_t)v.toInt(); if(s<2)s=2; if(s>120)s=120; g_ss_time_ms=s*1000UL;}
     else if(k=="SSFAV"){g_ss_fav=(v!="OFF"&&v!="0");}
     else if(k=="CAP"){int c=v.toInt(); if(c>=1&&c<=64)g_dongle_cap=c;}
-    else if(k=="CRACKTRO"){String cu=v;cu.trim();cu.toUpperCase(); if(cu=="OFF"||cu=="NONE")g_cracktro=-1; else if(cu=="OMEGA"||cu=="OMEGAWARE")g_cracktro=7; else if(cu=="DENISE")g_cracktro=8; else if(cu=="WRANGLER")g_cracktro=9; else if(cu=="RETRONAUT")g_cracktro=10; else{int c=v.toInt(); if(c>=0&&c<=7)g_cracktro=c; /* 7=OMEGAWARE; DENISE/WRANGLER/RETRONAUT are hidden, name-only */}}
+    else if(k=="CRACKTRO"){String cu=v;cu.trim();cu.toUpperCase(); if(cu=="OFF"||cu=="NONE")g_cracktro=-1; else if(cu=="OMEGA"||cu=="OMEGAWARE")g_cracktro=7; else if(cu=="DENISE")g_cracktro=8; else if(cu=="WRANGLER")g_cracktro=9; else if(cu=="RETRONAUT")g_cracktro=10; else{ if(cu=="CUSTOM"){g_cracktro=11;g_crk_want="";} else if(v.length()&&isDigit(v[0])){int c=v.toInt(); if(c>=0&&c<=7)g_cracktro=c;} else if(v.length()){g_cracktro=11;g_crk_want=v;} /* 7=OMEGAWARE; DENISE/WRANGLER/RETRONAUT hidden name-only; built-ins and numbers win, anything else is /cracktro/<name>.gti */}}
     else if(k=="SAVES"){v.toUpperCase(); g_saves_mode=(v=="OVERWRITE")?2:(v=="OFF"||v=="0")?0:1;}
     else if(k=="SDSPEED"){int hz=v.toInt(); g_sd_freq=(hz>=40||hz>=40000)?40000:20000;}
     else if(k=="LOG"){String lu=v;lu.toUpperCase();g_log_enabled=(lu!="OFF"&&lu!="0");}
@@ -1783,6 +1787,33 @@ static void crkSynth(float t, const gti::Pattern& p){
   if(p.scroll) crk_scroller(t,CRK_RGB(255,79,160),8,false);
 }
 
+// Logos of the .gti currently in play; NULL while a built-in style runs.
+static const gti::Logo* g_crk_logos = NULL;
+static int g_crk_logoCount = 0;
+
+// 1bpp, MSB-first, row-major -- the same layout as the built-in wordmarks.
+static void crkBlit1bpp(const gti::Logo& L, int x, int y, uint16_t col){
+  int stride=(L.w+7)/8;
+  for(int r=0;r<L.h;r++)for(int c=0;c<L.w;c++){
+    size_t idx=(size_t)r*stride+(c>>3); if(idx>=L.len) continue;
+    if(L.bits[idx] & (0x80 >> (c & 7))) gfx_drawPixel(x+c,y+r,col);
+  }
+}
+// LOGO is not a new effect: it is what crkDenise/crkWrangler already do, with
+// the bitmap coming from the file instead of from PROGMEM.
+static void fxLogo(float t, const gti::Pattern& p){
+  gfx_fillScreen(TFT_BLACK); crk_stars();
+  uint16_t col = p.col?p.col:CRK_RGB(244,238,225);
+  if(g_crk_logos && p.logo>=0 && p.logo<g_crk_logoCount && g_crk_logos[p.logo].len){
+    const gti::Logo& L=g_crk_logos[p.logo];
+    crkBlit1bpp(L,(gW-L.w)/2,(gH-L.h)/2-20,col);
+  } else if(p.title[0]){
+    crk_txtC(gW/2,gH/2-20,p.title,4,col);
+  }
+  if(p.sub[0]) crk_txtC(gW/2,gH/2+24,p.sub,1,CRK_RGB(180,190,210));
+  if(p.scroll) crk_scroller(t,col,10,false);
+}
+
 // ── Effect registry. A new effect is one row plus one function: no switch to
 // edit, no numbering to keep in sync, no change to the .gti format. ──
 static const CrkFx CRK_FX[] = {
@@ -1792,8 +1823,11 @@ static const CrkFx CRK_FX[] = {
   { "PLASMA",    crkPlasma    },
   { "BOING",     crkBoing     },
   { "SYNTH",     crkSynth     },
+  { "LOGO",      fxLogo       },
 };
 static const int CRK_FX_N = (int)(sizeof(CRK_FX)/sizeof(CRK_FX[0]));
+// CRACKTRO=1..6 map to the first six rows; LOGO is file-only (no number).
+static const int CRK_FX_NUMBERED = 6;
 
 static int crkFxIndex(const char* name){
   for(int i=0;i<CRK_FX_N;i++) if(strcasecmp(name,CRK_FX[i].name)==0) return i;
@@ -1808,7 +1842,7 @@ static void drawCracktroFrame(const gti::Pattern& p, float t){
 // same path -- that path is then exercised on every boot, not only by people
 // who have a file.
 static bool crkBuiltIn(int style, gti::Pattern* out, int* count){
-  if(style<1||style>CRK_FX_N) return false;
+  if(style<1||style>CRK_FX_NUMBERED) return false;
   memset(out,0,sizeof(gti::Pattern)); out->logo=-1;
   strncpy(out->fx, CRK_FX[style-1].name, sizeof(out->fx)-1);
   out->timeMs=6000; out->scroll=true;
@@ -1939,18 +1973,79 @@ static void crkOmega(float t){
   gfx_drawCircle(bx,by,r,CRK_RGB(110,0,0));
   crk_scrollerT(t,CRK_SCROLL_OMEGA,CRK_RGB(255,200,80),10,false);
 }
+// Read and parse /cracktro/<x>.gti. Any failure returns false and is logged;
+// the caller falls back to a built-in, never to a blank screen.
+static bool crkLoadFile(const String& path){
+  File f=SD_MMC.open(path);
+  if(!f){ Serial.printf("[gti] %s: not found\n",path.c_str()); return false; }
+  size_t n=f.size();
+  if(n==0||n>gti::MAX_FILE){ f.close(); Serial.printf("[gti] %s: bad size %u\n",path.c_str(),(unsigned)n); return false; }
+  char* buf=(char*)ps_malloc(n+1);
+  if(!buf){ f.close(); Serial.println("[gti] out of memory for file buffer"); return false; }
+  size_t got=f.read((uint8_t*)buf,n); f.close(); buf[got]=0;
+  if(!g_crk_file) g_crk_file=(gti::File*)ps_malloc(sizeof(gti::File));
+  if(!g_crk_file){ free(buf); Serial.println("[gti] out of memory for parsed file"); return false; }
+  gti::Err e=gti::parse(buf,got,*g_crk_file); free(buf);
+  if(e!=gti::OK){ Serial.printf("[gti] %s: %s\n",path.c_str(),gti::errText(e)); return false; }
+  g_crk_logos=g_crk_file->logos; g_crk_logoCount=g_crk_file->logoCount;
+  Serial.printf("[gti] %s: %d pattern(s), %d logo(s)\n",path.c_str(),g_crk_file->patternCount,g_crk_file->logoCount);
+  return true;
+}
+// Pick a random .gti that actually parses; a broken one just loses its turn.
+static bool crkPickRandom(){
+  File dir=SD_MMC.open("/cracktro");
+  if(!dir||!dir.isDirectory()){ Serial.println("[gti] /cracktro missing"); return false; }
+  String names[16]; int n=0;
+  for(File e=dir.openNextFile(); e && n<16; e=dir.openNextFile()){
+    String nm=e.name(); String lo=nm; lo.toLowerCase();
+    if(lo.endsWith(".gti")) names[n++]=nm;
+    e.close();
+  }
+  dir.close();
+  while(n>0){ int i=(int)(esp_random()%(uint32_t)n);
+    String p=names[i]; if(!p.startsWith("/")) p="/cracktro/"+p;
+    if(crkLoadFile(p)) return true;
+    names[i]=names[--n];
+  }
+  return false;
+}
+// Which pattern of a list is showing at time `el` (ms into the loop).
+static int crkPatternAt(const gti::Pattern* pats,int n,uint32_t el,uint32_t total){
+  if(n<=0||total==0) return 0;
+  uint32_t into=el%total, acc=0; int i=0;
+  for(;i<n;i++){ uint32_t d=pats[i].timeMs?pats[i].timeMs:4000; if(into<acc+d) break; acc+=d; }
+  return (i>=n)?n-1:i;
+}
+static uint32_t crkTotalMs(const gti::Pattern* pats,int n){
+  uint32_t total=0; for(int i=0;i<n;i++) total+=pats[i].timeMs?pats[i].timeMs:4000;
+  return total?total:4000;
+}
+
 static void drawCracktro(int style){
   bool omega=(style==7), denise=(style==8), wrangler=(style==9), retronaut=(style==10);   // 7=OMEGAWARE (shown); DENISE/WRANGLER/RETRONAUT hidden (name-only)
+  bool custom=false;
+  if(style==11){   // CRACKTRO=CUSTOM or a /cracktro/<name>.gti
+    custom = g_crk_want.length() ? crkLoadFile("/cracktro/"+g_crk_want+".gti") : crkPickRandom();
+    if(!custom) Serial.println("[gti] falling back to the built-in cracktro");
+    style=0;   // either way `s` below picks a built-in; `custom` decides what draws
+  }
   int s=(style>=1&&style<=6)?(style-1):(int)(esp_random()%6);
   initStars();
   if(retronaut)retroLogoLoad();
   unsigned long startMs=millis();
+  // A custom cracktro gets shown through at least once: cutting someone's own
+  // two-pattern intro off at 6s would hide half of what they made.
+  unsigned long holdMs=6000;
+  if(custom){ unsigned long tot=crkTotalMs(g_crk_file->patterns,g_crk_file->patternCount); if(tot>holdMs) holdMs=tot; }
   gfx_fillScreen(TFT_BLACK);gfx_flush();
   while(true){
     if(Touch_ReadFrame()){unsigned long t0=millis();while(Touch_ReadFrame()&&millis()-t0<500)delay(10);break;}
-    if(!g_loop_cracktro&&millis()-startMs>=6000)break;
+    if(!g_loop_cracktro&&millis()-startMs>=holdMs)break;
     float t=(float)(millis()-startMs);
-    if(omega)crkOmega(t);
+    if(custom){ const gti::File& F=*g_crk_file;
+      uint32_t total=crkTotalMs(F.patterns,F.patternCount);
+      drawCracktroFrame(F.patterns[crkPatternAt(F.patterns,F.patternCount,(uint32_t)t,total)], t); }
+    else if(omega)crkOmega(t);
     else if(denise)crkDenise(t);
     else if(wrangler)crkWrangler(t);
     else if(retronaut)crkRetronaut(t);
@@ -2178,7 +2273,7 @@ static void drawInfoPanel(){
   add(String(T(L_CFG_LIBRARY))+": "+(g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN"), COL_ACCENT, TFT_BLACK, IA_LIBMODE);   // v5.6.0: disk-format mode moved here from the mode bar
   add(String(T(L_CFG_CATEG))+": "+(g_categories?T(L_ON):T(L_OFF)), g_categories?COL_GREEN:COL_BAR, g_categories?TFT_BLACK:COL_LIT, IA_CATEG);   // library/category browse toggle (mirrors CONFIG.TXT CATEGORIES=)
   add(String(T(L_CFG_BUTTONS))+": "+(g_btn_pill?T(L_PILL):T(L_FLAT)), g_btn_pill?COL_ACCENT:COL_BAR, g_btn_pill?TFT_WHITE:COL_LIT, IA_BTNSTYLE);   // 5.8.3 reel button style
-  add(String(T(L_CFG_SAVER))+": "+(g_ss_matrix?T(L_MATRIX):(g_ss_slides?T(L_SLIDES):T(L_BOUNCE))), COL_BLUE, TFT_WHITE, IA_SSMODE);   // 5.8.3 screensaver mode
+  add(String(T(L_CFG_SAVER))+": "+(g_ss_cracktro?T(L_CRACKTRO):(g_ss_matrix?T(L_MATRIX):(g_ss_slides?T(L_SLIDES):T(L_BOUNCE)))), COL_BLUE, TFT_WHITE, IA_SSMODE);   // 5.8.3 screensaver mode; + cracktro
   add(String(T(L_CFG_FAVSAVER))+": "+(g_ss_fav?T(L_ON):T(L_OFF)), g_ss_fav?COL_GREEN:COL_BAR, g_ss_fav?TFT_BLACK:COL_LIT, IA_SSFAV);   // 5.8.3 favourites into slideshow
   add(T(L_RESCAN_SD), COL_BLUE, TFT_WHITE, IA_RESCAN);
   add(T(L_SOFT_RESET), (uint16_t)0x8000, TFT_WHITE, IA_RESET);
@@ -3366,6 +3461,7 @@ static void scanScreensaver(){                               // arm iff /screens
   // bounces instead (the third member of the crew, haunting the idle screen).
   g_ss_claude=g_ss_paths.empty();
   g_ss_have=!g_ss_paths.empty()||g_ss_claude;
+  if(g_ss_cracktro)g_ss_have=true;   // the cracktro saver brings its own content: no /screensaver folder needed
   if(g_cracktro==8)g_ss_have=true;   // 5.4.0: Denise theme arms the saver even with no /screensaver folder
   if(g_cracktro==9)g_ss_have=true;   // v5.5.2: Wrangler theme (CRACKTRO=WRANGLER) arms it too
   if(g_cracktro==10)g_ss_have=true;   // P4.9: Retronaut helmet screensaver
@@ -3646,7 +3742,41 @@ static void runMatrixRain(){
   if(g_car_active){drawCarousel();gfx_flush();} else {drawFullUI();gfx_flush();}
 }
 
+// The cracktro as a screensaver. Differs from the boot splash in exactly three
+// ways, all of them necessary: it services the web UI (the boot splash has no
+// server to starve), it restores the UI on exit, and it wraps its time base so
+// the float does not lose resolution over hours -- past ~4.6h the 6ms steps
+// stop registering in a float and the animation would freeze.
+static void runCracktroSaver(){
+  gti::Pattern bp; int bn=1;
+  bool custom=false;
+  if(g_cracktro==11) custom = g_crk_want.length() ? crkLoadFile("/cracktro/"+g_crk_want+".gti") : crkPickRandom();
+  if(!custom){ int st=(g_cracktro>=1&&g_cracktro<=CRK_FX_NUMBERED)?g_cracktro:(1+(int)(esp_random()%CRK_FX_NUMBERED));
+               crkBuiltIn(st,&bp,&bn); g_crk_logos=NULL; g_crk_logoCount=0; }
+  const gti::Pattern* pats = custom ? g_crk_file->patterns : &bp;
+  int n = custom ? g_crk_file->patternCount : bn;
+  if(n<=0){ g_ss_have=false; return; }
+  uint32_t total=crkTotalMs(pats,n);
+  // Rebase on a whole number of cycles so pattern selection stays continuous.
+  uint32_t wrapAt=total; while(wrapAt<600000UL) wrapAt+=total;
+
+  initStars();
+  gfx_fillScreen(TFT_BLACK); gfx_flush();
+  uint32_t startMs=millis();
+  while(true){
+    webPanelService();   // keep the web UI alive while the saver owns the screen
+    if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
+    uint32_t el=millis()-startMs;
+    if(el>=wrapAt){ startMs=millis(); el=0; }
+    drawCracktroFrame(pats[crkPatternAt(pats,n,el,total)],(float)el);
+    gfx_flush(); delay(6);
+  }
+  g_touch_active=false; g_touch_release=0; g_last_touch_ms=millis();
+  if(g_car_active){drawCarousel();gfx_flush();} else {drawFullUI();gfx_flush();}
+}
+
 static void runScreensaver(){                                // blocking bounce loop; any touch exits
+  if(g_ss_cracktro){ runCracktroSaver(); return; }            // cracktro saver
   // v5.7.2: slideshow mode — real images (folder + favourited covers) with transitions.
   // Only engages when there's genuine content; otherwise falls through to the sprite bounce.
   if(g_ss_matrix){ runMatrixRain(); return; }                 // 5.8.3: falling-code saver
@@ -4814,10 +4944,11 @@ static void infoAction(uint8_t act){
     case IA_CATEG: g_categories=!g_categories; saveConfigKey("CATEGORIES", g_categories?"ON":"OFF"); g_libpath=""; drawInfoFull(); break;   // flip+save like COMPACT/HIVEMIND; NO rescan (g_cats builds when the CATEGORIES button is tapped)
     case IA_BTNSTYLE: g_btn_pill=!g_btn_pill; saveConfigKey("BTNSTYLE", g_btn_pill?"PILL":"FLAT"); drawInfoFull(); break;   // 5.8.3
     case IA_SSMODE:
-      if(g_ss_slides){ g_ss_slides=false; g_ss_matrix=false; saveConfigKey("SSMODE","BOUNCE"); }
-      else if(!g_ss_matrix){ g_ss_matrix=true; g_ss_slides=false; saveConfigKey("SSMODE","MATRIX"); }
-      else { g_ss_slides=true; g_ss_matrix=false; saveConfigKey("SSMODE","SLIDES"); }
-      drawInfoFull(); break;   // 5.8.3 cycle SLIDES->BOUNCE->MATRIX
+      if(g_ss_slides){ g_ss_slides=false; g_ss_matrix=false; g_ss_cracktro=false; saveConfigKey("SSMODE","BOUNCE"); }
+      else if(!g_ss_matrix&&!g_ss_cracktro){ g_ss_matrix=true; g_ss_slides=false; saveConfigKey("SSMODE","MATRIX"); }
+      else if(g_ss_matrix){ g_ss_matrix=false; g_ss_cracktro=true; saveConfigKey("SSMODE","CRACKTRO"); }
+      else { g_ss_cracktro=false; g_ss_slides=true; g_ss_matrix=false; saveConfigKey("SSMODE","SLIDES"); }
+      drawInfoFull(); break;   // cycle SLIDES->BOUNCE->MATRIX->CRACKTRO
     case IA_SSFAV: g_ss_fav=!g_ss_fav; saveConfigKey("SSFAV", g_ss_fav?"ON":"OFF"); drawInfoFull(); break;   // 5.8.3
     case IA_WEBUI: doWebUiSetup(); drawInfoFull(); break;   // 5.9.9
     case IA_WIFICHECK: doWifiCheck(); drawInfoFull(); break;   // 5.9.10
