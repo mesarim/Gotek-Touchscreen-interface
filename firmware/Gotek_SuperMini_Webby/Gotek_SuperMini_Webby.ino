@@ -637,7 +637,11 @@ static void handleTCPClient(WiFiClient& client) {
         if (!wEnrollOpen()) { client.write((uint8_t)0x02); return; }   // 0x02 = window closed: tap BOOT on the dongle first
         bool ok = addWOwner(tok);
         client.write(ok?(uint8_t)0x01:(uint8_t)0x03);                  // 0x03 = owners full
-        if (ok) { g_wenroll_until = 0; oledStatus("Gotek OMEGA " FW_VERSION,"CLAIMED","Screen enrolled",String(g_wowner_count)+" owner(s)"); }
+        // #lock: the window closes on the FIRST successful enroll, so one BOOT tap can only ever
+        // hand out one claim. But whoever reaches port 3333 first inside those 60 s wins it, and a
+        // token is opaque - so show the claimer's address. If that is not the screen you just
+        // tapped CLAIM on, hold BOOT 10 s: that wipes creds AND owners.
+        if (ok) { g_wenroll_until = 0; oledStatus("Gotek OMEGA " FW_VERSION,"CLAIMED",client.remoteIP().toString(),String(g_wowner_count)+" owner(s)"); }
         return;
       }
       if (cmd == CMD_AUTH) {
@@ -1267,9 +1271,15 @@ static bool serviceBootButton(){
         setModeEspnow();
         oledStatus("Gotek OMEGA " FW_VERSION, "Wi-Fi OFF", "Back to ESP-NOW", "Rebooting...");
         delay(600); ESP.restart();
-      } else {   // #lock: short BOOT tap in WiFi mode = open the enroll window so a screen can CLAIM this dongle
+      } else if (g_webmode == 1) {   // #lock: short BOOT tap in WiFi mode = open the enroll window so a screen can CLAIM this dongle
+        // #lock: g_modeStr is what CONFIG.TXT SAYS; g_webmode is what we ACHIEVED. After a failed
+        // join we are serving our own AP - on the shared default password - with TCP 3333 open on
+        // it, so opening the claim window there hands the claim to anyone who knows gotek1234.
+        // Pairing belongs on the network the owner's screen is actually on.
         g_wenroll_until = now + WENROLL_WIN_MS;
         oledStatus("Gotek OMEGA " FW_VERSION, "PAIRING OPEN", "Tap CLAIM on a", "screen (60s)");
+      } else {
+        oledStatus("Gotek OMEGA " FW_VERSION, "NOT ON WIFI", "Join the network", "before pairing");
       }
       return true;
     }
