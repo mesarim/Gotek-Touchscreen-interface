@@ -1,5 +1,5 @@
-; /cracktro/omega.gti -- copy this to the SD card as /cracktro/omega.gti
-; Then set CRACKTRO=omega (or CRACKTRO=CUSTOM) in CONFIG.TXT.
+; /cracktro/dimmy.gti -- copy this to the SD card as /cracktro/dimmy.gti
+; Then set CRACKTRO=dimmy (or CRACKTRO=CUSTOM) in CONFIG.TXT.
 GTICRACK 1
 NAME=Omegaware
 AUTHOR=Dimmy

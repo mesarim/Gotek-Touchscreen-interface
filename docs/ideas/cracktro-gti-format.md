@@ -77,7 +77,7 @@ thousands of real demos under exactly this kind of constraint.
 ### Proposed format
 
 ```ini
-; /cracktro/omega.gti
+; /cracktro/dimmy.gti  (note: not "omega.gti" -- OMEGA is a built-in name and would win)
 GTICRACK 1
 NAME=Omegaware
 AUTHOR=Dimmy

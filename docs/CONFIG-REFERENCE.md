@@ -123,10 +123,14 @@ TEXT=OMEGAWARE PRESENTS ... YOUR OWN CRACKTRO, LOADED FROM SD ...
 **If anything is wrong** — folder missing, file missing, bad first line, a logo over the
 limit — the panel quietly falls back to the built-in cracktro. It will never show a blank
 screen. Plug in USB serial to see the reason, e.g.
-`[gti] /cracktro/omega.gti: missing GTICRACK magic`.
+`[gti] /cracktro/dimmy.gti: missing GTICRACK magic`.
 
-**Built-in names win.** `CRACKTRO=DENISE` is the built-in Denise theme even if you also
-have a `/cracktro/denise.gti`. Give your own file a different name to select it.
+**Built-in names win, so some filenames are unreachable.** These names are reserved and
+always select the built-in, even if a file of that name exists:
+`OFF`, `NONE`, `CUSTOM`, `OMEGA`, `OMEGAWARE`, `DENISE`, `WRANGLER`, `RETRONAUT`, and
+anything starting with a digit. So `/cracktro/omega.gti` can never be picked with
+`CRACKTRO=omega` - that gets you the built-in OMEGAWARE theme. Name your own files
+something else, or select them with `CRACKTRO=CUSTOM`.
 
 Ready-made examples live in [`docs/examples/cracktro/`](examples/cracktro/).
 
