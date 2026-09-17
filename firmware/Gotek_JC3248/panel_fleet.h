@@ -82,7 +82,8 @@ struct PfPanel { String id, mdns; uint32_t seen; };
 static PfPanel  g_pfPanels[PF_MAX_PEERS];
 static int      g_pfPanelN = 0;
 static String   g_pfMyId;              // this screen's MAC (uppercase hex) — same format as the beacon id
-static String   g_pfMdnsName;          // the mDNS name we are actually registered under (no ".local")
+static String   g_pfMdnsName;          // the mDNS name we WANT to be registered under (no ".local")
+static bool     g_pfMdnsHeld = false;  // ... and whether MDNS.begin() actually succeeded for it
 static bool     g_pfIsLeader = true;   // do we own the undecorated <name>.local?
 static bool     g_pfMdnsDirty = true;  // set when the elected name changes -> re-register (no reboot)
 
@@ -115,7 +116,10 @@ static void pfElect() {
   if (!g_pfMyId.length()) g_pfMyId = pfMyMac();
   pfPanelPrune();
   String want;
-  if (g_mdns_name != PF_MDNS_DEFAULT) {           // a named screen keeps its own name, never contends
+  if (g_mdns_named) {                             // a named screen keeps its own name, never contends.
+    // Test the fact that MDNS_NAME was set, not whether its value differs from
+    // the default: choosing the default name on purpose is still a choice, and
+    // comparing values silently entered such a screen into the election.
     want = g_mdns_name; g_pfIsLeader = true;
   } else {
     bool yield = false;                         // yield the default name to any live screen with a lower MAC that also wants it
@@ -124,13 +128,16 @@ static void pfElect() {
     want = yield ? (String(PF_MDNS_DEFAULT) + "-" + pfMacSuffix()) : String(PF_MDNS_DEFAULT);
     g_pfIsLeader = !yield;
   }
-  if (want != g_pfMdnsName) { g_pfMdnsName = want; g_pfMdnsDirty = true; }
+  if (want != g_pfMdnsName) { g_pfMdnsName = want; g_pfMdnsDirty = true; g_pfMdnsHeld = false; }
 }
 // Re-register mDNS when the elected name changed. Safe to call every pass — only acts when dirty.
 static void pfApplyMdns() {
   if (!g_pfMdnsDirty || g_pfMdnsName.length() == 0) return;
   MDNS.end();
-  if (MDNS.begin(g_pfMdnsName.c_str())) MDNS.addService("http", "tcp", 80);
+  if (!MDNS.begin(g_pfMdnsName.c_str())) return;   // stay dirty: a failed begin() must be retried,
+                                                   // or the screen claims a name nothing answers to
+  MDNS.addService("http", "tcp", 80);
+  g_pfMdnsHeld = true;
   g_pfMdnsDirty = false;
 }
 
@@ -225,7 +232,8 @@ static String pfRosterJson() {
   pfPrune();
   const bool busy = g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length();
   String j = "{\"self\":\"panel\",\"name\":\"" + pfJesc(String("GTi panel")) + "\",";
-  j += "\"mdns\":\"" + pfJesc(pfMdnsName()) + "\",";                       // #clubday: the mDNS name this screen actually holds after the election
+  j += "\"mdns\":\"" + pfJesc(pfMdnsName()) + "\",";                       // the name this screen WANTS after the election
+  j += "\"mdns_held\":" + String(g_pfMdnsHeld ? "true" : "false") + ",";   // ... and whether the responder actually took it
   j += "\"leader\":" + String(g_pfIsLeader ? "true" : "false") + ",";     // #clubday: true = owns the undecorated <name>.local
   j += "\"panels\":" + String(g_pfPanelN + 1) + ",";                      // #clubday: screens seen on the net, incl. self
   // The SPA shows the fleet card only in WIRELESS mode: STANDALONE means the

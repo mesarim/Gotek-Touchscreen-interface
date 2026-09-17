@@ -957,6 +957,8 @@ static int g_car_bootmode=0;  // CONFIG.TXT CAROUSEL= : default boot VIEW — 0/
 static bool   g_link_home=false;                                    // LINK: false=ESP-NOW/AP (default), true=HOME WIFI
 static uint8_t g_wifiNotice=0;   // #clubday: 1 = no known WiFi at boot, fell back to ESP-NOW; 2 = link lost while running
 static String g_mdns_name=PF_MDNS_DEFAULT;   // MDNS_NAME: this screen's own mDNS name. Two screens on one network sort it out between them (lowest MAC keeps it).
+static bool   g_mdns_named=false;   // MDNS_NAME was actually set. Not the same as "differs from the default":
+                                    // picking the default name on purpose is still a deliberate choice.
 static String g_home_ssid="", g_home_pass="", g_dongle_home_ip="";  // HOME_SSID / HOME_PASS (set in CONFIG.TXT) + cached DONGLE_HOME_IP
 static String g_dav_host="",g_dav_user="",g_dav_pass="",g_dav_path="/";static int g_dav_port=443;static bool g_dav_https=true,g_dav_on=false;   // DAV_* in CONFIG.TXT (merge step 1)
 static String g_dav_test="";   // DAV_TEST= : smoke test — fetch this remote path once at boot. Proves the wiring without UI; remove the key (or the hook) once real UI exists.
@@ -1630,7 +1632,7 @@ static void loadConfig(){
     else if(k=="CATEGORIES"){String cv=v;cv.toUpperCase();g_categories=(cv=="ON"||cv=="1"||cv=="TRUE");}
     else if(k=="NESTING"){String nv=v;nv.toUpperCase();g_nesting=(nv=="ON"||nv=="1"||nv=="TRUE");}
     else if(k=="LINK"){String lv=v;lv.toUpperCase();g_link_home=(lv=="HOMEWIFI"||lv=="HOME"||lv=="WIFI");}
-    else if(k=="MDNS_NAME"){if(v.length())g_mdns_name=v;}   // the name this screen answers to at <name>.local
+    else if(k=="MDNS_NAME"){if(v.length()){g_mdns_name=v;g_mdns_named=true;}}   // the name this screen answers to at <name>.local
     else if(k=="HOME_SSID"||k=="WIFI_CLIENT_SSID"){if(v.length())g_home_ssid=v;}   // WIFI_CLIENT_SSID: the OMEGAWARE tree stores the same credential under this name; empty never erases a value another key already set
     else if(k=="HOME_PASS"||k=="WIFI_CLIENT_PASS"){if(v.length())g_home_pass=v;}
     else if(k=="DAV"||k=="DAV_ENABLED"){String dv=v;dv.toUpperCase();g_dav_on=(dv=="ON"||dv=="1");}   // DAV_ENABLED: the OMEGAWARE tree writes this name for the same switch — cards travel between firmwares, so accept both
