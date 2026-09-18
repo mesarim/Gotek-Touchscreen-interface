@@ -76,6 +76,15 @@ For a full, current key reference, generate `CONFIG-REFERENCE.md` from
 `config_keys` (a table of key / default / meaning, in template order). This
 is the single doc that most repays being generated rather than typed.
 
+Do the same for the endpoint surface with
+`scripts/render_api_reference.py`, which builds `docs/API-REFERENCE.md` from
+the `endpoints` block (HTTP routes per surface with the lock gate each handler
+actually calls, the TCP escape opcodes, the UDP beacons and their cadence, and
+the protocol-facing constants). Name each surface's facts file and sketch on
+the command line — both worktrees hold every sketch and the branches disagree
+about some of them, so the renderer stamps the branch and commit it read
+rather than guessing which is authoritative. See the doc-map for the rest.
+
 ### 4. Flag what only a human can make
 The skill cannot screenshot a running device or photograph hardware. When a
 build adds something whose documentation should *show* it — a new theme or
