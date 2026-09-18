@@ -10,8 +10,10 @@ actually work, read `PAIRING.md`; for the CONFIG.TXT keys, `CONFIG-REFERENCE.md`
 
 ## Where these facts came from
 
-Both worktrees contain every sketch, and the two branches do not agree about all of
-them, so each surface below names the checkout it was read from.
+These surfaces were read from DIFFERENT checkouts, so each one names its own. That
+matters here: every worktree of this repo contains every sketch, and two branches
+can disagree about the same sketch, so a table without its provenance cannot be
+read safely.
 
 | Surface | Sketch | Version | Branch | Commit |
 |---|---|---|---|---|
