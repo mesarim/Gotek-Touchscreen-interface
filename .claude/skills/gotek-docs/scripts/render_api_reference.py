@@ -78,8 +78,19 @@ def main():
     # ── provenance ───────────────────────────────────────────────────────────
     L.append("## Where these facts came from")
     L.append("")
-    L.append("Both worktrees contain every sketch, and the two branches do not agree about all of")
-    L.append("them, so each surface below names the checkout it was read from.")
+    # Say which situation this document is actually in. Claiming the surfaces came
+    # from different checkouts when they did not would be a small lie about the
+    # document itself, which is a poor advertisement for a generated reference.
+    stamps = {(run.get("checkout") or {}).get("sha") for _l, run, _s in surfaces}
+    if len(stamps) > 1:
+        L.append("These surfaces were read from DIFFERENT checkouts, so each one names its own. That")
+        L.append("matters here: every worktree of this repo contains every sketch, and two branches")
+        L.append("can disagree about the same sketch, so a table without its provenance cannot be")
+        L.append("read safely.")
+    else:
+        L.append("All surfaces below were read from the same checkout, named per row. Worth stating,")
+        L.append("because every worktree of this repo contains every sketch and two branches can")
+        L.append("disagree about the same one — so these tables describe this commit, nothing else.")
     L.append("")
     rows = []
     for label, run, s in surfaces:
