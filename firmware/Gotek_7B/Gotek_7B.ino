@@ -25,10 +25,13 @@
 //   Touch INT: GPIO4
 
 #include <Arduino.h>
+#include "../shared/disk_lock.h"
+#include "../shared/dirty_snapshot.h"
 #include "USB.h"
 #include "USBMSC.h"
 #include <FS.h>
 #include <SD_MMC.h>
+#include "../shared/save_image.h"
 
 // K display stack: esp_lcd RGB panel (double framebuffer) — no LovyanGFX
 #include "esp_heap_caps.h"
@@ -585,7 +588,7 @@ static KGfx tft;
 static void drawFullUI();
 static void drawListAndCover();
 static bool doLoadSelected(const String& adfPath);
-static void doUnload();
+static bool doUnload();
 
 
 
@@ -726,8 +729,11 @@ static uint32_t g_sv_img_size=0;                          // bytes of the mounte
 static uint8_t  g_sv_fail=0;
 static inline bool svGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void svSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
-static void svDirtyReset(){memset(g_sv_dirty,0,sizeof(g_sv_dirty));g_sv_dirty_count=0;g_sv_last_write=0;}
+static void svDirtyReset(){GotekDiskGuard guard;memset(g_sv_dirty,0,sizeof(g_sv_dirty));g_sv_dirty_count=0;g_sv_last_write=0;}
 static int32_t onWrite(uint32_t lba,uint32_t off,uint8_t* buf,uint32_t n) {
+  GotekDiskGuard guard;
+  if(!n || !g_usb_online)return 0;
+
   uint32_t s=lba*SECTOR_SIZE+off; if(s+n>TOTAL_SECTORS*SECTOR_SIZE) return 0;
   memcpy(g_disk+s,buf,n);
   // tick the dirty scorecard for every image sector this write touches
@@ -749,10 +755,14 @@ static void bumpInquiryRevision(){
   MSC.productRevision(rev);
 }
 static void hardDetach(){
+  { GotekDiskGuard guard; g_usb_online=false; }
+
   MSC.mediaPresent(false); delay(100); tud_disconnect(); delay(500);
   g_usb_online=false;
 }
 static void hardAttach(){
+  { GotekDiskGuard guard; g_usb_online=true; }
+
   bumpInquiryRevision(); MSC.mediaPresent(true); delay(50); tud_connect(); delay(200);
   g_usb_online=true;
 }
@@ -2506,27 +2516,15 @@ static String savPathFor(const String&adfPath){
   return adfPath.substring(0,dot)+".sav"+adfPath.substring(dot);
 }
 static bool savExistsFor(const String&adfPath){String sv=savPathFor(adfPath);return sv!=adfPath&&SD_MMC.exists(sv);}
-// Copy base->sav.tmp, patch dirty sectors from RAM (g_disk), atomic rename.
+// Copy base->sav.tmp, patch dirty sectors from RAM (g_disk), recoverable replacement.
 static bool svPatchCore(const String&master,const String&sav,const uint8_t*map,uint32_t mapBits,const uint8_t*ram){
-  String base=SD_MMC.exists(sav)?sav:master;
-  String tmp=sav+".tmp";
-  SD_MMC.remove(tmp);
-  {File in=SD_MMC.open(base,FILE_READ);if(!in)return false;
-   File out=SD_MMC.open(tmp,FILE_WRITE);if(!out){in.close();return false;}
-   uint8_t*buf=(uint8_t*)malloc(16384);if(!buf){in.close();out.close();return false;}
-   int rd;while((rd=in.read(buf,16384))>0)out.write(buf,rd);
-   free(buf);in.close();out.close();}
-  File f=SD_MMC.open(tmp,"r+");if(!f)return false;
-  bool ok=true;
-  for(uint32_t i=0;i<mapBits;i++){
-    if(!((map[i>>3]>>(i&7))&1))continue;
-    const uint8_t*src=ram+(size_t)(DATA_LBA+i)*512;
-    if(!f.seek(i*512UL)||f.write(src,512)!=512){ok=false;break;}
-  }
-  f.flush();f.close();
-  if(!ok){SD_MMC.remove(tmp);return false;}
-  SD_MMC.remove(sav);
-  return SD_MMC.rename(tmp,sav);
+  return GotekSave::patch(SD_MMC, master, sav, map, mapBits,
+    [&](uint32_t sector, uint32_t k, uint8_t* dst) {
+      const uint8_t* src = ram + (size_t)(DATA_LBA + sector) * 512;
+      GotekDiskGuard guard;
+      memcpy(dst, src, 512);
+      return true;
+    });
 }
 static void svToast(const String&msg){
   UG->fillRect(0,0,LCD_WIDTH,STATUS_H,COL_GREEN);UG->setFont(&lgfx::fonts::DejaVu12);UG->setTextColor(TFT_BLACK,COL_GREEN);
@@ -2534,21 +2532,46 @@ static void svToast(const String&msg){
   delay(1200);drawStatusBar();uiFlush();
 }
 // Standalone flush: persist our RAM disk's dirty sectors to SD.
-static void svFlushStandalone(){
-  if(g_sv_dirty_count==0)return;
-  if(g_saves_mode==0||!g_loaded||!g_loaded_path.length()){svDirtyReset();return;}   // OFF / diag disk: discard
+static bool svFlushStandalone(){
+  if(g_sv_dirty_count==0)return true;
+  if(g_saves_mode==0||!g_loaded||!g_loaded_path.length()){svDirtyReset();return true;}   // OFF / diag disk: discard
   String master=g_loaded_path;
   String sav=(g_saves_mode==2)?master:savPathFor(master);
   uint32_t imgSecs=(g_sv_img_size+511)/512;if(imgSecs>SV_IMG_MAX_SECTORS)imgSecs=SV_IMG_MAX_SECTORS;
-  if(svPatchCore(master,sav,g_sv_dirty,imgSecs,g_disk)){
-    svDirtyReset();g_sv_fail=0;svToast("SAVED: "+g_loaded_name);
+  uint8_t snapshot[sizeof(g_sv_dirty)];
+  { GotekDiskGuard guard; GotekDirty::begin(g_sv_dirty,snapshot,sizeof(snapshot),g_sv_dirty_count); }
+  bool saved=svPatchCore(master,sav,snapshot,imgSecs,g_disk);
+  { GotekDiskGuard guard; GotekDirty::finish(g_sv_dirty,snapshot,sizeof(snapshot),g_sv_dirty_count,saved); }
+  if(saved){
+    g_sv_fail=0;svToast("SAVED: "+g_loaded_name);
   }else{
     g_sv_last_write=millis();                       // back off one settle window, then retry
-    if(++g_sv_fail>=5){svDirtyReset();g_sv_fail=0;svToast("SAVE FAILED - GAVE UP");}
+    if(++g_sv_fail>=5)g_sv_fail=0;
+    svToast("SAVE FAILED - RETRY REQUIRED");
   }
+  return saved;
+}
+// Freeze USB before the final save so no write can race the change.
+static bool svPrepareChange(){
+  bool wasOnline=g_usb_online;
+  if(wasOnline)hardDetach();
+  if(!svFlushStandalone()){
+    if(wasOnline)hardAttach();
+    return false;
+  }
+  if(g_wireless_mode && g_saves_mode==0 && espnowIsPaired() && !espnowSendEject(true)){
+    if(wasOnline)hardAttach();return false;
+  }
+  return true;
+}
+static void invalidateLocalImage(){
+  g_loaded=false;g_loaded_name="";g_loaded_path="";
+  g_loaded_game_idx=-1;g_loaded_disk_idx=-1;g_sv_img_size=0;
+  svDirtyReset();
 }
 static bool doLoadSelected(const String& adfPath){
-  if(g_sv_dirty_count) svFlushStandalone();          // persist the OUTGOING disk before g_disk is overwritten
+  if(!svPrepareChange())return false;
+  if(!GotekSave::recover(SD_MMC)){if(g_loaded && !g_usb_online)hardAttach();return false;}
   String loadPath=adfPath;
   if(g_saves_mode==1 && savExistsFor(adfPath)) loadPath=savPathFor(adfPath);   // SAVES=COPY: resume from the .sav
   // Loading overlay in cover panel
@@ -2566,11 +2589,15 @@ static bool doLoadSelected(const String& adfPath){
   File f=openNamedImage(loadPath);
   if(!f){
     UG->setTextColor(0xE8C4,COL_PANEL); UG->setCursor(8,STATUS_H+56);
-    UG->print("Open failed"); delay(1000); drawListAndCover(); return false;
+    UG->print("Open failed"); delay(1000); drawListAndCover(); if(g_loaded && !g_usb_online)hardAttach();return false;
   }
   uint32_t fsz=f.size();
-  if(fsz==0){ f.close(); drawListAndCover(); return false; }
-  if(fsz>MAX_FILE_BYTES) fsz=MAX_FILE_BYTES;
+  if(fsz==0){ f.close(); drawListAndCover(); if(g_loaded && !g_usb_online)hardAttach();return false; }
+  if(fsz>MAX_FILE_BYTES){f.close();if(g_loaded && !g_usb_online)hardAttach();return false;}
+  const size_t BUFSZ=4096;
+  uint8_t* buf=(uint8_t*)malloc(BUFSZ);
+  if(!buf){ f.close(); if(g_loaded && !g_usb_online)hardAttach();return false; }
+  invalidateLocalImage();
   build_volume_with_file(g_mode==MODE_GEN?filenameOnly(adfPath).c_str():getOutputFilename(),fsz);   // GEN keeps the real name+ext so FlashFloppy detects the format
 
   int barX=8,barY=STATUS_H+58,barW=COVER_W-16,barH=14;
@@ -2578,9 +2605,6 @@ static bool doLoadSelected(const String& adfPath){
 
   uint32_t copied=0;
   uint8_t* dst=g_disk+DATA_LBA*SECTOR_SIZE;
-  const size_t BUFSZ=4096;
-  uint8_t* buf=(uint8_t*)malloc(BUFSZ);
-  if(!buf){ f.close(); return false; }
   uint32_t remain=fsz;
   int _pcTick=0;
   while(remain){
@@ -2592,7 +2616,7 @@ static bool doLoadSelected(const String& adfPath){
     if((++_pcTick & 7)==0) uiFlush();   // throttled flip so the progress bar animates
   }
   free(buf);
-  if(fsz>copied) memset(dst+copied,0,fsz-copied);
+  if(copied!=fsz){f.close();svToast("IMAGE READ FAILED");return false;}
   f.close();
 
   UG->setFont(&lgfx::fonts::DejaVu9);
@@ -2614,7 +2638,7 @@ static bool doLoadSelected(const String& adfPath){
   if (g_wireless_mode && espnowIsPaired()) {
     String modeName = (g_mode==MODE_ADF) ? "ADF" : (g_mode==MODE_DSK) ? "DSK" : "GEN";
     espnowSendNotify(g_loaded_name, modeName, copied);
-    espnowSendDisk(copied);
+    if(!espnowSendDisk(copied)){svToast("TRANSFER FAILED");return false;}
   }
   // In standalone mode, hardAttach() already connected USB directly to Gotek
 
@@ -2632,6 +2656,8 @@ static void diagInflate(const uint8_t* src, uint32_t slen, uint8_t* dst){
 }
 // Mount the built-in Amiga Test Kit as the emulated disk — works with no SD card.
 static void doLoadDiag(){
+  if(!svPrepareChange())return;
+  invalidateLocalImage();
   g_info_showing=false;
   if(g_loaded) hardDetach();
   build_volume_with_file("DISK.ADF", DIAG_ADF_SIZE);          // force an .ADF image regardless of MODE
@@ -2642,14 +2668,18 @@ static void doLoadDiag(){
   drawFullUI();
 }
 
-static void doUnload(){
-  if(g_sv_dirty_count) svFlushStandalone();     // persist before eject
+static bool doUnload(){
+  if(!svPrepareChange())return false;
+  if(g_wireless_mode && espnowIsPaired() && !espnowSendEject(g_saves_mode==0)){
+    if(g_loaded)hardAttach();svToast("EJECT FAILED - DISK RETAINED");return false;
+  }
+
   hardDetach();
   g_loaded=false; g_loaded_name=""; g_loaded_path="";
   g_loaded_game_idx=-1; g_loaded_disk_idx=-1; svDirtyReset();
-  if (g_wireless_mode && espnowIsPaired()) espnowSendEject();
   drawStatusBar();
   drawListAndCover();
+return true;
 }
 
 // ============================================================================
@@ -3336,7 +3366,7 @@ static void gridHandleTap(uint16_t px,uint16_t py){
   int gi=g_car_list[li];
   if(g_grid_sel==gi){                                     // second tap on the selected tile -> mount/eject
     g_sel=gi; g_disk_sel=0;
-    if(g_loaded&&g_loaded_game_idx==gi) doUnload();
+    if(g_loaded&&g_loaded_game_idx==gi && !doUnload())return;
     else { GameEntry&gm=g_games[gi]; doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[0]]); }
     if(g_car_active) drawCarousel();                      // repaint over the loader's list redraw
   } else {
@@ -3606,6 +3636,10 @@ void setup(){
   delay(100);
   bool sdok=SD_MMC.begin("/sdcard",true);
   if(!sdok){ delay(200); sdok=SD_MMC.begin("/sdcard",true); }
+  if(sdok && !GotekSave::recover(SD_MMC)){
+    Serial.println("Save recovery failed; SD disabled to preserve files");
+    SD_MMC.end(); sdok=false;
+  }
   if(sdok){
     ensureConfig();      // create CONFIG.TXT with defaults if missing or empty
     selfHealConfig();    // append any documented keys an older CONFIG.TXT is missing

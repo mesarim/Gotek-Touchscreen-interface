@@ -22,6 +22,8 @@
 //    onboard LED on GP21. Ignore if not fitted — the dongle works without them.)
 
 #include <Arduino.h>
+#include "../shared/disk_lock.h"
+#include "../shared/dirty_snapshot.h"
 #include "USB.h"
 #include "USBMSC.h"
 #include "ESP32_NOW.h"
@@ -31,6 +33,7 @@
 #include <esp_mac.h>
 #include "esp_wifi.h"
 #include <LittleFS.h>
+#include "../shared/owner_keys.h"
 
 #define FW_VERSION     "v3.7.0-xiao"   // owner-lock parity w/ Super Mini v3.5.3 (multi-owner allowlist, BOOT-hold pair/wipe, TCP eject, heartbeat) + HD 2MB ramdisk. Wire-compatible w/ the Mini (stays DD).
 #define ESPNOW_CHANNEL 6
@@ -107,7 +110,7 @@ static uint32_t g_next_status_ms = 0;   // v3.5.3: load-state heartbeat timer
 static inline bool dGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void dSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
 static inline void dClr(uint8_t*m,uint32_t i){m[i>>3]&=(uint8_t)~(1u<<(i&7));}
-static void dirtyReset(){memset(g_dirty,0,sizeof(g_dirty));g_dirty_count=0;g_last_write_ms=0;g_next_beacon_ms=0;}
+static void dirtyReset(){GotekDiskGuard guard;memset(g_dirty,0,sizeof(g_dirty));g_dirty_count=0;g_last_write_ms=0;g_next_beacon_ms=0;}
 // CRC32 (IEEE, bitwise — identical implementation on the GTi side)
 static uint32_t crc32sw(uint32_t crc,const uint8_t*p,size_t n){
   crc=~crc;
@@ -150,6 +153,9 @@ static int32_t onRead(uint32_t lba, uint32_t off, void* buf, uint32_t n) {
   memcpy(buf, g_disk+s, n); return (int32_t)n;
 }
 static int32_t onWrite(uint32_t lba, uint32_t off, uint8_t* buf, uint32_t n) {
+  GotekDiskGuard guard;
+  if(!n || !g_usb_online)return 0;
+
   uint32_t s = lba*SECTOR_SIZE+off;
   if (s+n > TOTAL_SECTORS*SECTOR_SIZE) return 0;
   memcpy(g_disk+s, buf, n);
@@ -171,9 +177,13 @@ static int32_t onWrite(uint32_t lba, uint32_t off, uint8_t* buf, uint32_t n) {
 }
 static void usbEventCb(void*,esp_event_base_t,int32_t,void*) {}
 static void hardDetach() {
+  { GotekDiskGuard guard; g_usb_online=false; }
+
   MSC.mediaPresent(false); delay(100); tud_disconnect(); delay(500); g_usb_online=false;
 }
 static void hardAttach() {
+  { GotekDiskGuard guard; g_usb_online=true; }
+
   char rev[8]; snprintf(rev,sizeof(rev),"%lu",(unsigned long)g_rev_counter++);
   MSC.productRevision(rev); MSC.mediaPresent(true); delay(50); tud_connect(); delay(200);
   g_usb_online=true;
@@ -235,19 +245,18 @@ static uint32_t g_enroll_until = 0;       // ms deadline for that window
 
 // ESP-NOW receive queue (FreeRTOS)
 #define RX_PKT_SIZE 250
-struct RxPkt { uint8_t data[RX_PKT_SIZE]; int len; };
+struct RxPkt { uint8_t data[RX_PKT_SIZE]; uint8_t source[6]; int len; bool broadcast; };
 static QueueHandle_t _rxQueue = nullptr;
 
-static void queuePacket(const uint8_t* data, int len) {
-  if (!_rxQueue) return;
-  RxPkt pkt;
-  int n = min(len, RX_PKT_SIZE);
-  memcpy(pkt.data, data, n); pkt.len = n;
-  xQueueSendFromISR(_rxQueue, &pkt, nullptr);
+static void queuePacket(const uint8_t* source,const uint8_t* data,int len,bool broadcast){
+  if(!_rxQueue || !source || !data || len<1 || len>RX_PKT_SIZE)return;
+  RxPkt pkt={};memcpy(pkt.source,source,6);memcpy(pkt.data,data,len);
+  pkt.len=len;pkt.broadcast=broadcast;
+  xQueueSend(_rxQueue,&pkt,0);
 }
 
 // Forward declare
-static void handleESPNOW(const uint8_t* data, int len);
+static void handleESPNOW(const uint8_t* source,const uint8_t* data,int len,bool broadcast);
 
 // ESP-NOW peer class
 class XiaoPeer : public ESP_NOW_Peer {
@@ -257,7 +266,7 @@ public:
   ~XiaoPeer() { remove(); }
   bool add_peer() { return add(); }
   bool send_pkt(const uint8_t* d, size_t l) { return send(d, l); }
-  void onReceive(const uint8_t* d, size_t l, bool b) override { queuePacket(d, (int)l); }
+  void onReceive(const uint8_t* d, size_t l, bool b) override { queuePacket(addr(),d,(int)l,b); }
   void onSent(bool) override {}
 };
 
@@ -303,11 +312,13 @@ static void wipeOwners(){
 }
 
 // Handle ESP-NOW control packets
-static void handleESPNOW(const uint8_t* data, int len) {
-  if (len < 1) return;
+static void handleESPNOW(const uint8_t* source,const uint8_t* data,int len,bool broadcast) {
+  if(len!=sizeof(PktHello))return;
   uint8_t type = data[0];
 
   if (type == PKT_PAIR_HELLO) {
+    if(memcmp(source,data+1,6))return;
+    bool canEnroll=g_enroll_open;
     const PktHello* p = (const PktHello*)data;
     // Owner lock (v3.5.0): only obey enrolled GTis. An unknown GTi is enrolled
     // ONLY while a BOOT-hold pairing window is open — otherwise ignored silently.
@@ -337,6 +348,7 @@ static void handleESPNOW(const uint8_t* data, int len) {
     strncpy(reply.ip, AP_IP, 15);
     reply.pad[0] = SAVE_PROTO_VER;
     reply.pad[1] = 1;                  // HD-capable (2MB ramdisk) — GTi may fling 1.76MB HD
+    if(!GotekAuth::pairReply(LittleFS,source,(uint8_t*)&reply,canEnroll))return;
     XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
     if (dst) dst->send_pkt((uint8_t*)&reply, sizeof(reply));
 
@@ -345,7 +357,9 @@ static void handleESPNOW(const uint8_t* data, int len) {
     return;
   }
 
-  if (type == PKT_UNPAIR) {                        // v3.5.2: an owner GTi asked to be forgotten
+  if (type == PKT_UNPAIR) {
+    if(broadcast || memcmp(source,data+1,6) || !isOwner(source) ||
+       !GotekAuth::authorize(source,data,len))return;                        // v3.5.2: an owner GTi asked to be forgotten
     const PktHello* p = (const PktHello*)data;
     if (removeOwner(p->mac)) {                     // only ever removes a MAC that was enrolled
       saveOwners();
@@ -360,6 +374,9 @@ static void handleESPNOW(const uint8_t* data, int len) {
   }
 
   if (type == PKT_DISK_EJECT) {
+    if(broadcast || !isOwner(source) || !GotekAuth::authorize(source,data,len))return;
+    bool wasLoaded=g_disk_loaded;hardDetach();
+    if(g_dirty_count){if(wasLoaded)hardAttach();return;}
     if (g_disk_loaded) { hardDetach(); g_disk_loaded=false; }
     // A new-firmware GTi drains saves BEFORE ejecting, so any bits left here are
     // either already fetched or from an old GTi that can't fetch — drop them.
@@ -371,7 +388,7 @@ static void handleESPNOW(const uint8_t* data, int len) {
 }
 
 static void onNewPeer(const esp_now_recv_info_t* info, const uint8_t* data, int len, void* arg) {
-  queuePacket(data, len);
+  queuePacket(info->src_addr,data,len,!memcmp(info->des_addr,ESP_NOW.BROADCAST_ADDR,6));
 }
 
 // Load saved config
@@ -414,7 +431,10 @@ static inline void wrLE16(uint8_t*p,uint16_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v
 // EJECT_FORCE. Replies: 0x01 = ejected ("nothing loaded" is also success),
 // 0x02 = refused, unsaved writes pending (0x03 only). Old dongles reply 0x00 (unknown).
 static void doEject(WiFiClient& client, bool force){
+  bool wasLoaded=g_disk_loaded;
+  hardDetach();
   if (!force && g_dirty_count > 0) {
+    if(wasLoaded)hardAttach();
     Serial.printf("[TCP] Eject refused — %u dirty sectors pending\n",(unsigned)g_dirty_count);
     client.write((uint8_t)0x02); client.flush();
     return;
@@ -442,34 +462,28 @@ static void doGetSave(WiFiClient& client){
   uint32_t imgSecs=(g_image_size+SECTOR_SIZE-1)/SECTOR_SIZE;
   if(imgSecs>IMG_MAX_SECTORS)imgSecs=IMG_MAX_SECTORS;
   uint16_t mapLen=(uint16_t)((imgSecs+7)/8);
-  memcpy(g_snap,g_dirty,mapLen);           // snapshot: writes during transfer stay dirty in the live map
-  uint8_t hdr[14]; hdr[0]='S';hdr[1]='V';hdr[2]='1';hdr[3]=0;
+  { GotekDiskGuard guard; GotekDirty::begin(g_dirty,g_snap,mapLen,g_dirty_count); }
+  uint8_t hdr[14]={'S','V','1',0};
   wrLE32(hdr+4,g_load_id); wrLE32(hdr+8,g_image_size); wrLE16(hdr+12,mapLen);
-  client.write(hdr,14);
+  bool sent=client.write(hdr,sizeof(hdr))==sizeof(hdr);
   uint32_t crc=crc32sw(0,g_snap,mapLen);
-  client.write(g_snap,mapLen);
-  uint32_t sent=0;
-  for(uint32_t i=0;i<imgSecs;i++){
+  sent=sent && client.write(g_snap,mapLen)==mapLen;
+  uint8_t sector[SECTOR_SIZE];
+  for(uint32_t i=0;sent && i<imgSecs;i++){
     if(!dGet(g_snap,i))continue;
-    uint8_t* sec=g_disk+(DATA_LBA+i)*SECTOR_SIZE;
-    client.write(sec,SECTOR_SIZE);
-    crc=crc32sw(crc,sec,SECTOR_SIZE);
-    sent++; oledProgress(sent,g_dirty_count);
+    { GotekDiskGuard guard; memcpy(sector,g_disk+(DATA_LBA+i)*SECTOR_SIZE,SECTOR_SIZE); }
+    // Send and checksum the same stable bytes; USB may now rewrite RAM.
+    sent=client.write(sector,SECTOR_SIZE)==SECTOR_SIZE;
+    crc=crc32sw(crc,sector,SECTOR_SIZE);
   }
-  uint8_t cb[4]; wrLE32(cb,crc); client.write(cb,4); client.flush();
-  Serial.printf("[SAVE] Sent %lu dirty sectors (load %lu)\n",(unsigned long)sent,(unsigned long)g_load_id);
-  // Await GTi ack: 0x01 = persisted to SD → clear the snapshot's bits from the live map
-  uint32_t t0=millis(); while(!client.available()&&millis()-t0<10000)delay(5);
-  bool ok=(client.available()&&client.read()==0x01);
-  if(ok){
-    for(uint32_t i=0;i<imgSecs;i++)
-      if(dGet(g_snap,i)&&dGet(g_dirty,i)){dClr(g_dirty,i);if(g_dirty_count)g_dirty_count=g_dirty_count-1;}
-    g_next_beacon_ms=0;
-    Serial.println("[SAVE] GTi persisted — bits cleared");
-    if(g_dirty_count==0) setLeds(false,g_disk_loaded);
-  } else {
-    Serial.println("[SAVE] No ack — keeping dirty bits for retry");
-  }
+  uint8_t cb[4]; wrLE32(cb,crc);
+  sent=sent && client.write(cb,sizeof(cb))==sizeof(cb); client.flush();
+  uint32_t t0=millis();
+  while(sent && client.connected() && !client.available() && millis()-t0<10000)delay(5);
+  bool ok=sent && client.available() && client.read()==0x01;
+  { GotekDiskGuard guard; GotekDirty::finish(g_dirty,g_snap,mapLen,g_dirty_count,ok); }
+  g_next_beacon_ms=0;
+  if(g_dirty_count==0)setLeds(false,g_disk_loaded);
 }
 
 // Beacon: settled unsaved writes exist — repeated every SAVE_BEACON_MS until fetched.
@@ -523,6 +537,10 @@ static void handleTCPClient(WiFiClient& client) {
     else if (cmd == CMD_GET_STATUS)  doGetStatus(client);
     else if (cmd == CMD_EJECT)       doEject(client,false);
     else if (cmd == CMD_EJECT_FORCE) doEject(client,true);
+    else if(cmd==7){
+      uint8_t caps[8]={'G','C',1,(uint8_t)(g_disk_loaded?1:0)};
+      wrLE32(caps+4,MAX_FILE_BYTES);client.write(caps,sizeof(caps));
+    }
     else client.write((uint8_t)0x00);
     return;
   }
@@ -538,7 +556,6 @@ static void handleTCPClient(WiFiClient& client) {
   // Determine filename from size
   const char* outName = (size == 901120) ? "DISK.ADF" : 
                         (size <= MAX_FILE_BYTES) ? "DISK.ADF" : "DISK.DSK";
-  build_volume(outName, size);
 
   // Receive data directly into ramdisk
   uint8_t* dst = g_disk + DATA_LBA * SECTOR_SIZE;
@@ -547,16 +564,24 @@ static void handleTCPClient(WiFiClient& client) {
   uint8_t* buf = (uint8_t*)malloc(BUF);
   if (!buf) { client.write((uint8_t)0x00); return; }
 
+  bool wasLoaded=g_disk_loaded;
+  hardDetach();
+  if(g_dirty_count){
+    if(wasLoaded)hardAttach();
+    free(buf);client.write((uint8_t)0x02);return;
+  }
+  g_disk_loaded=false;g_image_size=0;dirtyReset();
+  build_volume(outName, size);
   t0 = millis();
   while (received < size && millis()-t0 < 30000) {
-    if (!client.connected()) break;
+    if (!client.connected() && !client.available()) break;
     int avail = client.available();
     if (avail <= 0) { delay(1); continue; }
     size_t toRead = min((size_t)avail, min(BUF, (size_t)(size-received)));
     int rd = client.read(buf, toRead);
     if (rd > 0) {
       memcpy(dst + received, buf, rd);
-      received += rd;
+      received += rd; t0=millis();
       oledProgress(received, size);
     }
   }
@@ -674,7 +699,7 @@ void setup() {
     // Drain ESP-NOW queue
     RxPkt pkt;
     while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE)
-      handleESPNOW(pkt.data, pkt.len);
+      handleESPNOW(pkt.source,pkt.data,pkt.len,pkt.broadcast);
 
     // Check for TCP clients while pairing
     WiFiClient client = _tcpServer.accept();
@@ -766,7 +791,7 @@ void loop() {
   // Drain ESP-NOW control queue
   RxPkt pkt;
   while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE)
-    handleESPNOW(pkt.data, pkt.len);
+    handleESPNOW(pkt.source,pkt.data,pkt.len,pkt.broadcast);
 
   // Handle TCP disk transfers
   WiFiClient client = _tcpServer.accept();

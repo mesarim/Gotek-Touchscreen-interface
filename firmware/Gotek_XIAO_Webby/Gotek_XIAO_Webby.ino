@@ -33,6 +33,9 @@
 // ============================================================================
 
 #include <Arduino.h>
+#include "../shared/disk_lock.h"
+#include "../shared/image_upload.h"
+#include "../shared/dirty_snapshot.h"
 #include "USB.h"
 #include "USBMSC.h"
 #include "ESP32_NOW.h"
@@ -43,14 +46,18 @@
 #include "esp_wifi.h"
 #include "esp_heap_caps.h"   // HD test: internal-heap readout
 #include <LittleFS.h>
-#include <Update.h>   // OMEGAWARE: web OTA
+#include "../shared/owner_keys.h"
+#include "../shared/ota_upload.h"
+#include "../shared/fleet_mdns.h"
 #include <WebServer.h>     // WEBBY: built-in (ESP32 core) — no external lib
 #include <ESPmDNS.h>       // WEBBY: gotekomega.local
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
+#ifndef FW_VERSION
 #define FW_VERSION     "Webby-1.5-xiao"
+#endif
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -137,7 +144,7 @@ static uint32_t g_next_status_ms = 0;
 static inline bool dGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void dSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
 static inline void dClr(uint8_t*m,uint32_t i){m[i>>3]&=(uint8_t)~(1u<<(i&7));}
-static void dirtyReset(){memset(g_dirty,0,sizeof(g_dirty));g_dirty_count=0;g_last_write_ms=0;g_next_beacon_ms=0;}
+static void dirtyReset(){GotekDiskGuard guard;memset(g_dirty,0,sizeof(g_dirty));g_dirty_count=0;g_last_write_ms=0;g_next_beacon_ms=0;}
 static uint32_t crc32sw(uint32_t crc,const uint8_t*p,size_t n){
   crc=~crc;
   while(n--){crc^=*p++;for(int k=0;k<8;k++)crc=(crc>>1)^(0xEDB88320UL&(uint32_t)(-(int32_t)(crc&1)));}
@@ -167,6 +174,9 @@ static int32_t onRead(uint32_t lba, uint32_t off, void* buf, uint32_t n) {
   memcpy(buf, g_disk+s, n); return (int32_t)n;
 }
 static int32_t onWrite(uint32_t lba, uint32_t off, uint8_t* buf, uint32_t n) {
+  GotekDiskGuard guard;
+  if(!n || !g_usb_online)return 0;
+
   uint32_t s = lba*SECTOR_SIZE+off;
   if (s+n > TOTAL_SECTORS*SECTOR_SIZE) return 0;
   memcpy(g_disk+s, buf, n);
@@ -184,8 +194,12 @@ static int32_t onWrite(uint32_t lba, uint32_t off, uint8_t* buf, uint32_t n) {
   return (int32_t)n;
 }
 static void usbEventCb(void*,esp_event_base_t,int32_t,void*) {}
-static void hardDetach() { MSC.mediaPresent(false); delay(100); tud_disconnect(); delay(500); g_usb_online=false; }
+static void hardDetach() {
+  { GotekDiskGuard guard; g_usb_online=false; }
+ MSC.mediaPresent(false); delay(100); tud_disconnect(); delay(500); g_usb_online=false; }
 static void hardAttach() {
+  { GotekDiskGuard guard; g_usb_online=true; }
+
   char rev[8]; snprintf(rev,sizeof(rev),"%lu",(unsigned long)g_rev_counter++);
   MSC.productRevision(rev); MSC.mediaPresent(true); delay(50); tud_connect(); delay(200);
   g_usb_online=true;
@@ -265,15 +279,15 @@ static uint32_t g_enroll_until = 0;
 
 // ESP-NOW receive queue
 #define RX_PKT_SIZE 250
-struct RxPkt { uint8_t data[RX_PKT_SIZE]; int len; };
+struct RxPkt { uint8_t data[RX_PKT_SIZE]; uint8_t source[6]; int len; bool broadcast; };
 static QueueHandle_t _rxQueue = nullptr;
-static void queuePacket(const uint8_t* data, int len) {
-  if (!_rxQueue) return;
-  RxPkt pkt; int n = min(len, RX_PKT_SIZE);
-  memcpy(pkt.data, data, n); pkt.len = n;
-  xQueueSendFromISR(_rxQueue, &pkt, nullptr);
+static void queuePacket(const uint8_t* source,const uint8_t* data,int len,bool broadcast){
+  if(!_rxQueue || !source || !data || len<1 || len>RX_PKT_SIZE)return;
+  RxPkt pkt={};memcpy(pkt.source,source,6);memcpy(pkt.data,data,len);
+  pkt.len=len;pkt.broadcast=broadcast;
+  xQueueSend(_rxQueue,&pkt,0);
 }
-static void handleESPNOW(const uint8_t* data, int len);
+static void handleESPNOW(const uint8_t* source,const uint8_t* data,int len,bool broadcast);
 
 class XiaoPeer : public ESP_NOW_Peer {
 public:
@@ -282,7 +296,7 @@ public:
   ~XiaoPeer() { remove(); }
   bool add_peer() { return add(); }
   bool send_pkt(const uint8_t* d, size_t l) { return send(d, l); }
-  void onReceive(const uint8_t* d, size_t l, bool b) override { queuePacket(d, (int)l); }
+  void onReceive(const uint8_t* d, size_t l, bool b) override { queuePacket(addr(),d,(int)l,b); }
   void onSent(bool) override {}
 };
 static XiaoPeer* _bcastPeer = nullptr;
@@ -315,10 +329,12 @@ static void wipeOwners(){
   oledStatus("Gotek OMEGA " FW_VERSION,"** WIPED **","All owners cleared","Hold BOOT to pair");
 }
 
-static void handleESPNOW(const uint8_t* data, int len) {
-  if (len < 1) return;
+static void handleESPNOW(const uint8_t* source,const uint8_t* data,int len,bool broadcast) {
+  if(len!=sizeof(PktHello))return;
   uint8_t type = data[0];
   if (type == PKT_PAIR_HELLO) {
+    if(memcmp(source,data+1,6))return;
+    bool canEnroll=g_enroll_open;
     const PktHello* p = (const PktHello*)data;
     // WEBBY note: Webby ships unlocked, so with no enrolled owners any GTi may pair
     // (g_enroll_open is forced true at boot in ESPNOW mode when _owner_count==0).
@@ -334,13 +350,16 @@ static void handleESPNOW(const uint8_t* data, int len) {
     _wavePeer = new XiaoPeer(_wave_mac, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
     if (!_wavePeer->add_peer()) { delete _wavePeer; _wavePeer = nullptr; }
     PktHello reply = {}; reply.type = PKT_PAIR_REPLY;
-    WiFi.softAPmacAddress(reply.mac); strncpy(reply.ip, AP_IP, 15); reply.pad[0] = SAVE_PROTO_VER;
+    WiFi.softAPmacAddress(reply.mac); strncpy(reply.ip, AP_IP, 15); reply.pad[0] = SAVE_PROTO_VER; reply.pad[1] = 1;
+    if(!GotekAuth::pairReply(LittleFS,source,(uint8_t*)&reply,canEnroll))return;
     XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
     if (dst) dst->send_pkt((uint8_t*)&reply, sizeof(reply));
     oledStatus("Gotek OMEGA " FW_VERSION, known?"Reconnected":"Owner added", macToStr(_wave_mac), String(_owner_count)+" owner(s)");
     return;
   }
   if (type == PKT_UNPAIR) {
+    if(broadcast || memcmp(source,data+1,6) || !isOwner(source) ||
+       !GotekAuth::authorize(source,data,len))return;
     const PktHello* p = (const PktHello*)data;
     if (removeOwner(p->mac)) {
       saveOwners();
@@ -354,13 +373,16 @@ static void handleESPNOW(const uint8_t* data, int len) {
     return;
   }
   if (type == PKT_DISK_EJECT) {
+    if(broadcast || !isOwner(source) || !GotekAuth::authorize(source,data,len))return;
+    bool wasLoaded=g_disk_loaded;hardDetach();
+    if(g_dirty_count){if(wasLoaded)hardAttach();return;}
     if (g_disk_loaded) { hardDetach(); g_disk_loaded=false; }
     dirtyReset(); digitalWrite(LED_BLUE, LOW);
     oledStatus("Gotek OMEGA " FW_VERSION, "Ejected", "", "Ready");
     return;
   }
 }
-static void onNewPeer(const esp_now_recv_info_t* info, const uint8_t* data, int len, void* arg) { queuePacket(data, len); }
+static void onNewPeer(const esp_now_recv_info_t* info, const uint8_t* data, int len, void* arg) { queuePacket(info->src_addr,data,len,!memcmp(info->des_addr,ESP_NOW.BROADCAST_ADDR,6)); }
 
 // Owner config load (base)
 static void loadConfig() {
@@ -418,6 +440,20 @@ static void loadWifiCfg() {
   }
   f.close();
 }
+// Write the complete settings file before replacing the previous copy.
+static bool writeWifiCfg(const String& ssid, const String& pass,
+                         const String& mode, const String& name) {
+  if (!LittleFS.begin(false)) return false;
+  String data = "SSID=" + ssid + "\nPASS=" + pass + "\nMODE=" + mode
+              + "\nNAME=" + name + "\n";
+  File f = LittleFS.open("/WEBBY.TXT.tmp", "w");
+  if (!f) return false;
+  bool ok = f.write((const uint8_t*)data.c_str(), data.length()) == data.length();
+  f.close();
+  if (ok) ok = LittleFS.rename("/WEBBY.TXT.tmp", "/WEBBY.TXT");
+  if (!ok) LittleFS.remove("/WEBBY.TXT.tmp");
+  return ok;
+}
 static void saveWifiCfg(const String& ssid, const String& pass) {
   if (!LittleFS.begin(true)) return;
   File f = LittleFS.open("/WEBBY.TXT", "w"); if (!f) return;
@@ -456,7 +492,9 @@ static uint32_t   g_next_alive_ms = 0;   // FLEET: next "I'm alive" broadcast
 static inline void wrLE32(uint8_t*p,uint32_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);p[2]=(uint8_t)(v>>16);p[3]=(uint8_t)(v>>24);}
 static inline void wrLE16(uint8_t*p,uint16_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);}
 static void doEject(WiFiClient& client, bool force){
-  if (!force && g_dirty_count > 0) { client.write((uint8_t)0x02); client.flush(); return; }
+  bool wasLoaded=g_disk_loaded;
+  hardDetach();
+  if (!force && g_dirty_count > 0) { if(wasLoaded)hardAttach(); client.write((uint8_t)0x02); client.flush(); return; }
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   dirtyReset(); g_loaded_name=""; digitalWrite(LED_BLUE, LOW);
   oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (app)", "", "Ready");
@@ -470,20 +508,31 @@ static void doGetStatus(WiFiClient& client){
   client.write(r,21); client.flush();
 }
 static void doGetSave(WiFiClient& client){
-  uint32_t imgSecs=(g_image_size+SECTOR_SIZE-1)/SECTOR_SIZE; if(imgSecs>IMG_MAX_SECTORS)imgSecs=IMG_MAX_SECTORS;
+  uint32_t imgSecs=(g_image_size+SECTOR_SIZE-1)/SECTOR_SIZE;
+  if(imgSecs>IMG_MAX_SECTORS)imgSecs=IMG_MAX_SECTORS;
   uint16_t mapLen=(uint16_t)((imgSecs+7)/8);
-  memcpy(g_snap,g_dirty,mapLen);
-  uint8_t hdr[14]; hdr[0]='S';hdr[1]='V';hdr[2]='1';hdr[3]=0;
+  { GotekDiskGuard guard; GotekDirty::begin(g_dirty,g_snap,mapLen,g_dirty_count); }
+  uint8_t hdr[14]={'S','V','1',0};
   wrLE32(hdr+4,g_load_id); wrLE32(hdr+8,g_image_size); wrLE16(hdr+12,mapLen);
-  client.write(hdr,14);
+  bool sent=client.write(hdr,sizeof(hdr))==sizeof(hdr);
   uint32_t crc=crc32sw(0,g_snap,mapLen);
-  client.write(g_snap,mapLen);
-  uint32_t sent=0;
-  for(uint32_t i=0;i<imgSecs;i++){ if(!dGet(g_snap,i))continue; uint8_t* sec=g_disk+(DATA_LBA+i)*SECTOR_SIZE; client.write(sec,SECTOR_SIZE); crc=crc32sw(crc,sec,SECTOR_SIZE); sent++; oledProgress(sent,g_dirty_count); }
-  uint8_t cb[4]; wrLE32(cb,crc); client.write(cb,4); client.flush();
-  uint32_t t0=millis(); while(!client.available()&&millis()-t0<10000)delay(5);
-  bool ok=(client.available()&&client.read()==0x01);
-  if(ok){ for(uint32_t i=0;i<imgSecs;i++) if(dGet(g_snap,i)&&dGet(g_dirty,i)){dClr(g_dirty,i);if(g_dirty_count)g_dirty_count=g_dirty_count-1;} g_next_beacon_ms=0; if(g_dirty_count==0) setLeds(false,g_disk_loaded); }
+  sent=sent && client.write(g_snap,mapLen)==mapLen;
+  uint8_t sector[SECTOR_SIZE];
+  for(uint32_t i=0;sent && i<imgSecs;i++){
+    if(!dGet(g_snap,i))continue;
+    { GotekDiskGuard guard; memcpy(sector,g_disk+(DATA_LBA+i)*SECTOR_SIZE,SECTOR_SIZE); }
+    // Send and checksum the same stable bytes; USB may now rewrite RAM.
+    sent=client.write(sector,SECTOR_SIZE)==SECTOR_SIZE;
+    crc=crc32sw(crc,sector,SECTOR_SIZE);
+  }
+  uint8_t cb[4]; wrLE32(cb,crc);
+  sent=sent && client.write(cb,sizeof(cb))==sizeof(cb); client.flush();
+  uint32_t t0=millis();
+  while(sent && client.connected() && !client.available() && millis()-t0<10000)delay(5);
+  bool ok=sent && client.available() && client.read()==0x01;
+  { GotekDiskGuard guard; GotekDirty::finish(g_dirty,g_snap,mapLen,g_dirty_count,ok); }
+  g_next_beacon_ms=0;
+  if(g_dirty_count==0)setLeds(false,g_disk_loaded);
 }
 static void sendDirtyBeacon(){
   PktDirty pkt={}; pkt.type=PKT_XIAO_DIRTY; pkt.load_id=g_load_id; pkt.dirty_count=g_dirty_count;
@@ -511,6 +560,10 @@ static void handleTCPClient(WiFiClient& client) {
     else if (cmd == CMD_GET_STATUS)  doGetStatus(client);
     else if (cmd == CMD_EJECT)       doEject(client,false);
     else if (cmd == CMD_EJECT_FORCE) doEject(client,true);
+    else if(cmd==7){
+      uint8_t caps[8]={'G','C',1,(uint8_t)(g_disk_loaded?1:0)};
+      wrLE32(caps+4,MAX_FILE_BYTES);client.write(caps,sizeof(caps));
+    }
     else if (cmd == CMD_SET_NAME) {   // #24: 1-byte length + name bytes -> g_next_name
       uint32_t tn=millis(); while(client.available()<1 && millis()-tn<2000){ if(!client.connected())break; delay(1); }
       int len = client.available()>=1 ? client.read() : 0;
@@ -524,13 +577,21 @@ static void handleTCPClient(WiFiClient& client) {
   }
   if (size == 0 || size > MAX_FILE_BYTES) { client.write((uint8_t)0x00); return; }
   const char* outName = "DISK.ADF";   // #24: FAT12 root stays a constant legal 8.3 (cosmetic); the pretty name lands in g_loaded_name
-  build_volume(outName, size);
   uint8_t* dst = g_disk + DATA_LBA * SECTOR_SIZE;
   uint32_t received = 0; const size_t BUF = 4096;
   uint8_t* buf = (uint8_t*)malloc(BUF); if (!buf) { client.write((uint8_t)0x00); return; }
+  bool wasLoaded=g_disk_loaded;
+  hardDetach();
+  if(g_dirty_count){
+    if(wasLoaded)hardAttach();
+    free(buf);client.write((uint8_t)0x02);return;
+  }
+  g_disk_loaded=false;g_image_size=0;dirtyReset();
+  g_loaded_name="";
+  build_volume(outName, size);
   t0 = millis();
   while (received < size && millis()-t0 < 30000) {   // 30s = max STALL (no progress), not total — a slow-but-steady fling completes; t0 resets on every read below
-    if (!client.connected()) break;
+    if (!client.connected() && !client.available()) break;
     int avail = client.available(); if (avail <= 0) { delay(1); continue; }
     size_t toRead = min((size_t)avail, min(BUF, (size_t)(size-received)));
     int rd = client.read(buf, toRead);
@@ -564,11 +625,19 @@ static bool     g_up_overflow = false;
 static String   g_up_name = "";
 
 static String jsonEsc(const String& s){
-  String o; for(size_t i=0;i<s.length();i++){ char c=s[i]; if(c=='"'||c=='\\'){o+='\\';o+=c;} else if(c>=32) o+=c; } return o;
+  String out;
+  for (size_t i=0; i<s.length(); ++i) {
+    unsigned char c = (unsigned char)s[i];
+    if (c == '"' || c == '\\') { out += '\\'; out += (char)c; }
+    else if (c < 32) { char escaped[7]; snprintf(escaped, sizeof(escaped), "\\u%04x", c); out += escaped; }
+    else out += (char)c;
+  }
+  return out;
 }
 static String statusJson(){
   String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
   String s = "{";
+  s += "\"max_image_bytes\":"+String(MAX_FILE_BYTES)+",";
   s += "\"fw\":\""; s += FW_VERSION; s += "\",";
   s += "\"loaded\":"; s += (g_disk_loaded?"true":"false");
   s += ",\"name\":\""; s += jsonEsc(g_loaded_name); s += "\"";
@@ -595,30 +664,44 @@ static void webFinishLoad(){
   oledStatus("LOADED!", "", "USB: attached", "Gotek ready");
   sendSimple(PKT_XIAO_DONE);   // harmless if no ESP-NOW peer
 }
+static GotekImageUpload g_upload;
+static bool prepareWebChange(){
+  bool wasLoaded=g_disk_loaded;
+  hardDetach();
+  if(g_dirty_count){if(wasLoaded)hardAttach();return false;}
+  g_disk_loaded=false;g_loaded_name="";g_image_size=0;dirtyReset();
+  return true;
+}
 static void handleUpload(){
-  HTTPUpload& up = server.upload();
-  if (up.status == UPLOAD_FILE_START) {
-    g_up_recv = 0; g_up_overflow = false;
-    g_up_name = up.filename; if (g_up_name.length()==0) g_up_name = "DISK.ADF";
-    // detach first so the Amiga isn't reading the disk while we rewrite its data region
-    if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; digitalWrite(LED_BLUE, LOW); }
-  } else if (up.status == UPLOAD_FILE_WRITE) {
-    if (!g_up_overflow && g_up_recv + up.currentSize <= MAX_FILE_BYTES) {
-      memcpy(g_disk + DATA_LBA*SECTOR_SIZE + g_up_recv, up.buf, up.currentSize);
-      g_up_recv += up.currentSize;
-    } else { g_up_overflow = true; }
-  } else if (up.status == UPLOAD_FILE_END) {
-    // finalized by the POST responder below
-  }
+  HTTPUpload& up=server.upload();
+  if(up.status==UPLOAD_FILE_START){
+    if(!g_upload.start())return;
+    g_up_recv=0;g_up_overflow=false;g_up_name=up.filename;
+    if(!prepareWebChange()){g_upload.reject(409);return;}
+  }else if(up.status==UPLOAD_FILE_WRITE){
+    if(g_upload.write(up.currentSize,MAX_FILE_BYTES)){
+      memcpy(g_disk+DATA_LBA*SECTOR_SIZE+g_up_recv,up.buf,up.currentSize);
+      g_up_recv+=up.currentSize;
+    }
+  }else if(up.status==UPLOAD_FILE_END){g_upload.end(up.totalSize);}
+  else if(up.status==UPLOAD_FILE_ABORTED){g_upload.abort();}
+}
+static bool acceptWebUpload(){
+  int code=g_upload.consume();
+  if(code==200)return true;
+  const char* error=code==409 ? "Pending saves; save the current disk first" :
+    code==413 ? "Image exceeds the RAM disk capacity" : "Upload is missing or incomplete";
+  server.send(code,"application/json",String("{\"error\":\"")+error+"\"}");
+  return false;
 }
 static void handleUploadDone(){
-  if (g_up_overflow) { server.send(413,"application/json","{\"ok\":false,\"err\":\"image too big for the 1MB ramdisk (DD only)\"}"); return; }
-  if (g_up_recv == 0) { server.send(400,"application/json","{\"ok\":false,\"err\":\"empty upload\"}"); return; }
+  if(!acceptWebUpload())return;
   g_loaded_name = g_up_name;
   webFinishLoad();
   server.send(200,"application/json", statusJson());
 }
 static void handleEjectWeb(){
+  if(!prepareWebChange()){server.send(409,"application/json","{\"error\":\"Pending saves\"}");return;}
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   dirtyReset(); g_loaded_name=""; digitalWrite(LED_BLUE, LOW);
   oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (web)", "", "Ready");
@@ -631,12 +714,18 @@ static void handleScan(){
   wifi_mode_t pm = WiFi.getMode();
   if (!(pm & WIFI_MODE_STA)) WiFi.mode((wifi_mode_t)(pm | WIFI_MODE_STA));
   int n = WiFi.scanNetworks(false, true, false, 200);
+  if (n < 0) {
+    WiFi.scanDelete();
+    server.send(503, "application/json", "{\"error\":\"Wi-Fi scan could not start; please retry\"}");
+    return;
+  }
   String jj = "{\"networks\":[";
   for (int i = 0; i < n && i < 30; i++) {
     if (i) jj += ",";
     jj += "{\"ssid\":\""; jj += jsonEsc(WiFi.SSID(i));
     jj += "\",\"rssi\":"; jj += String(WiFi.RSSI(i));
     jj += ",\"enc\":"; jj += (WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "false" : "true");
+    jj += ",\"encrypted\":"; jj += (WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "false" : "true");
     jj += "}";
     yield();
   }
@@ -735,12 +824,15 @@ footer{text-align:center;color:#5b6076;font-size:11px;margin-top:22px}.hidden{di
 </section>
 <footer>Webby-0.1 &middot; OMEGAWARE</footer></div>
 <div class="toast" id="toast"></div>
-<script>var I18N={"this_dongle":{"en":"This dongle","fr":"Ce dongle","it":"Questo dongle","es":"Este dongle","de":"Dieser Dongle","nl":"Deze dongle"},"screen_fleet":{"en":"Screen / fleet","fr":"Ecran / flotte","it":"Schermo / flotta","es":"Pantalla / flota","de":"Bildschirm / Fleet","nl":"Scherm / fleet"},"dev_name":{"en":"Device name","fr":"Nom appareil","it":"Nome dispositivo","es":"Nombre del dispositivo","de":"Geraetename","nl":"Apparaatnaam"},"dev_name_ph":{"en":"e.g. amiga-desk","fr":"ex. amiga-bureau","it":"es. amiga-scrivania","es":"ej. amiga-mesa","de":"z.B. amiga-tisch","nl":"bijv. amiga-bureau"},"disk":{"en":"Disk","fr":"Disque","it":"Disco","es":"Disco","de":"Diskette","nl":"Disk"},"wifi":{"en":"Wi-Fi","fr":"Wi-Fi","it":"Wi-Fi","es":"Wi-Fi","de":"WLAN","nl":"Wi-Fi"},"in_drive":{"en":"In the drive","fr":"Dans le lecteur","it":"Nel drive","es":"En la unidad","de":"Im Laufwerk","nl":"In het station"},"no_disk":{"en":"-- no disk --","fr":"-- aucun disque --","it":"-- nessun disco --","es":"-- sin disco --","de":"-- keine Diskette --","nl":"-- geen disk --"},"load_ins":{"en":"Load an ADF to insert it","fr":"Chargez un ADF pour l’inserer","it":"Carica un ADF per inserirlo","es":"Carga un ADF para insertarlo","de":"ADF laden zum Einlegen","nl":"Laad een ADF om hem te plaatsen"},"eject":{"en":"Eject","fr":"Ejecter","it":"Espelli","es":"Expulsar","de":"Auswerfen","nl":"Uitwerpen"},"load_img":{"en":"Load image","fr":"Charger une image","it":"Carica immagine","es":"Cargar imagen","de":"Abbild laden","nl":"Image laden"},"tap_choose":{"en":"Tap to choose an ADF","fr":"Touchez pour choisir un ADF","it":"Tocca per scegliere un ADF","es":"Toca para elegir un ADF","de":"Zum Auswahlen eines ADF tippen","nl":"Tik om een ADF te kiezen"},"drag_hint":{"en":"or drag a file here","fr":"ou glissez un fichier ici","it":"o trascina un file qui","es":"o arrastra un archivo aqui","de":"oder Datei hierher ziehen","nl":"of sleep hier een bestand"},"dd_note":{"en":"DD image up to ~880 KB, one disk at a time","fr":"Image DD jusqu’a ~880 Ko, un disque a la fois","it":"Immagine DD fino a ~880 KB, un disco alla volta","es":"Imagen DD hasta ~880 KB, un disco a la vez","de":"DD-Abbild bis ~880 KB, eine Diskette","nl":"DD-image tot ~880 KB, een disk tegelijk"},"home_wifi":{"en":"Home Wi-Fi","fr":"Wi-Fi domestique","it":"Wi-Fi di casa","es":"Wi-Fi de casa","de":"Heim-WLAN","nl":"Thuis-Wi-Fi"},"net_ssid":{"en":"Network (SSID)","fr":"Reseau (SSID)","it":"Rete (SSID)","es":"Red (SSID)","de":"Netzwerk (SSID)","nl":"Netwerk (SSID)"},"ssid_ph":{"en":"your home wifi name","fr":"nom de votre wifi","it":"nome del tuo wifi","es":"nombre de tu wifi","de":"Name deines WLAN","nl":"naam van je wifi"},"scan_btn":{"en":"Scan for networks","fr":"Rechercher des reseaux","it":"Cerca reti","es":"Buscar redes","de":"Netzwerke suchen","nl":"Netwerken zoeken"},"password":{"en":"Password","fr":"Mot de passe","it":"Password","es":"Contrasena","de":"Passwort","nl":"Wachtwoord"},"save_join":{"en":"Save & Join","fr":"Enregistrer & rejoindre","it":"Salva & connetti","es":"Guardar y unir","de":"Speichern & verbinden","nl":"Opslaan & verbinden"},"wifi_hint":{"en":"Saves and reboots onto your home Wi-Fi. Then open gotekomega.local for the screen or fleet leader, or reach this dongle directly at its own name.local (shown after saving).","fr":"Enregistre et redemarre sur votre Wi-Fi. Ouvrez ensuite gotekomega.local pour l’ecran ou le chef de flotte, ou ce dongle a sa propre adresse nom.local (affichee apres l’enregistrement).","it":"Salva e riavvia sul tuo Wi-Fi. Poi apri gotekomega.local per lo schermo o il capo flotta, oppure raggiungi questo dongle al suo indirizzo nome.local (mostrato dopo il salvataggio).","es":"Guarda y reinicia en tu Wi-Fi. Luego abre gotekomega.local para la pantalla o el lider, o accede a este dongle en su propia direccion nombre.local (mostrada tras guardar).","de":"Speichert und startet ins Heim-WLAN neu. Dann gotekomega.local fuer den Bildschirm oder Fleet-Leader oeffnen, oder diesen Dongle direkt unter seinem eigenen name.local erreichen (nach dem Speichern angezeigt).","nl":"Slaat op en herstart op je Wi-Fi. Open daarna gotekomega.local voor het scherm of de fleet-leider, of bereik deze dongle direct op zijn eigen naam.local (getoond na opslaan)."},"espnow_t":{"en":"ESP-NOW / GTi mode","fr":"Mode ESP-NOW / GTi","it":"Modalita ESP-NOW / GTi","es":"Modo ESP-NOW / GTi","de":"ESP-NOW / GTi-Modus","nl":"ESP-NOW / GTi-modus"},"espnow_h":{"en":"Switch back to the dongle’s own access point + ESP-NOW so a GTi screen can drive it. Reconnect to the GotekOMEGA Wi-Fi afterwards to return here.","fr":"Revenir au point d’acces du dongle + ESP-NOW pour qu’un ecran GTi le pilote. Reconnectez-vous ensuite au Wi-Fi GotekOMEGA.","it":"Torna all’access point del dongle + ESP-NOW cosi uno schermo GTi puo guidarlo. Poi riconnettiti al Wi-Fi GotekOMEGA.","es":"Vuelve al punto de acceso del dongle + ESP-NOW para que una pantalla GTi lo controle. Luego reconecta al Wi-Fi GotekOMEGA.","de":"Zurueck zum eigenen Access Point + ESP-NOW, damit ein GTi-Bildschirm steuern kann. Danach mit dem GotekOMEGA-WLAN verbinden.","nl":"Terug naar de eigen access point + ESP-NOW zodat een GTi-scherm hem aanstuurt. Verbind daarna weer met het GotekOMEGA-Wi-Fi."},"espnow_b":{"en":"Disconnect Wi-Fi → ESP-NOW","fr":"Deconnecter Wi-Fi → ESP-NOW","it":"Disconnetti Wi-Fi → ESP-NOW","es":"Desconectar Wi-Fi → ESP-NOW","de":"WLAN trennen → ESP-NOW","nl":"Wi-Fi loskoppelen → ESP-NOW"},"scanning":{"en":"Scanning...","fr":"Recherche...","it":"Ricerca...","es":"Buscando...","de":"Suche...","nl":"Zoeken..."},"no_nets":{"en":"No networks found","fr":"Aucun reseau trouve","it":"Nessuna rete trovata","es":"No se hallaron redes","de":"Keine Netzwerke gefunden","nl":"Geen netwerken gevonden"},"scan_fail":{"en":"Scan failed, try again","fr":"Echec du scan, reessayez","it":"Scansione fallita, riprova","es":"Fallo el escaneo, reintenta","de":"Suche fehlgeschlagen, erneut","nl":"Scan mislukt, opnieuw"},"save_fail":{"en":"SAVE FAILED - not stored","fr":"ECHEC - non enregistre","it":"SALVATAGGIO FALLITO","es":"ERROR - no guardado","de":"SPEICHERN FEHLGESCHLAGEN","nl":"OPSLAAN MISLUKT"},"cant_conn":{"en":"Could not connect to","fr":"Impossible de se connecter a","it":"Impossibile connettersi a","es":"No se pudo conectar a","de":"Keine Verbindung zu","nl":"Kon niet verbinden met"},"wrong_pw":{"en":"Wrong password? Check it and try again.","fr":"Mauvais mot de passe ? Verifiez et reessayez.","it":"Password errata? Controlla e riprova.","es":"Contrasena incorrecta? Revisa y reintenta.","de":"Falsches Passwort? Pruefen und erneut.","nl":"Verkeerd wachtwoord? Check en probeer opnieuw."},"saved_join":{"en":"Saved, joining","fr":"Enregistre, connexion a","it":"Salvato, connessione a","es":"Guardado, uniendo a","de":"Gespeichert, verbinde mit","nl":"Opgeslagen, verbindt met"},"enter_net":{"en":"enter a network","fr":"saisissez un reseau","it":"inserisci una rete","es":"ingresa una red","de":"Netzwerk eingeben","nl":"voer een netwerk in"},"saving":{"en":"Saving...","fr":"Enregistrement...","it":"Salvataggio...","es":"Guardando...","de":"Speichern...","nl":"Opslaan..."}};var LANG=(localStorage.getItem("lang")||(navigator.language||"en")).slice(0,2).toLowerCase();if(!I18N.disk[LANG])LANG="en";function tt(k){var e=I18N[k];return e&&e[LANG]?e[LANG]:(e?e.en:k);}function applyI18n(){document.querySelectorAll("[data-i18n]").forEach(function(el){el.textContent=tt(el.getAttribute("data-i18n"));});document.querySelectorAll("[data-i18n-ph]").forEach(function(el){el.setAttribute("placeholder",tt(el.getAttribute("data-i18n-ph")));});}function setLang(l){LANG=l;try{localStorage.setItem("lang",l);}catch(e){}applyI18n();buildLangBar();}function buildLangBar(){var b=document.getElementById("langbar");if(!b)return;b.innerHTML="";["en","fr","it","es","de","nl"].forEach(function(l){var a=document.createElement("span");a.textContent=l.toUpperCase();a.style.cssText="cursor:pointer;padding:2px 5px;font-size:11px;border-radius:4px;"+(l===LANG?"background:#3b4570;color:#fff":"color:#8b93ad");a.onclick=function(){setLang(l);};b.appendChild(a);});}document.addEventListener("DOMContentLoaded",function(){applyI18n();buildLangBar();});
+<script>var I18N={"this_dongle":{"en":"This dongle","fr":"Ce dongle","it":"Questo dongle","es":"Este dongle","de":"Dieser Dongle","nl":"Deze dongle"},"screen_fleet":{"en":"Screen / fleet","fr":"Ecran / flotte","it":"Schermo / flotta","es":"Pantalla / flota","de":"Bildschirm / Fleet","nl":"Scherm / fleet"},"dev_name":{"en":"Device name","fr":"Nom appareil","it":"Nome dispositivo","es":"Nombre del dispositivo","de":"Geraetename","nl":"Apparaatnaam"},"dev_name_ph":{"en":"e.g. amiga-desk","fr":"ex. amiga-bureau","it":"es. amiga-scrivania","es":"ej. amiga-mesa","de":"z.B. amiga-tisch","nl":"bijv. amiga-bureau"},"disk":{"en":"Disk","fr":"Disque","it":"Disco","es":"Disco","de":"Diskette","nl":"Disk"},"wifi":{"en":"Wi-Fi","fr":"Wi-Fi","it":"Wi-Fi","es":"Wi-Fi","de":"WLAN","nl":"Wi-Fi"},"in_drive":{"en":"In the drive","fr":"Dans le lecteur","it":"Nel drive","es":"En la unidad","de":"Im Laufwerk","nl":"In het station"},"no_disk":{"en":"-- no disk --","fr":"-- aucun disque --","it":"-- nessun disco --","es":"-- sin disco --","de":"-- keine Diskette --","nl":"-- geen disk --"},"load_ins":{"en":"Load an ADF to insert it","fr":"Chargez un ADF pour l’inserer","it":"Carica un ADF per inserirlo","es":"Carga un ADF para insertarlo","de":"ADF laden zum Einlegen","nl":"Laad een ADF om hem te plaatsen"},"eject":{"en":"Eject","fr":"Ejecter","it":"Espelli","es":"Expulsar","de":"Auswerfen","nl":"Uitwerpen"},"load_img":{"en":"Load image","fr":"Charger une image","it":"Carica immagine","es":"Cargar imagen","de":"Abbild laden","nl":"Image laden"},"tap_choose":{"en":"Tap to choose an ADF","fr":"Touchez pour choisir un ADF","it":"Tocca per scegliere un ADF","es":"Toca para elegir un ADF","de":"Zum Auswahlen eines ADF tippen","nl":"Tik om een ADF te kiezen"},"drag_hint":{"en":"or drag a file here","fr":"ou glissez un fichier ici","it":"o trascina un file qui","es":"o arrastra un archivo aqui","de":"oder Datei hierher ziehen","nl":"of sleep hier een bestand"},"dd_note":{"en":"DD / HD image, one disk at a time","fr":"Image DD jusqu’a ~880 Ko, un disque a la fois","it":"Immagine DD fino a ~880 KB, un disco alla volta","es":"Imagen DD hasta ~880 KB, un disco a la vez","de":"DD-Abbild bis ~880 KB, eine Diskette","nl":"DD-image tot ~880 KB, een disk tegelijk"},"home_wifi":{"en":"Home Wi-Fi","fr":"Wi-Fi domestique","it":"Wi-Fi di casa","es":"Wi-Fi de casa","de":"Heim-WLAN","nl":"Thuis-Wi-Fi"},"net_ssid":{"en":"Network (SSID)","fr":"Reseau (SSID)","it":"Rete (SSID)","es":"Red (SSID)","de":"Netzwerk (SSID)","nl":"Netwerk (SSID)"},"ssid_ph":{"en":"your home wifi name","fr":"nom de votre wifi","it":"nome del tuo wifi","es":"nombre de tu wifi","de":"Name deines WLAN","nl":"naam van je wifi"},"scan_btn":{"en":"Scan for networks","fr":"Rechercher des reseaux","it":"Cerca reti","es":"Buscar redes","de":"Netzwerke suchen","nl":"Netwerken zoeken"},"password":{"en":"Password","fr":"Mot de passe","it":"Password","es":"Contrasena","de":"Passwort","nl":"Wachtwoord"},"save_join":{"en":"Save & Join","fr":"Enregistrer & rejoindre","it":"Salva & connetti","es":"Guardar y unir","de":"Speichern & verbinden","nl":"Opslaan & verbinden"},"wifi_hint":{"en":"Saves and reboots onto your home Wi-Fi. Then open gotekomega.local for the screen or fleet leader, or reach this dongle directly at its own name.local (shown after saving).","fr":"Enregistre et redemarre sur votre Wi-Fi. Ouvrez ensuite gotekomega.local pour l’ecran ou le chef de flotte, ou ce dongle a sa propre adresse nom.local (affichee apres l’enregistrement).","it":"Salva e riavvia sul tuo Wi-Fi. Poi apri gotekomega.local per lo schermo o il capo flotta, oppure raggiungi questo dongle al suo indirizzo nome.local (mostrato dopo il salvataggio).","es":"Guarda y reinicia en tu Wi-Fi. Luego abre gotekomega.local para la pantalla o el lider, o accede a este dongle en su propia direccion nombre.local (mostrada tras guardar).","de":"Speichert und startet ins Heim-WLAN neu. Dann gotekomega.local fuer den Bildschirm oder Fleet-Leader oeffnen, oder diesen Dongle direkt unter seinem eigenen name.local erreichen (nach dem Speichern angezeigt).","nl":"Slaat op en herstart op je Wi-Fi. Open daarna gotekomega.local voor het scherm of de fleet-leider, of bereik deze dongle direct op zijn eigen naam.local (getoond na opslaan)."},"espnow_t":{"en":"ESP-NOW / GTi mode","fr":"Mode ESP-NOW / GTi","it":"Modalita ESP-NOW / GTi","es":"Modo ESP-NOW / GTi","de":"ESP-NOW / GTi-Modus","nl":"ESP-NOW / GTi-modus"},"espnow_h":{"en":"Switch back to the dongle’s own access point + ESP-NOW so a GTi screen can drive it. Reconnect to the GotekOMEGA Wi-Fi afterwards to return here.","fr":"Revenir au point d’acces du dongle + ESP-NOW pour qu’un ecran GTi le pilote. Reconnectez-vous ensuite au Wi-Fi GotekOMEGA.","it":"Torna all’access point del dongle + ESP-NOW cosi uno schermo GTi puo guidarlo. Poi riconnettiti al Wi-Fi GotekOMEGA.","es":"Vuelve al punto de acceso del dongle + ESP-NOW para que una pantalla GTi lo controle. Luego reconecta al Wi-Fi GotekOMEGA.","de":"Zurueck zum eigenen Access Point + ESP-NOW, damit ein GTi-Bildschirm steuern kann. Danach mit dem GotekOMEGA-WLAN verbinden.","nl":"Terug naar de eigen access point + ESP-NOW zodat een GTi-scherm hem aanstuurt. Verbind daarna weer met het GotekOMEGA-Wi-Fi."},"espnow_b":{"en":"Disconnect Wi-Fi → ESP-NOW","fr":"Deconnecter Wi-Fi → ESP-NOW","it":"Disconnetti Wi-Fi → ESP-NOW","es":"Desconectar Wi-Fi → ESP-NOW","de":"WLAN trennen → ESP-NOW","nl":"Wi-Fi loskoppelen → ESP-NOW"},"scanning":{"en":"Scanning...","fr":"Recherche...","it":"Ricerca...","es":"Buscando...","de":"Suche...","nl":"Zoeken..."},"no_nets":{"en":"No networks found","fr":"Aucun reseau trouve","it":"Nessuna rete trovata","es":"No se hallaron redes","de":"Keine Netzwerke gefunden","nl":"Geen netwerken gevonden"},"scan_fail":{"en":"Scan failed, try again","fr":"Echec du scan, reessayez","it":"Scansione fallita, riprova","es":"Fallo el escaneo, reintenta","de":"Suche fehlgeschlagen, erneut","nl":"Scan mislukt, opnieuw"},"save_fail":{"en":"SAVE FAILED - not stored","fr":"ECHEC - non enregistre","it":"SALVATAGGIO FALLITO","es":"ERROR - no guardado","de":"SPEICHERN FEHLGESCHLAGEN","nl":"OPSLAAN MISLUKT"},"cant_conn":{"en":"Could not connect to","fr":"Impossible de se connecter a","it":"Impossibile connettersi a","es":"No se pudo conectar a","de":"Keine Verbindung zu","nl":"Kon niet verbinden met"},"wrong_pw":{"en":"Wrong password? Check it and try again.","fr":"Mauvais mot de passe ? Verifiez et reessayez.","it":"Password errata? Controlla e riprova.","es":"Contrasena incorrecta? Revisa y reintenta.","de":"Falsches Passwort? Pruefen und erneut.","nl":"Verkeerd wachtwoord? Check en probeer opnieuw."},"saved_join":{"en":"Saved, joining","fr":"Enregistre, connexion a","it":"Salvato, connessione a","es":"Guardado, uniendo a","de":"Gespeichert, verbinde mit","nl":"Opgeslagen, verbindt met"},"enter_net":{"en":"enter a network","fr":"saisissez un reseau","it":"inserisci una rete","es":"ingresa una red","de":"Netzwerk eingeben","nl":"voer een netwerk in"},"saving":{"en":"Saving...","fr":"Enregistrement...","it":"Salvataggio...","es":"Guardando...","de":"Speichern...","nl":"Opslaan..."}};var LANG=(localStorage.getItem("lang")||(navigator.language||"en")).slice(0,2).toLowerCase();if(!I18N.disk[LANG])LANG="en";function tt(k){var e=I18N[k];return e&&e[LANG]?e[LANG]:(e?e.en:k);}function applyI18n(){document.querySelectorAll("[data-i18n]").forEach(function(el){el.textContent=tt(el.getAttribute("data-i18n"));});document.querySelectorAll("[data-i18n-ph]").forEach(function(el){el.setAttribute("placeholder",tt(el.getAttribute("data-i18n-ph")));});}function setLang(l){LANG=l;try{localStorage.setItem("lang",l);}catch(e){}applyI18n();buildLangBar();}function buildLangBar(){var b=document.getElementById("langbar");if(!b)return;b.innerHTML="";["en","fr","it","es","de","nl"].forEach(function(l){var a=document.createElement("span");a.textContent=l.toUpperCase();a.style.cssText="cursor:pointer;padding:2px 5px;font-size:11px;border-radius:4px;"+(l===LANG?"background:#3b4570;color:#fff":"color:#8b93ad");a.onclick=function(){setLang(l);};b.appendChild(a);});}document.addEventListener("DOMContentLoaded",function(){applyI18n();buildLangBar();});
 function fmt(b){return b>=1048576?(b/1048576).toFixed(2)+' MB':Math.round(b/1024)+' KB';}
 function san(s){var o='',last='';for(var i=0;i<s.length&&o.length<24;i++){var c=s.charAt(i).toLowerCase();if(c>='a'&&c<='z'||c>='0'&&c<='9'){o+=c;last=c;}else if(o.length&&last!=='-'){o+='-';last='-';}}return o.replace(/-+$/,'');}
 function toast(m,e){var t=document.getElementById('toast');t.textContent=m;t.classList.toggle('err',!!e);t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(function(){t.classList.remove('show')},2600);}
 function view(v){document.getElementById('vDisk').classList.toggle('hidden',v!=='disk');document.getElementById('vWifi').classList.toggle('hidden',v!=='wifi');document.getElementById('tabDisk').classList.toggle('on',v==='disk');document.getElementById('tabWifi').classList.toggle('on',v==='wifi');}
+var maxImageBytes=0;
 function paint(s){
+ maxImageBytes=s.max_image_bytes||0;
+ var note=document.querySelector('[data-i18n="dd_note"]');if(note&&maxImageBytes)note.textContent="DD / HD, up to "+fmt(maxImageBytes);
  var pill=document.getElementById('conntxt'),dot=document.getElementById('condot');
  if(s.mode==='wifi'){pill.textContent=s.ip||'gotekomega.local';dot.classList.remove('ap');}else{pill.textContent='ESP-NOW / AP';dot.classList.add('ap');}
  var ab=document.getElementById('addrbox');
@@ -753,7 +845,7 @@ function poll(){fetch('/status').then(function(r){return r.json()}).then(paint).
 function picked(f){
  if(!f)return;
  if(!/\.(adf|adz|img)$/i.test(f.name)){toast('Not an ADF (.adf .adz .img)',1);return;}
- if(f.size>1048576){toast('HD image too big - DD only (~880 KB)',1);return;}
+ if(maxImageBytes && f.size>maxImageBytes){toast('Image exceeds '+fmt(maxImageBytes),1);return;}
  var fd=new FormData();fd.append('f',f,f.name);
  var x=new XMLHttpRequest();x.open('POST','/upload');
  var prog=document.getElementById('prog'),bar=document.getElementById('bar');prog.style.display='block';bar.style.width='0';
@@ -793,28 +885,40 @@ static void loadTheme(){
 // ── Web OTA (added by OMEGAWARE): flash a new firmware over WiFi into the
 // inactive OTA slot. Uses the WebServer upload stream (Webby is not our
 // client-parser firmware). First byte must be 0xE9 (an ESP32 image).
-static bool g_ota_ok=false, g_ota_run=false, g_ota_first=false;
+static GotekOtaUpload g_ota;
 static void onOtaUpload(){
   HTTPUpload& up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
-    g_ota_ok=false; g_ota_first=true;
-    g_ota_run = Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
-  } else if (up.status == UPLOAD_FILE_WRITE && g_ota_run) {
-    if (g_ota_first) { g_ota_first=false; if (up.currentSize>0 && up.buf[0]!=0xE9) { Update.abort(); g_ota_run=false; return; } }
-    if (Update.write(up.buf, up.currentSize) != up.currentSize) { g_ota_run=false; }
-  } else if (up.status == UPLOAD_FILE_END && g_ota_run) {
-    g_ota_ok = Update.end(true);
+    if (g_disk_loaded || g_dirty_count) {
+      g_ota.reject(409, "Save and eject the loaded disk before updating firmware");
+      return;
+    }
+    if (up.filename.endsWith(".merged.bin")) {
+      g_ota.reject(400, "Select the application .ino.bin file; merged images are for USB");
+      return;
+    }
+    g_ota.start();
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    g_ota.write(up.buf, up.currentSize);
+  } else if (up.status == UPLOAD_FILE_END) {
+    g_ota.end(up.totalSize);
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    g_ota.abort();
   }
 }
 static void onOtaDone(){
-  server.send(200, "application/json", g_ota_ok ? "{\"status\":\"ok\"}" : "{\"error\":\"firmware update failed - not an ESP32 image?\"}");
-  if (g_ota_ok) { delay(600); ESP.restart(); }
+  int code = g_ota.consume();
+  server.send(code, "application/json", code == 200 ? String("{\"status\":\"ok\"}")
+    : String("{\"error\":\"") + jsonEsc(g_ota.error()) + "\"}");
+  if (code == 200) { delay(600); ESP.restart(); }
 }
 
 static void apiSystemInfo(){
   String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
   String j = "{";
+  j += "\"max_image_bytes\":"+String(MAX_FILE_BYTES)+",";
   j += "\"firmware\":\""; j += FW_VERSION; j += "\",";
+  j += "\"build\":\"" __DATE__ " " __TIME__ "\",";
   j += "\"heap_free\":"; j += String((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL)); j += ",";
   j += "\"psram_free\":"; j += String((unsigned)ESP.getFreePsram()); j += ",";
   j += "\"sd_used_mb\":0,\"sd_total_mb\":0,";
@@ -845,24 +949,40 @@ static void apiDiskStatus(){
   server.send(200,"application/json", j);
 }
 static void apiDiskUnload(){
+  if(!prepareWebChange()){server.send(409,"application/json","{\"error\":\"Pending saves\"}");return;}
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   dirtyReset(); g_loaded_name=""; digitalWrite(LED_BLUE, LOW);
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
+static void apiGamesList(){
+  String name = g_disk_loaded ? jsonEsc(g_loaded_name) : String("");
+  server.send(200, "application/json", String("{\"mode\":\"ADF\",\"loaded_game\":\"") + name +
+    "\",\"loaded_file\":\"" + name + "\",\"games\":[]}");
+}
 static void apiGamesUploadDone(){
-  if (g_up_overflow) { server.send(413,"application/json","{\"error\":\"image too big for the HD ramdisk\"}"); return; }
-  if (g_up_recv == 0) { server.send(400,"application/json","{\"error\":\"empty upload\"}"); return; }
+  if(!acceptWebUpload())return;
   g_loaded_name = g_up_name;
   webFinishLoad();
   String j = "{\"name\":\""; j += jsonEsc(g_up_name); j += "\",\"bytes\":"; j += String((unsigned)g_up_recv); j += "}";
   server.send(200,"application/json", j);
 }
 static void apiWifiStatus(){
-  bool sta = (WiFi.status()==WL_CONNECTED);
-  String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
-  String j = "{\"sta\":"; j += (sta?"true":"false");
-  j += ",\"ip\":\""; j += ip; j += "\",\"sta_ssid\":\""; j += jsonEsc(g_ssid); j += "\"}";
-  server.send(200,"application/json", j);
+  bool sta = (WiFi.status() == WL_CONNECTED);
+  bool ap = (WiFi.getMode() & WIFI_MODE_AP) != 0;
+  String staIp = sta ? WiFi.localIP().toString() : String("");
+  String apIp = ap ? WiFi.softAPIP().toString() : String("");
+  String ssid = sta ? WiFi.SSID() : g_ssid;
+  // Keep the original fields for older clients, and supply the dashboard API.
+  String j = "{\"sta\":"; j += (sta ? "true" : "false");
+  j += ",\"ip\":\""; j += (sta ? staIp : apIp);
+  j += "\",\"sta_connected\":"; j += (sta ? "true" : "false");
+  j += ",\"sta_ip\":\""; j += staIp;
+  j += "\",\"sta_ssid\":\""; j += jsonEsc(ssid);
+  j += "\",\"ap_active\":"; j += (ap ? "true" : "false");
+  j += ",\"ap_ip\":\""; j += apIp;
+  j += "\",\"ap_clients\":"; j += String((unsigned)WiFi.softAPgetStationNum());
+  j += "}";
+  server.send(200, "application/json", j);
 }
 static void apiConfig(){
   String j = "{";
@@ -872,15 +992,47 @@ static void apiConfig(){
   j += "\"WIFI_CLIENT_ENABLED\":\""; j += (g_webmode==1?"1":"0"); j += "\",";
   j += "\"WIFI_CLIENT_SSID\":\""; j += jsonEsc(g_ssid); j += "\",";
   j += "\"WIFI_CLIENT_PASS\":\"\",";
+  j += "\"WIFI_CLIENT_PASS_SAVED\":\""; j += (g_pass.length() ? "1" : "0"); j += "\",";
+  j += "\"DEVICE_NAME\":\""; j += jsonEsc(discoName()); j += "\",";
   j += "\"FTP_ENABLED\":\"0\",\"DAV_ENABLED\":\"0\"";
   j += "}";
   server.send(200,"application/json", j);
 }
+static void apiWifiPassword(){
+  // Only an explicit eye-button request returns the stored password.
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", String("{\"password\":\"") + jsonEsc(g_pass) + "\"}");
+}
 static void apiConfigSave(){
-  String ssid = server.arg("WIFI_CLIENT_SSID");
-  String pass = server.arg("WIFI_CLIENT_PASS");
-  if (ssid.length()) { saveWifiCfg(ssid, pass); server.send(200,"application/json","{\"status\":\"ok\",\"reboot\":true}"); delay(400); ESP.restart(); return; }
-  server.send(200,"application/json","{\"status\":\"ok\"}");
+  String ssid = server.hasArg("WIFI_CLIENT_SSID") ? server.arg("WIFI_CLIENT_SSID") : g_ssid;
+  String pass = server.hasArg("WIFI_CLIENT_PASS") ? server.arg("WIFI_CLIENT_PASS") : g_pass;
+  if(pass.length()==0 && ssid==g_ssid && server.arg("WIFI_CLIENT_PASS_CLEAR")!="1")pass=g_pass;
+  String name = server.hasArg("DEVICE_NAME") ? sanitizeName(server.arg("DEVICE_NAME")) : g_devname;
+  if (server.hasArg("DEVICE_NAME") &&
+      ((server.arg("DEVICE_NAME").length() && !name.length()) || name == MDNS_NAME)) {
+    server.send(400, "application/json", "{\"error\":\"Choose a device name with letters or digits; gotekomega is reserved for the fleet\"}");
+    return;
+  }
+  if (name == discoName()) name = g_devname; // Leave an automatic name automatic.
+  String mode = g_modeStr.length() ? g_modeStr : String("ESPNOW");
+  if (server.hasArg("WIFI_CLIENT_ENABLED"))
+    mode = server.arg("WIFI_CLIENT_ENABLED") == "1" ? "WIFI" : "ESPNOW";
+  else if (ssid != g_ssid) mode = "WIFI";
+  if (mode == "WIFI" && !ssid.length()) {
+    server.send(400, "application/json", "{\"error\":\"Enter a Wi-Fi network name\"}"); return;
+  }
+  if(ssid==g_ssid && pass==g_pass && name==g_devname && mode==g_modeStr){
+    server.send(200,"application/json","{\"status\":\"ok\"}"); return;
+  }
+  if (g_disk_loaded || g_dirty_count) {
+    server.send(409, "application/json", "{\"error\":\"Save and eject the loaded disk before changing device settings\"}"); return;
+  }
+  if (!writeWifiCfg(ssid, pass, mode, name)) {
+    server.send(500, "application/json", "{\"error\":\"Could not save device settings; please retry\"}"); return;
+  }
+  g_ssid=ssid; g_pass=pass; g_devname=name; g_modeStr=mode;
+  server.send(200, "application/json", String("{\"status\":\"ok\",\"reboot\":true,\"hostname\":\"") + discoName() + "\"}");
+  delay(400); ESP.restart();
 }
 static void apiReboot(){ server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
 static void apiThemesList(){
@@ -932,6 +1084,7 @@ static void sendAliveBeacon(){
 // ── FLEET: peer roster (from beacons) + lowest-MAC master election ──────────
 struct FleetPeer { String id, name, ip, fw; bool hd; bool loaded; bool isPanel; uint32_t seen; };   // #rule: isPanel = a screen; a screen always leads, so dongles defer
 static FleetPeer g_peers[16]; static int g_peer_n = 0;
+static GotekFleetAlias g_fleet_alias;
 static bool      g_is_master = false;
 static uint32_t  g_next_elect_ms = 0;
 #define FLEET_STALE_MS 40000   // drop a peer unheard for >40 s (~3 missed beacons)
@@ -967,11 +1120,11 @@ static void doElection(){   // a screen always leads; otherwise the lowest MAC w
   String me=discoId(); bool master=true;
   for(int i=0;i<g_peer_n;i++) if(g_peers[i].isPanel){ master=false; break; }   // #rule: a panel (screen) is present -> it is the leader, dongles defer (stay gotekomega-<mac>.local)
   if(master) for(int i=0;i<g_peer_n;i++) if(g_peers[i].id < me){ master=false; break; }
+  // Keep the per-device hostname while adding the fleet leader alias.
+  if (discoName() != MDNS_NAME &&
+      !g_fleet_alias.setLeader(master, MDNS_NAME, (uint32_t)WiFi.localIP())) return;
   if(master!=g_is_master){
     g_is_master=master;
-    MDNS.end();
-    if(master) MDNS.begin(MDNS_NAME); else MDNS.begin(discoName().c_str());
-    MDNS.addService("http","tcp",80);
     Serial.printf("[FLEET] now %s -> %s.local\n", master?"MASTER":"slave", master?MDNS_NAME:discoName().c_str());
   }
 }
@@ -1006,8 +1159,10 @@ static void startWebServer(){
   server.on("/api/disk/status",  HTTP_GET,  apiDiskStatus);
   server.on("/api/disk/unload",  HTTP_POST, apiDiskUnload);
   server.on("/api/games/upload", HTTP_POST, apiGamesUploadDone, handleUpload);
-  server.on("/api/games/list",   HTTP_GET,  [](){ server.send(200,"application/json","{\"games\":[]}"); });
+  server.on("/api/games/list",   HTTP_GET,  apiGamesList);
   server.on("/api/wifi/status",  HTTP_GET,  apiWifiStatus);
+  server.on("/api/wifi/scan",    HTTP_GET,  handleScan);
+  server.on("/api/wifi/password",HTTP_POST, apiWifiPassword);
   server.on("/api/config",       HTTP_GET,  apiConfig);
   server.on("/api/config",       HTTP_POST, apiConfigSave);
   server.on("/api/system/reboot",HTTP_POST, apiReboot);
@@ -1100,7 +1255,8 @@ static void startEspnowApMode(){
   WiFi.mode(WIFI_AP_STA);
   // Unique AP name per device: two dongles in one room both broadcasting
   // "GotekOMEGA" is impossible to tell apart (you configure the wrong one).
-  uint8_t apm[6]; WiFi.macAddress(apm);
+  uint8_t apm[6];
+  if(esp_read_mac(apm,ESP_MAC_WIFI_STA)!=ESP_OK){Serial.println("Cannot read WiFi MAC");return;}
   char apid[24]; snprintf(apid, sizeof(apid), "%s-%02X%02X", AP_SSID, apm[4], apm[5]);
   char apline[32]; snprintf(apline, sizeof(apline), "AP: %s", apid);
   WiFi.softAP(apid, AP_PASS, ESPNOW_CHANNEL);
@@ -1126,10 +1282,10 @@ static void startEspnowApMode(){
   uint32_t t0 = millis();
   while (millis()-t0 < (uint32_t)(_paired ? 8000 : 3000)) {
     PktHello hello = {}; hello.type = PKT_PAIR_HELLO; WiFi.softAPmacAddress(hello.mac);
-    strncpy(hello.ip, AP_IP, 15); hello.pad[0] = SAVE_PROTO_VER;
+    strncpy(hello.ip, AP_IP, 15); hello.pad[0] = SAVE_PROTO_VER; hello.pad[1] = 1;
     if (_bcastPeer) _bcastPeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     if (_wavePeer)  _wavePeer->send_pkt((uint8_t*)&hello, sizeof(hello));
-    RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len);
+    RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.source,pkt.data,pkt.len,pkt.broadcast);
     WiFiClient c = _tcpServer.accept(); if (c) handleTCPClient(c);
     server.handleClient(); dnsServer.processNextRequest();
     delay(120);
@@ -1180,7 +1336,7 @@ void setup() {
     if (WiFi.status() == WL_CONNECTED) {
       g_webmode = 1;
       g_is_master = false;
-      if (MDNS.begin(discoName().c_str())) MDNS.addService("http","tcp",80);   // start as self; election may promote to gotekomega.local
+      if (MDNS.begin(discoName().c_str())) MDNS.addService("http","tcp",80);   // permanent device name; election adds gotekomega.local as an alias
       _tcpServer.begin();        // app can reach us over the LAN too
       _disco.begin(GTI_DISCO_PORT);   // FLEET: open discovery socket
       g_next_alive_ms = 0;            // FLEET: beacon on the next loop tick
@@ -1204,7 +1360,7 @@ void loop() {
   if (g_dns_up) dnsServer.processNextRequest();
 
   // ESP-NOW control queue (only meaningful in AP/ESP-NOW mode; harmless otherwise)
-  RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len);
+  RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.source,pkt.data,pkt.len,pkt.broadcast);
 
   // TCP app transfers (begun in both modes)
   WiFiClient client = _tcpServer.accept();

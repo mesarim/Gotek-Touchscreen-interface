@@ -222,7 +222,7 @@ static void hDiskStatus() {
 }
 
 static void hDiskUnload() {
-  doUnload();
+  if(!doUnload()){webPanelHttp.send(409,"application/json","{\"error\":\"Save or eject failed; disk retained\"}");return;}
   g_webDavLoaded = "";
   webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}");
 }
@@ -343,20 +343,30 @@ static void otaDone() {
 
 // ── Game/image upload (streamed into the RAM disk, then mounted) ────────────
 
-static size_t g_guRecv = 0; static bool g_guOverflow = false; static String g_guName = "";
-static void guUpload() {
-  HTTPUpload &up = webPanelHttp.upload();
-  if (up.status == UPLOAD_FILE_START) {
-    hardDetach(); g_guRecv = 0; g_guOverflow = false; g_guName = up.filename;
-  } else if (up.status == UPLOAD_FILE_WRITE) {
-    uint8_t *dst = g_disk + DATA_LBA * 512;
-    if (g_guRecv + up.currentSize <= (size_t)MAX_FILE_BYTES) { memcpy(dst + g_guRecv, up.buf, up.currentSize); g_guRecv += up.currentSize; }
-    else g_guOverflow = true;
-  }
+#include "image_upload.h"
+static GotekImageUpload g_guUpload;
+static size_t g_guRecv=0;static String g_guName="";
+static void guUpload(){
+  HTTPUpload& up=webPanelHttp.upload();
+  if(up.status==UPLOAD_FILE_START){
+    if(!g_guUpload.start())return;
+    g_guRecv=0;g_guName=up.filename;
+    if(!svPrepareChange()){g_guUpload.reject(409);return;}
+    invalidateLocalImage();
+  }else if(up.status==UPLOAD_FILE_WRITE){
+    if(g_guUpload.write(up.currentSize,MAX_FILE_BYTES)){
+      memcpy(g_disk+DATA_LBA*512+g_guRecv,up.buf,up.currentSize);
+      g_guRecv+=up.currentSize;
+    }
+  }else if(up.status==UPLOAD_FILE_END){g_guUpload.end(up.totalSize);}
+  else if(up.status==UPLOAD_FILE_ABORTED){g_guUpload.abort();}
 }
 static void guDone() {
-  if (g_guOverflow) { hardAttach(); webPanelHttp.send(400, "application/json", "{\"error\":\"Image is larger than this board's volume\"}"); return; }
-  if (g_guRecv == 0) { hardAttach(); webPanelHttp.send(400, "application/json", "{\"error\":\"Upload was empty\"}"); return; }
+  int code=g_guUpload.consume();
+  if(code!=200){
+    webPanelHttp.send(code,"application/json","{\"error\":\"Upload rejected, incomplete, or blocked by pending saves\"}");
+    return;
+  }
   memset(g_disk, 0, DATA_LBA * 512);
   build_boot_sector(g_disk);
   build_fat(g_disk + RESERVED_SECTORS * 512, (uint32_t)g_guRecv);

@@ -7,11 +7,13 @@
 //       We use compile-time detection to handle both core 2.x and 3.x.
 
 #include "espnow_server.h"
+#include "../shared/dongle_wifi.h"
 #include <Arduino.h>
 #include <esp_now.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
 #include <SD.h>
+#include "../shared/owner_keys.h"
 #include <WiFiClient.h>
 
 #define ESPNOW_CHANNEL 6
@@ -133,6 +135,9 @@ static void handleIncoming(const uint8_t* data, int len, const uint8_t* src_mac)
   }
 
   if (type == PKT_PAIR_REPLY) {
+    if(len!=sizeof(PktHello))return;
+    const PktHello* p=(const PktHello*)data;
+    if(data[25]==1 && !GotekAuth::acceptReply(SD,p->mac,data,len))return;
     g_espnow_xiao_last_seen = millis();
     Serial.println("[NOW] PAIR_REPLY — XIAO session locked");
     return;
@@ -351,7 +356,7 @@ bool espnowSendDisk(uint32_t size) {
 
   esp_now_deinit(); delay(100);
   WiFi.mode(WIFI_STA); delay(100);
-  WiFi.begin(XIAO_AP_SSID, XIAO_AP_PASS);
+  gotekBeginDongle(_xiao_mac,XIAO_AP_PASS);
   uint32_t t0=millis();
   while (WiFi.status()!=WL_CONNECTED && millis()-t0<15000) { delay(200); Serial.print("."); }
   Serial.println();
@@ -420,5 +425,6 @@ void espnowSendEject() {
   static const uint8_t bcast[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
   const uint8_t* dst = g_espnow_paired ? _xiao_mac : bcast;
   PktSimple pkt={}; pkt.type=PKT_DISK_EJECT;
+  if(!GotekAuth::signCommand(_xiao_mac,(uint8_t*)&pkt,sizeof(pkt)))return;
   esp_now_send(dst, (uint8_t*)&pkt, sizeof(pkt));
 }

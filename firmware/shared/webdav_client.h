@@ -613,6 +613,7 @@ public:
     } else if (!complete) {
       _lastError = "Transfer incomplete (" + String(totalBytes) + " B)";
       _log("DAV: " + _lastError);
+      return -1;
     }
 
     _log("DAV: streamed " + String(totalBytes) + " bytes to RAM");
