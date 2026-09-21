@@ -30,10 +30,11 @@
 #include <vector>
 #include <algorithm>
 #include <set>
+#include <map>
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.13-7B cpubump"
+#define FW_VERSION "5.9.23-7B sidework"
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -221,6 +222,21 @@ static const uint8_t font6x8[95][6] PROGMEM = {
 static uint16_t *framebuffer = NULL;   // P4: the 480x800 compose buffer (PSRAM)
 static JPEGDEC jpegdec;
 static PNG     pngdec;   // v4.8.4 PNG cover support
+// ── SD access mutex (5.9.18 cover worker) ──────────────────────────────────────
+// The cover-decode worker runs on core 1 and reads JPEGs from SD while the UI core
+// also uses SD (game load, .tnl reads, NFO). This recursive mutex serialises the
+// heavy sequences so they never interleave inside FatFS. Created in setup() before
+// the worker starts; until then SD_LOCK is a no-op (boot is single-threaded).
+static SemaphoreHandle_t g_sd_mtx=NULL;
+#define SD_LOCK()   do{ if(g_sd_mtx) xSemaphoreTakeRecursive(g_sd_mtx, portMAX_DELAY); }while(0)
+#define SD_UNLOCK() do{ if(g_sd_mtx) xSemaphoreGiveRecursive(g_sd_mtx); }while(0)
+// Micro-block mutex — guards car_micro_block realloc (carMicroInit, e.g. reel entry) against
+// the worker's carMicroFromTile write. SEPARATE from g_lib_mtx on purpose: carMicroInit does
+// NOT touch g_games, so it must not wait behind the worker's whole ~1s build/confirm sweep
+// (that was the multi-second reel-entry stall). This lock is held only for microseconds.
+static SemaphoreHandle_t g_micro_mtx=NULL;
+#define MICRO_LOCK()   do{ if(g_micro_mtx) xSemaphoreTakeRecursive(g_micro_mtx, portMAX_DELAY); }while(0)
+#define MICRO_UNLOCK() do{ if(g_micro_mtx) xSemaphoreGiveRecursive(g_micro_mtx); }while(0)
 
 static inline uint16_t swap16(uint16_t c){return c;}   // P4 DSI: native LE, no swap
 static inline void fb_setPixel(int vx,int vy,uint16_t color){
@@ -313,6 +329,10 @@ static int      g_cover_bi=0;           // linear sweep cursor
 static int      g_cover_done=0;         // decoded this session (progress readout)
 static int      g_cover_need=0;         // total that needed building at boot (progress denominator)
 static uint16_t*g_cover_bgbuf=NULL;     // persistent decode target for the bg builder
+static volatile bool g_wrk_run=false;   // 5.9.18 cover worker active (early decl: coverBgTick/reel-rest gate on it)
+static bool g_cover_worker_cfg=true;    // COVERWORKER= (early decl: loadConfig sets it); default ON
+static void wrkPark();                   // fwd (defined with the worker); no-op until the task exists
+static void wrkUnpark();
 static char     g_cvdbg[24]="-";        // cover-build diagnostic (shown on DIAG overlay): last outcome
 static bool      g_micro_need=false;     // reel micro-thumb set still needs background filling (no valid sidecar)
 static uint16_t* car_micro_block=NULL;   // reel resident micro set: n*dim*dim RGB565, contiguous (PSRAM)
@@ -719,6 +739,18 @@ static bool isGenImage(const String&u){
 }
 static std::set<String> g_coverset;   // 5.3.7: lowercased cover-image paths (jpg/png) harvested during the scan walk, so buildThumbs resolves each cover from RAM instead of probing the card. Covers ONLY — .nfo/.rtfm are read on demand when you open a game, never in bulk, so they were dead weight here.
 static inline bool isCoverExtU(const String&u){return u.endsWith(".JPG")||u.endsWith(".JPEG")||u.endsWith(".PNG");}
+// ── 5.9.22 NFO blurb harvest ─────────────────────────────────────────────────
+// The ~1s tap latency was the per-selection .nfo read (findNFOFor stats + open, both
+// dir-scans on a 1000+ file flat folder). Fix: harvest every .nfo's title+blurb DURING
+// the scan walk — the file handle is already open (openNextFile), so it's a 512-byte read
+// with NO extra dir-scan — into this RAM map, then persist to /<mode>/.nfocache keyed by
+// carGamesSig(). Warm boots restore blurbs straight into PSRAM (g_games[].blurb): tapping
+// a game shows its blurb with ZERO card I/O. The sig means an unchanged library reuses the
+// cache on rescan instead of re-reading every NFO.
+static std::map<String,std::pair<String,String> > g_nfomap;   // lc basename (no ext) -> {title, blurb}
+static bool g_nfo_harvested=false;                            // true once this boot walked the tree (g_nfomap is then authoritative)
+static void parseNFO(const String&txt,String&t,String&b);    // fwd: defined with the game-cache helpers below
+static void nfoMapStore(const String&keyLC,const String&txt){ String t,b; parseNFO(txt,t,b); if(t.length()||b.length()) g_nfomap[keyLC]=std::make_pair(t,b); }
 // ── v5.6.0 Library Categories (CONFIG.TXT gated; folders auto-classified by content) ──
 static bool   g_categories=false;   // CATEGORIES=ON : show the category browse (a folder with no disk images but subfolders = a category)
 static bool   g_nesting=false;      // NESTING=ON : allow category recursion beyond one level
@@ -743,6 +775,7 @@ static void scanDirInto(const String& dir, std::vector<String>& out, const Strin
       size_t _imgs0=out.size();
       File e;while((e=gd.openNextFile())){String fn=e.name();int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
       if(isCoverExtU(u)){String ap=en+"/"+fn;if(!ap.startsWith("/"))ap="/"+ap;ap.toLowerCase();g_coverset.insert(ap);}
+      if(u.endsWith(".NFO")){char _nb[513];int _nr=e.read((uint8_t*)_nb,512);if(_nr<0)_nr=0;_nb[_nr]=0;String k=fn;int _kd=k.lastIndexOf('.');if(_kd>0)k=k.substring(0,_kd);k.toLowerCase();nfoMapStore(k,String(_nb));e.close();continue;}   // 5.9.22: harvest blurb while the handle is open (no dir-scan)
       if(u.indexOf(".SAV.")>=0){
         if(u.endsWith(".TMP")){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;SD_MMC.remove(fp);}
         e.close();continue;}
@@ -758,6 +791,7 @@ static void scanDirInto(const String& dir, std::vector<String>& out, const Strin
     }
     else{String fn=en;int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
       if(isCoverExtU(u)){String ap=en;ap.toLowerCase();g_coverset.insert(ap);}
+      if(u.endsWith(".NFO")){char _nb[513];int _nr=gd.read((uint8_t*)_nb,512);if(_nr<0)_nr=0;_nb[_nr]=0;String k=fn;int _kd=k.lastIndexOf('.');if(_kd>0)k=k.substring(0,_kd);k.toLowerCase();nfoMapStore(k,String(_nb));gd.close();continue;}   // 5.9.22: harvest blurb while the handle is open (no dir-scan)
       if(u.indexOf(".SAV.")>=0){
         if(u.endsWith(".TMP"))SD_MMC.remove(en);
         gd.close();continue;}
@@ -767,7 +801,7 @@ static void scanDirInto(const String& dir, std::vector<String>& out, const Strin
   root.close();
 }
 static std::vector<String> scanImagesAnimated(){
-  std::vector<String>out;g_coverset.clear();g_cats.clear();String dir=g_mode==MODE_ADF?"/ADF":g_mode==MODE_DSK?"/DSK":"/GENERIC";if(g_categories&&g_libpath.length())dir+=g_libpath;String ext=g_mode==MODE_ADF?".ADF":".DSK";
+  std::vector<String>out;g_coverset.clear();g_cats.clear();g_nfomap.clear();g_nfo_harvested=false;String dir=g_mode==MODE_ADF?"/ADF":g_mode==MODE_DSK?"/DSK":"/GENERIC";if(g_categories&&g_libpath.length())dir+=g_libpath;String ext=g_mode==MODE_ADF?".ADF":".DSK";
   // Init ball position
   ball_x=gW/2;ball_y=gH/2-30;ball_dx=3;ball_dy=2;
   // Draw initial scan screen
@@ -779,6 +813,7 @@ static std::vector<String> scanImagesAnimated(){
   gfx_flush();
   int count=0;uint32_t lastDraw=0; g_scan_t0=millis();   // 7B bench: time the scan
   scanDirInto(dir,out,ext,0,count,lastDraw);
+  g_nfo_harvested=true;   // 5.9.22: the tree was walked -> g_nfomap is authoritative (empty map = library genuinely has no NFOs)
   // Final count
   drawScanFrame(count);delay(500);
   gtiLog("SCAN  v" FW_VERSION "  sd="+String(g_sd_4bit?"4bit":"1bit")+"@"+String(g_sd_freq/1000)+"MHz  files="+String(count)+"  secs="+String((millis()-g_scan_t0)/1000.0,1)+"  freeSRAM="+String(ESP.getFreeHeap()/1024)+"K  freePSRAM="+String(ESP.getFreePsram()/1024)+"K");
@@ -1104,7 +1139,7 @@ static bool g_hotswap=false;    // ON = tapping another disk while loaded swaps 
 static bool g_forceswap=false;  // ON = swap disk bytes in place without the USB eject/re-attach cycle
 static int g_info_x=0,g_info_w=150,g_info_bottom=0;
 static String g_manual_path=""; static int g_manual_bx=0,g_manual_by=0,g_manual_bw=0,g_manual_bh=0;  // v4.9.2 .rtfm book button rect
-struct GameEntry{String name;int first_file_idx;int disk_count;String jpg_path;std::vector<int>disk_indices;bool fav=false;uint16_t plays=0;bool cover_ok=false;};
+struct GameEntry{String name;int first_file_idx;int disk_count;String jpg_path;std::vector<int>disk_indices;bool fav=false;uint16_t plays=0;bool cover_ok=false;bool cover_fail=false;uint8_t jpg_ready=0;bool cover_built=false;bool micro_filled=false;String blurb;bool nfo_done=false;};   // jpg_ready: UI resolved jpg_path -> worker may read it. cover_built: worker confirmed .tnl on SD. micro_filled: reel micro built from that .tnl. blurb: NFO body harvested into PSRAM (see .nfocache); nfo_done: blurb+title resolved (from cache or scan) -> sidecar skips the SD read
 static std::vector<String>g_files;static std::vector<GameEntry>g_games;
 static uint32_t g_lib_gen=0;   // bumped whenever g_games is rebuilt -> invalidates the pre-scaled reel cache (gi indices change)
 static int g_sel=0,g_scroll=0,g_disk_sel=0,g_loaded_game_idx=-1,g_loaded_disk_idx=-1;
@@ -1157,6 +1192,7 @@ static bool readGameCache(){
     e.disk_count=line.substring(p2+1,p3).toInt();
     e.jpg_path=line.substring(p3+1,p4);
     if(e.jpg_path=="?")e.jpg_path="";  // never trust a persisted sentinel
+    e.jpg_ready = e.jpg_path.length()?1:0;   // cache carries a resolved path -> worker may read it; empty -> UI core re-resolves first
     String indices=line.substring(p4+1);
     if(indices.length()){int pos=0;while(pos<(int)indices.length()){int comma=indices.indexOf(',',pos);if(comma<0)comma=indices.length();e.disk_indices.push_back(indices.substring(pos,comma).toInt());pos=comma+1;}}
     if(e.first_file_idx>=0&&e.first_file_idx<(int)g_files.size()) g_games.push_back(e);
@@ -1189,6 +1225,27 @@ static void parseNFO(const String&txt,String&t,String&b){
   t.trim();b.trim();
 }
 
+// Fold the harvested NFO title+blurb into g_games. Idempotent (nfo_done guards each row).
+// Returns true if any display name was adopted from an NFO title (so the caller can re-persist
+// the game cache). Authoritative after a walk: a row with no map entry is still marked nfo_done
+// with an empty blurb, so the cover-panel sidecar never re-scans the card looking for its .nfo.
+static bool assignBlurbsFromMap(){
+  bool nameChanged=false;
+  for(auto&g:g_games){
+    if(g.nfo_done)continue;
+    String raw=basenameNoExt(filenameOnly(g_files[g.first_file_idx]));
+    String k=raw;k.toLowerCase();
+    std::map<String,std::pair<String,String> >::iterator it=g_nfomap.find(k);
+    if(it==g_nfomap.end()){String gb=getGameBaseName(g_files[g.first_file_idx]);gb.toLowerCase();it=g_nfomap.find(gb);}
+    if(it!=g_nfomap.end()){
+      const String&nT=it->second.first; const String&nB=it->second.second;
+      if(nT.length()&&g.name==raw){g.name=nT;nameChanged=true;}
+      g.blurb=nB;
+    }
+    g.nfo_done=true;
+  }
+  return nameChanged;
+}
 static void buildGameList(){
   g_games.clear();std::vector<bool>used(g_files.size(),false);
   for(int i=0;i<(int)g_files.size();i++){if(used[i])continue;
@@ -1205,6 +1262,7 @@ static void buildGameList(){
     // NO NFO/JPG lookups here — done lazily in drawCoverPanel
     g_games.push_back(e);
   }
+  if(g_nfo_harvested)assignBlurbsFromMap();   // 5.9.22: adopt NFO titles + blurbs BEFORE the sort so the list orders (and the A-Z index buckets) by the display title
   std::sort(g_games.begin(),g_games.end(),[](const GameEntry&a,const GameEntry&b){String al=a.name,bl=b.name;al.toLowerCase();bl.toLowerCase();return al<bl;});
   g_lib_gen++;   // g_games changed -> stale reel cache (gi indices) must invalidate
   if(g_libpath.length()==0)writeGameCache();   // v5.6.0: only cache the top level; category sub-levels scan fresh each time
@@ -1535,6 +1593,7 @@ static void selfHealConfig(){
     {"COVERMIN", "\n# COVERMIN: hide covers whose short side is under N px (0 = show all) - keeps the reel + panel clean.\nCOVERMIN=140\n"},
     {"REELFILTER", "\n# REELFILTER: ON = the reel (cover carousel) shows only games whose cover passes COVERMIN;\n#             the A-Z list still shows every game. OFF = reel shows all games.\nREELFILTER=OFF\n"},
     {"COVERBUILD", "\n# COVERBUILD: how the cover-thumbnail cache is built the first time (or after .tnl loss).\n#   BG    = build in the background while you browse - the list is usable instantly,\n#           covers pop in one-by-one, building pauses while you touch/scroll (default).\n#   BLOCK = old behaviour: full-screen 'BUILDING' progress bar, device frozen until done.\nCOVERBUILD=BG\n"},
+    {"COVERWORKER","\n# COVERWORKER: ON (default) decodes cover thumbnails on the P4's second CPU core, so\n#   building the cache never stalls the UI - browse smoothly while covers fill. OFF = build\n#   them on the UI core (older behaviour). Turn OFF only if you suspect a stability issue.\nCOVERWORKER=ON\n"},
     {"COMPACT",  "\n# COMPACT: OFF = cover art + list, ON = maximise the game list (cover collapses to a strip)\nCOMPACT=OFF\n"},
     {"BTNSTYLE", "\n# BTNSTYLE: reel button style. PILL=rounded coloured buttons (default), FLAT=flat bar.\nBTNSTYLE=PILL\n"},
     {"CAP",      "\n# CAP: max wireless dongles the scan will list (default 32, up to 64)\nCAP=32\n"},
@@ -1585,6 +1644,7 @@ static void loadConfig(){
     else if(k=="COVERMIN"){g_covermin=v.toInt();if(g_covermin<0)g_covermin=0;}
     else if(k=="REELFILTER"){String ru=v;ru.trim();ru.toUpperCase();g_reelfilter=(ru=="ON"||ru=="1"||ru=="YES");}
     else if(k=="COVERBUILD"){String cu=v;cu.trim();cu.toUpperCase();g_cover_bg=!(cu=="BLOCK"||cu=="SYNC"||cu=="OLD"||cu=="0");}   // BG (default)=incremental idle build; BLOCK=old full-screen build
+    else if(k=="COVERWORKER"){String cw=v;cw.trim();cw.toUpperCase();g_cover_worker_cfg=!(cw=="OFF"||cw=="0"||cw=="NO");}   // 5.9.18: decode covers on core 1 (default ON); OFF = old UI-loop build
     else if(k=="COMPACT"){g_compact=(v=="ON"||v=="1");}
     else if(k=="SCREENSAVER"){g_ss_enabled=(v!="OFF"&&v!="0");}
     else if(k=="SS_IDLE"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_idle_ms=s*1000UL;}
@@ -2081,17 +2141,49 @@ static void drawMagnifier(int cx,int cy,uint16_t col){
   gfx_fillRect(cx+4,cy+4,2,2,col);
 }
 
+// Cover-panel sidecars (NFO blurb + save / HD / manual badges). These are SD lookups —
+// findNFOFor + savExistsFor + isHDImage + manualFor is ~5-7 directory-scanning exists()/
+// stat() calls plus an NFO read. 7B perf: they are DEFERRED off the selection change so the
+// cover art + name paint instantly; coverSidecarTick() (in loop) loads them on a ~100ms
+// settle and redraws. g_cp_side_sel = the selection whose sidecars are currently loaded.
+static int      g_cp_side_sel=-1;
+static uint32_t g_cp_side_gen=0xFFFFFFFF;   // tracks g_lib_gen so a library reload auto-invalidates
+static String g_cp_blurb="";
+static bool   g_cp_hasSav=false, g_cp_hd=false;
+static String g_cp_manual="";
+static int    g_cp_step=0;      // 5.9.21: sidecar load is CHUNKED — one SD op-group per UI frame
+static String g_cp_nfoP="";     // NFO path carried from the find step to the read step
+// Run ONE sidecar sub-step and return true when the whole bundle is done for g_sel. Splitting it
+// this way means the UI loop never blocks on the full findNFO+read+sav+HD+manual bundle at once
+// (that all-at-once load was the "delay while the .nfo loads"). Each call does ~one SD op group.
+static bool sidecarStep(){
+  if(g_games.empty())return true;
+  auto&game=g_games[g_sel];
+  switch(g_cp_step){
+    case 0:  // resolve the cover path (if not yet) + locate the NFO
+      if(!game.jpg_path.length()){String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg))game.jpg_path=jpg;else game.jpg_path="?";}
+      if(game.nfo_done){ g_cp_blurb=game.blurb; g_cp_nfoP=""; g_cp_step=2; return false; }   // 5.9.22: blurb already in PSRAM (.nfocache / prior scan) -> skip the .nfo find+read entirely
+      { String nfoP; g_cp_nfoP = findNFOFor(g_files[game.first_file_idx],nfoP)?nfoP:""; }
+      g_cp_step=1; return false;
+    case 1:  // on-demand fallback (no cache yet): read the NFO blurb + adopt its title if the row still shows the filename
+      g_cp_blurb="";
+      if(g_cp_nfoP.length()){File nf=SD_MMC.open(g_cp_nfoP,FILE_READ);if(nf){char _nb[513];int _nr=nf.read((uint8_t*)_nb,512);if(_nr<0)_nr=0;_nb[_nr]=0;nf.close();String txt(_nb),nT,nB;parseNFO(txt,nT,nB);
+        if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=nT;g_cp_blurb=nB;}}
+      game.blurb=g_cp_blurb; game.nfo_done=true;   // 5.9.22: cache it in RAM so re-tapping this game is instant even before the file cache exists
+      g_cp_step=2; return false;
+    case 2:  g_cp_hasSav=(g_saves_mode==1)&&savExistsFor(g_files[game.first_file_idx]); g_cp_step=3; return false;
+    case 3:  g_cp_hd=(g_mode==MODE_ADF)&&isHDImage(g_files[game.first_file_idx]);      g_cp_step=4; return false;
+    case 4:  { g_cp_manual=""; String mp; if(manualFor(g_files[game.first_file_idx],mp))g_cp_manual=mp; } g_cp_step=5; return false;
+    default: g_cp_side_sel=g_sel; g_cp_side_gen=g_lib_gen; g_cp_step=0; return true;   // published — drawCoverPanel now shows badges/blurb
+  }
+}
 static void drawCoverPanel(){
   g_manual_bw=0;   // v4.9.2: cleared each draw; set below only if this game has a .rtfm
   if(!COVER_ON)return;
   gfx_fillRect(COVER_X,COVER_Y,COVER_W,COVER_H,COL_PANEL);if(g_games.empty())return;
   auto&game=g_games[g_sel];
   if(!game.jpg_path.length()){String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg))game.jpg_path=jpg;else game.jpg_path="?";}
-  static int lastNfoSel=-1;static String cachedNfoBlurb="";static bool cachedHasSav=false;static bool cachedHD=false;static String cachedManual="";
-  if(lastNfoSel!=g_sel){lastNfoSel=g_sel;cachedNfoBlurb="";String nfoP,nT,nB;
-    if(findNFOFor(g_files[game.first_file_idx],nfoP)){File nf=SD_MMC.open(nfoP,FILE_READ);if(nf){String txt;while(nf.available()&&txt.length()<512)txt+=(char)nf.read();nf.close();parseNFO(txt,nT,nB);
-      if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=nT;cachedNfoBlurb=nB;}}
-    cachedHasSav=(g_saves_mode==1)&&savExistsFor(g_files[game.first_file_idx]);cachedHD=(g_mode==MODE_ADF)&&isHDImage(g_files[game.first_file_idx]);cachedManual="";{String mp;if(manualFor(g_files[game.first_file_idx],mp))cachedManual=mp;}}   // v4.8.0 badge + v4.9 HD flag + v4.9.2 .rtfm (checked once per selection)
+  bool haveSide=(g_cp_side_sel==g_sel && g_cp_side_gen==g_lib_gen);   // sidecars for THIS selection ready? (else they fill on settle)
   // Cover art
   gfx_fillRoundRect(COVER_ART_X,COVER_ART_Y,COVER_ART_W,COVER_ART_H,5,COL_BAR);
   gfx_drawRoundRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,6,COL_ACCENT);
@@ -2099,10 +2191,10 @@ static void drawCoverPanel(){
   if(game.jpg_path.length()>0&&game.jpg_path!="?")drewCover=drawCoverThumb(g_sel,COVER_ART_X+2,COVER_ART_Y+2,COVER_ART_W-4,COVER_ART_H-4);   // 7B: .tnl thumb, no live JPEG decode (kills the ~1s tap latency)
   if(!drewCover){char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setCursor(COVER_ART_X+COVER_ART_W/2-6,COVER_ART_Y+COVER_ART_H/2-8);gfx_print(ib);}
   // v4.8.0: floppy icon — this game has a save-copy (INSERT will boot the save)
-  if(cachedHasSav)drawSaveFloppy(COVER_ART_X+3,COVER_ART_Y+3);
-  if(cachedHD){drawHDChip(COVER_ART_X+COVER_ART_W-23,COVER_ART_Y+3);drawNoA500(COVER_ART_X+15,COVER_ART_Y+COVER_ART_H-15,13,TFT_RED);}   // v4.9 HD markers
-  if(cachedManual.length()){   // v4.9.2: book button, bottom-right of the cover art — only when a .rtfm exists
-    g_manual_bw=26;g_manual_bh=22;g_manual_bx=COVER_ART_X+3;g_manual_by=COVER_ART_Y+(COVER_ART_H-g_manual_bh)/2;g_manual_path=cachedManual;   // v4.9.3: bigger + left edge, clear of the fav/HD corners
+  if(haveSide&&g_cp_hasSav)drawSaveFloppy(COVER_ART_X+3,COVER_ART_Y+3);
+  if(haveSide&&g_cp_hd){drawHDChip(COVER_ART_X+COVER_ART_W-23,COVER_ART_Y+3);drawNoA500(COVER_ART_X+15,COVER_ART_Y+COVER_ART_H-15,13,TFT_RED);}   // v4.9 HD markers
+  if(haveSide&&g_cp_manual.length()){   // v4.9.2: book button, bottom-right of the cover art — only when a .rtfm exists
+    g_manual_bw=26;g_manual_bh=22;g_manual_bx=COVER_ART_X+3;g_manual_by=COVER_ART_Y+(COVER_ART_H-g_manual_bh)/2;g_manual_path=g_cp_manual;   // v4.9.3: bigger + left edge, clear of the fav/HD corners
     gfx_fillRoundRect(g_manual_bx,g_manual_by,g_manual_bw,g_manual_bh,3,COL_ACCENT);gfx_drawRoundRect(g_manual_bx,g_manual_by,g_manual_bw,g_manual_bh,3,COL_AMBER);
     drawBookIcon(g_manual_bx+g_manual_bw/2,g_manual_by+g_manual_bh/2,COL_LIT);
   }
@@ -2114,14 +2206,14 @@ static void drawCoverPanel(){
     int psz=g_font+1;int bsz=(psz>1?psz-1:1);int ty=COVER_ART_Y+COVER_ART_H+6;gfx_setTextSize(psz);   // title tracks FONT; blurb one step smaller
     ty=drawWrapped(6,ty,game.name,COVER_W-12,10*psz,2,cb,COL_LIT,COL_PANEL);
     gfx_setTextSize(bsz);
-    if(cachedNfoBlurb.length()>0)drawWrapped(6,ty+2,cachedNfoBlurb,COVER_W-12,9*bsz+1,16,cb,COL_DIM,COL_PANEL);
+    if(haveSide&&g_cp_blurb.length()>0)drawWrapped(6,ty+2,g_cp_blurb,COVER_W-12,9*bsz+1,16,cb,COL_DIM,COL_PANEL);
     if(game.disk_count>1)drawDiskGrid(game.disk_count);
   }else{
     int rx=COVER_ART_X+COVER_ART_W+8,rw=VW-rx-6;int ty=COVER_ART_Y;gfx_setTextSize(1);
     ty=drawWrapped(rx,ty,game.name,rw,10,3,COVER_ART_Y+COVER_ART_H,COL_LIT,COL_PANEL);
-    if(cachedNfoBlurb.length()>0)drawWrapped(rx,ty+3,cachedNfoBlurb,rw,9,6,COVER_ART_Y+COVER_ART_H+2,COL_DIM,COL_PANEL);
+    if(haveSide&&g_cp_blurb.length()>0)drawWrapped(rx,ty+3,g_cp_blurb,rw,9,6,COVER_ART_Y+COVER_ART_H+2,COL_DIM,COL_PANEL);
     if(game.disk_count>1)drawDiskStepper(8,COVER_Y+COVER_H-70,VW-16,26,game.disk_count);   // full-width disk row above INSERT
-    else{gfx_setTextSize(1);gfx_setTextColor(cachedHD?COL_ORANGE:COL_DIM,COL_PANEL);gfx_setCursor(12,COVER_Y+COVER_H-58);gfx_print(cachedHD?"HD 1.76MB - needs A3000/A4000":g_mode==MODE_ADF?"Single disk  -  ADF 880KB":g_mode==MODE_DSK?"Single disk  -  DSK":"Single disk");}
+    else{bool hd=haveSide&&g_cp_hd;gfx_setTextSize(1);gfx_setTextColor(hd?COL_ORANGE:COL_DIM,COL_PANEL);gfx_setCursor(12,COVER_Y+COVER_H-58);gfx_print(hd?"HD 1.76MB - needs A3000/A4000":g_mode==MODE_ADF?"Single disk  -  ADF 880KB":g_mode==MODE_DSK?"Single disk  -  DSK":"Single disk");}
   }
   // INSERT/EJECT
   gfx_fillRoundRect(INS_X,INS_Y,INS_W,INS_H,8,isL?(uint16_t)0x4000:(uint16_t)0x0340);
@@ -2436,33 +2528,45 @@ static void carBuildList(){
 }
 
 // Decode a game's cover into a CAR_TILE x CAR_TILE tile (aspect-fit, COL_BAR letterbox).
+// 7B covfix: last carDecodeTile failure reason, surfaced on the DIAG overlay via the
+// CVR "<idx> DEC:<why>" line so a broken cover tells you WHY (BIG=oversize file,
+// OPEN=SD open, HDR=decoder rejected header, DIMS=bad/huge dims, CMIN=below COVERMIN,
+// MEM=out of PSRAM). Progressive/CMYK JPEGs usually pass HDR but render as garbage.
+static char g_dec_why[10]="-";
+// Cover source-file ceiling. Was 500 KB (an S3-era limit) which false-failed hi-res
+// covers on the 32 MB-PSRAM P4; JPEGDEC downscales during decode so a big source is
+// cheap. 4 MB is plenty for any real cover and still rejects a stray non-image file.
+#define COVER_MAX_BYTES 4000000L
 static bool carDecodeTile(int gi,uint16_t*dst){
   for(int i=0;i<CAR_TILE*CAR_TILE;i++)dst[i]=COL_BAR;
+  strcpy(g_dec_why,"-");
   auto&game=g_games[gi];
   if(!game.jpg_path.length()){String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg))game.jpg_path=jpg;else game.jpg_path="?";}
-  if(!(game.jpg_path.length()>0&&game.jpg_path!="?"))return false;
+  if(!(game.jpg_path.length()>0&&game.jpg_path!="?")){strcpy(g_dec_why,"NOPATH");return false;}
   String vfsPath="/sdcard"+game.jpg_path;struct stat st;
-  if(stat(vfsPath.c_str(),&st)!=0||st.st_size==0||st.st_size>500000)return false;
+  if(stat(vfsPath.c_str(),&st)!=0){strcpy(g_dec_why,"STAT");return false;}
+  if(st.st_size==0){strcpy(g_dec_why,"EMPTY");return false;}
+  if(st.st_size>COVER_MAX_BYTES){strcpy(g_dec_why,"BIG");return false;}
   size_t sz=(size_t)st.st_size;
-  File f=SD_MMC.open(game.jpg_path.c_str(),"r");if(!f)return false;
-  uint8_t*buf=(uint8_t*)ps_malloc(sz);if(!buf){f.close();return false;}
+  File f=SD_MMC.open(game.jpg_path.c_str(),"r");if(!f){strcpy(g_dec_why,"OPEN");return false;}
+  uint8_t*buf=(uint8_t*)ps_malloc(sz);if(!buf){f.close();strcpy(g_dec_why,"MEM");return false;}
   f.read(buf,sz);f.close();
   int djw=0,djh=0;
   if(coverIsPng(game.jpg_path)){
-    if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){free(buf);return false;}
+    if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){free(buf);strcpy(g_dec_why,"PHDR");return false;}
     int jw=pngdec.getWidth(),jh=pngdec.getHeight();
-    if(jw<=0||jh<=0||jw>2000||jh>2000){pngdec.close();free(buf);return false;}
-    if(g_covermin>0&&(jw<g_covermin||jh<g_covermin)){pngdec.close();free(buf);return false;}   // COVERMIN: skip low-res cover
+    if(jw<=0||jh<=0||jw>2000||jh>2000){pngdec.close();free(buf);strcpy(g_dec_why,"DIMS");return false;}
+    if(g_covermin>0&&(jw<g_covermin||jh<g_covermin)){pngdec.close();free(buf);strcpy(g_dec_why,"CMIN");return false;}   // COVERMIN: skip low-res cover
     djw=jw;djh=jh;                          // PNGdec has no built-in downscale -> full decode, then shrink
     jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)djw*djh*2);
-    if(!jpeg_tmp_buf){pngdec.close();free(buf);return false;}
+    if(!jpeg_tmp_buf){pngdec.close();free(buf);strcpy(g_dec_why,"MEM");return false;}
     memset(jpeg_tmp_buf,0,(size_t)djw*djh*2);jpeg_tmp_w=djw;jpeg_tmp_h=djh;
     pngdec.decode(NULL,0);pngdec.close();free(buf);
   } else {
-    if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);return false;}
+    if(!jpegdec.openRAM(buf,sz,jpeg_buf_cb)){free(buf);strcpy(g_dec_why,"JHDR");return false;}
     int jw=jpegdec.getWidth(),jh=jpegdec.getHeight();
-    if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);return false;}
-    if(g_covermin>0&&(jw<g_covermin||jh<g_covermin)){jpegdec.close();free(buf);return false;}   // COVERMIN: skip low-res cover
+    if(jw<=0||jh<=0||jw>2000||jh>2000){jpegdec.close();free(buf);strcpy(g_dec_why,"DIMS");return false;}
+    if(g_covermin>0&&(jw<g_covermin||jh<g_covermin)){jpegdec.close();free(buf);strcpy(g_dec_why,"CMIN");return false;}   // COVERMIN: skip low-res cover
     // Use JPEGDEC's built-in downscale: decoding a big cover at 1/2, 1/4 or 1/8
     // is up to 16x less work than full-decode-then-shrink (the "slow covers" fix).
     int opt=0,div=1;
@@ -2471,7 +2575,7 @@ static bool carDecodeTile(int gi,uint16_t*dst){
     else if(jw>=CAR_TILE*2&&jh>=CAR_TILE*2){opt=JPEG_SCALE_HALF;div=2;}
     djw=jw/div;djh=jh/div;
     jpeg_tmp_buf=(uint16_t*)ps_malloc((size_t)djw*djh*2);
-    if(!jpeg_tmp_buf){jpegdec.close();free(buf);return false;}
+    if(!jpeg_tmp_buf){jpegdec.close();free(buf);strcpy(g_dec_why,"MEM");return false;}
     memset(jpeg_tmp_buf,0,(size_t)djw*djh*2);jpeg_tmp_w=djw;jpeg_tmp_h=djh;
     jpegdec.decode(0,0,opt);jpegdec.close();free(buf);
   }
@@ -2579,6 +2683,7 @@ static bool coverNeedsBuild(int i){
   auto&g=g_games[i];
   if(!g.jpg_path.length()){String jpg;if(findJPGFor(g_files[g.first_file_idx],jpg))g.jpg_path=jpg;else g.jpg_path="?";}
   if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return false;   // no cover art -> nothing to build (letter placeholder)
+  if(g.cover_fail)return false;   // 7B covfix: this cover already DECfailed once -> never re-decode it (was stalling the reel ~1s on every pass over a broken cover)
   String vT="/sdcard"+carThumbPath(i),vJ="/sdcard"+g.jpg_path;
   struct stat stT,stJ;
   if(stat(vT.c_str(),&stT)!=0)return true;                                     // no .tnl yet
@@ -2589,7 +2694,7 @@ static bool coverNeedsBuild(int i){
 static bool buildOneThumb(int i,uint16_t*tmp){
   auto&g=g_games[i];
   if(!(g.jpg_path.length()>0&&g.jpg_path!="?")){snprintf(g_cvdbg,sizeof g_cvdbg,"%d NOJPG",i);return false;}
-  if(!carDecodeTile(i,tmp)){snprintf(g_cvdbg,sizeof g_cvdbg,"%d DECfail",i);return false;}
+  if(!carDecodeTile(i,tmp)){snprintf(g_cvdbg,sizeof g_cvdbg,"%d DEC:%s",i,g_dec_why);g.cover_fail=true;return false;}   // 7B covfix: mark bad so coverNeedsBuild stops retrying it (kills the per-pass reel stall)
   if(!carSaveThumb(i,tmp)){snprintf(g_cvdbg,sizeof g_cvdbg,"%d SAVEfail",i);return false;}
   // read it straight back to prove the round-trip (this is what drawCoverThumb does)
   bool rb=carLoadThumb(i,tmp);
@@ -2670,7 +2775,7 @@ static bool coverBgTick(uint32_t idleMs){
   //    Never retry one that just failed to decode (would livelock).
   static int g_cover_selfail=-1, g_cover_lastok=-1;
   if(g_sel>=0&&g_sel<n&&g_sel!=g_cover_selfail&&g_sel!=g_cover_lastok){
-    if(coverNeedsBuild(g_sel)){
+    if(!g_wrk_run && coverNeedsBuild(g_sel)){   // worker ON -> it decodes; UI loop only fills micros below
       if(buildOneThumb(g_sel,g_cover_bgbuf)){ g_cover_done++; g_cover_lastok=g_sel; if(g_micro_need)carMicroFromTile(g_sel,g_cover_bgbuf); if(!g_car_active&&!g_info_showing){drawCoverPanel();gfx_flush();} }
       else g_cover_selfail=g_sel;   // couldn't build this one; don't hammer it (cleared when selection moves)
       return true;                  // did a decode this tick
@@ -2687,7 +2792,7 @@ static bool coverBgTick(uint32_t idleMs){
   int scanned=0;
   while(g_cover_bi<n){
     int i=g_cover_bi++;
-    if(coverNeedsBuild(i)){ if(buildOneThumb(i,g_cover_bgbuf)){ g_cover_done++; if(g_micro_need)carMicroFromTile(i,g_cover_bgbuf); } return true; }
+    if(!g_wrk_run && coverNeedsBuild(i)){ if(buildOneThumb(i,g_cover_bgbuf)){ g_cover_done++; if(g_micro_need)carMicroFromTile(i,g_cover_bgbuf); } return true; }
     // .tnl present but micro still owed -> fill the reel micro from the .tnl (cheap SD read, no decode)
     if(g_micro_need&&car_micro_block&&carLoadThumb(i,g_cover_bgbuf)){ carMicroFromTile(i,g_cover_bgbuf); return true; }
     if(++scanned>=96)return true;   // swept a batch of already-cached covers; resume next tick
@@ -2714,10 +2819,7 @@ static inline uint16_t carDim(uint16_t c,int lvl){
 // A tiny RGB565 copy of every cover, always in PSRAM. On a cache miss the reel
 // blits the upscaled micro instead of the COL_BAR grey square -> blurry-then-
 // sharp, never a coloured square, independent of SD speed.
-#ifndef SD_LOCK
-#define SD_LOCK()   do{}while(0)
-#define SD_UNLOCK() do{}while(0)
-#endif
+// (SD_LOCK / SD_UNLOCK and g_sd_mtx are defined up top, near the decoder globals.)
 // (car_micro_block / g_car_micro_dim / g_car_micro_n declared up top so the background
 //  cover builder can fill micro-thumbs alongside .tnl — see the g_cover_* block.)
 static uint32_t carGamesSig(){
@@ -2727,17 +2829,54 @@ static uint32_t carGamesSig(){
     for(unsigned k=0;k<p.length();k++){h^=(uint8_t)p[k]; h*=16777619u;}}
   return h;
 }
+// ── 5.9.22 .nfocache — NFO blurbs indexed into PSRAM, persisted per side ──────
+// Binary: [magic 'GTN1'][count][sig=carGamesSig()][reserved] then, in g_games order,
+// each blurb as [u16 len][len bytes]. Keyed by the SAME signature as the reel micro
+// cache, so a rescan that produces the identical game set reuses this instead of
+// re-reading every .nfo. Names are NOT stored here (they live in .gamecache); this
+// carries only the blurb body. Separate file (not folded into .gamecache) by choice.
+#define NFOCACHE_MAGIC 0x47544E31u
+static String nfoCachePath(){return g_mode==MODE_ADF?"/ADF/.nfocache":g_mode==MODE_DSK?"/DSK/.nfocache":"/GENERIC/.nfocache";}
+static void writeNfoCache(){
+  File f=SD_MMC.open(nfoCachePath().c_str(),FILE_WRITE); if(!f)return;
+  uint32_t hdr[4]={NFOCACHE_MAGIC,(uint32_t)g_games.size(),carGamesSig(),0};
+  f.write((uint8_t*)hdr,16);
+  for(auto&g:g_games){ uint32_t bl=g.blurb.length(); if(bl>2000)bl=2000; uint16_t L=(uint16_t)bl; f.write((uint8_t*)&L,2); if(L)f.write((const uint8_t*)g.blurb.c_str(),L); }
+  f.close();
+}
+// The "CRC so a rescan doesn't rebuild": if the on-disk cache already matches this game
+// set's signature, keep it — no rewrite. Otherwise (re)write it.
+static void writeNfoCacheIfChanged(){
+  File f=SD_MMC.open(nfoCachePath().c_str(),FILE_READ);
+  if(f){uint32_t hdr[4]; bool ok=(f.read((uint8_t*)hdr,16)==16); f.close();
+    if(ok&&hdr[0]==NFOCACHE_MAGIC&&(int)hdr[1]==(int)g_games.size()&&hdr[2]==carGamesSig())return;}
+  writeNfoCache();
+}
+static bool loadNfoCache(){
+  File f=SD_MMC.open(nfoCachePath().c_str(),FILE_READ); if(!f)return false;
+  uint32_t hdr[4]; if(f.read((uint8_t*)hdr,16)!=16){f.close();return false;}
+  if(hdr[0]!=NFOCACHE_MAGIC||(int)hdr[1]!=(int)g_games.size()||hdr[2]!=carGamesSig()){f.close();return false;}   // stale/mismatched -> caller falls back to on-demand reads
+  for(auto&g:g_games){
+    uint16_t L=0; if(f.read((uint8_t*)&L,2)!=2){f.close();return false;}
+    if(L){ std::vector<char>buf((size_t)L+1); int r=f.read((uint8_t*)buf.data(),L); if(r!=(int)L){f.close();return false;} buf[L]=0; g.blurb=String(buf.data()); }
+    else g.blurb="";
+    g.nfo_done=true;   // resolved from cache -> sidecar shows it instantly, zero card I/O
+  }
+  f.close(); return true;
+}
 static void carMicroFree(){ if(car_micro_block){free(car_micro_block);car_micro_block=NULL;} g_car_micro_dim=0; g_car_micro_n=0; }
 static void carMicroInit(){
+  MICRO_LOCK();                    // only the micro block — NOT the whole worker build (see g_micro_mtx note)
   carMicroFree();
-  int n=(int)g_games.size(); if(!n)return;
+  int n=(int)g_games.size(); if(!n){MICRO_UNLOCK();return;}
   int dim=(n<=1000)?32:(n<=1800)?24:16;
   size_t bytes=(size_t)n*dim*dim*2;
   car_micro_block=(uint16_t*)ps_malloc(bytes);
   if(!car_micro_block&&dim!=16){dim=16;bytes=(size_t)n*dim*dim*2;car_micro_block=(uint16_t*)ps_malloc(bytes);}
-  if(!car_micro_block)return;
+  if(!car_micro_block){MICRO_UNLOCK();return;}
   g_car_micro_dim=dim; g_car_micro_n=n;
   size_t px=bytes/2; for(size_t i=0;i<px;i++)car_micro_block[i]=COL_BAR;
+  MICRO_UNLOCK();
 }
 static void carMicroFromTile(int gi,const uint16_t*tile){
   if(!car_micro_block||gi<0||gi>=g_car_micro_n||!tile)return;
@@ -2801,6 +2940,260 @@ static void carMicroEnsure(){
   if(!hit){
     if(g_cover_bg){ g_micro_need=true; g_cover_pending=true; g_cover_swept=false; g_cover_bi=0; }   // re-arm the bg sweep to fill the micro set (covers a rescan-then-reel)
     else carMicroBuild();
+  }
+}
+
+// ============================================================================
+// COVER DECODE WORKER  (5.9.18 — ESP32-P4 core 1)
+// A cover thumbnail decodes in ~0.9s. On the UI loop that was a per-cover COMP
+// spike (FPS -> ~1) while a big library filled. This task runs the decode on the
+// SECOND CPU so the UI core never blocks. Safety model:
+//   * OWN decoder instances (wrk_jpg / wrk_png / wrk_tmp) — it NEVER touches the
+//     shared jpegdec / pngdec / jpeg_tmp_buf the UI core uses (INFO cover, cracktro).
+//   * Reads a game's jpg_path only once the UI core has fully resolved it
+//     (jpg_ready==1, published with a release fence) — so it can't read a String
+//     mid-write. jpg_path is immutable after that until the library rebuilds.
+//   * SD serialised by SD_LOCK; the JPEG file read drops the lock every 32KB so
+//     UI SD ops (tap/scroll) stay responsive during a big decode.
+//   * PARKED (wrkPark/wrkUnpark) around every g_games / g_files / micro realloc.
+//   * COVERWORKER=OFF in CONFIG.TXT falls back to the old UI-loop build.
+// ============================================================================
+static JPEGDEC   wrk_jpg;
+static PNG       wrk_png;
+static uint16_t* wrk_tmp=NULL; static int wrk_tw=0, wrk_th=0;   // decode scratch — ONLY the worker task touches these
+static uint16_t* wrk_tile=NULL;                                 // worker's CAR_TILE^2 output tile
+static TaskHandle_t g_cover_worker_task=NULL;
+static SemaphoreHandle_t g_lib_mtx=NULL;   // the worker HOLDS this while indexing g_games/g_files/micro; the UI core takes it (wrkPark) before any realloc, so a rebuild can't happen mid-build. Recursive (per-task) so accidental nesting can't deadlock.
+static int g_wrk_cursor=0;
+static int g_wrk_mcursor=0;                 // reel micro-fill sweep cursor (worker owns micros when ON)
+static bool g_wrk_saved=false;              // persisted the game cache + micro sidecar once this fill is complete
+static int  wrk_jpeg_cb(JPEGDRAW*p){
+  if(!wrk_tmp)return 0;
+  for(int yy=0;yy<p->iHeight;yy++){int row=p->y+yy; if(row<0||row>=wrk_th)continue;
+    int cw=p->iWidth; if(p->x+cw>wrk_tw)cw=wrk_tw-p->x;
+    if(cw>0) memcpy(&wrk_tmp[row*wrk_tw+p->x],&p->pPixels[yy*p->iWidth],cw*2);} return 1;
+}
+static int  wrk_png_cb(PNGDRAW*p){
+  if(!wrk_tmp)return 0;
+  int row=p->y; if(row<0||row>=wrk_th)return 1;
+  wrk_png.getLineAsRGB565(p,&wrk_tmp[row*wrk_tw],PNG_RGB565_LITTLE_ENDIAN,0x00000000); return 1;
+}
+// Read a whole file into PSRAM, dropping SD_LOCK every 32KB so the UI core can
+// interleave its own reads (keeps tapping/scrolling smooth during a 0.9s decode).
+static uint8_t* wrkReadFile(const String&path,size_t sz){
+  uint8_t*buf=(uint8_t*)ps_malloc(sz); if(!buf)return NULL;
+  File f; SD_LOCK(); f=SD_MMC.open(path.c_str(),"r"); SD_UNLOCK();
+  if(!f){ free(buf); return NULL; }
+  size_t got=0;
+  while(got<sz){ size_t want=sz-got; if(want>32768)want=32768;
+    SD_LOCK(); int r=f.read(buf+got,want); SD_UNLOCK();
+    if(r<=0)break; got+=(size_t)r; vTaskDelay(0); }
+  SD_LOCK(); f.close(); SD_UNLOCK();
+  if(got!=sz){ free(buf); return NULL; }
+  return buf;
+}
+// Worker-side decode+scale into dst (mirror of carDecodeTile, worker-local decoder). Never
+// resolves jpg_path (the caller guarantees jpg_ready==1). Sets g_dec_why on failure.
+static bool wrkDecodeTile(int gi,uint16_t*dst){
+  for(int i=0;i<CAR_TILE*CAR_TILE;i++)dst[i]=COL_BAR;
+  auto&game=g_games[gi];
+  if(!(game.jpg_path.length()>0&&game.jpg_path!="?")){strcpy(g_dec_why,"NOPATH");return false;}
+  String vfsPath="/sdcard"+game.jpg_path;struct stat st;
+  { bool ok; SD_LOCK(); ok=(stat(vfsPath.c_str(),&st)==0); SD_UNLOCK();
+    if(!ok){strcpy(g_dec_why,"STAT");return false;} }
+  if(st.st_size==0){strcpy(g_dec_why,"EMPTY");return false;}
+  if(st.st_size>COVER_MAX_BYTES){strcpy(g_dec_why,"BIG");return false;}
+  size_t sz=(size_t)st.st_size;
+  uint8_t*buf=wrkReadFile(game.jpg_path,sz); if(!buf){strcpy(g_dec_why,"OPEN");return false;}
+  int djw=0,djh=0;
+  if(coverIsPng(game.jpg_path)){
+    if(wrk_png.openRAM(buf,sz,wrk_png_cb)!=PNG_SUCCESS){free(buf);strcpy(g_dec_why,"PHDR");return false;}
+    int jw=wrk_png.getWidth(),jh=wrk_png.getHeight();
+    if(jw<=0||jh<=0||jw>2000||jh>2000){wrk_png.close();free(buf);strcpy(g_dec_why,"DIMS");return false;}
+    if(g_covermin>0&&(jw<g_covermin||jh<g_covermin)){wrk_png.close();free(buf);strcpy(g_dec_why,"CMIN");return false;}
+    djw=jw;djh=jh;
+    wrk_tmp=(uint16_t*)ps_malloc((size_t)djw*djh*2);
+    if(!wrk_tmp){wrk_png.close();free(buf);strcpy(g_dec_why,"MEM");return false;}
+    memset(wrk_tmp,0,(size_t)djw*djh*2);wrk_tw=djw;wrk_th=djh;
+    wrk_png.decode(NULL,0);wrk_png.close();free(buf);
+  } else {
+    if(!wrk_jpg.openRAM(buf,sz,wrk_jpeg_cb)){free(buf);strcpy(g_dec_why,"JHDR");return false;}
+    int jw=wrk_jpg.getWidth(),jh=wrk_jpg.getHeight();
+    if(jw<=0||jh<=0||jw>2000||jh>2000){wrk_jpg.close();free(buf);strcpy(g_dec_why,"DIMS");return false;}
+    if(g_covermin>0&&(jw<g_covermin||jh<g_covermin)){wrk_jpg.close();free(buf);strcpy(g_dec_why,"CMIN");return false;}
+    int opt=0,div=1;
+    if(jw>=CAR_TILE*8&&jh>=CAR_TILE*8){opt=JPEG_SCALE_EIGHTH;div=8;}
+    else if(jw>=CAR_TILE*4&&jh>=CAR_TILE*4){opt=JPEG_SCALE_QUARTER;div=4;}
+    else if(jw>=CAR_TILE*2&&jh>=CAR_TILE*2){opt=JPEG_SCALE_HALF;div=2;}
+    djw=jw/div;djh=jh/div;
+    wrk_tmp=(uint16_t*)ps_malloc((size_t)djw*djh*2);
+    if(!wrk_tmp){wrk_jpg.close();free(buf);strcpy(g_dec_why,"MEM");return false;}
+    memset(wrk_tmp,0,(size_t)djw*djh*2);wrk_tw=djw;wrk_th=djh;
+    wrk_jpg.decode(0,0,opt);wrk_jpg.close();free(buf);
+  }
+  float sc=min((float)CAR_TILE/djw,(float)CAR_TILE/djh);if(sc>1.0f)sc=1.0f;
+  int dw=(int)(djw*sc),dh=(int)(djh*sc);
+  int ox=(CAR_TILE-dw)/2,oy=(CAR_TILE-dh)/2;
+  for(int r=0;r<dh;r++){int sy=(int)(r/sc);if(sy>=djh)sy=djh-1;
+    for(int c=0;c<dw;c++){int sx=(int)(c/sc);if(sx>=djw)sx=djw-1;
+      dst[(oy+r)*CAR_TILE+(ox+c)]=wrk_tmp[sy*djw+sx];}
+    if((r&15)==0)vTaskDelay(0);}
+  free(wrk_tmp);wrk_tmp=NULL; return true;
+}
+// Is game i's .tnl missing/stale on SD? (the ONE SD stat — call only for real candidates).
+static bool wrkTnlMissing(int i){
+  String vT="/sdcard"+carThumbPath(i); struct stat stT; bool ex;
+  SD_LOCK(); ex=(stat(vT.c_str(),&stT)==0); SD_UNLOCK();
+  return !(ex && stT.st_size==(long)((size_t)CAR_TILE*CAR_TILE*2));
+}
+// Cheap candidate test (NO SD): a game the worker might need to build.
+// int index (not GameEntry& — a user type in a free-function signature trips Arduino's
+// auto-prototype, which is emitted above the struct definition).
+static inline bool wrkCand(int i){
+  GameEntry&g=g_games[i];
+  if(g.cover_built||g.cover_fail) return false;      // known state
+  if(g.jpg_ready!=1) return false;                   // UI hasn't published the path yet
+  __atomic_thread_fence(__ATOMIC_ACQUIRE);            // pair with the UI core's release fence
+  return (g.jpg_path.length()>0&&g.jpg_path!="?");    // has art
+}
+// Pick the next game to build. Bounds SD stats to ~8 per call (so a fully-built library
+// doesn't stat all N while holding g_lib_mtx). Confirms already-present covers into
+// cover_built as it goes, so steady-state scans are pure flag checks (no SD).
+static int wrkPick(){
+  int n=(int)g_games.size(); if(n<=0)return -1;
+  { int p=g_sel; if(p>=0&&p<n){                                        // priority: the game you're on
+      if(wrkCand(p)){ if(wrkTnlMissing(p))return p; else g_games[p].cover_built=true; } } }
+  int budget=8;
+  for(int k=0;k<n&&budget>0;k++){ int i=g_wrk_cursor++; if(g_wrk_cursor>=n)g_wrk_cursor=0;
+    if(!wrkCand(i)) continue;                          // cheap skip (no SD)
+    budget--;                                          // this candidate costs one SD stat
+    if(wrkTnlMissing(i)) return i;                     // needs building
+    g_games[i].cover_built=true;                       // already on SD -> remember, never stat again
+  }
+  return -1;
+}
+// ── 5.9.23-7B: SIDECAR WORKER ───────────────────────────────────────────────
+// Chunking (5.9.21) split the sidecar BUNDLE across frames, but one chunk — findNFOFor —
+// is up to two complete directory walks of a flat 1700-file folder, ~1s, and a single
+// blocking SD call cannot be chunked. So a tap still hitched. Now the whole bundle runs on
+// the worker core and the UI just polls for a published result: tap through Cannon Fodder ->
+// Conan -> Commando and each retarget simply abandons the in-flight lookup; settle on one
+// and its blurb appears when it's ready, without the list ever stalling.
+// Ownership rule: the WORKER only ever READS g_games (under g_lib_mtx, and only long enough
+// to copy a path out). Every write into g_games stays on the UI core, so there is no
+// cross-core race on the vector itself.
+static volatile int      g_side_req=-1;        // UI -> worker: selection wanting sidecars
+static volatile uint32_t g_side_reqgen=0;
+static volatile int      g_side_pub=-1;        // worker -> UI: selection whose payload is published
+static volatile uint32_t g_side_pubgen=0;
+static SemaphoreHandle_t g_side_mtx=NULL;      // guards the published payload below
+static String g_side_blurb="",g_side_title="",g_side_manual="";
+static bool   g_side_hasSav=false,g_side_hd=false;
+// Runs on the worker core. Returns true if it did sidecar work this tick.
+static bool wrkSidecarTick(){
+  int req=g_side_req;
+  if(req<0) return false;
+  if(req==g_side_pub && g_side_reqgen==g_side_pubgen) return false;   // already answered
+  // Copy what we need out from under the library mutex, then LET GO — the SD work below can
+  // take a second, and holding g_lib_mtx that long would stall wrkPark() (i.e. a rescan).
+  String path; bool haveCached=false; String cachedBlurb; uint32_t gen;
+  if(g_lib_mtx) xSemaphoreTakeRecursive(g_lib_mtx,portMAX_DELAY);
+  gen=g_lib_gen;
+  if(req<0||req>=(int)g_games.size()){ if(g_lib_mtx)xSemaphoreGiveRecursive(g_lib_mtx); return false; }
+  { GameEntry&g=g_games[req]; path=g_files[g.first_file_idx]; haveCached=g.nfo_done; cachedBlurb=g.blurb; }
+  if(g_lib_mtx) xSemaphoreGiveRecursive(g_lib_mtx);
+  String blurb,title,manual; bool hasSav=false,hd=false;
+  #define SIDE_BAIL() do{ if(g_side_req!=req) return true; }while(0)   // user moved on -> drop it
+  if(haveCached) blurb=cachedBlurb;                                    // .nfocache hit: no card I/O at all
+  else{
+    String nfoP; bool found;
+    SD_LOCK(); found=findNFOFor(path,nfoP); SD_UNLOCK();
+    SIDE_BAIL();
+    if(found){ SD_LOCK(); File nf=SD_MMC.open(nfoP,FILE_READ);
+      if(nf){ char nb[513]; int nr=nf.read((uint8_t*)nb,512); if(nr<0)nr=0; nb[nr]=0; nf.close(); SD_UNLOCK();
+              String txt(nb),t,b; parseNFO(txt,t,b); title=t; blurb=b; }
+      else SD_UNLOCK(); }
+  }
+  SIDE_BAIL();
+  if(g_saves_mode==1){ SD_LOCK(); hasSav=savExistsFor(path); SD_UNLOCK(); }
+  SIDE_BAIL();
+  if(g_mode==MODE_ADF){ SD_LOCK(); hd=isHDImage(path); SD_UNLOCK(); }
+  SIDE_BAIL();
+  { String mp; bool f; SD_LOCK(); f=manualFor(path,mp); SD_UNLOCK(); if(f)manual=mp; }
+  SIDE_BAIL();
+  #undef SIDE_BAIL
+  if(g_side_mtx) xSemaphoreTake(g_side_mtx,portMAX_DELAY);
+  g_side_blurb=blurb; g_side_title=title; g_side_manual=manual;
+  g_side_hasSav=hasSav; g_side_hd=hd; g_side_pubgen=gen;
+  if(g_side_mtx) xSemaphoreGive(g_side_mtx);
+  __atomic_thread_fence(__ATOMIC_RELEASE);   // payload visible before the UI sees g_side_pub move
+  g_side_pub=req;
+  return true;
+}
+#define WRK_IDLE_MS 400   // 5.9.20: the worker only builds when the UI has been idle this long — so
+                          // active tapping/scrolling gets the SD card + CPU to itself and stays snappy
+static void coverWorker(void*){
+  for(;;){
+    if(!g_wrk_run){ vTaskDelay(pdMS_TO_TICKS(30)); continue; }
+    // Yield to the user: while they're actively touching (or just did), do NOTHING — no SD, no
+    // decode. The worker was hammering the SD card during browsing, which made the first tap and
+    // game-select take seconds. It resumes ~WRK_IDLE_MS after the last touch and fills during idle.
+    // Sidecars first, and deliberately NOT idle-gated: they're short, and they're the thing the
+    // user is actively waiting to see. Cover building stays gated below.
+    if(wrkSidecarTick()){ vTaskDelay(pdMS_TO_TICKS(2)); continue; }
+    if(millis()-g_last_touch_ms < WRK_IDLE_MS){ vTaskDelay(pdMS_TO_TICKS(40)); continue; }
+    if(!wrk_tile){ wrk_tile=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2); if(!wrk_tile){ vTaskDelay(pdMS_TO_TICKS(250)); continue; } }
+    // Hold g_lib_mtx for the WHOLE build: g_games[gi] is referenced throughout wrkDecodeTile,
+    // so the vector must not be reallocated under us. wrkPark() (UI core) takes this same mutex
+    // before a rebuild, so it waits out the current build (~1 tile) instead of racing it.
+    if(g_lib_mtx) xSemaphoreTakeRecursive(g_lib_mtx, portMAX_DELAY);
+    int did=0;   // 0 = idle this tick, 1 = built a cover, 2 = filled a micro
+    int gi = g_games.empty()? -1 : wrkPick();
+    if(gi>=0){
+      did=1;
+      bool ok=wrkDecodeTile(gi,wrk_tile);
+      if(ok){ bool sv; SD_LOCK(); sv=carSaveThumb(gi,wrk_tile); SD_UNLOCK();
+              if(sv){ g_cover_done++; g_games[gi].cover_built=true; snprintf(g_cvdbg,sizeof g_cvdbg,"%d OKw",gi);
+                      if(g_micro_need&&car_micro_block){ MICRO_LOCK(); if(car_micro_block)carMicroFromTile(gi,wrk_tile); MICRO_UNLOCK(); g_games[gi].micro_filled=true; } }
+              else snprintf(g_cvdbg,sizeof g_cvdbg,"%d SAVEfail",gi); }
+      else { snprintf(g_cvdbg,sizeof g_cvdbg,"%d DEC:%s",gi,g_dec_why); g_games[gi].cover_fail=true; }
+      g_wrk_saved=false;   // built something new -> the on-SD caches are now stale
+    } else if(g_micro_need && car_micro_block && !g_games.empty()){
+      // Nothing to build. Fill the reel micro-set from covers already on SD (cheap .tnl read,
+      // no decode). This is the UI loop's old job — moved here so the UI never does it.
+      int n=(int)g_games.size(), mi=-1;
+      for(int k=0;k<n;k++){ int i=g_wrk_mcursor++; if(g_wrk_mcursor>=n)g_wrk_mcursor=0;
+        GameEntry&g=g_games[i]; if(g.cover_built&&!g.micro_filled){ mi=i; break; } }
+      if(mi>=0){ did=2;
+        if(carLoadThumb(mi,wrk_tile)){ MICRO_LOCK(); if(car_micro_block)carMicroFromTile(mi,wrk_tile); MICRO_UNLOCK(); }
+        g_games[mi].micro_filled=true;
+      } else {  // whole micro-set filled -> persist the sidecar once, stop owing
+        MICRO_LOCK(); SD_LOCK(); carMicroSave(); SD_UNLOCK(); MICRO_UNLOCK(); g_micro_need=false;
+      }
+    } else if(!g_wrk_saved){
+      // All covers built + micros done (or none owed): persist resolved jpg paths once so a
+      // reboot skips the rescan, then go quiet.
+      if(g_cover_done>0){ SD_LOCK(); writeGameCache(); SD_UNLOCK(); }
+      g_wrk_saved=true;
+    }
+    if(g_lib_mtx) xSemaphoreGiveRecursive(g_lib_mtx);
+    vTaskDelay(pdMS_TO_TICKS(did==1?1:did==2?4:60));   // build->tight, micro->quick, idle->slow poll
+  }
+}
+// UI-core side. Take the library mutex before mutating g_games/g_files/micro (it blocks until
+// the worker's current build finishes), release after. No-op before the mutex/task exist.
+static void wrkPark(){ if(g_lib_mtx) xSemaphoreTakeRecursive(g_lib_mtx, portMAX_DELAY); }
+static void wrkUnpark(){ if(g_lib_mtx) xSemaphoreGiveRecursive(g_lib_mtx); }
+// UI-core incremental resolver: fills jpg_path for a few games per call, then publishes
+// jpg_ready (release fence) so the worker may read that String. Fed to the worker; cheap.
+static void jpgResolveTick(){
+  int n=(int)g_games.size(); if(!n)return;
+  static int cur=0; int did=0;
+  for(int k=0;k<n&&did<4;k++){ int i=cur++; if(cur>=n)cur=0;   // <=4 dir-scanning findJPGFor per loop -> stays smooth on a cold card
+    auto&g=g_games[i]; if(g.jpg_ready)continue;
+    if(!g.jpg_path.length()){String jpg; bool f; SD_LOCK(); f=findJPGFor(g_files[g.first_file_idx],jpg); SD_UNLOCK(); g.jpg_path=f?jpg:"?"; }
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    g.jpg_ready=1; did++;
   }
 }
 
@@ -2920,10 +3313,13 @@ static void drawCarousel(){
     float frac=g_car_pos-(float)ci;                      // -0.5..0.5
     bool moving=(g_car_touch&&g_car_moved)||g_car_coast||g_car_spin;
     int maxOff=(n>=5)?2:((n>=2)?1:0);
-    // v4.8.0: save-copy badge for the center game (checked once per center change)
+    // v4.8.0: save-copy badge for the center game (checked once per center change).
+    // 7B perf: skip the SD stat WHILE MOVING — the center changes every frame during a
+    // spin, so this ran savExistsFor() per frame (a dir-scanning stat on a flat 1000-file
+    // library) and dominated COMP. Refresh it only when the reel settles.
     static int carSavSel=-1;static bool g_car_hasSav=false;
     {int cgi=g_car_list[carWrap(ci)];
-     if(carSavSel!=cgi){carSavSel=cgi;g_car_hasSav=(g_saves_mode==1)&&savExistsFor(g_files[g_games[cgi].first_file_idx]);}}
+     if(carSavSel!=cgi && !moving){carSavSel=cgi;g_car_hasSav=(g_saves_mode==1)&&savExistsFor(g_files[g_games[cgi].first_file_idx]);}}
     // Warm the cache CENTER-FIRST when settled (painter's order would decode
     // the side covers before the star of the show — backwards for the eye).
     if(!moving && !g_reeltext){
@@ -2985,11 +3381,15 @@ static void drawCarousel(){
     gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);
     String t=game.name;while(gfx_textWidth(t)>VW-24&&t.length()>3)t=t.substring(0,t.length()-1);
     gfx_setCursor((VW-gfx_textWidth(t))/2,190);gfx_print(t);
-    // lazy NFO blurb (same pattern as the cover panel, keyed to the center game)
+    // lazy NFO blurb (same pattern as the cover panel, keyed to the center game).
+    // 7B perf: only load it when the reel is SETTLED. During a spin the center changes
+    // every frame, so findNFOFor()+open+read ran per frame — two dir-scanning exists()
+    // calls + a 512-byte read on a flat 1000-file library was the bulk of the ~575ms COMP
+    // (and the blurb isn't readable mid-spin anyway). Loads the instant it stops moving.
     static int carNfoSel=-1;static String carBlurb="";
-    if(carNfoSel!=gi){carNfoSel=gi;carBlurb="";String nfoP,nT,nB;
+    if(carNfoSel!=gi && !moving){carNfoSel=gi;carBlurb="";String nfoP,nT,nB;
       if(findNFOFor(g_files[game.first_file_idx],nfoP)){File nf=SD_MMC.open(nfoP,FILE_READ);
-        if(nf){String txt;while(nf.available()&&txt.length()<512)txt+=(char)nf.read();nf.close();parseNFO(txt,nT,nB);
+        if(nf){char _nb[513];int _nr=nf.read((uint8_t*)_nb,512);if(_nr<0)_nr=0;_nb[_nr]=0;nf.close();String txt(_nb);   /* 7B: one block read, not 512 per-byte reads + String reallocs */parseNFO(txt,nT,nB);
           if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=nT;carBlurb=nB;}}}
     if(game.disk_count>1){
       // v5.7.x: reel disk buttons — pick a disk (unloaded) or clean-swap to it (loaded), without leaving the reel.
@@ -3235,7 +3635,7 @@ static void carTick(bool touch,uint16_t px,uint16_t py,uint32_t now){
   // cover view, so covers must build HERE too — not only in the list (the idle
   // builder is gated off while g_car_active). One decode per rest tick, only after a
   // short settle so a spin/drag is never interrupted; then redraw to sharpen it.
-  if(n>0 && g_cover_bg && !g_reeltext && now-g_last_touch_ms>350){
+  if(n>0 && !g_wrk_run && g_cover_bg && !g_reeltext && now-g_last_touch_ms>350){   // worker ON -> it decodes off-core; skip the reel-rest decode
     int gi=g_car_list[carWrap((int)lroundf(g_car_pos))];
     if(coverNeedsBuild(gi)){
       if(!g_cover_bgbuf)g_cover_bgbuf=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2);
@@ -3269,6 +3669,38 @@ static void carTick(bool touch,uint16_t px,uint16_t py,uint32_t now){
 
 static void drawFullUI(){gfx_fillScreen(COL_BG);drawStatusBar();drawCoverPanel();drawActionStrip();drawModeBar();drawFileList();drawNowPlayingBar();drawAZBar();drawBottomBar();}
 static void drawListAndCover(){drawCoverPanel();drawActionStrip();drawFileList();drawNowPlayingBar();drawAZBar();}
+// 7B perf: fill the cover panel's DEFERRED sidecars (NFO blurb + save/HD/manual badges)
+// once the selection has settled ~100ms. drawCoverPanel paints the cover art + name instantly
+// on select; this does the ~5-7 dir-scanning SD lookups a beat later and redraws — so rapid
+// prev/next stepping never pays that cost per step. Self-gates; auto-invalidates on reload.
+static void coverSidecarTick(uint32_t now){
+  if(g_info_showing||g_car_active||g_games.empty())return;
+  if(g_cp_side_sel==g_sel && g_cp_side_gen==g_lib_gen)return;   // already loaded for this selection
+  if(g_wrk_run){
+    // 5.9.23: the worker core owns the SD lookups. Retargeting is a single store, so tapping
+    // through games just abandons whatever was in flight — the list never waits on the card.
+    if(g_side_req!=g_sel){ g_side_reqgen=g_lib_gen; g_side_req=g_sel; }   // gen BEFORE req: the worker reads the pair
+    if(g_side_pub==g_sel && g_side_pubgen==g_lib_gen){
+      __atomic_thread_fence(__ATOMIC_ACQUIRE);                  // pairs with the worker's RELEASE
+      String t;
+      if(g_side_mtx) xSemaphoreTake(g_side_mtx,portMAX_DELAY);
+      g_cp_blurb=g_side_blurb; t=g_side_title; g_cp_manual=g_side_manual;
+      g_cp_hasSav=g_side_hasSav; g_cp_hd=g_side_hd;
+      if(g_side_mtx) xSemaphoreGive(g_side_mtx);
+      auto&game=g_games[g_sel];                                 // every WRITE into g_games stays on this core
+      if(t.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=t;
+      game.blurb=g_cp_blurb; game.nfo_done=true;                // remember it, so re-selecting never asks again
+      g_cp_side_sel=g_sel; g_cp_side_gen=g_lib_gen;
+      drawCoverPanel(); gfx_flush();
+    }
+    return;
+  }
+  // COVERWORKER=OFF, or the task never started: fall back to the 5.9.21 chunked UI-core loader.
+  static int seen=-1; static uint32_t since=0;
+  if(seen!=g_sel){seen=g_sel;since=now;g_cp_step=0;return;}     // selection changed -> restart settle + step machine
+  if(now-since<120)return;                                      // short dwell before starting (tap-through never triggers it)
+  if(sidecarStep()){ drawCoverPanel(); gfx_flush(); }          // ONE step per tick -> no UI freeze; redraw when the bundle completes
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // LOAD / UNLOAD
@@ -3920,8 +4352,10 @@ static void doRescan(){
   // deliberately preserved — flipping standalone/wireless wants a clean boot, not a rescan.
   { bool wl=g_wireless_mode; selfHealConfig(); loadConfig(); g_wireless_mode=wl; relayout(); }
   // Rescan with animation
+  wrkPark();   // cover worker indexes g_games/g_files by index — hold it off across the rebuild
   g_files.clear();g_games.clear();
   sramSpill(true); listImages(SD_MMC,g_files);buildGameList(); sramSpill(false); buildThumbs();applyStats();buildActiveLetters();scanScreensaver();   // 7B: index in PSRAM (SRAM too small); cover build outside spill
+  g_wrk_cursor=0; g_wrk_mcursor=0; g_wrk_saved=false; wrkUnpark();
   g_sel=0;g_scroll=0;g_disk_sel=0;g_disk_page=0;g_scrollPx=0;g_az_page=0;g_inertia_on=false;
   if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
   drawFullUI();gfx_flush();
@@ -4575,6 +5009,10 @@ static void c6SelfUpdate(){
 
 void setup(){
   Serial.begin(115200);delay(200);
+  g_sd_mtx=xSemaphoreCreateRecursiveMutex();   // 5.9.18: SD access mutex live before any SD use (cover worker shares SD)
+  g_lib_mtx=xSemaphoreCreateRecursiveMutex();  // 5.9.18: guards g_games/g_files against realloc while the cover worker indexes them
+  g_micro_mtx=xSemaphoreCreateRecursiveMutex();// 5.9.19: guards the reel micro block (carMicroInit vs worker) — decoupled from g_lib_mtx
+  g_side_mtx=xSemaphoreCreateMutex();          // 5.9.23: guards the worker's published sidecar payload
   applyCpuClock();   // 7B: pick CPU clock from silicon rev BEFORE anything heavy (AUTO 360/400; CONFIG.TXT CPUMHZ re-applies after loadConfig)
   // v5.1: SD-access is requested only when our NOINIT flag survived a *software* restart
   // (cold power-on => reset reason POWERON => never a false trigger from RTC garbage).
@@ -4635,6 +5073,15 @@ void setup(){
     listImages(SD_MMC,g_files);
     bool _needBuild=!readGameCache();
     if(_needBuild)buildGameList();
+    // 5.9.22 NFO blurbs. If this boot walked the SD, g_nfomap is authoritative: fold the
+    // blurbs into g_games and persist .nfocache (the sig guard skips the write when nothing
+    // changed). buildGameList already folded+cached on the cold path; this also covers the
+    // rare warm-gamecache-but-index-rebuilt case (re-persist names if a title was adopted).
+    // Warm boot (no walk) -> restore blurbs straight from the PSRAM cache, zero .nfo reads.
+    // Done under spill so the ~1000 blurb strings live in PSRAM, not the small HP SRAM.
+    if(g_nfo_harvested){ bool _nameChg=assignBlurbsFromMap(); if(!_needBuild&&_nameChg)writeGameCache(); writeNfoCacheIfChanged(); }
+    else loadNfoCache();
+    g_nfomap.clear();
     sramSpill(false);
     // Cover cache: BLOCK mode = old full-screen build; BG mode (default) = boot
     // straight into the usable list and fill covers in the idle loop. BG is armed
@@ -4656,6 +5103,15 @@ void setup(){
     if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
     scanScreensaver();
   } else {gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,200);gfx_print(T(L_SD_MOUNT_FAIL));gfx_flush();delay(2000);relayout();}   // no card: still init layout so INFO/LOAD DIAG work
+  // 5.9.18: start the cover-decode worker on the OTHER CPU so cover building never stalls the
+  // UI core. Not in SD-access mode (that path reboots). If the task fails to create, g_wrk_run
+  // stays false and the old UI-loop build takes over — so a failure degrades, never bricks.
+  if(!sdAccessReq && !g_games.empty()){
+    int other=(xPortGetCoreID()==0)?1:0;
+    xTaskCreatePinnedToCore(coverWorker,"cover",20480,NULL,1,&g_cover_worker_task,other);
+    g_wrk_run = (g_cover_worker_task!=NULL) && g_cover_worker_cfg;
+    gtiLog("COVERWORKER v" FW_VERSION "  "+String(g_wrk_run?"ON core":"OFF ")+String(g_wrk_run?other:-1));
+  }
   if(!sdAccessReq && g_c6_ready){espnowBegin();g_espnow_started=true;}   // 5.9.12: radio armed at boot in BOTH modes (MODE is a pure UI gate, no reboot); off in SD access, and only if the C6 is ready
   if(g_cracktro>=0)drawCracktro(g_cracktro);   // CRACKTRO=OFF/NONE (-1) skips the boot demo entirely
   USB.onEvent(usbEventCB);
@@ -4767,10 +5223,12 @@ static String doUserDisks(){
 // v5.6.0: fresh (uncached) reload of the current library level = mode root + g_libpath.
 // Used for category browsing so per-level scans aren't served/polluted by the per-mode cache.
 static void reloadLevel(){
+  wrkPark();   // cover worker indexes g_games/g_files by index — hold it off across the rebuild
   g_files=scanImagesAnimated();            // fills g_files (titles) + g_cats (sub-categories) + g_coverset
   sramSpill(true); buildGameList(); sramSpill(false); buildThumbs();applyStats();   // 7B: cover build outside spill; buildGameList's cache write is guarded to top level; applyStats restores fav/plays
   buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;g_disk_sel=0;g_disk_page=0;
   if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
+  g_wrk_cursor=0; g_wrk_mcursor=0; g_wrk_saved=false; wrkUnpark();
 }
 
 // v5.6.0: category folder browser (drill-down). Shows the sub-folders (categories) at the
@@ -5028,11 +5486,16 @@ void loop(){
     return;
   }
 
+  // 7B perf: load the cover panel's deferred sidecars (blurb/badges) after the selection
+  // settles — cover art is instant on select, these fill ~100ms later. Cheap; self-gating.
+  if(!g_inertia_on)coverSidecarTick(now);
+  if(g_wrk_run && !g_inertia_on)jpgResolveTick();   // 5.9.18: resolve a few jpg_paths per loop so the core-1 worker has covers to build
+
   // background cover build. Two tiers (see coverBgTick): after a ~350ms settle it
   // builds ONLY the cover you're sitting on (pops in ~1s later); the bulk sweep of
   // the whole library waits for a longer idle (COVER_SWEEP_IDLE_MS) so it never eats
   // a ~1s decode while you're actively browsing. Active use pauses it (touch read up top).
-  if(g_cover_pending&&!g_inertia_on&&!g_car_active&&now-g_last_touch_ms>350){
+  if(!g_wrk_run && g_cover_pending&&!g_inertia_on&&!g_car_active&&now-g_last_touch_ms>350){   // worker ON owns cover building AND micro-fill -> UI loop does none of it
     if(coverBgTick(now-g_last_touch_ms))return;
   }
 

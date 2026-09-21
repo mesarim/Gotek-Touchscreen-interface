@@ -1,0 +1,12 @@
+# ESP32-S3 Guition JC3248W535C (N16R8 — 16MB flash / 8MB OPI PSRAM)
+# Copied verbatim from firmware/Gotek_JC3248 so this sketch builds with the same
+# layout as the known-good firmware. A sketch-local partitions.csv OVERRIDES the
+# IDE's Partition Scheme menu — without this file the test sketch was using
+# whatever that menu happened to be set to, which is one more difference from
+# known-good than a bring-up test should have.
+# Name,     Type, SubType,  Offset,    Size,      Flags
+nvs,        data, nvs,      0x9000,    0x5000,
+otadata,    data, ota,      0xe000,    0x2000,
+app0,       app,  ota_0,    0x10000,   0x6A0000,
+app1,       app,  ota_1,    0x6B0000,  0x6A0000,
+spiffs,     data, spiffs,   0xD50000,  0x2B0000,

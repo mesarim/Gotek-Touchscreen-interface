@@ -1,5 +1,5 @@
 {
-  "_note": "Per-device firmware version history for the web flasher. To add a build: drop its <ver>-update.bin (the app image \u2014 byte-identical to the merged app region at 0x10000) somewhere under firmware/, then add one entry to that device's 'builds'. 'app' entries flash multi-part (that device's shared bootloader/partitions/boot_app0 + this app) \u2014 a clean bootable install that leaves SPIFFS/NVS intact. 'full' entries point at a complete merged.bin manifest.json (full erase). Newest first. 'latest:true' marks the default selection. P4 is intentionally not listed.",
+  "_note": "Per-device firmware version history for the web flasher. To add a build: drop its <ver>-update.bin (the app image — byte-identical to the merged app region at 0x10000) somewhere under firmware/, then add one entry to that device's 'builds'. 'app' entries flash multi-part (that device's shared bootloader/partitions/boot_app0 + this app) — a clean bootable install that leaves SPIFFS/NVS intact. 'full' entries point at a complete merged.bin manifest.json (full erase). Newest first. 'latest:true' marks the default selection. P4 is intentionally not listed.",
   "jc3248": {
     "chipFamily": "ESP32-S3",
     "shared": [
@@ -19,84 +19,66 @@
     "appOffset": 65536,
     "builds": [
       {
+        "v": "5.9.38",
+        "ch": "lab",
+        "date": "2026-09-21",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.38-update.bin",
+        "note": "5.9.37's direct SD access (any-size images, saves via RAM-disk overlay) PLUS: an exFAT or NTFS card (the Windows default for 64GB+) is now detected at boot instead of 'SD MOUNT FAILED', and the GTi offers to format it as FAT32 itself - no third-party tools. Two confirmations, RED NO / GREEN YES, 1s arming delay. Quick format (boot sector + FATs); ERASES THE CARD. Reboots into a fresh /ADF /DSK /GENERIC layout.",
+        "latest": false
+      },
+      {
+        "v": "5.9.37",
+        "ch": "lab",
+        "date": "2026-09-21",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.37-update.bin",
+        "note": "DIRECT SD ACCESS (standalone): disk images are no longer copied into the RAM disk - the volume the Gotek sees is mapped straight onto the file on the card, so ANY size .adf/.dsk/.hfe/.st/.img mounts (up to 32MB). Saves still work: writes land in the RAM disk as an overlay and are written back as GameName.sav.<ext> exactly as before; DISKMAXKB now bounds how much of an image can be SAVED, not loaded. Wireless is unchanged (dongle RAM disk, DISKMAXKB ceiling). exFAT cards not supported. Also 5.9.36's boot-progress rework.",
+        "latest": false
+      },
+      {
+        "v": "5.9.30",
+        "ch": "beta",
+        "date": "2026-09-18",
+        "app": "firmware/jc3248-beta/GTi-JC35-5.9.30-update.bin",
+        "note": "SD FW-UPDATE now refuses a merged/full-flash image up front (it can only ever flash the ~1.8MB app image) and shows the INCOMING firmware version on the confirm screen before you commit. Settings tab fully follows BTNSTYLE incl. the page/close bar. Keeps 5.9.29's /gti.log diagnostics, plus REEL BORDER and LAST USED.",
+        "latest": true
+      },
+      {
         "v": "5.9.23",
         "ch": "beta",
-        "latest": true,
         "date": "2026-09-12",
         "app": "firmware/jc3248-beta/GTi-JC35-5.9.23-update.bin",
-        "note": "WiFi SD file access over home WiFi (browse / upload / download / recursive-delete ADFs from a browser) + live 3-way mode switch Standalone/ESP-NOW/WiFi (no reboot) + folder upload incl. subfolders + GTi.local + tidied sectioned CONFIG.TXT"
+        "note": "WiFi SD file access over home WiFi (browse / upload / download / recursive-delete ADFs from a browser) + live 3-way mode switch Standalone/ESP-NOW/WiFi (no reboot) + folder upload incl. subfolders + GTi.local + tidied sectioned CONFIG.TXT",
+        "latest": false
       },
       {
         "v": "5.9.7",
         "ch": "beta",
-        "latest": false,
         "date": "2026-09-09",
         "app": "firmware/jc3248-beta/GTi-JC35-5.9.7-update.bin",
-        "note": "sample manual rewrite (jump [Section] markers); config names OMEGA theme & Dutch"
-      },
-      {
-        "v": "5.9.6",
-        "ch": "beta",
-        "latest": false,
-        "date": "2026-09-09",
-        "app": "firmware/jc3248-beta/GTi-JC35-5.9.6-update.bin",
-        "note": "touch fix (AXS15231B idle-frame reject) + shared web panel / web-OTA + config names OMEGA theme & Dutch"
-      },
-      {
-        "v": "5.9.4-ghost2-tfix",
-        "ch": "beta",
-        "date": "2026-09-08",
-        "app": "firmware/jc3248-ghost/GTi-JC35-5.9.4-ghost2-tfix-update.bin",
-        "note": "first touch-fix build (frozen / bouncing-board fix)"
-      },
-      {
-        "v": "5.9.4-beta",
-        "ch": "beta",
-        "date": "2026-09-08",
-        "app": "firmware/jc3248-beta/GTi-JC35-5.9.4-update.bin",
-        "note": "OMEGAWARE cracktro + OMEGA theme + Dutch, reel cover-filter, pill bar"
-      },
-      {
-        "v": "5.9.3-beta",
-        "ch": "beta",
-        "date": "2026-09-07",
-        "app": "firmware/jc3248-beta/GTi-JC35-5.9.3-update.bin",
-        "note": "cracktro + theme groundwork"
-      },
-      {
-        "v": "5.9.1-beta",
-        "ch": "beta",
-        "date": "2026-09-04",
-        "app": "firmware/jc3248-beta/GTi-JC35-5.9.1-update.bin",
-        "note": "Home-WiFi setup on the touchscreen"
-      },
-      {
-        "v": "5.9.0-beta",
-        "ch": "beta",
-        "date": "2026-09-01",
-        "app": "firmware/jc3248-beta/GTi-JC35-5.9.0-update.bin",
-        "note": "sharded cover cache, faster reel on big libraries"
-      },
-      {
-        "v": "5.8.4-beta",
-        "ch": "beta",
-        "date": "2026-08-23",
-        "app": "firmware/jc3248-beta/GTi-JC35-5.8.4-update.bin",
-        "note": "1000+ cards without reboot, on-SD log"
-      },
-      {
-        "v": "5.8.3-beta",
-        "ch": "beta",
-        "date": "2026-08-21",
-        "app": "firmware/jc3248-beta/GTi-JC35-5.8.3-update.bin",
-        "note": "recurse-flatten library baseline"
+        "note": "sample manual rewrite (jump [Section] markers); config names OMEGA theme & Dutch",
+        "latest": false
       },
       {
         "v": "5.5.5",
         "ch": "stable",
         "date": "2026-08-07",
-        "full": "firmware/jc3248/manifest.json",
-        "note": "last 5.5.x stable \u2014 full image (clean wipe)"
+        "shared": [
+          {
+            "path": "firmware/_shared/jc3248-55x/bootloader.bin",
+            "offset": 0
+          },
+          {
+            "path": "firmware/_shared/jc3248-55x/partitions.bin",
+            "offset": 32768
+          },
+          {
+            "path": "firmware/_shared/jc3248/boot_app0.bin",
+            "offset": 57344
+          }
+        ],
+        "app": "firmware/jc3248/GTi-JC35-5.5.5-update.bin",
+        "note": "last 5.5.x stable (carries its own bootloader/partitions - predates the 5.8+ layout)",
+        "latest": false
       }
     ]
   },
@@ -121,46 +103,17 @@
       {
         "v": "5.9.7",
         "ch": "beta",
-        "latest": true,
         "date": "2026-09-09",
         "app": "firmware/jc4827-beta/GTi-JC43-5.9.7-update.bin",
-        "note": "sample manual rewrite (jump [Section] markers); config names OMEGA theme & Dutch"
+        "note": "sample manual rewrite (jump [Section] markers); config names OMEGA theme & Dutch",
+        "latest": true
       },
       {
         "v": "5.9.6",
         "ch": "beta",
-        "latest": false,
         "date": "2026-09-09",
         "app": "firmware/jc4827-beta/GTi-JC43-5.9.6-update.bin",
         "note": "shared web panel / web-OTA + config names OMEGA theme & Dutch"
-      },
-      {
-        "v": "5.9.4-beta",
-        "ch": "beta",
-        "date": "2026-09-08",
-        "app": "firmware/jc4827-beta/GTi-JC43-5.9.4-update.bin",
-        "note": "OMEGAWARE cracktro + OMEGA theme + Dutch, reel cover-filter, pill bar"
-      },
-      {
-        "v": "5.9.3-beta",
-        "ch": "beta",
-        "date": "2026-09-07",
-        "app": "firmware/jc4827-beta/GTi-JC43-5.9.3-update.bin",
-        "note": "cracktro + theme groundwork"
-      },
-      {
-        "v": "5.8.4-beta",
-        "ch": "beta",
-        "date": "2026-08-23",
-        "app": "firmware/jc4827-beta/GTi-JC43-5.8.4-update.bin",
-        "note": "1000+ cards without reboot, on-SD log"
-      },
-      {
-        "v": "5.8.3-beta",
-        "ch": "beta",
-        "date": "2026-08-21",
-        "app": "firmware/jc4827-beta/GTi-JC43-5.8.3-update.bin",
-        "note": "recurse-flatten library baseline"
       }
     ]
   },
@@ -173,7 +126,7 @@
         "latest": true,
         "date": "2026-09-12",
         "full": "firmware/supermini-beta/manifest-1.5.json",
-        "note": "Webby: unique-SSID fix + settable device name + name-on-fling + screen-as-leader naming. (1.6.1 pulled \u2014 status-LED refresh starved the ESP-NOW radio; fix pending as 1.6.2)"
+        "note": "Webby: unique-SSID fix + settable device name + name-on-fling + screen-as-leader naming. (1.6.1 pulled — status-LED refresh starved the ESP-NOW radio; fix pending as 1.6.2)"
       },
       {
         "v": "3.4.0-beta",

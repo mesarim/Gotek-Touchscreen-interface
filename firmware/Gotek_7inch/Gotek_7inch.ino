@@ -782,7 +782,19 @@ static void scanDirImages(const String& dir, std::vector<String>& out, const Str
   }
   root.close();
 }
+// RAII guard for the library build. Ported from JC3248 5.8.9.
+// While this is in scope, allocations of 16 bytes and up go to PSRAM instead of
+// internal SRAM. The library index is tens of thousands of tiny String
+// allocations; without this they all land in the ~200 KB internal heap and a
+// 1000+ game card runs it dry. Restores the normal 4096-byte threshold on exit
+// so the UI keeps allocating from fast internal RAM.
+static int lib_extmem_depth = 0;
+struct LibMem {
+  LibMem(){  if(lib_extmem_depth++ == 0) heap_caps_malloc_extmem_enable(16);   }
+  ~LibMem(){ if(--lib_extmem_depth == 0) heap_caps_malloc_extmem_enable(4096); }
+};
 static bool listImages(fs::FS& fs, std::vector<String>& out) {
+  LibMem _lm;   // 5.8.9 port: library strings -> PSRAM, not the internal heap
   out.clear();
   String modeDir = (g_mode == MODE_ADF) ? "/ADF" : (g_mode == MODE_DSK) ? "/DSK" : "/GENERIC";
   String ext1    = (g_mode == MODE_ADF) ? ".ADF" : ".DSK";
@@ -1582,6 +1594,7 @@ static void writeFileList(){
   f.close();
 }
 static bool readFileList(){
+  LibMem _lm;   // 5.8.9 port: library strings -> PSRAM, not the internal heap
   File f=SD_MMC.open(fileListPath().c_str(),FILE_READ); if(!f)return false;
   long declared=-1; std::vector<String> tmp;
   while(f.available()){
@@ -1610,6 +1623,7 @@ static void writeGameCache(){
 }
 
 static bool readGameCache(){
+  LibMem _lm;   // 5.8.9 port: library strings -> PSRAM, not the internal heap
   g_games.clear();
   File f=SD_MMC.open(gameCachePath().c_str(),FILE_READ);
   if(!f){return false;}
@@ -1637,6 +1651,7 @@ static bool readGameCache(){
 }
 
 static void buildGameList(){
+  LibMem _lm;   // 5.8.9 port: library strings -> PSRAM, not the internal heap
   g_games.clear();
   std::vector<bool> used(g_files.size(), false);
   for(int i=0;i<(int)g_files.size();i++){
@@ -3209,6 +3224,30 @@ static bool carDecodeTile(int gi,uint16_t*dst){
 static String carThumbRoot(int gi){
   return (g_files[g_games[gi].first_file_idx].startsWith("/DSK"))?String("/DSK/.thumbs"):String("/ADF/.thumbs");
 }
+// 32-bit FNV-1a over the image path. Wider than the old 16-bit djb2 because it
+// now has to be collision-safe as the ONLY thing identifying the tile.
+static uint32_t carThumbHash(int gi){
+  const String&p=g_files[g_games[gi].first_file_idx];
+  uint32_t h=2166136261u;
+  for(unsigned i=0;i<p.length();i++){ h^=(uint8_t)p[i]; h*=16777619u; }
+  return h;
+}
+// "/ADF/.thumbs/A3" — 256 shard folders keyed on the top byte of the hash, so a
+// 1000-game library is ~4 tiles per folder instead of 1000 in one.
+static String carShardDir(int gi){
+  char b[4]; snprintf(b,sizeof(b),"%02X",(unsigned)(carThumbHash(gi)>>24));
+  return carThumbRoot(gi)+"/"+b;
+}
+// "A3F2C1D0.tnl" — pure 8.3, so FAT spends ONE directory entry on it. The old
+// names ("Conflict Middle East Political Simulator_A3F2.tnl") needed a VFAT
+// long-name chain of six or seven entries each, which is most of why scanning
+// the folder was so expensive.
+static String carThumbFast(int gi){
+  char b[16]; snprintf(b,sizeof(b),"%08X.tnl",(unsigned)carThumbHash(gi));
+  return carShardDir(gi)+"/"+b;
+}
+// Legacy flat path. Read-only now — tiles found here are migrated to the fast
+// layout as they are used, so nothing has to be rebuilt.
 static String carThumbPath(int gi){
   GameEntry&g=g_games[gi];
   const String&p=g_files[g.first_file_idx];
@@ -3216,28 +3255,45 @@ static String carThumbPath(int gi){
   char hx[6]; snprintf(hx,sizeof(hx),"%04X",(unsigned)(h&0xFFFF));
   return carThumbRoot(gi)+"/"+getGameBaseName(p)+"_"+hx+".tnl";
 }
+static void carSaveThumb(int gi,uint16_t*src);   // fwd: carLoadThumb migrates legacy tiles
+// ONE directory scan: open, then ask the handle for the size. The stat() that
+// used to run first doubled the cost of the most expensive operation in the
+// whole browse path, for information the open handle already has.
+// No mtime "stale" check: these boards often have no RTC, so a freshly written
+// thumb is dated 1980 and would always look older than the PC-dated cover,
+// wrongly rejecting every cached tile. RESCAN is the invalidator.
+static bool carReadTnl(const String&path,uint16_t*dst){
+  File f=SD_MMC.open(path.c_str(),"r"); if(!f) return false;
+  size_t want=(size_t)CAR_TILE*CAR_TILE*2;
+  if((size_t)f.size()!=want){ f.close(); return false; }
+  size_t got=f.read((uint8_t*)dst,want); f.close();
+  return got==want;
+}
 static bool carLoadThumb(int gi,uint16_t*dst){
   GameEntry&g=g_games[gi];
   if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return false;
-  String tp=carThumbPath(gi);
-  struct stat stT;
-  String vT="/sdcard"+tp;
-  if(stat(vT.c_str(),&stT)!=0)return false;
-  if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))return false;
-  // No mtime "stale" check: these boards often have no RTC, so a freshly written thumb
-  // is dated 1980 and would always look older than the PC-dated cover, wrongly rejecting
-  // every cached tile. RESCAN (which wipes .thumbs) is the invalidator.
-  File f=SD_MMC.open(tp.c_str(),"r");if(!f)return false;
-  size_t want=(size_t)CAR_TILE*CAR_TILE*2;
-  size_t got=f.read((uint8_t*)dst,want);f.close();
-  return got==want;
+  if(carReadTnl(carThumbFast(gi),dst)) return true;          // fast layout
+  if(carReadTnl(carThumbPath(gi),dst)){                      // legacy flat layout
+    carSaveThumb(gi,dst);                                    // migrate on the way past
+    return true;
+  }
+  return false;
 }
+// SD_MMC.exists() on each shard would itself be a scan of the (large) parent,
+// so instead remember which shards this boot has already created. mkdir on an
+// existing directory just fails, harmlessly.
+static uint8_t car_shard_made[32]={0};
+static bool    car_thumbroot_made=false;
 static void carSaveThumb(int gi,uint16_t*src){
   GameEntry&g=g_games[gi];
   if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return;
-  String root=carThumbRoot(gi);
-  if(!SD_MMC.exists(root.c_str()))SD_MMC.mkdir(root.c_str());
-  File f=SD_MMC.open(carThumbPath(gi).c_str(),FILE_WRITE);if(!f)return;
+  if(!car_thumbroot_made){ SD_MMC.mkdir(carThumbRoot(gi).c_str()); car_thumbroot_made=true; }
+  unsigned sh=(unsigned)(carThumbHash(gi)>>24);
+  if(!(car_shard_made[sh>>3]&(1u<<(sh&7)))){
+    SD_MMC.mkdir(carShardDir(gi).c_str());
+    car_shard_made[sh>>3]|=(uint8_t)(1u<<(sh&7));
+  }
+  File f=SD_MMC.open(carThumbFast(gi).c_str(),FILE_WRITE);if(!f)return;
   f.write((uint8_t*)src,(size_t)CAR_TILE*CAR_TILE*2);f.close();
 }
 // Fetch a game's tile (NULL if uncached and decoding isn't allowed right now).
@@ -3274,6 +3330,14 @@ static void purgeThumbDir(const char* vfsDir){
 static void carInvalidateThumbs(){
   purgeThumbDir("/sdcard/ADF/.thumbs");
   purgeThumbDir("/sdcard/DSK/.thumbs");
+  // ...and the 256 shard folders underneath each.
+  for(int i=0;i<256;i++){
+    char b[4]; snprintf(b,sizeof(b),"%02X",(unsigned)i);
+    String a=String("/sdcard/ADF/.thumbs/")+b, d=String("/sdcard/DSK/.thumbs/")+b;
+    purgeThumbDir(a.c_str()); purgeThumbDir(d.c_str());
+    yield();
+  }
+  memset(car_shard_made,0,sizeof(car_shard_made)); car_thumbroot_made=false;
   // covers rebuild lazily per page as you browse — no blocking full rebuild
 }
 
@@ -3283,11 +3347,27 @@ static inline uint16_t carDim(uint16_t c,int lvl){
   return (uint16_t)((c>>2)&0x39E7);              // ~25%
 }
 // Blit a tile scaled to w x h centred at (cx,cy), dim level 0..2, nearest-neighbour.
+// The source-column map is built once per call (w entries, not w*h), the source
+// row is computed once per destination row, clipping happens once per row, and
+// the inner loop writes through a raw row pointer into the compose buffer.
+static int car_bl_sx[KLCD_W];
 static void carBlit(uint16_t*tile,int cx,int cy,int w,int h,int dim){
-  int x0=cx-w/2,y0=cy-h/2;
-  for(int dy=0;dy<h;dy++){int sy=dy*CAR_TILE/h;
-    for(int dx=0;dx<w;dx++){int sx=dx*CAR_TILE/w;
-      UG->drawPixel(x0+dx,y0+dy,carDim(tile?tile[sy*CAR_TILE+sx]:COL_BAR,dim));}}
+  if(w<=0||h<=0||!tft.cb) return;
+  int x0=cx-w/2, y0=cy-h/2;
+  int bx0=max(tft.clx0,x0), bx1=min(tft.clx1,x0+w);
+  int by0=max(tft.cly0,y0), by1=min(tft.cly1,y0+h);
+  if(bx0>=bx1||by0>=by1) return;
+  int cw=bx1-bx0;                                  // clipped, so never wider than KLCD_W
+  for(int i=0,dx=bx0-x0; i<cw; i++,dx++) car_bl_sx[i]=(dx*CAR_TILE)/w;
+  for(int y=by0;y<by1;y++){
+    int sy=((y-y0)*CAR_TILE)/h;
+    uint16_t* drow=tft.cb+(size_t)y*KLCD_W+bx0;
+    if(!tile){ uint16_t c=carDim(COL_BAR,dim); for(int i=0;i<cw;i++) drow[i]=c; continue; }
+    const uint16_t* srow=tile+(size_t)sy*CAR_TILE;
+    if(dim<=0)      for(int i=0;i<cw;i++) drow[i]=srow[car_bl_sx[i]];
+    else if(dim==1) for(int i=0;i<cw;i++) drow[i]=(uint16_t)((srow[car_bl_sx[i]]>>1)&0x7BEF);
+    else            for(int i=0;i<cw;i++) drow[i]=(uint16_t)((srow[car_bl_sx[i]]>>2)&0x39E7);
+  }
 }
 static void drawCarousel(){ UiFrame _uf;   // static 3x2 GRID page (no motion) — replaces the carousel
   int W=LCD_WIDTH,H=LCD_HEIGHT;
@@ -3319,8 +3399,15 @@ static void drawCarousel(){ UiFrame _uf;   // static 3x2 GRID page (no motion) �
       UG->fillRect(cx-box/2,cyImg-box/2,box,box,COL_BAR);
       if(!gm.jpg_path.length()){String jpg;if(findJPGFor(g_files[gm.first_file_idx],jpg))gm.jpg_path=jpg;else gm.jpg_path="?";}
       if(gm.jpg_path.length()>0&&gm.jpg_path!="?"){
-        if(coverIsPng(gm.jpg_path)) drawPngFit(gm.jpg_path,cx-box/2,cyImg-box/2,box,box);
-        else                        drawJpegFit(gm.jpg_path,cx-box/2,cyImg-box/2,box,box);
+        // Through the LRU tile cache, NOT a fresh decode. carTile() serves a
+        // cached tile, else the .tnl thumb, and only decodes as a last resort
+        // (then saves the thumb, so it is the last time for that cover).
+        // The old path re-decoded the full-size JPEG at 1:1 for every tile on
+        // every page draw and threw it away: ~1.3 s each, six per page.
+        uint16_t* _t=carTile(gi,true);
+        if(_t) carBlit(_t,cx,cyImg,box,box,0);
+        else if(coverIsPng(gm.jpg_path)) drawPngFit(gm.jpg_path,cx-box/2,cyImg-box/2,box,box);
+        else                             drawJpegFit(gm.jpg_path,cx-box/2,cyImg-box/2,box,box);
       } else {                                            // no-art placeholder letter
         UG->setFont(&lgfx::fonts::DejaVu18);UG->setTextSize(2);
         char ib[2]={(char)toupper(gm.name.charAt(0)),0};
