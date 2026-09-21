@@ -16,9 +16,9 @@ disagree about the same one — so these tables describe this commit, nothing el
 
 | Surface | Sketch | Version | Branch | Commit |
 |---|---|---|---|---|
-| Webby dongle - Super Mini | `Gotek_SuperMini_Webby` | `Webby-1.6.3` | `—` | `e01fd87` |
-| Webby dongle - XIAO | `Gotek_XIAO_Webby` | `Webby-1.5-xiao` | `—` | `e01fd87` |
-| Touchscreen panel - JC3248 | `Gotek_JC3248` | `5.9.26-JC3248` | `—` | `e01fd87` |
+| Webby dongle - Super Mini | `Gotek_SuperMini_Webby` | `Webby-1.6.3` | `gotek-docs-api-reference` | `8beac4e` |
+| Webby dongle - XIAO | `Gotek_XIAO_Webby` | `Webby-1.5-xiao` | `gotek-docs-api-reference` | `8beac4e` |
+| Touchscreen panel - JC3248 | `Gotek_JC3248` | `5.9.38-lab8-JC3248` | `gotek-docs-api-reference` | `8beac4e` |
 
 ## HTTP
 
