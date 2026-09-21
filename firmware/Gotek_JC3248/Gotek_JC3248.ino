@@ -35,7 +35,9 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.23-JC3248"
+#define FW_VERSION "5.9.23-fleet-JC3248"   // -fleet so the bench can tell this apart from a
+                                           // cracktro build: both were "5.9.23-JC3248" and the
+                                           // panel on the desk could not be attributed to either.
 #define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
 #define PF_MDNS_DEFAULT "gotekomega"   // the name this screen answers to unless MDNS_NAME says otherwise.
                                        // Must match what the dongles cede (their portal points users here).
