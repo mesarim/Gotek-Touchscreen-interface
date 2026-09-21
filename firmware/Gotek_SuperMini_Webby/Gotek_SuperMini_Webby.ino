@@ -47,7 +47,17 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-1.6.5-lock"   // Mez 1.6.2 base (WS2812 radio fix, HD sectors) + 1.6.3's to83keepext + the WiFi owner-lock
+// -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the closed-route table and the
+// lk/lkd/enr beacon keys. OFF by default per #24: a normal user should never meet the word, so
+// this is compile-time only and deliberately NOT a CONFIG.TXT key. Uncomment for a fleet build.
+// The wire contract is unchanged either way, so the two builds interoperate.
+//#define GTI_FLEET 1
+
+#if defined(GTI_FLEET)
+#define FW_VERSION     "Webby-1.6.5-lock"   // Mez 1.6.2 base + 1.6.3's to83keepext + the fleet layer
+#else
+#define FW_VERSION     "Webby-1.6.5"        // Mez 1.6.2 base (WS2812 radio fix, HD sectors) + 1.6.3's to83keepext
+#endif
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -111,11 +121,14 @@
 #define CMD_EJECT       0x03
 #define CMD_EJECT_FORCE 0x04
 #define CMD_SET_NAME    0x06   // #24: set the pretty display name for the NEXT flung disk (g_loaded_name only; FAT12 stays DISK.ADF)
-#define CMD_ENROLL      0x07   // #lock: [FFFFFFFF][07][16-byte token] -> if the enroll window is open, store the token as an owner
-#define CMD_AUTH        0x08   // #lock: [FFFFFFFF][08][16-byte token] preamble before a disk fling -> proves the sender is an enrolled owner
-#define CMD_UNENROLL    0x09   // #lock: [FFFFFFFF][09][16-byte token] -> remove that token (unclaim/release)
-#define WTOKEN_LEN      16     // #lock: owner-token length (bytes)
-#define WENROLL_WIN_MS  60000UL // #lock: how long a BOOT tap keeps the WiFi enroll window open
+// 0x07-0x09 are reserved in both builds - do not renumber them and do not reuse them.
+#if defined(GTI_FLEET)
+#define CMD_ENROLL      0x07   // #fleet: [FFFFFFFF][07][16-byte token] -> if the enrol window is open, store the token as an owner
+#define CMD_AUTH        0x08   // #fleet: [FFFFFFFF][08][16-byte token] preamble before a disk fling -> proves the sender is an enrolled owner
+#define CMD_UNENROLL    0x09   // #fleet: [FFFFFFFF][09][16-byte token] -> remove that token
+#define WTOKEN_LEN      16     // #fleet: owner-token length (bytes)
+#define WENROLL_WIN_MS  60000UL // #fleet: how long a BOOT tap keeps the WiFi enrol window open
+#endif
 // ── FLEET: UDP discovery beacon (shared port: dongle, app, JC, browser-master) ──
 #define GTI_DISCO_PORT   51703
 #define ALIVE_BEACON_MS  12000   // "I'm alive" cadence, home-WiFi only
@@ -345,6 +358,7 @@ static uint8_t  _owner_count   = 0;
 static bool     g_enroll_open  = false;
 static uint32_t g_enroll_until = 0;
 
+#if defined(GTI_FLEET)
 // ── #lock: WiFi/LAN owner tokens — gate flings on a shared network to enrolled screens ──
 // Extends the ESP-NOW owner concept (above) to the WiFi/TCP path. A locked dongle
 // (>=1 token) only accepts a fling preceded by a valid AUTH token. Enrolment needs the
@@ -371,6 +385,12 @@ static bool wReadToken(WiFiClient& c, uint8_t* tok){
 static bool wEnrollOpen(){ return g_wenroll_until != 0 && (int32_t)(millis() - g_wenroll_until) < 0; }
 // #lock: clear every WiFi owner - the escape hatch from an orphaned lock (physical BOOT gestures call this).
 static void wipeWOwners(){ g_wowner_count=0; LittleFS.begin(true); LittleFS.remove("/WOWNERS.TXT"); }
+#else
+// No fleet layer in this build: no token store, and /WOWNERS.TXT is never created, read
+// or deleted. The stub exists because the MAINLINE ESP-NOW wipe calls it, so that one
+// gesture forgets both transports in a fleet build.
+static inline void wipeWOwners() {}
+#endif
 
 // ESP-NOW receive queue
 #define RX_PKT_SIZE 250
@@ -532,23 +552,26 @@ static String discoName(){
   uint8_t m[6]; WiFi.macAddress(m);
   char b[24]; snprintf(b,sizeof(b),"gotekomega-%02x%02x",m[4],m[5]); return String(b); }
 static int    g_webmode = 0;
-// #lock: the token gates the SHARED LAN, where every screen in the building can reach us.
-// On our own AP the AP password is the gate - that is why it is configurable, and it is the
-// documented way out of a claim ('use its own AP, or UNCLAIM it first'). The HTTP surface has
-// always drawn the line there; the TCP gates did not, and that refused the panel's own
-// ESP-NOW-mode save fetch with 0x05 - it joins this AP to collect the save.
-static bool wtokGateActive();   // the token helpers are above; the body needs g_webmode, so it lands here
-static bool wtokGateActive(){ return wtokLocked() && g_webmode == 1; }
 static bool   g_join_failed = false;   // resolved at boot: 0 = ESPNOW/AP, 1 = WIFI/STA
 static String g_loaded_name = "";
+#if defined(GTI_FLEET)
+// #fleet: the token gates the SHARED LAN, where every screen in the building can reach us.
+// On our own AP the AP password is the gate - that is why it is configurable, and it is the
+// documented way out of a claim. The HTTP surface has always drawn the line there; the TCP gates
+// did not, and that refused the panel's own ESP-NOW-mode save fetch with 0x05 - it joins this AP
+// to collect the save.
+static bool wtokGateActive();   // the token helpers are above; the body needs g_webmode, so it lands here
+static bool wtokGateActive(){ return wtokLocked() && g_webmode == 1; }
 
-// #lock (Mez's idea): configurable AP creds — a custom AP name + password means nobody can join the
-// dongle's own setup AP to reconfigure it. Stored in /APCFG.TXT, apart from WEBBY.TXT so a wifi-cred
-// save never clobbers them. Complements the LAN owner-lock (which guards flings on a shared network).
+// #fleet (Mez's idea): configurable AP creds - a custom AP name + password means nobody can join
+// the dongle's own setup AP to reconfigure it. Stored in /APCFG.TXT, apart from WEBBY.TXT so a
+// wifi-cred save never clobbers them. NOTE: the UNIQUE per-device AP name is mainline and lives in
+// startEspnowApMode(); only the user-configurable name and password are in here.
 static String g_ap_name = AP_SSID;
 static String g_ap_pass = AP_PASS;
 static void loadApCfg(){ if(!LittleFS.begin(true)) return; File f=LittleFS.open("/APCFG.TXT","r"); if(!f) return; while(f.available()){ String l=f.readStringUntil('\n'); l.trim(); if(l.startsWith("APNAME=")) g_ap_name=l.substring(7); else if(l.startsWith("APPASS=")) g_ap_pass=l.substring(7); } f.close(); if(!g_ap_name.length()) g_ap_name=AP_SSID; }
 static void saveApCfg(const String& name, const String& pass){ if(!LittleFS.begin(true)) return; File f=LittleFS.open("/APCFG.TXT","w"); if(!f) return; f.print("APNAME="); f.println(name.length()?name:String(AP_SSID)); f.print("APPASS="); f.println(pass.length()>=8?pass:String(AP_PASS)); f.close(); }
+#endif
 
 static void loadWifiCfg() {
   if (!LittleFS.begin(true)) return;
@@ -644,9 +667,13 @@ static void sendStatusBeacon(){
 static void handleTCPClient(WiFiClient& client) {
   oledStatus("Receiving...", "TCP connected", "", "");
   uint32_t t0;
-  bool authed = false;   // #lock: set by a valid CMD_AUTH preamble on this connection
-  // #lock: at most two frames per connection - an optional AUTH preamble, then the real command or the disk.
+#if defined(GTI_FLEET)
+  bool authed = false;   // #fleet: set by a valid CMD_AUTH preamble on this connection
+  // #fleet: at most two frames per connection - an optional AUTH preamble, then the real command or the disk.
   for (int frame = 0; frame < 2; frame++) {
+#else
+  {   // one frame per connection: there is no AUTH preamble in this build
+#endif
     t0 = millis();
     while (client.available() < 4 && millis()-t0 < 5000) delay(1);
     if (client.available() < 4) { client.write((uint8_t)0x00); return; }
@@ -658,8 +685,9 @@ static void handleTCPClient(WiFiClient& client) {
       if (!client.available()) { client.write((uint8_t)0x00); return; }
       uint8_t cmd = client.read();
 
-      // -- always allowed: read-only status, the AUTH preamble, and ENROLL (gated by its own physical BOOT window) --
+      // -- read-only status is always allowed --
       if (cmd == CMD_GET_STATUS) { doGetStatus(client); return; }
+#if defined(GTI_FLEET)
       if (cmd == CMD_ENROLL) {
         uint8_t tok[WTOKEN_LEN];
         if (!wReadToken(client, tok)) { client.write((uint8_t)0x00); return; }
@@ -679,9 +707,12 @@ static void handleTCPClient(WiFiClient& client) {
         if (wtokLocked() && !wtokIsOwner(tok)) { client.write((uint8_t)0x05); return; }   // locked + not an owner
         authed = true; continue;   // the NEXT frame carries the real command or the disk
       }
+#endif
 
+#if defined(GTI_FLEET)
       // -- everything below changes state or reads the user's data: refused while locked without AUTH --
       if (wtokGateActive() && !authed) { client.write((uint8_t)0x05); return; }
+#endif
 
       if (cmd == CMD_GET_SAVE)    { doGetSave(client);     return; }
       if (cmd == CMD_EJECT)       { doEject(client,false); return; }
@@ -694,6 +725,7 @@ static void handleTCPClient(WiFiClient& client) {
         nb[got<128?got:128]=0; g_next_name=String(nb);
         client.write((uint8_t)0x01); return;
       }
+#if defined(GTI_FLEET)
       if (cmd == CMD_UNENROLL) {   // #lock: remove that owner (unclaim); the token itself proves ownership
         uint8_t tok[WTOKEN_LEN];
         if (!wReadToken(client, tok)) { client.write((uint8_t)0x00); return; }
@@ -702,12 +734,22 @@ static void handleTCPClient(WiFiClient& client) {
         if (ok) oledStatus("Gotek OMEGA " FW_VERSION,"RELEASED","Owner removed",String(g_wowner_count)+" owner(s)");
         return;
       }
-      client.write((uint8_t)0x00); return;
+#endif
+      // 0x07-0x09 carry a 16-byte payload this build does not use. Drain it before answering:
+      // closing a socket with unread RX data makes lwIP send a RST, and the RST discards the NAK
+      // we just wrote - the caller then sees a dead connection instead of a clean refusal.
+      if (cmd >= 0x07 && cmd <= 0x09) {
+        uint32_t td = millis(); int nd = 0;
+        while (nd < 16 && millis() - td < 500) { if (!client.connected()) break; if (client.read() < 0) { delay(1); continue; } nd++; td = millis(); }
+      }
+      client.write((uint8_t)0x00); client.flush(); return;
     }
 
     // -- disk payload --
     if (size == 0 || size > MAX_FILE_BYTES) { client.write((uint8_t)0x00); return; }
-    if (wtokGateActive() && !authed) { client.write((uint8_t)0x05); return; }   // #lock: locked dongle refuses an unauthenticated fling over the shared LAN
+#if defined(GTI_FLEET)
+    if (wtokGateActive() && !authed) { client.write((uint8_t)0x05); return; }   // #fleet: a locked dongle refuses an unauthenticated fling over the shared LAN
+#endif
     // #safety: detach BEFORE overwriting the RAM disk. The browser-upload path already does this;
     // the TCP path did not, so a re-fling left the host mounted on a half-rewritten volume for the
     // whole transfer (minutes, on a bad link).
@@ -781,8 +823,8 @@ static String statusJson(){
   return s;
 }
 
-// Finalize a browser upload: lay metadata over the streamed data, re-insert.
-// #lock: a LOCKED dongle on a SHARED network (STA mode) closes its own HTTP write surface.
+#if defined(GTI_FLEET)
+// #fleet: a LOCKED dongle on a SHARED network (STA mode) closes its own HTTP write surface.
 // The panel drives it over TCP 3333 with an owner token; its web page is not an auth channel.
 // Configure it from its own password-protected AP (g_webmode==0), or UNCLAIM it from the owning screen.
 // #lock: which web endpoints a claim closes on the shared LAN. Two groups:
@@ -816,6 +858,17 @@ static bool webDenyLockedCfg(){
   server.send(403,"application/json","{\"error\":\"locked to a screen - UNCLAIM it there, or use the dongle's BOOT button (3s = ESP-NOW, 10s = wipe creds+owners)\"}");
   return true;
 }
+#else
+// No fleet layer in this build, so nothing is ever refused. The SENSE of these stubs is the one
+// mistake no compiler would catch: allowed = true, deny = false. Every call site then reads
+// naturally - handleUpload's `if (!webWriteAllowed()) return;` becomes `if (!true)`, so the
+// upload stream keeps flowing. Inverted, every upload would be silently discarded.
+static inline bool webWriteAllowed()  { return true;  }
+static inline bool webDenyLocked()    { return false; }
+static inline bool webDenyLockedCfg() { return false; }
+#endif
+
+// Finalize a browser upload: lay metadata over the streamed data, re-insert.
 
 static void webFinishLoad(){
   uint32_t size = g_up_recv;
@@ -968,11 +1021,16 @@ footer{text-align:center;color:#5b6076;font-size:11px;margin-top:22px}.hidden{di
  <div class="card"><h2 data-i18n="espnow_t">ESP-NOW / GTi mode</h2>
   <div class="hint" style="margin-top:0">Switch back to the dongle's own access point + ESP-NOW so a GTi screen can drive it. Reconnect to the <b>GotekOMEGA</b> Wi-Fi afterwards to return here.</div>
   <button class="btn ghost wide" style="margin-top:14px" onclick="toEspnow()" data-i18n="espnow_b">Disconnect Wi-Fi &rarr; ESP-NOW</button></div>
- <div class="card"><h2>AP security</h2>
+)HTML"
+#if defined(GTI_FLEET)
+R"HTML( <div class="card"><h2>AP security</h2>
   <div class="hint" style="margin-top:0">Rename this dongle setup access point and give it a password. Only someone who knows them can join it to reconfigure the dongle. WPA2 password: 8+ characters.</div>
   <div class="field"><label>AP name</label><input id="apname" placeholder="GotekOMEGA" maxlength="24"></div>
   <div class="field"><label>AP password (8+)</label><input id="appass" type="password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" maxlength="32"></div>
   <button class="btn amber wide" style="margin-top:12px" onclick="setAp()">Save AP &amp; reboot</button></div>
+)HTML"
+#endif
+R"HTML(
 </section>
 <footer>Webby-0.1 &middot; OMEGAWARE</footer></div>
 <div class="toast" id="toast"></div>
@@ -1008,7 +1066,12 @@ function scanWifi(){var L=document.getElementById('scanlist');L.textContent=tt('
 (function(){fetch('/status').then(function(r){return r.json();}).then(function(d){if(d&&d.devname){window.__dn=d.devname;}if(d&&d.devname&&d.devname.indexOf('gotekomega-')!==0){var dn=document.getElementById('devname');if(dn&&!dn.value)dn.value=d.devname;}if(d&&d.join_failed&&d.ssid){var m=document.getElementById('joinmsg');if(m){var w=document.createElement('div');w.style.cssText='background:#2a1416;border:1px solid #6b2b2b;color:#ffb3b3;border-radius:9px;padding:10px 12px;margin-bottom:10px;font-size:13px';w.textContent=tt('cant_conn')+' '+String.fromCharCode(34)+d.ssid+String.fromCharCode(34)+'. '+tt('wrong_pw');m.appendChild(w);}var si=document.getElementById('ssid');if(si&&!si.value)si.value=d.ssid;}}).catch(function(){});})();
 function joinWifi(){var s=document.getElementById('ssid').value.trim();if(!s){toast(tt('enter_net'),1);return;}var b=new URLSearchParams();b.append('ssid',s);b.append('pass',document.getElementById('pass').value);var dn=document.getElementById('devname');var nm=dn?dn.value.trim():'';b.append('name',nm);toast(tt('saving'));fetch('/savewifi',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b.toString()}).then(function(r){return r.json();}).then(function(d){if(!d.saved){toast(tt('save_fail'),1);return;}var own=(nm?san(nm):'')||window.__dn||'gotekomega';document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2>'+tt('saved_join')+' '+s+'</h2><p style="color:#8b93ad">Reconnect your device to your home Wi-Fi. This dongle is at <b>'+own+'.local</b>. The screen / fleet leader stays at <b>gotekomega.local</b>.</p></div>';});}
 function toEspnow(){toast('Switching...');fetch('/espnow',{method:'POST'}).then(function(){document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2>Back to ESP-NOW / AP mode</h2><p style="color:#8b93ad">Rebooting. Reconnect to the <b>GotekOMEGA</b> Wi-Fi (password gotek1234) and open <b>192.168.4.1</b> to return here.</p></div>';});}
-function setAp(){var n=document.getElementById('apname').value.trim();var p=document.getElementById('appass').value;if(p&&p.length<8){toast('Password 8+ chars',1);return;}var b=new URLSearchParams();b.append('apname',n);b.append('appass',p);toast('Saving AP...');fetch('/setap',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b.toString()}).then(function(r){return r.json();}).then(function(d){if(!d.saved){toast(d.err||'Failed',1);return;}document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2>AP updated</h2><p style="color:#8b93ad">Rebooting. Reconnect to <b>'+(n||'GotekOMEGA')+'</b> with the new password.</p></div>';}).catch(function(){});}
+)HTML"
+#if defined(GTI_FLEET)
+R"HTML(function setAp(){var n=document.getElementById('apname').value.trim();var p=document.getElementById('appass').value;if(p&&p.length<8){toast('Password 8+ chars',1);return;}var b=new URLSearchParams();b.append('apname',n);b.append('appass',p);toast('Saving AP...');fetch('/setap',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b.toString()}).then(function(r){return r.json();}).then(function(d){if(!d.saved){toast(d.err||'Failed',1);return;}document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2>AP updated</h2><p style="color:#8b93ad">Rebooting. Reconnect to <b>'+(n||'GotekOMEGA')+'</b> with the new password.</p></div>';}).catch(function(){});}
+)HTML"
+#endif
+R"HTML(
 var drop=document.getElementById('drop');
 ['dragenter','dragover'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.add('hot');});});
 ['dragleave','drop'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.remove('hot');});});
@@ -1166,9 +1229,14 @@ static void sendAliveBeacon(){
   j += ",\"board\":\"supermini\"";
   j += ",\"fw\":\"";    j += FW_VERSION;     j += "\"";
   j += ",\"hd\":true";
-  j += ",\"lk\":1";                              // #lock: understands the WiFi owner-lock -> the panel prepends AUTH
-  j += ",\"lkd\":"; j += (wtokLocked()?"1":"0"); // #lock: 1 = locked (>=1 enrolled owner)
-  j += ",\"enr\":"; j += (wEnrollOpen()?"1":"0"); // #lock: 1 = enroll window open -> screens offer CLAIM
+#if defined(GTI_FLEET)
+  // #fleet: all three keys or none. A half-present contract (lk without lkd) is worse than
+  // absent, and "lk":0 would be worse still - the panel keys its AUTH decision off lk being
+  // present, so a default build must simply not mention it.
+  j += ",\"lk\":1";
+  j += ",\"lkd\":"; j += (wtokLocked()?"1":"0");
+  j += ",\"enr\":"; j += (wEnrollOpen()?"1":"0");
+#endif
   j += ",\"port\":80";
   j += ",\"tcp\":";     j += String(TCP_PORT);
   j += ",\"loaded\":";  j += (g_disk_loaded?"true":"false");
@@ -1251,6 +1319,7 @@ static void startWebServer(){
   server.on("/scan",     HTTP_GET,  handleScan);
   server.on("/savewifi", HTTP_POST, handleSaveWifi);
   server.on("/espnow", HTTP_POST, handleEspnowWeb);
+#if defined(GTI_FLEET)
   server.on("/setap", HTTP_POST, [](){   // #lock: set a custom AP name + password (protects the dongle's own setup AP)
     if (webDenyLockedCfg()) return;   // #lock: choosing the fallback AP password before pushing us into AP mode
     String name = server.hasArg("apname") ? server.arg("apname") : "";
@@ -1263,6 +1332,7 @@ static void startWebServer(){
     server.send(200,"application/json","{\"saved\":true}");
     delay(400); ESP.restart();   // AP change needs a reboot
   });
+#endif
   // PANEL: /api/* shim the SPA calls (has_sd:false dongle surface)
   server.on("/api/system/info",  HTTP_GET,  apiSystemInfo);
   server.on("/api/disk/status",  HTTP_GET,  apiDiskStatus);
@@ -1324,25 +1394,31 @@ static bool serviceBootButton(){
       uint32_t wheld = now - wrt0; wrPrev = false; setLeds(false, false);
       if (wheld >= BOOT_WIFIWIPE_MS) {
         wipeWifiCreds(); wipeWOwners();   // #lock: this is the physical escape from an orphaned lock - clear owners too
-        oledStatus("Gotek OMEGA " FW_VERSION, "Wi-Fi WIPED", "Creds + owners", "Rebooting...");
+        oledStatus("Gotek OMEGA " FW_VERSION, "Wi-Fi WIPED", "Creds cleared", "Rebooting...");
         delay(600); ESP.restart();
       } else if (wheld >= BOOT_REVERT_MS) {
         setModeEspnow();
         oledStatus("Gotek OMEGA " FW_VERSION, "Wi-Fi OFF", "Back to ESP-NOW", "Rebooting...");
         delay(600); ESP.restart();
-      } else if (g_webmode == 1) {   // #lock: short BOOT tap in WiFi mode = open the enroll window so a screen can CLAIM this dongle
-        // #lock: g_modeStr is what CONFIG.TXT SAYS; g_webmode is what we ACHIEVED. After a failed
+#if defined(GTI_FLEET)
+      } else if (g_webmode == 1) {   // #fleet: short BOOT tap in WiFi mode opens the enrol window
+        // #fleet: g_modeStr is what CONFIG.TXT SAYS; g_webmode is what we ACHIEVED. After a failed
         // join we are serving our own AP - on the shared default password - with TCP 3333 open on
-        // it, so opening the claim window there hands the claim to anyone who knows gotek1234.
+        // it, so opening the window there would hand the claim to anyone who knows the default.
         // Pairing belongs on the network the owner's screen is actually on.
         g_wenroll_until = now + WENROLL_WIN_MS;
         oledStatus("Gotek OMEGA " FW_VERSION, "PAIRING OPEN", "Tap CLAIM on a", "screen (60s)");
       } else {
         oledStatus("Gotek OMEGA " FW_VERSION, "NOT ON WIFI", "Join the network", "before pairing");
       }
+#else
+      }   // a short BOOT tap in WiFi mode does nothing in this build
+#endif
       return true;
     }
-    if (wEnrollOpen()) { setLeds(false, (now%600)<120); return true; }   // #lock: BLUE heartbeat while the enroll window is open (via the board LED HAL)
+#if defined(GTI_FLEET)
+    if (wEnrollOpen()) { setLeds(false, (now%600)<120); return true; }   // #fleet: BLUE heartbeat while the enrol window is open
+#endif
     return false;
   }
 
@@ -1373,11 +1449,20 @@ static void startEspnowApMode(){
   // Unique AP name per device: two dongles in one room both broadcasting
   // "GotekOMEGA" is impossible to tell apart (you configure the wrong one).
   uint8_t apm[6]; WiFi.macAddress(apm);
+#if defined(GTI_FLEET)
   char apid[40];
   if (g_ap_name == AP_SSID) snprintf(apid, sizeof(apid), "%s-%02X%02X", g_ap_name.c_str(), apm[4], apm[5]);   // default name -> unique per device
-  else snprintf(apid, sizeof(apid), "%s", g_ap_name.c_str());                                                 // #lock: custom AP name -> exactly what the user set
+  else snprintf(apid, sizeof(apid), "%s", g_ap_name.c_str());                                                 // #fleet: custom AP name -> exactly what the user set
   char apline[48]; snprintf(apline, sizeof(apline), "AP: %s", apid);
-  WiFi.softAP(apid, g_ap_pass.length()>=8 ? g_ap_pass.c_str() : AP_PASS, ESPNOW_CHANNEL);                     // #lock: custom AP password (WPA2 needs >=8; else fall back)
+  WiFi.softAP(apid, g_ap_pass.length()>=8 ? g_ap_pass.c_str() : AP_PASS, ESPNOW_CHANNEL);                     // #fleet: custom AP password (WPA2 needs >=8; else fall back)
+#else
+  // The UNIQUE per-device AP name is mainline and stays: two dongles in one room both called
+  // "GotekOMEGA" is how you configure the wrong one. Only the user-configurable name and password
+  // are in the fleet build.
+  char apid[24]; snprintf(apid, sizeof(apid), "%s-%02X%02X", AP_SSID, apm[4], apm[5]);
+  char apline[32]; snprintf(apline, sizeof(apline), "AP: %s", apid);
+  WiFi.softAP(apid, AP_PASS, ESPNOW_CHANNEL);
+#endif
   delay(300);
   _tcpServer.begin();
   dnsServer.start(53, "*", IPAddress(192,168,4,1)); g_dns_up = true;
@@ -1432,8 +1517,10 @@ void setup() {
 
   loadConfig();       // enrolled owners (used in ESPNOW mode)
   loadWifiCfg();      // WEBBY: home creds + mode
-  loadWOwners();      // #lock: WiFi owner tokens (LAN fling gate)
-  loadApCfg();        // #lock: custom AP name + password (setup-AP protection)
+#if defined(GTI_FLEET)
+  loadWOwners();      // #fleet: WiFi owner tokens (LAN fling gate)
+  loadApCfg();        // #fleet: custom AP name + password (setup-AP protection)
+#endif
   loadTheme();        // PANEL: last-chosen web theme
 
   // WEBBY: pick the radio mode.
