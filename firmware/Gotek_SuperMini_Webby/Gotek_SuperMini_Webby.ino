@@ -47,7 +47,7 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-1.6.3"
+#define FW_VERSION     "Webby-1.6.4"   // 1.6.3 + keep-announcing, ESP-NOW src_addr, re-fling detach
 #define ESPNOW_CHANNEL 6
 //  Board profile 
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -340,15 +340,21 @@ static uint32_t g_enroll_until = 0;
 
 // ESP-NOW receive queue
 #define RX_PKT_SIZE 250
-struct RxPkt { uint8_t data[RX_PKT_SIZE]; int len; };
+struct RxPkt { uint8_t data[RX_PKT_SIZE]; int len; uint8_t src[6]; };   // #lock: src = the sender the CORE matched this frame to, never a payload field
 static QueueHandle_t _rxQueue = nullptr;
-static void queuePacket(const uint8_t* data, int len) {
+// #lock: every caller must pass the real sender. Both feeders can: onNewPeer gets
+// info->src_addr, and a peer's onReceive gets addr(), which the core has already matched
+// against info->src_addr (ESP32_NOW.cpp: "memcmp(info->src_addr, _esp_now_peers[i]->addr()"),
+// so a peer object never sees a frame from anyone else. A null src means "unknown", which no
+// owner check can ever satisfy - that is the safe direction.
+static void queuePacket(const uint8_t* data, int len, const uint8_t* src) {
   if (!_rxQueue) return;
   RxPkt pkt; int n = min(len, RX_PKT_SIZE);
   memcpy(pkt.data, data, n); pkt.len = n;
+  if (src) memcpy(pkt.src, src, 6); else memset(pkt.src, 0, 6);
   xQueueSendFromISR(_rxQueue, &pkt, nullptr);
 }
-static void handleESPNOW(const uint8_t* data, int len);
+static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src);
 
 class XiaoPeer : public ESP_NOW_Peer {
 public:
@@ -357,11 +363,27 @@ public:
   ~XiaoPeer() { remove(); }
   bool add_peer() { return add(); }
   bool send_pkt(const uint8_t* d, size_t l) { return send(d, l); }
-  void onReceive(const uint8_t* d, size_t l, bool b) override { queuePacket(d, (int)l); }
+  // #lock: addr() is this peer's MAC, and the core only routes a frame here when it equals
+  // the frame's real source - so it is an authenticated sender, not a claim.
+  void onReceive(const uint8_t* d, size_t l, bool b) override { queuePacket(d, (int)l, addr()); }
   void onSent(bool) override {}
 };
 static XiaoPeer* _bcastPeer = nullptr;
 static XiaoPeer* _wavePeer  = nullptr;
+
+// #pair: keep announcing while unpaired. The 3 s burst at boot meant a screen only found us
+// if it happened to scan inside that window, which is the whole "dongles not detected"
+// complaint - the dongle was fine, it had simply stopped talking.
+#define ESPNOW_HELLO_MS  2000
+static uint32_t g_next_hello_ms = 0;   // #pair: next unpaired ESP-NOW announcement
+
+// #pair: one hello, broadcast. The boot burst and the keep-announcing timer share it.
+static void sendPairHello() {
+  if (!_bcastPeer) return;
+  PktHello hello = {}; hello.type = PKT_PAIR_HELLO; WiFi.softAPmacAddress(hello.mac);
+  strncpy(hello.ip, AP_IP, 15); hello.pad[0] = SAVE_PROTO_VER;
+  _bcastPeer->send_pkt((uint8_t*)&hello, sizeof(hello));
+}
 static void sendSimple(uint8_t type) {
   PktSimple pkt = {}; pkt.type = type;
   XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
@@ -390,7 +412,7 @@ static void wipeOwners(){
   oledStatus("Gotek OMEGA " FW_VERSION,"** WIPED **","All owners cleared","Hold BOOT to pair");
 }
 
-static void handleESPNOW(const uint8_t* data, int len) {
+static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
   if (len < 1) return;
   uint8_t type = data[0];
   if (type == PKT_PAIR_HELLO) {
@@ -429,13 +451,17 @@ static void handleESPNOW(const uint8_t* data, int len) {
     return;
   }
   if (type == PKT_DISK_EJECT) {
+    // #lock: an OWNED dongle only ejects for an owner. Checked against the routed sender, not
+    // against a field the sender fills in. While nobody has claimed this dongle the behaviour
+    // is exactly what it was, so a home user never meets this.
+    if (_owner_count > 0 && !(src && isOwner(src))) return;
     if (g_disk_loaded) { hardDetach(); g_disk_loaded=false; }
     dirtyReset(); ledBlue(false);
     oledStatus("Gotek OMEGA " FW_VERSION, "Ejected", "", "Ready");
     return;
   }
 }
-static void onNewPeer(const esp_now_recv_info_t* info, const uint8_t* data, int len, void* arg) { queuePacket(data, len); }
+static void onNewPeer(const esp_now_recv_info_t* info, const uint8_t* data, int len, void* arg) { queuePacket(data, len, info ? info->src_addr : nullptr); }
 
 // Owner config load (base)
 static void loadConfig() {
@@ -599,6 +625,10 @@ static void handleTCPClient(WiFiClient& client) {
     return;
   }
   if (size == 0 || size > MAX_FILE_BYTES) { client.write((uint8_t)0x00); return; }
+  // #safety: detach BEFORE overwriting the RAM disk. The browser-upload path already did this;
+  // the TCP path did not, so a re-fling left the host mounted on a half-rewritten volume for the
+  // whole transfer - minutes, on a bad link.
+  if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; g_loaded_name = ""; ledBlue(false); }
   // Wireless DSK fix (1.6.3): name the FAT12 root with the flung disk's REAL
   // extension so FlashFloppy detects the format. The panel sends the real
   // filename+ext via CMD_SET_NAME immediately before the fling; absent that
@@ -1207,11 +1237,11 @@ static void startEspnowApMode(){
   oledStatus("Gotek OMEGA " FW_VERSION, apline, WiFi.softAPIP().toString(), "Broadcasting...");
   uint32_t t0 = millis();
   while (millis()-t0 < (uint32_t)(_paired ? 8000 : 3000)) {
-    PktHello hello = {}; hello.type = PKT_PAIR_HELLO; WiFi.softAPmacAddress(hello.mac);
-    strncpy(hello.ip, AP_IP, 15); hello.pad[0] = SAVE_PROTO_VER;
-    if (_bcastPeer) _bcastPeer->send_pkt((uint8_t*)&hello, sizeof(hello));
-    if (_wavePeer)  _wavePeer->send_pkt((uint8_t*)&hello, sizeof(hello));
-    RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len);
+    sendPairHello();
+    if (_wavePeer) { PktHello h = {}; h.type = PKT_PAIR_HELLO; WiFi.softAPmacAddress(h.mac);
+                     strncpy(h.ip, AP_IP, 15); h.pad[0] = SAVE_PROTO_VER;
+                     _wavePeer->send_pkt((uint8_t*)&h, sizeof(h)); }
+    RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len, pkt.src);
     WiFiClient c = _tcpServer.accept(); if (c) handleTCPClient(c);
     server.handleClient(); dnsServer.processNextRequest();
     delay(120);
@@ -1286,7 +1316,7 @@ void loop() {
   if (g_dns_up) dnsServer.processNextRequest();
 
   // ESP-NOW control queue (only meaningful in AP/ESP-NOW mode; harmless otherwise)
-  RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len);
+  RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len, pkt.src);
 
   // TCP app transfers (begun in both modes)
   WiFiClient client = _tcpServer.accept();
@@ -1298,6 +1328,9 @@ void loop() {
   if (g_webmode==1 && millis() > g_next_alive_ms) { sendAliveBeacon(); g_next_alive_ms = millis()+ALIVE_BEACON_MS; }   // FLEET beacon
   if (g_webmode==1) pollDisco();                                                                                       // FLEET listen
   if (g_webmode==1 && millis() > g_next_elect_ms) { doElection(); g_next_elect_ms = millis()+4000; }                    // FLEET elect
+  // #pair: unpaired and on our own AP -> keep saying we are here, so SCAN DONGLES finds us
+  // whenever the user asks instead of only in the seconds after we booted.
+  if (g_webmode==0 && !_paired && millis() > g_next_hello_ms) { sendPairHello(); g_next_hello_ms = millis()+ESPNOW_HELLO_MS; }
 
   if (!serviceBootButton()) {
     if (dirtyWaiting)          setLeds(true, true);
