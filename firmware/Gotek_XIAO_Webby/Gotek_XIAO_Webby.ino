@@ -50,7 +50,7 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-1.5.3-xiao-lock"
+#define FW_VERSION     "Webby-1.5.4-xiao-lock"   // + 1.6.3's to83keepext (main never had it on the XIAO) + the WiFi owner-lock
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -252,6 +252,23 @@ static String to83(const String& in){
     if((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')) base += (char)toupper(c); }
   if(base.length()==0) base="OMEGA";
   return base + ".ADF";
+}
+// Wireless DSK fix, from Mez 1.6.3: like to83() but PRESERVES the real extension
+// (ADF/DSK/IMG/DSD/ST/...) so the FAT12 root advertises the correct format to FlashFloppy.
+// A flung CPC .dsk or Atari .st used to be named DISK.ADF -> FF Error 34, reported twice in
+// #support. Base is upper-alnum, <=8 chars; extension is upper-alnum, <=3 chars; ADF fallback.
+static String to83keepext(const String& in){
+  const char* s=in.c_str(); const char* dot=strrchr(s,'.');
+  size_t nl = dot ? (size_t)(dot-s) : in.length();
+  String base;
+  for(size_t i=0;i<nl && base.length()<8;i++){ char c=s[i];
+    if((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')) base += (char)toupper(c); }
+  if(base.length()==0) base="OMEGA";
+  String ext;
+  if(dot){ for(size_t i=1;i<=3 && dot[i] && dot[i]!='.'; i++){ char c=dot[i];
+    if((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')) ext += (char)toupper(c); } }
+  if(ext.length()==0) ext="ADF";
+  return base + "." + ext;
 }
 
 static String macToStr(const uint8_t* mac) {
@@ -624,8 +641,12 @@ static void handleTCPClient(WiFiClient& client) {
     // the TCP path did not, so a re-fling left the host mounted on a half-rewritten volume for the
     // whole transfer (minutes, on a bad link).
     if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; g_loaded_name = ""; digitalWrite(LED_BLUE, LOW); }
-  const char* outName = "DISK.ADF";   // #24: FAT12 root stays a constant legal 8.3 (cosmetic); the pretty name lands in g_loaded_name
-  build_volume(outName, size);
+  // 1.6.3 (Mez) / here 1.6.5: name the FAT12 root after the REAL file so FlashFloppy detects the
+  // format. The panel sends the true filename+ext via CMD_SET_NAME right before the fling; with an
+  // older panel that escape never arrives and we fall back to the historic DISK.ADF. g_next_name is
+  // read again below for the pretty name and consumed there, so reading it twice is deliberate.
+  String fatName = g_next_name.length() ? to83keepext(g_next_name) : String("DISK.ADF");
+  build_volume(fatName.c_str(), size);
   uint8_t* dst = g_disk + DATA_LBA * SECTOR_SIZE;
   uint32_t received = 0; const size_t BUF = 4096;
   uint8_t* buf = (uint8_t*)malloc(BUF); if (!buf) { client.write((uint8_t)0x00); return; }
@@ -727,7 +748,7 @@ static bool webDenyLockedCfg(){
 // Finalize a browser upload: lay metadata over the streamed data, re-insert.
 static void webFinishLoad(){
   uint32_t size = g_up_recv;
-  build_volume_ex(to83(g_up_name).c_str(), size, false);   // #24: 8.3-mangle for the FAT12 root; full name kept in g_loaded_name (below)
+  build_volume_ex(to83keepext(g_up_name).c_str(), size, false);   // #24/1.6.5: 8.3-mangle KEEPING the real extension so FF detects DSK/ST/etc; full name kept in g_loaded_name (below)
   g_image_size = size; g_load_id++; dirtyReset();
   if (g_disk_loaded) hardDetach();
   hardAttach(); g_disk_loaded = true; g_next_status_ms = 0; digitalWrite(LED_BLUE, HIGH);
