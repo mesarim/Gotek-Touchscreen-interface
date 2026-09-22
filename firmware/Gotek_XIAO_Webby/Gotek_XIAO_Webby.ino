@@ -449,9 +449,12 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
     return;
   }
   if (type == PKT_DISK_EJECT) {
-    // #lock: an OWNED dongle only ejects for an owner. Checked against the routed sender, not
-    // against a field the sender fills in. While nobody has claimed this dongle the behaviour
-    // is exactly what it was, so a home user never meets this.
+    // #24: an OWNED dongle only ejects for an owner, checked against the ROUTED sender rather
+    // than a field the sender fills in. Read "owned" as ESP-NOW-PAIRED, not WiFi-claimed:
+    // _owner_count rises above zero at the FIRST ordinary pairing (addOwner in the PAIR arm),
+    // so this is armed on every dongle that has ever paired. The screen that paired IS an
+    // owner, so a one-screen setup never notices - but a SECOND, unpaired screen can no longer
+    // eject, where mainline let it. That is the intended trade; it is not "nobody meets this".
     if (_owner_count > 0 && !(src && isOwner(src))) return;
     if (g_disk_loaded) { hardDetach(); g_disk_loaded=false; }
     dirtyReset(); digitalWrite(LED_BLUE, LOW);
@@ -679,8 +682,17 @@ static void handleTCPClient(WiFiClient& client) {
       // closing a socket with unread RX data makes lwIP send a RST, and the RST discards the NAK
       // we just wrote - the caller then sees a dead connection instead of a clean refusal.
       if (cmd >= 0x07 && cmd <= 0x09) {
+        // Two deadlines on purpose. `td` is the idle budget between bytes; `tstop` is the TOTAL
+        // one. Without tstop a peer that dribbles a byte every 499 ms keeps resetting td and
+        // holds this loop for ~8 s - and handleTCPClient runs on the loop() task, so the web
+        // server, the ESP-NOW drain, the beacons and USB-MSC servicing would all stall with it.
+        const uint32_t tstop = millis() + 600;
         uint32_t td = millis(); int nd = 0;
-        while (nd < 16 && millis() - td < 500) { if (!client.connected()) break; if (client.read() < 0) { delay(1); continue; } nd++; td = millis(); }
+        while (nd < 16 && millis() - td < 500 && (int32_t)(millis() - tstop) < 0) {
+          if (!client.connected()) break;
+          if (client.read() < 0) { delay(1); continue; }
+          nd++; td = millis();
+        }
       }
       client.write((uint8_t)0x00); client.flush(); return;
     }

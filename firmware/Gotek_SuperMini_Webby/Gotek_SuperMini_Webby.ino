@@ -499,9 +499,12 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
     return;
   }
   if (type == PKT_DISK_EJECT) {
-    // #lock: an OWNED dongle only ejects for an owner. Checked against the routed sender, not
-    // against a field the sender fills in. While nobody has claimed this dongle the behaviour
-    // is exactly what it was, so a home user never meets this.
+    // #24: an OWNED dongle only ejects for an owner, checked against the ROUTED sender rather
+    // than a field the sender fills in. Read "owned" as ESP-NOW-PAIRED, not WiFi-claimed:
+    // _owner_count rises above zero at the FIRST ordinary pairing (addOwner in the PAIR arm),
+    // so this is armed on every dongle that has ever paired. The screen that paired IS an
+    // owner, so a one-screen setup never notices - but a SECOND, unpaired screen can no longer
+    // eject, where mainline let it. That is the intended trade; it is not "nobody meets this".
     if (_owner_count > 0 && !(src && isOwner(src))) return;
     if (g_disk_loaded) { hardDetach(); g_disk_loaded=false; }
     dirtyReset(); ledBlue(false);
@@ -739,8 +742,17 @@ static void handleTCPClient(WiFiClient& client) {
       // closing a socket with unread RX data makes lwIP send a RST, and the RST discards the NAK
       // we just wrote - the caller then sees a dead connection instead of a clean refusal.
       if (cmd >= 0x07 && cmd <= 0x09) {
+        // Two deadlines on purpose. `td` is the idle budget between bytes; `tstop` is the TOTAL
+        // one. Without tstop a peer that dribbles a byte every 499 ms keeps resetting td and
+        // holds this loop for ~8 s - and handleTCPClient runs on the loop() task, so the web
+        // server, the ESP-NOW drain, the beacons and USB-MSC servicing would all stall with it.
+        const uint32_t tstop = millis() + 600;
         uint32_t td = millis(); int nd = 0;
-        while (nd < 16 && millis() - td < 500) { if (!client.connected()) break; if (client.read() < 0) { delay(1); continue; } nd++; td = millis(); }
+        while (nd < 16 && millis() - td < 500 && (int32_t)(millis() - tstop) < 0) {
+          if (!client.connected()) break;
+          if (client.read() < 0) { delay(1); continue; }
+          nd++; td = millis();
+        }
       }
       client.write((uint8_t)0x00); client.flush(); return;
     }
@@ -774,7 +786,13 @@ static void handleTCPClient(WiFiClient& client) {
   free(buf);
   if (received == size) {
     g_load_id++; g_image_size = size; dirtyReset();
-    g_loaded_name = g_next_name.length() ? g_next_name : String("DISK.ADF");   // #24: pretty name from the set-next-name escape, else the constant
+    // #24/1.6.3: the pretty name loses its extension; main did this and the rewrite around
+    // this block dropped it. NOT the same value as the FAT12 8.3 root entry, which keeps its
+    // extension via to83keepext() - g_loaded_name is only what the beacon and /status publish.
+    // (Mez's own XIAO never stripped here, so that twin is deliberately left alone.)
+    { String pretty = g_next_name.length() ? g_next_name : String("DISK.ADF");
+      int d = pretty.lastIndexOf('.'); if (d > 0) pretty = pretty.substring(0, d);
+      g_loaded_name = pretty; }
     g_next_name = "";   // consume it — the next fling must set its own name
     uint8_t ack[5]; ack[0]=0x01; wrLE32(ack+1,g_load_id); client.write(ack,5); client.flush(); delay(100); client.stop();
     if (g_disk_loaded) hardDetach(); hardAttach(); g_disk_loaded = true; g_next_status_ms = 0; ledBlue(true); ledActivity();
