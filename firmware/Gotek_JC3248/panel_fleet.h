@@ -83,7 +83,12 @@ static PfPanel  g_pfPanels[PF_MAX_PEERS];
 static int      g_pfPanelN = 0;
 static String   g_pfMyId;              // this screen's MAC (uppercase hex) — same format as the beacon id
 static String   g_pfMdnsName;          // the mDNS name we WANT to be registered under (no ".local")
-static bool     g_pfMdnsHeld = false;  // ... and whether MDNS.begin() actually succeeded for it
+static bool     g_pfMdnsHeld = false;  // ... and whether the responder REPORTS that name (see pfMdnsReadback)
+static char     g_pfMdnsActual[MDNS_NAME_BUF_LEN] = {0};   // what mdns_hostname_get() says we are really called
+static uint32_t g_pfMdnsCheck = 0;     // last readback (throttled; the conflict rename lands after probing)
+static uint32_t g_pfMdnsRetry = 0;     // last re-registration after losing the name
+static uint16_t g_pfMdnsLost  = 0;     // how often we had to take it back (diagnostic)
+#define PF_MDNS_RETRY_MS 20000UL       // > the window a booting dongle holds the leader name
 static bool     g_pfIsLeader = true;   // do we own the undecorated <name>.local?
 static bool     g_pfMdnsDirty = true;  // set when the elected name changes -> re-register (no reboot)
 
@@ -130,6 +135,29 @@ static void pfElect() {
   }
   if (want != g_pfMdnsName) { g_pfMdnsName = want; g_pfMdnsDirty = true; g_pfMdnsHeld = false; }
 }
+// Ask the responder what hostname it actually holds. begin() returning true is NOT that
+// answer: it only means the responder accepted the request. If another device on the LAN
+// already answers to the name, the IDF responder renames itself AFTER probing — that is
+// where "gotekomega-2" came from on 22-09, a suffix our own code cannot produce. So this
+// has to run periodically, not once at begin().
+static void pfMdnsReadback() {
+  if (millis() - g_pfMdnsCheck < 2000) return;
+  g_pfMdnsCheck = millis();
+  char buf[MDNS_NAME_BUF_LEN] = {0};
+  if (mdns_hostname_get(buf) != ESP_OK) { g_pfMdnsActual[0] = 0; g_pfMdnsHeld = false; return; }
+  strlcpy(g_pfMdnsActual, buf, sizeof(g_pfMdnsActual));
+  g_pfMdnsHeld = g_pfMdnsName.length() && g_pfMdnsName == g_pfMdnsActual;
+  // Lost it. A dongle claims the leader name for the first seconds of its boot (its roster is
+  // still empty, so doElection makes it master) and cedes once it hears us - but by then the
+  // responder has already renamed US, and pfApplyMdns only fires when the WANTED name changes.
+  // So take it back, slower than that window, and only for a name we are entitled to.
+  if (!g_pfMdnsHeld && g_pfIsLeader && g_pfMdnsName.length() && g_pfMdnsActual[0]) {
+    if (millis() - g_pfMdnsRetry >= PF_MDNS_RETRY_MS) {
+      g_pfMdnsRetry = millis(); g_pfMdnsDirty = true; g_pfMdnsLost++;
+    }
+  }
+}
+
 // Re-register mDNS when the elected name changed. Safe to call every pass — only acts when dirty.
 static void pfApplyMdns() {
   if (!g_pfMdnsDirty || g_pfMdnsName.length() == 0) return;
@@ -137,8 +165,8 @@ static void pfApplyMdns() {
   if (!MDNS.begin(g_pfMdnsName.c_str())) return;   // stay dirty: a failed begin() must be retried,
                                                    // or the screen claims a name nothing answers to
   MDNS.addService("http", "tcp", 80);
-  g_pfMdnsHeld = true;
   g_pfMdnsDirty = false;
+  g_pfMdnsCheck = 0;        // force a readback on the next pass instead of claiming success here
 }
 
 static String pfJesc(const String &s) {
@@ -223,6 +251,7 @@ static void pfService() {
   }
   pfElect();        // #clubday: pick our mDNS name from the screens we hear (lowest MAC keeps the undecorated one)
   pfApplyMdns();    // re-register if it changed — no reboot
+  pfMdnsReadback(); // ... and check what the responder ended up called, rather than assuming
   pfSendBeacon();   // #rule: keep announcing ourselves (with the elected name) as a leader
 }
 
@@ -233,7 +262,9 @@ static String pfRosterJson() {
   const bool busy = g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length();
   String j = "{\"self\":\"panel\",\"name\":\"" + pfJesc(String("GTi panel")) + "\",";
   j += "\"mdns\":\"" + pfJesc(pfMdnsName()) + "\",";                       // the name this screen WANTS after the election
-  j += "\"mdns_held\":" + String(g_pfMdnsHeld ? "true" : "false") + ",";   // ... and whether the responder actually took it
+  j += "\"mdns_held\":" + String(g_pfMdnsHeld ? "true" : "false") + ",";   // ... true only when the responder REPORTS that same name
+  j += "\"mdns_actual\":\"" + pfJesc(String(g_pfMdnsActual)) + "\",";       // ... and what it reports, renamed-on-conflict included
+  j += "\"mdns_lost\":" + String(g_pfMdnsLost) + ",";                      // ... and how often we had to take the name back
   j += "\"leader\":" + String(g_pfIsLeader ? "true" : "false") + ",";     // #clubday: true = owns the undecorated <name>.local
   j += "\"panels\":" + String(g_pfPanelN + 1) + ",";                      // #clubday: screens seen on the net, incl. self
   // The SPA shows the fleet card only in WIRELESS mode: STANDALONE means the
