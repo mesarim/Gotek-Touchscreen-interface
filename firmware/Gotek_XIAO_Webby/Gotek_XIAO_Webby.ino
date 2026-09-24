@@ -669,7 +669,10 @@ static void handleTCPClient(WiFiClient& client) {
         client.write((uint8_t)0x01); return;
       }
 #if defined(GTI_FLEET)
-      if (cmd == CMD_UNENROLL) {   // #lock: remove that owner (unclaim); the token itself proves ownership
+      // #lock: remove that owner (unclaim). Below the gate on purpose: on the shared LAN it needs an
+      // AUTH preamble on this connection first (the panel's pfSendUnenroll sends one); on the
+      // dongle's own AP the gate is off. Either way only a token that is on the list is removed.
+      if (cmd == CMD_UNENROLL) {
         uint8_t tok[WTOKEN_LEN];
         if (!wReadToken(client, tok)) { client.write((uint8_t)0x00); return; }
         bool ok = delWOwner(tok);
