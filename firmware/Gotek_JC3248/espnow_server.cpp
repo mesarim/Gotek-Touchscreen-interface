@@ -614,6 +614,10 @@ bool espnowFetchSave(SavePersistCb persist) {
   bool okAll = false;
   uint8_t* mapBuf = nullptr; uint8_t* packed = nullptr;
   if (client.connect(ip.c_str(), DONGLE_TCP_PORT)) {
+    // No AUTH preamble, on purpose: this path joins the dongle's own AP, and a Webby dongle only
+    // gates on the shared LAN (wtokGateActive = locked && g_webmode==1, where it has no AP).
+    // Adding AUTH here would break the save of a dongle another screen has claimed. A future
+    // LAN save path (such as PR #27's GotekHome) is gated and must send AUTH first, as panel_fleet.h does.
     uint8_t esc[5] = {0xFF,0xFF,0xFF,0xFF, 0x01};   // command escape + GET_SAVE
     client.write(esc, 5);
     uint8_t hdr[14];

@@ -438,11 +438,15 @@ static bool pfSendEnroll(const String &ip, uint16_t port, String &err) {
 }
 
 // #lock: release ownership — tell the dongle to drop THIS panel's token. Blocking, short.
+// UNENROLL sits below the dongle's AUTH gate, so on the shared LAN it needs the AUTH preamble on
+// this same connection. Always sent, not via pfPeerWantsAuth(): RELEASE LOCKS aims at dongles we
+// no longer list as ours, and the UNENROLL frame carries the same token anyway.
 static bool pfSendUnenroll(const String &ip, uint16_t port, String &err) {
   if (!g_panel_token_ok) { err = "no panel token (SD missing?)"; return false; }
   WiFiClient c;
   if (!c.connect(ip.c_str(), port, 4000)) { err = "connect failed"; return false; }
   c.setNoDelay(true);
+  if (!pfWriteAuth(c, err)) { c.stop(); return false; }   // 0x05 = not one of its owners; 0x00 = no fleet layer
   uint8_t a[5 + PF_TOKEN_LEN]; a[0]=a[1]=a[2]=a[3]=0xFF; a[4]=PF_CMD_UNENROLL; memcpy(a+5, g_panel_token, PF_TOKEN_LEN);
   c.write(a, sizeof(a));
   const uint32_t t0 = millis();
