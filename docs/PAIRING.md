@@ -114,6 +114,10 @@ network at all. Unclaim it first, or use its own access point.
 - **On the dongle, with nothing else to hand:** hold BOOT for **10 seconds**. That wipes the
   saved WiFi *and* every owner, and the dongle comes back as a fresh one on its own AP.
 
+Both screen releases prove themselves the way a fling does: the screen shows its token first
+and only then asks to be forgotten. A dongle that does not know that token answers *locked to
+another screen*, and RELEASE LOCKS counts it as *Not ours*.
+
 ### Give the setup AP its own name and password
 While the dongle is on its own access point, open its page and find **AP security**: set a
 name (up to 24 characters) and a WPA2 password (8–32). After the reboot, only somebody who
@@ -170,6 +174,12 @@ simply forgotten it — **INFO → RELEASE LOCKS**.
 
 **My screen says "locked to another screen".**
 That is the dongle refusing a fling from a screen it doesn't know. Nothing is broken.
+
+**UNCLAIM says *Failed*, or RELEASE LOCKS says *Not ours*, for a dongle that is mine.**
+Fixed in current screen firmware (24 September 2026). Older fleet builds asked a claimed
+dongle on your home WiFi to forget them without showing their token first, and the dongle
+refuses that. Update the screen and try again. With no update to hand, hold BOOT on the
+dongle for 10 seconds — that also forgets its WiFi.
 
 **I can't update a Webby dongle's firmware over WiFi any more.**
 Because it is claimed — a locked dongle refuses every write over the network, firmware

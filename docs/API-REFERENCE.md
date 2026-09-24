@@ -17,9 +17,9 @@ read safely.
 
 | Surface | Sketch | Version | Branch | Commit |
 |---|---|---|---|---|
-| Webby dongle - Super Mini | `Gotek_SuperMini_Webby` | `Webby-1.6.4-lock` | `webby-lock-161` | `45b74dc` |
-| Webby dongle - XIAO | `Gotek_XIAO_Webby` | `Webby-1.5.3-xiao-lock` | `webby-lock-161` | `45b74dc` |
-| Touchscreen panel - JC3248 | `Gotek_JC3248` | `5.9.23-JC3248` | `panel-fleet-5923` | `c9e0a20` |
+| Webby dongle - Super Mini | `Gotek_SuperMini_Webby` | `Webby-1.6.5-lock` | `webby-lock-161` | `3ce5acc` |
+| Webby dongle - XIAO | `Gotek_XIAO_Webby` | `Webby-1.5.4-xiao-lock` | `webby-lock-161` | `3ce5acc` |
+| Touchscreen panel - JC3248 | `Gotek_JC3248` | `5.9.23-fleet-JC3248` | `panel-fleet-5923` | `27400a8` |
 
 ## HTTP
 
@@ -146,9 +146,9 @@ below the refusal line inside `handleTCPClient`, so it follows the code.
 | `0x03` | `CMD_EJECT` | — | yes | yes |
 | `0x04` | `CMD_EJECT_FORCE` | — | yes | yes |
 | `0x06` | `CMD_SET_NAME` | #24: set the pretty display name for the NEXT flung disk (g_loaded_name only; FAT12 stays DISK.ADF) | yes | yes |
-| `0x07` | `CMD_ENROLL` | #lock: [FFFFFFFF][07][16-byte token] -> if the enroll window is open, store the token as an owner | no | yes |
-| `0x08` | `CMD_AUTH` | #lock: [FFFFFFFF][08][16-byte token] preamble before a disk fling -> proves the sender is an enrolled owner | no | yes |
-| `0x09` | `CMD_UNENROLL` | #lock: [FFFFFFFF][09][16-byte token] -> remove that token (unclaim/release) | yes | yes |
+| `0x07` | `CMD_ENROLL` | #fleet: [FFFFFFFF][07][16-byte token] -> if the enrol window is open, store the token as an owner | no | yes |
+| `0x08` | `CMD_AUTH` | #fleet: [FFFFFFFF][08][16-byte token] preamble before a disk fling -> proves the sender is an enrolled owner | no | yes |
+| `0x09` | `CMD_UNENROLL` | #fleet: [FFFFFFFF][09][16-byte token] -> remove that token | yes | yes |
 
 ### Webby dongle - XIAO — port 3333
 
