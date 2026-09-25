@@ -8,3 +8,6 @@ build/
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# scratch output of tools/check_fleet_off.sh
+.fleetcheck/
