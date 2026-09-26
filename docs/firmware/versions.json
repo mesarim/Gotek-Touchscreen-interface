@@ -19,6 +19,14 @@
     "appOffset": 65536,
     "builds": [
       {
+        "v": "5.9.41-lab14u",
+        "ch": "beta",
+        "date": "2026-09-26",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab14u-update.bin",
+        "note": "Testing build. Same as lab14t (HFE write-protect fix, Webby 1.5+ dongles reachable, two screens sharing a dongle, GTINAME=) with one wireless correction: the take-over check now uses dongle command 0x0A (0x07 already belongs to the fleet build's ENROLL). Pairs with Webby-1.6.7; mixed versions still load, just without the take-over question.",
+        "latest": false
+      },
+      {
         "v": "5.9.41-lab14t",
         "ch": "beta",
         "date": "2026-09-26",
@@ -160,6 +168,14 @@
   "supermini": {
     "chipFamily": "ESP32-S3",
     "builds": [
+      {
+        "v": "Webby-1.6.7",
+        "ch": "beta",
+        "latest": false,
+        "date": "2026-09-26",
+        "full": "firmware/supermini-beta/manifest-1.6.7.json",
+        "note": "Testing. NEEDS GTi 5.9.41-lab14t or newer (best with lab14u). Same as 1.6.6 with the take-over check on dongle command 0x0A (0x07 is ENROLL in the fleet build). Deleting it on the GTi puts it back to 'looking for a new owner'; two screens can share it (SHARE, 'in use by', take-over question); DSK/GENERIC keep their extension over wireless. Pair again after flashing (full wipe)."
+      },
       {
         "v": "Webby-1.6.6",
         "ch": "beta",

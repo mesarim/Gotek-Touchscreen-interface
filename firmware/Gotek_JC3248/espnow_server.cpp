@@ -430,11 +430,11 @@ static String dongleSsid(const uint8_t* bssid){
 static void dongleSsidForget(){ _ssidName = ""; memset(_ssidMac, 0, 6); }   // after a failed join: look again next time
 
 // ── lab14s: claim the dongle before sending (two screens, one dongle) ────────
-// Escape CMD_CLAIM: my MAC[6], flags (bit0 = take over), name length, name. Webby 1.6.6+ answers
+// Escape CMD_CLAIM (0x0A): my MAC[6], flags (bit0 = take over), name length, name. Webby 1.6.6+ answers
 // 0x01 = go ahead; 0x03 = another screen has a disk in me; 0x02 = another screen's saves are not handed
 // back yet (both followed by length + that screen's name). Older dongles answer 0x00 (unknown command),
 // which means "go ahead" - exactly the old behaviour.
-#define CMD_CLAIM 0x07
+#define CMD_CLAIM 0x0A   // lab14u: was 0x07, which is ENROLL in the signed fleet wire contract (#24: 0x07 ENROLL / 0x08 AUTH / 0x09 UNENROLL, 0x05 reject)
 static ClaimAskCb _claimAsk = nullptr;
 static String     _myName   = "";
 static bool       _claimCancelled = false;
