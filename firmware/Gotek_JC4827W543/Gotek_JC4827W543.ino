@@ -46,7 +46,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.41-lab12-JC4827"   // lab11b carBlit rotation; lab11c short-panel reel layout; lab12 SD write audit (W:/RO: + SDRO=ON)
+#define FW_VERSION "5.9.41-lab13-JC4827"   // lab13: the GTi never formats a card (exFAT/NTFS -> explains how to format on a computer, changes nothing); struct DiskGrid moved above the lab12 wrappers so the sketch compiles | lab11b carBlit rotation; lab11c short-panel reel layout; lab12 SD write audit (W:/RO: + SDRO=ON)
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -58,6 +58,9 @@
 // (/gti.log) is governed by LOG= and is silenced by SDRO, not counted.
 // Not covered: SD ACCESS mode (the PC writes raw sectors - a separate boot mode) and
 // the WiFi web panel / WebDAV (they only run in MODE=WIFI).
+// lab13: DiskGrid must be declared before the first function below, or the Arduino prototype
+// generator puts "static DiskGrid diskGrid(int)" above it and the sketch does not compile.
+struct DiskGrid{int pages,pageStart,pageEnd,COLS,dbw,dbh,dgap,gridW,gx,gridY,gridH,pageBtnH,pageGap,labelY;bool multiPage;};
 static bool g_sdro=false;                       // SDRO=ON: refuse every card write
 static volatile uint32_t g_sdw_n=0,g_sdw_blocked=0;
 static char g_sdw_last[40]="";
@@ -103,7 +106,6 @@ static bool g_compact=false;
 #define g_portrait (g_rot==1||g_rot==3)
 // Disk-selector grid geometry — declared up here so the Arduino auto-prototype
 // for diskGrid() (which returns this type) sees it before use.
-struct DiskGrid{int pages,pageStart,pageEnd,COLS,dbw,dbh,dgap,gridW,gx,gridY,gridH,pageBtnH,pageGap,labelY;bool multiPage;};
 #define LCD_PIN_CS 45
 #define LCD_PIN_CLK 47
 #define LCD_PIN_MOSI 21
@@ -5576,7 +5578,7 @@ static void doFirmwareUpdate(){
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 5.9.38 — exFAT / NTFS CARD DETECTION + ON-DEVICE FAT32 FORMAT
+// 5.9.38 — exFAT / NTFS CARD DETECTION (lab13: detection only - the GTi never formats)
 // ────────────────────────────────────────────────────────────────────────────
 // Windows formats anything over 32 GB as exFAT (or NTFS) and will not offer
 // FAT32 — that is a limit of the Windows dialog, not of FAT32, which goes to
@@ -5584,13 +5586,10 @@ static void doFirmwareUpdate(){
 // it), so such a card simply fails to mount. FlashFloppy has the same rule for
 // its USB stick ("FAT32 — exFAT and NTFS are not supported").
 //
-// Rather than send the user to a third-party formatter, the GTi does it: if the
-// mount fails AND sector 0 positively identifies exFAT or NTFS, offer to format
-// the card as FAT32 — behind two confirmations, with a 1 s arming delay on the
-// second so a bounced tap cannot get through. FatFs f_mkfs is a QUICK format:
-// partition table, boot sector, the two FATs and the root cluster. The data
-// area is never touched, but nothing points at it any more.
-// ════════════════════════════════════════════════════════════════════════════
+// If the mount fails AND sector 0 positively identifies exFAT or NTFS, the GTi says so and
+// explains how to format the card on a computer. lab13: it never formats or erases a card
+// itself (5.9.38 used to offer a FatFs quick format here - removed).
+// ════════════════════════════════════════════════════════════════════════
 // Returns 1 = exFAT, 2 = NTFS, 0 = something else (FAT or unknown), -1 = no card.
 // Only ever called AFTER SD_MMC.begin() has failed and released the host.
 static int sdPeekForeignFs(){
@@ -5626,63 +5625,20 @@ static int sdPeekForeignFs(){
   sdmmc_host_deinit();
   return r;
 }
-// Two-wall confirm. Returns true only if the user passed both screens.
-static bool sdOfferFormat(int kind){
+// lab13: THE GTi NEVER FORMATS OR ERASES A CARD (owner's rule R8, 25 Sep 2026). 5.9.38 offered an
+// on-device FAT32 format behind two confirmations; it is gone. The GTi only says what the card is
+// and how to fix it on a computer - and changes nothing.
+static void sdForeignFsNotice(int kind){
   const char* fsn = (kind==2) ? "NTFS" : "exFAT";
-  // ── wall 1 ──
   gfx_fillScreen(COL_BG);
-  fwupMsg(22,"CARD NOT COMPATIBLE",COL_ORANGE,COL_BG,2);
-  {char l[64];snprintf(l,sizeof l,"This card is formatted %s.",fsn);fwupMsg(52,l,COL_LIT,COL_BG,1);}
-  fwupMsg(66,"The GTi (and the Gotek) need FAT32.",COL_LIT,COL_BG,1);
-  fwupMsg(80,"Windows won't make FAT32 above 32GB,",COL_DIM,COL_BG,1);
-  fwupMsg(94,"but the GTi can - a quick format.",COL_DIM,COL_BG,1);
-  fwupMsg(118,"EVERYTHING ON THIS CARD WILL BE LOST.",COL_ORANGE,COL_BG,1);
-  fwupMsg(132,"Copy off anything you want first.",COL_ORANGE,COL_BG,1);
-  int bw=124,bbh=42,gap=22,by=VH-64,lx=VW/2-bw-gap/2,rx=VW/2+gap/2;
-  gfx_fillRoundRect(lx,by,bw,bbh,8,COL_BAR);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setTextSize(2);gfx_setCursor(lx+(bw-gfx_textWidth("CANCEL"))/2,by+13);gfx_print("CANCEL");
-  gfx_fillRoundRect(rx,by,bw,bbh,8,COL_ORANGE);gfx_setTextColor(TFT_BLACK,COL_ORANGE);gfx_setTextSize(2);gfx_setCursor(rx+(bw-gfx_textWidth("FORMAT"))/2,by+13);gfx_print("FORMAT");
-  gfx_flush();
-  { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }   // require a release first
-  bool go=false;
-  while(true){uint16_t tx,ty;if(Touch_ReadFrame()&&getTouchXY(&tx,&ty)){
-    if(ty>=(uint16_t)(by-8)&&ty<(uint16_t)(by+bbh+8)){
-      if(tx>=(uint16_t)(lx-8)&&tx<(uint16_t)(lx+bw+8)){go=false;break;}
-      if(tx>=(uint16_t)(rx-8)&&tx<(uint16_t)(rx+bw+8)){go=true;break;}}}
-    delay(25);}
-  if(!go) return false;
-  // ── wall 2: RED = NO, GREEN = YES, armed only after 1 s ──
-  gfx_fillScreen(COL_BG);
-  fwupMsg(VH/2-60,"ARE YOU SURE?",COL_LIT,COL_BG,2);
-  fwupMsg(VH/2-30,"This erases the whole card.",COL_ORANGE,COL_BG,1);
-  fwupMsg(VH/2-16,"There is no undo.",COL_ORANGE,COL_BG,1);
-  gfx_fillRoundRect(lx,by,bw,bbh,8,TFT_RED);  gfx_setTextColor(TFT_WHITE,TFT_RED);  gfx_setTextSize(2);gfx_setCursor(lx+(bw-gfx_textWidth("NO"))/2,by+13); gfx_print("NO");
-  gfx_fillRoundRect(rx,by,bw,bbh,8,COL_GREEN);gfx_setTextColor(TFT_BLACK,COL_GREEN);gfx_setTextSize(2);gfx_setCursor(rx+(bw-gfx_textWidth("YES"))/2,by+13);gfx_print("YES");
-  gfx_flush();
-  { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }   // release the finger that hit FORMAT
-  uint32_t armed=millis()+1000;                                                     // 1 s: a bounced double-tap lands here and is ignored
-  bool yes=false;
-  while(true){uint16_t tx,ty;
-    if(Touch_ReadFrame()&&getTouchXY(&tx,&ty)){
-      if((int32_t)(millis()-armed)<0){ delay(25); continue; }                       // not armed yet: swallow it
-      if(ty>=(uint16_t)(by-8)&&ty<(uint16_t)(by+bbh+8)){
-        if(tx>=(uint16_t)(lx-8)&&tx<(uint16_t)(lx+bw+8)){yes=false;break;}
-        if(tx>=(uint16_t)(rx-8)&&tx<(uint16_t)(rx+bw+8)){yes=true;break;}}}
-    delay(25);}
-  return yes;
-}
-// Format via FatFs (SD_MMC.begin with format_if_mount_failed), then reboot into a
-// normal blank-card boot, which creates /ADF /DSK /GENERIC and the sample folder.
-static void sdFormatFat32AndReboot(){
-  gfx_fillScreen(COL_BG);
-  fwupMsg(VH/2-20,"FORMATTING - DO NOT REMOVE",COL_AMBER,COL_BG,2);
-  fwupMsg(VH/2+10,"about a minute on a big card",COL_DIM,COL_BG,1);
-  gfx_flush();
-  SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);delay(100);
-  bool ok=SD_MMC.begin("/sdcard",true,/*format_if_mount_failed=*/true,20000);
-  gfx_fillScreen(COL_BG);
-  if(ok){ SD_MMC.end(); fwupMsg(VH/2-8,"FORMATTED - RESTARTING",COL_GREEN,COL_BG,2); gfx_flush(); delay(1500); ESP.restart(); }
-  fwupMsg(VH/2-14,"FORMAT FAILED",COL_ORANGE,COL_BG,2);
-  fwupMsg(VH/2+12,"card may be locked or faulty",COL_DIM,COL_BG,1);
+  fwupMsg(14,"CARD NOT COMPATIBLE",COL_ORANGE,COL_BG,2);
+  {char l[64];snprintf(l,sizeof l,"This card is formatted %s.",fsn);fwupMsg(44,l,COL_LIT,COL_BG,1);}
+  fwupMsg(58,"The GTi and the Gotek need FAT32.",COL_LIT,COL_BG,1);
+  fwupMsg(80,"Format it as FAT32 on a computer:",COL_LIT,COL_BG,1);
+  fwupMsg(96,"Mac: Disk Utility > Erase > MS-DOS (FAT)",COL_DIM,COL_BG,1);
+  fwupMsg(110,"Windows, 32 GB or less: Format > FAT32",COL_DIM,COL_BG,1);
+  fwupMsg(124,"Windows over 32 GB: a FAT32 tool (guiformat)",COL_DIM,COL_BG,1);
+  fwupMsg(146,"Nothing on the card was changed.",COL_GREEN,COL_BG,1);
   fwupMsg(VH-22,"tap to continue",COL_MID,COL_BG,1);
   gfx_flush(); fwupWait();
 }
@@ -5703,9 +5659,9 @@ void setup(){
   if(!sdok && !sdAccessReq){                          // 5.9.38: is it an exFAT/NTFS card rather than no card?
     int fk=sdPeekForeignFs();
     if(fk==1||fk==2){
-      Serial.printf("[sd] card present but %s - offering FAT32 format\n",fk==2?"NTFS":"exFAT");
-      if(sdOfferFormat(fk)) sdFormatFat32AndReboot();   // reboots on success
-      gfx_fillScreen(TFT_BLACK);                       // declined: carry on to the normal no-card path
+      Serial.printf("[sd] card present but %s - needs FAT32 (the GTi does not format cards)\n",fk==2?"NTFS":"exFAT");
+      sdForeignFsNotice(fk);                           // lab13: explain, change nothing
+      gfx_fillScreen(TFT_BLACK);                       // carry on to the normal no-card path
     }
   }
   if(sdok){

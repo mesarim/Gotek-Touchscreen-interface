@@ -1,13 +1,10 @@
 # ESP32-S3 Guition JC3248W535C (N16R8 — 16MB flash / 8MB OPI PSRAM)
-# lab13 layout: two 4MB app slots (dual-OTA for SD firmware-update; the GTi is ~2.6MB
-# with Doom compiled in), a 4.25MB "doom" data partition for the shareware doom1.wad
-# (4,196,020 B, installed once from the card), and a 3.7MB SPIFFS. Uses the full 16MB.
-# Changing this table needs ONE full USB flash (EraseFlash=all); SD update cannot move it.
+# Maximised dual-OTA layout: two ~6.9MB app slots (SD firmware-update writes the
+# inactive slot) + a 2.8MB SPIFFS. Uses the full 16MB. PSRAM is unaffected.
 # Sketch-local partitions.csv overrides the IDE Partition Scheme menu.
 # Name,     Type, SubType,  Offset,    Size,      Flags
 nvs,        data, nvs,      0x9000,    0x5000,
 otadata,    data, ota,      0xe000,    0x2000,
-app0,       app,  ota_0,    0x10000,   0x400000,
-app1,       app,  ota_1,    0x410000,  0x400000,
-doom,       0x40, 0x06,     0x810000,  0x440000,
-spiffs,     data, spiffs,   0xC50000,  0x3B0000,
+app0,       app,  ota_0,    0x10000,   0x6A0000,
+app1,       app,  ota_1,    0x6B0000,  0x6A0000,
+spiffs,     data, spiffs,   0xD50000,  0x2B0000,

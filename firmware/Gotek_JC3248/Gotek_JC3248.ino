@@ -1,11 +1,9 @@
 // ESP32-S3 (Guition JC3248W535C) — USB MSC RAM Disk + ADF/DSK Browser
 // Full port of Waveshare 7" firmware v3.4.7 (Mez UI) onto Dimi's hardware layer
 // Board: ESP32S3 Dev Module | USB-OTG (TinyUSB) | CDC DISABLED | OPI PSRAM
-// N16R8: Flash 16MB QIO 80MHz | PSRAM OPI (Octal 8MB) | Partition: sketch-local partitions.csv = 4MB APP x2 (dual-OTA for SD-update) + 4.25MB "doom" WAD + 3.7MB SPIFFS (lab13) | 240MHz
-// lab13: src/doom = PrBoom (GPL-2) - a JC3248 binary built with it is distributed under the GPL-2 (see src/doom/README_GTi.md)
+// N16R8: Flash 16MB QIO 80MHz | PSRAM OPI (Octal 8MB) | Partition: sketch-local partitions.csv = 6.9MB APP x2 (dual-OTA for SD-update) + 2.8MB SPIFFS — maximises the 16MB | 240MHz
 
 #include <Arduino.h>
-#include <new>             // lab13: placement new for the heap-built decoders
 #include "USB.h"
 #include "USBMSC.h"
 // Merge step 1: the shared WebDAV client (see firmware/shared/README.md).
@@ -35,33 +33,25 @@
 #include <PNGdec.h>      // cover art may be PNG as well as JPEG (v4.8.4) — needs the "PNGdec" library (Larry Bank) installed
 #include <Wire.h>
 #include <vector>
+#include <deque>      // 5.9.41-lab14b: g_games (no single multi-MB block needed)
 #include <algorithm>
 #include <set>
 #include <ctype.h>
 #include <sys/stat.h>
+#include "gti_fatwalk.h"   // 5.9.41-lab14: read .nfo heads straight off the directory entry (no open-by-name)
+#include "gti_sdguard.h"   // lab14g: FatFs metadata guard between FatFs and the SD driver
+#include "diskio_impl.h"   // lab14g: ff_diskio_register / ff_diskio_get_drive
+#include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
+#include "driver/gpio.h"
 
-#define FW_VERSION "5.9.41-lab13e-JC3248"  // lab13: DOOM easter egg (CRACKTRO=666, tap top-left during the cracktro); lab13b: FLUSHUS=0 ping-pong push + DIAGDISP in Doom; lab13c: Doom crash reporting; lab13d: PrBoom lumps built in (CRBRICK fix); lab13e: tap-the-menu touch controls, no auto-yes
+#define FW_VERSION "5.9.41-lab14p-JC3248"  // lab14p: DEVMODE=OFF hides Settings -> TEST TOOLS (ON by default); switching LIBRARY loads that library's saved descriptions; every documented key is in its own CONFIG.TXT section | lab14o: LIBLIMIT= documented in CONFIG.TXT (ON by default); built-in data (default CONFIG.TXT, SAMPLE cover) copied to RAM before it is written - it used to reach the card as garbage (first 4 KB of every new CONFIG.TXT blank) | lab14n: CATEGORIES and LIBRARY (ADF/DSK/GEN) free the old library before rebuilding, like RESCAN - a big card no longer rebuilds into an empty list | lab14m: BIGDISK=OFF (default) reserves 1.76 MB for save write-back / wireless sends (was 2.9 MB), BIGDISK=ON = 2.9 MB for big HFEs; DISKMAXKB retired | lab14l: "OMEGAWARE / GTi" shown the moment the card and CONFIG.TXT are read, so a big library's load time is never a black screen | lab14k: Settings -> TEST TOOLS sub-page holds the pure test tools (SD SOAK TEST, REEL PROF, NO-CACHE, DIAG-DISP) | lab14j: the SD guard's totals are written to gti.log on the way into SD ACCESS (so a normal session's card reads show up in the log) | lab14i: "no cover" remembered across restarts until the next RESCAN (a warm boot no longer searches the card for every cover-less game - the reel/list stalls), save badge answered from a list of .sav files made by the scan and kept current when the GTi writes a save, the .nfo fallback is one name lookup (not every file in the folder) and never runs while the reel moves | lab14h: the GTi never formats a card (exFAT/NTFS card -> explains how to format it on a computer, changes nothing), Mac "._" files ignored by the scanner | lab14g: SD guard (FatFs metadata checked on every read/write: bit-shifted sectors re-read, never written back; writes verified), gti.log + state files moved out of the root into /GTI, SD line pull-ups, SD SOAK TEST in Settings, SDSPEED=10 | lab14f: cover-cache build with no name lookups (covers opened from where the scan found them, .thumbs listed once), tiles stamped with their cover's date so a RESCAN only rebuilds changed covers | lab14e: library build keeps small allocations out of internal RAM (the real cause of the big-card panics), RAM disk reserved before the library, LIBLIMIT=OFF loads the rated amount, micro-thumbs sized to what is left (new 8x8 tier), crash breadcrumbs + no boot loops, clearer TOO BIG wording | lab14d: library capacity check - a card too big for this GTi halts with a loud warning + SD ACCESS (LIBLIMIT=OFF to load anyway) | lab14c: g_games is a deque (no 1.2 MB block), grouping retries with fewer images on bad_alloc instead of reboot-looping | lab14b: two-pass scan (all images first, blurbs within a memory budget), .index trusted only with a .gamecache, blurbs moved not copied, allocation-free name sort | lab14: one-pass FatFs scan walker (raw .nfo heads), O(n log n) multi-disk grouping, cover harvest trusted when empty, PSRAM guard
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
 #include <Update.h>            // v5.3: self-flash an app image off the SD (OTA)
 #include "esp_ota_ops.h"       // v5.3: OTA slot query + rollback-validate handshake
-#include "esp_partition.h"     // lab13: the "doom" WAD partition
-// ── lab13: DOOM easter egg ──────────────────────────────────────────────────
-// PrBoom (GPL-2, src/doom/) is compiled into this firmware. Armed ONLY by the hidden
-// CONFIG.TXT value CRACKTRO=666: the boot cracktro then plays as normal, and a tap in
-// its top-left corner reboots into Doom. The WAD (shareware doom1.wad, 4,196,020 B) is
-// installed once from the card root (/doom1.wad) into the 4.25 MB "doom" flash partition
-// (partitions.csv, type 0x40 / subtype 0x06). The Doom boot is a one-shot RTC flag, so a
-// crash or any reset lands back in the GTi. Hold the top-left corner 2 s in Doom to quit.
-extern "C" int doom_main(int argc, char const * const *argv);
-extern "C" int gti_doom_alloc(void);   // src/doom/gti_doom_alloc.c: the engine's big tables, heap not .bss
-#define DOOM_MAGIC 0xD00D1993u
-#define DOOM_PART_TYPE    ((esp_partition_type_t)0x40)
-#define DOOM_PART_SUBTYPE ((esp_partition_subtype_t)0x06)
-static bool g_doom_egg=false;          // CRACKTRO=666
-static void doomLaunch();              // fwd: defined just above setup()
 #include "esp_log.h"           // 5.9.29: capture IDF OTA/image log lines into /gti.log
+#include "esp_heap_caps.h"     // lab14e: failed-allocation hook for the crash breadcrumbs
 
 extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect(void); void* ps_malloc(size_t size); }
 
@@ -209,21 +199,8 @@ static esp_lcd_panel_io_handle_t io_handle = NULL;
 static esp_lcd_panel_handle_t panel_handle = NULL;
 static uint16_t *framebuffer = NULL;
 static uint16_t *dma_buffer = NULL;
-// lab13: the decoders were static objects - 17.9 KB (JPEGDEC) + 45.6 KB (PNG) of .bss in the
-// scarce internal DRAM, whether or not a cover was ever decoded. They are now built at boot
-// in PSRAM by decodersInit() (never on a Doom boot). Net: the GTi has MORE internal RAM free
-// than 5.9.41 even with Doom linked in; cost is a slower one-off cover decode. Every existing jpegdec./pngdec. use is
-// unchanged via the two macros.
-static JPEGDEC* g_jpegdec=nullptr;
-static PNG*     g_pngdec=nullptr;
-#define jpegdec (*g_jpegdec)
-#define pngdec  (*g_pngdec)
-static void decodersInit(){
-  // PSRAM first: internal DRAM is what WiFi/TLS/USB need, and covers are decoded rarely now
-  // (the reel and the LIST panel read pre-built .tnl tiles). Internal only as a fallback.
-  if(!g_jpegdec){ void*m=ps_malloc(sizeof(JPEGDEC)); if(!m)m=heap_caps_malloc(sizeof(JPEGDEC),MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT); g_jpegdec=new(m) JPEGDEC(); }
-  if(!g_pngdec){ void*m=ps_malloc(sizeof(PNG)); if(!m)m=heap_caps_malloc(sizeof(PNG),MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT); g_pngdec=new(m) PNG(); }
-}
+static JPEGDEC jpegdec;
+static PNG     pngdec;   // v4.8.4 PNG cover support
 
 static inline uint16_t swap16(uint16_t c){return(c>>8)|(c<<8);}
 static inline void fb_setPixel(int vx,int vy,uint16_t color){
@@ -335,29 +312,11 @@ static void gfx_flush(){
   uint32_t _fl_t0=micros();
   { uint32_t now=millis(); if(g_diag_last){ float dt=(float)(now-g_diag_last); if(dt>0){ float f=1000.0f/dt; g_diag_fps = g_diag_fps>0 ? g_diag_fps*0.85f+f*0.15f : f; } } g_diag_last=now; }
   if(g_diagdisp) drawDiagOverlay();
-  if(g_flush_us>0){                                  // unchanged path (defaults 10 rows / 500 us)
-    for(int sy=0;sy<LCD_HEIGHT;sy+=g_strip_rows){
-      int rows=min(g_strip_rows,LCD_HEIGHT-sy);
-      memcpy(dma_buffer,&framebuffer[sy*LCD_WIDTH],LCD_WIDTH*rows*2);
-      esp_lcd_panel_draw_bitmap(panel_handle,0,sy,LCD_WIDTH,sy+rows,dma_buffer);
-      delayMicroseconds(g_flush_us);
-    }
-  } else {
-    // lab13b: FLUSHUS=0. draw_bitmap only QUEUES the DMA, so the old loop's next memcpy
-    // overwrote a strip still being sent (garbled bands). Split the DMA buffer into two
-    // halves and alternate: we fill one half while the other is on the wire. Each
-    // draw_bitmap waits for the previous transfer before queuing (esp_lcd SPI io,
-    // queue depth 1), so a half is never refilled while it is still in flight.
-    // The toggle persists across calls because the last strip may still be sending.
-    static int half=0;
-    const int slot=max(1,min(g_strip_rows,g_strip_cap/2));
-    for(int sy=0;sy<LCD_HEIGHT;sy+=slot){
-      int rows=min(slot,LCD_HEIGHT-sy);
-      uint16_t* buf=dma_buffer+(size_t)half*slot*LCD_WIDTH;
-      memcpy(buf,&framebuffer[sy*LCD_WIDTH],LCD_WIDTH*rows*2);
-      esp_lcd_panel_draw_bitmap(panel_handle,0,sy,LCD_WIDTH,sy+rows,buf);
-      half^=1;
-    }
+  for(int sy=0;sy<LCD_HEIGHT;sy+=g_strip_rows){
+    int rows=min(g_strip_rows,LCD_HEIGHT-sy);
+    memcpy(dma_buffer,&framebuffer[sy*LCD_WIDTH],LCD_WIDTH*rows*2);
+    esp_lcd_panel_draw_bitmap(panel_handle,0,sy,LCD_WIDTH,sy+rows,dma_buffer);
+    if(g_flush_us>0)delayMicroseconds(g_flush_us);
   }
   g_rp_flush+=micros()-_fl_t0;
 }
@@ -421,15 +380,53 @@ static String   g_dec_path = "";       // cover path currently held in jpeg_tmp_
 static uint16_t* g_dec_buf = NULL;      // pointer we cached (guards against external reuse of jpeg_tmp_buf)
 static bool     g_dec_failed = false;   // last decode of g_dec_path failed (negative cache)
 
+// ── lab14f: WHERE FILES START, remembered from the scan walk ──────────────────
+// The cover-cache build opened every cover BY NAME: a stat() and an open(), each a search of
+// a letter folder with ~5,000 entries (~1 MB of directory). Measured on the 26 GB card: 0.57 s
+// a game, of which ~0.1 s is the real read + decode. The walk already passes every cover's
+// directory entry, so it notes the start cluster, size and FAT date/time (fw_entry_clust), and
+// the build opens the file from that (fw_open_at) - no search. Same for the .thumbs tiles,
+// listed once per build. Anything not found here falls back to the normal by-name path.
+// (struct FwLoc lives in gti_fatwalk.h so the Arduino prototype generator can see it)
+static std::vector<FwLoc> g_coverloc;           // covers seen by the walk, sorted by h (lower-case VFS path hash)
+static std::vector<FwLoc> g_thumbloc;           // .tnl tiles, listed at the start of buildThumbs
+static FATFS* g_fw_fs=nullptr; static WORD g_fw_fsid=0;   // the card's volume + mount id at walk time
+static FIL*   g_fw_fil=nullptr;                  // one reusable FIL (4 KB sector buffer inside)
+static uint32_t g_fw_open_at=0, g_fw_open_at_fail=0;
+static uint64_t coverHash(const String&s);       // fwd (defined with the walk harvest)
+static const FwLoc* fwLocFind(const std::vector<FwLoc>& v,uint64_t h){
+  auto it=std::lower_bound(v.begin(),v.end(),h,[](const FwLoc&a,uint64_t k){return a.h<k;});
+  return (it!=v.end()&&it->h==h)?&*it:nullptr;
+}
+static const FwLoc* fwLocFor(const std::vector<FwLoc>& v,const String& vfsPath){
+  if(v.empty()) return nullptr; String l=vfsPath; l.toLowerCase(); return fwLocFind(v,coverHash(l));
+}
+// Read the whole file (n bytes) from its recorded start cluster. False = use the normal path.
+static bool fwReadAt(const FwLoc* L,uint8_t* dst,size_t n){
+  if(!L||!g_fw_fs||n!=L->size) return false;
+  if(!g_fw_fil){ g_fw_fil=(FIL*)ps_malloc(sizeof(FIL)); if(!g_fw_fil) return false; }
+  if(!fw_open_at(g_fw_fil,g_fw_fs,g_fw_fsid,L->sclust,L->size)){ g_fw_open_at_fail++; return false; }
+  UINT br=0; FRESULT r=f_read(g_fw_fil,dst,(UINT)n,&br); f_close(g_fw_fil);
+  if(r!=FR_OK||br!=n){ g_fw_open_at_fail++; return false; }
+  g_fw_open_at++; return true;
+}
+static void fwLocFree(){ std::vector<FwLoc>().swap(g_coverloc); std::vector<FwLoc>().swap(g_thumbloc); }
+
 // Decode ONE file into jpeg_tmp_buf at natural aspect, long side scaled toward budgetLong.
 // Frees its own file buffer. On failure: frees jpeg_tmp_buf, sets NULL, returns false.
 static bool _coverDecodeRaw(const String& path, int budgetLong){
+  uint8_t* buf=nullptr; size_t sz=0;
+  { const FwLoc* L=fwLocFor(g_coverloc,path);     // lab14f: straight from the walk, no name search
+    if(L && L->size>0 && L->size<=COVER_FILE_CAP){ buf=(uint8_t*)ps_malloc(L->size);
+      if(buf && fwReadAt(L,buf,L->size)) sz=L->size; else { if(buf)free(buf); buf=nullptr; } } }
+  if(!buf){                                        // the by-name path (runtime, or not in the walk)
   String vfsPath="/sdcard"+path; struct stat st;
   if(stat(vfsPath.c_str(),&st)!=0 || st.st_size==0 || (uint32_t)st.st_size>COVER_FILE_CAP) return false;
-  size_t sz=(size_t)st.st_size;
+  sz=(size_t)st.st_size;
   File f=SD_MMC.open(path.c_str(),"r"); if(!f) return false;
-  uint8_t* buf=(uint8_t*)ps_malloc(sz); if(!buf){ f.close(); return false; }
+  buf=(uint8_t*)ps_malloc(sz); if(!buf){ f.close(); return false; }
   if(f.read(buf,sz)!=(int)sz){ free(buf); f.close(); return false; } f.close();
+  }
   int djw=0,djh=0;
   if(coverIsPng(path)){
     if(pngdec.openRAM(buf,sz,png_buf_cb)!=PNG_SUCCESS){ free(buf); return false; }
@@ -566,20 +563,23 @@ USBMSC MSC;static bool g_usb_online=false;
 // disk can be a 1-2 MB HFE and a high-sample-rate or HFEv3 dump can exceed
 // 2.88 MB. So there is no natural ceiling to bake in — it is a knob.
 //
-// DISKMAXKB= is the largest IMAGE we must be able to mount (not the volume
-// size). The volume, cluster size and FAT are derived from it so the result is
+// lab14m: the RAM disk size now comes from BIGDISK= (DISKMAXKB is retired). Since 5.9.37 the
+// cable path serves any image straight off the card (alias disk), so this buffer is only
+//   * the save write-back space over the cable (writes past it are refused), and
+//   * the whole image for a wireless send (the dongle must receive real bytes).
+// BIGDISK=OFF (default) = 1760 KB = an Amiga HD disk, and the SuperMini's limit.
+// BIGDISK=ON            = 2880 KB = room for large Atari ST .HFE images.
+// The volume, cluster size and FAT are derived from it so the result is
 // always valid FAT12 and the metadata layout is identical at every size.
-// Default 2880 = the 3.5" ED floppy capacity: covers every raw sector format
-// outright (ADF/ADZ/ST/IMG/DSK) and the large majority of HFE dumps.
 //
-//   DISKMAXKB   volume    sec/clus   PSRAM cost
+//   image KB    volume    sec/clus   PSRAM cost
+//     1760      3533 sec     2        1,808,896   <- BIGDISK=OFF (default, lab14m)
 //     2048      4109 sec     2        2,103,808   (the old 5.9.34 behaviour)
-//     2560      5133 sec     2        2,628,096
-//     2880      5773 sec     4        2,955,776   <- default
-//     3072      6157 sec     4        3,152,384
+//     2880      5773 sec     4        2,955,776   <- BIGDISK=ON (the default until lab14m)
 //     4096      8205 sec     4        4,200,960   (ceiling)
 #define DISK_IMG_MIN_KB  1024
-#define DISK_IMG_DEF_KB  2880
+#define DISK_IMG_DEF_KB  1760   // lab14m: BIGDISK=OFF
+#define DISK_IMG_BIG_KB  2880   // lab14m: BIGDISK=ON
 #define DISK_IMG_MAX_KB  4096
 #define DISK_RESERVED_SECTORS 1
 #define DISK_SECTORS_PER_FAT  8        // 4096 bytes = 2730 FAT12 entries; enough for every size above (was 6)
@@ -590,7 +590,7 @@ static const uint16_t SECTOR_SIZE=512;
 static const uint16_t RESERVED_SECTORS=DISK_RESERVED_SECTORS,SECTORS_PER_FAT=DISK_SECTORS_PER_FAT,ROOT_DIR_SECTORS=DISK_ROOT_DIR_SECTORS;
 static const uint8_t NUM_FATS=1;static const uint16_t ROOT_ENTRIES=64;
 static const uint32_t FAT_LBA=DISK_RESERVED_SECTORS,ROOT_LBA=DISK_RESERVED_SECTORS+DISK_SECTORS_PER_FAT,DATA_LBA=DISK_DATA_LBA;
-static uint32_t g_img_max_kb=DISK_IMG_DEF_KB;   // DISKMAXKB=
+static uint32_t g_img_max_kb=DISK_IMG_DEF_KB;   // lab14m: BIGDISK= (was DISKMAXKB=)
 static uint32_t TOTAL_SECTORS=DISK_IMG_DEF_KB*2+DISK_DATA_LBA;   // real value set by diskGeomApply()
 static uint8_t  SECTORS_PER_CLUSTER=4;
 static uint32_t MAX_FILE_BYTES=0;
@@ -647,7 +647,7 @@ static void build_volume(const char*outName,uint32_t fsz){if(fsz>MAX_FILE_BYTES)
 // ════════════════════════════════════════════════════════════════════════════
 // ALIAS DISK — present an SD file to the Gotek without copying it (5.9.37)
 // ────────────────────────────────────────────────────────────────────────────
-// The RAM disk can only ever hold DISKMAXKB, so anything larger used to be
+// The RAM disk can only ever hold the BIGDISK size, so anything larger used to be
 // refused outright ("TOO BIG"). Instead we now build ONLY the FAT12 metadata in
 // RAM and remap every read past DATA_LBA to the file's own sectors on the card,
 // via its cluster chain. Nothing is copied, so the image size stops mattering.
@@ -660,7 +660,7 @@ static void build_volume(const char*outName,uint32_t fsz){if(fsz>MAX_FILE_BYTES)
 // zero errors while the card was concurrently being walked, on FAT16 and FAT32.
 //
 // WRITES ARE REFUSED while aliased. The image is not ours to modify — saving
-// needs the RAM-disk scratch, which is what DISKMAXKB now really bounds.
+// needs the RAM-disk scratch, which is what the BIGDISK size now really bounds.
 // ════════════════════════════════════════════════════════════════════════════
 
 #define AL_SEC 512
@@ -976,7 +976,7 @@ static bool aliasMount(const String&path,uint32_t fsz,const char*volName,
 // below ticks the dirty map; a settle timer + eject flush persist to .sav.adf.
 // WIRELESS: the dongle ticks its own map and beacons; we pull + patch (espnow).
 // SV_IMG_MAX_SECTORS is a runtime value now (see diskGeomApply); the dirty map is
-// sized once for the largest disk DISKMAXKB can ever ask for.
+// sized once for the largest disk the BIGDISK size can ever ask for.
 #define SV_SETTLE_MS 3000
 static int      g_saves_mode=1;                          // 0=OFF 1=COPY 2=OVERWRITE (SAVES=)
 static uint8_t  g_sv_dirty[((DISK_SECTORS_CEIL-DISK_DATA_LBA)+7)/8];
@@ -1027,7 +1027,7 @@ static int32_t onRead(uint32_t lba,uint32_t off,void*buf,uint32_t n){
 
 static int32_t onWrite(uint32_t lba,uint32_t off,uint8_t*buf,uint32_t n){
   // 5.9.37: under an alias mount this is the WRITE OVERLAY. The bound below is
-  // now the scratch size (DISKMAXKB), not the image size: a write inside it is
+  // now the scratch size (the BIGDISK size), not the image size: a write inside it is
   // captured and served back by onRead; one beyond it is refused, so the host
   // sees a write error — "mounts fine, too big to save".
   uint32_t s=lba*512+off;if(s+n>TOTAL_SECTORS*512)return 0;memcpy(g_disk+s,buf,n);
@@ -1062,16 +1062,32 @@ RTC_NOINIT_ATTR uint32_t g_sdaccess_magic;           // NOINIT (not DATA): DATA 
 // reset but dies with the RTC domain on power loss. B:1 after POWERON = a clean
 // cold boot; B:>1 = something restarted us since power (e.g. a bench PC's USB-JTAG
 // probe pulsing DTR/RTS). Logged at boot; harmless at a Gotek.
+// 5.9.41-lab14d: "library too big" facts, carried into SD ACCESS mode across the restart
+#define CAP_MAGIC 0xCA9AC17Eu
+RTC_NOINIT_ATTR uint32_t g_cap_magic, g_cap_images, g_cap_games, g_cap_fit, g_cap_pct, g_cap_atleast;
 RTC_NOINIT_ATTR uint32_t g_bootMagic;
 RTC_NOINIT_ATTR uint32_t g_bootCount;
-RTC_NOINIT_ATTR uint32_t g_doom_magic;   // lab13: == DOOM_MAGIC -> this software restart boots Doom
-RTC_NOINIT_ATTR uint32_t g_doom_rot;     // lab13: landscape orientation to use in Doom (0 or 2)
-// lab13c: crash forensics. The Doom boot has no SD card, so it leaves breadcrumbs in RTC memory
-// (survives a panic/watchdog reset) and the next normal GTi boot shows + logs them.
-RTC_NOINIT_ATTR uint32_t g_doom_trace;   // 0xD00D00ss = Doom boot reached stage ss; 0 = clean
-extern "C" { RTC_NOINIT_ATTR char g_doom_lastmsg[128]; }   // tail of Doom's console output (lprintf.c)
-static char g_doom_report[224]={0};
-static inline void doomStage(int s){ g_doom_trace=0xD00D0000u|(uint32_t)s; }
+// lab14e: CRASH BREADCRUMBS. A panic prints its backtrace to a serial port nobody can see
+// on a Gotek, so each boot stage leaves a marker (plus free memory) in RTC memory, which a
+// software/panic reset does not clear. The next boot writes "last boot died in <stage>"
+// to /gti.log. A heap hook also records the first allocation that failed outright.
+#define BC_MAGIC 0xBC14E0E1u
+RTC_NOINIT_ATTR uint32_t g_bc_magic, g_bc_stage, g_bc_n, g_bc_psram, g_bc_int, g_bc_failsz, g_bc_failcaps;
+enum { BC_NONE=0, BC_SCAN, BC_BLURBS, BC_INDEXREAD, BC_CACHEREAD, BC_GROUP, BC_SIDECARS, BC_SORT, BC_CACHEWRITE, BC_THUMBS, BC_NFOCACHE,
+       BC_READY, BC_RAMDISK, BC_UISTART };
+static const char* bcName(uint32_t s){
+  static const char* n[]={"-","scan (pass 1)","blurbs (pass 2)",".index read",".gamecache read","multi-disk grouping","sidecars",
+                          "name sort",".gamecache write","thumbnails / micro-thumbs","nfo cache","running (after boot)","RAM disk","starting the UI (stats, reel, USB)"};
+  return s<sizeof(n)/sizeof(n[0])?n[s]:"?";
+}
+static inline bool bcIsLibrary(uint32_t s){ return (s>=BC_SCAN && s<=BC_NFOCACHE) || s==BC_UISTART; }   // a crash here = don't auto-retry
+static void bcSet(uint32_t stage,uint32_t n){
+  g_bc_magic=BC_MAGIC; g_bc_stage=stage; g_bc_n=n;
+  g_bc_psram=(uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM); g_bc_int=(uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+}
+static void IRAM_ATTR bcAllocFailed(size_t size,uint32_t caps,const char*){ if(!g_bc_failsz){ g_bc_failsz=size?(uint32_t)size:1u; g_bc_failcaps=caps; } }
+struct BcPrev { bool crashed=false, valid=false; int reason=0; uint32_t stage=0,n=0,psram=0,intr=0,failsz=0,failcaps=0; };
+static BcPrev g_bc_prev;   // what the LAST boot left behind (read once, first thing in setup)
 #define SDACCESS_MAGIC 0x5DACCE55u
 static uint32_t g_sd_sectors=0;                       // real card size, set at SD-access boot
 static volatile uint32_t g_sd_rd=0,g_sd_wr=0;        // sector-op tallies for the activity readout
@@ -1100,7 +1116,7 @@ static bool onStartStopSD(uint8_t,bool start,bool load_eject){if(load_eject&&!st
 // ════════════════════════════════════════════════════════════════════════════
 static String indexFilePath(){return g_mode==MODE_ADF?"/ADF/.index":g_mode==MODE_DSK?"/DSK/.index":"/GENERIC/.index";}
 static void writeIndexCache(const std::vector<String>&v){ if(g_nocache)return;File f=SD_MMC.open(indexFilePath().c_str(),FILE_WRITE);if(!f)return;f.println("#COUNT="+String(v.size()));for(auto&p:v)f.println(p);f.close();}
-static bool readIndexCache(std::vector<String>&out){ if(g_nocache){out.clear();return false;}out.clear();File f=SD_MMC.open(indexFilePath().c_str(),FILE_READ);if(!f){return false;}
+static bool readIndexCache(std::vector<String>&out){ if(g_nocache){out.clear();return false;} bcSet(BC_INDEXREAD,0);out.clear();File f=SD_MMC.open(indexFilePath().c_str(),FILE_READ);if(!f){return false;}
   long declaredCount=-1;
   while(f.available()){String l=f.readStringUntil('\n');l.trim();if(!l.length())continue;
     if(l.startsWith("#COUNT=")){declaredCount=l.substring(7).toInt();if(declaredCount>0)out.reserve(declaredCount);continue;}
@@ -1183,6 +1199,17 @@ static bool isGenImage(const String&u){
 static std::vector<uint64_t> g_coverset;
 static uint64_t coverHash(const String&s){uint64_t h=1469598103934665603ULL;for(unsigned i=0;i<s.length();i++){h^=(uint8_t)s[i];h*=1099511628211ULL;}return h;}   // 5.3.7: lowercased cover-image paths (jpg/png) harvested during the scan walk, so buildThumbs resolves each cover from RAM instead of probing the card. Covers ONLY — .nfo/.rtfm are read on demand when you open a game, never in bulk, so they were dead weight here.
 static inline bool isCoverExtU(const String&u){return u.endsWith(".JPG")||u.endsWith(".JPEG")||u.endsWith(".PNG");}
+// lab14i: .sav files seen by the scan walk (lower-case VFS path hashes, sorted). The save badge on the
+// reel and the list is answered from this instead of an SD_MMC.exists() per selection - on a miss that
+// reads the whole folder (R7). Kept on the card as /GTI/.gtisaves_<mode> so a warm boot has it too, and
+// appended to whenever the GTi writes a save. No list yet (first boot of lab14i, before a RESCAN) ->
+// g_savset_ok=false -> the badge falls back to the old live check. Loading a disk always checks live.
+static std::vector<uint64_t> g_savset;
+static bool   g_savset_ok=false;
+static String g_savset_cutdir;                 // the walk's cut folder: its badges stay live checks
+static inline void savSetNoteWalk(const String&fp){String l=fp;l.toLowerCase();g_savset.push_back(coverHash(l));}
+static void savSetWrite();                      // fwd - defined with the save engine
+static void savSetLoad();
 // ── 5.9.31-lab1: SIDECAR HARVEST ────────────────────────────────────────────
 // Selecting a game used to cost ~10 full directory walks on a flat 1700-file card:
 // findNFOFor (2 on a miss) + the NFO open + savExistsFor + isHDImage + manualFor (6 on
@@ -1218,6 +1245,168 @@ static bool   g_nesting=false;      // NESTING=ON : allow category recursion bey
 static String g_libpath="";         // current category path under the mode root ("" = at the root)
 static std::vector<String> g_cats;  // category sub-folder names at the current level (filled by the scan)
 static void reloadLevel();          // fwd: fresh (uncached) rescan of mode root + g_libpath
+// ── 5.9.41-lab14: ONE-PASS WALKER ────────────────────────────────────────────
+// The walker below used File::openNextFile(), which stat()s and opens EVERY entry by
+// path. On FAT an open-by-name searches the folder from the top, so in the 26 GB bulk
+// card's letter folders (~5,000 entries with long TOSEC names = ~1 MB of directory)
+// each entry re-read about half the folder: 3-7 entries/s, ~3 hours for the card.
+// scanDirFast() reads each folder ONCE with FatFs f_readdir() (name, size and
+// attributes come with the entry) and takes each .nfo's first sector straight off the
+// entry it just read (gti_fatwalk.h) - measured on a copy of that layout (FatFs R0.15
+// host build, 15,127 entries): 14,120 sector reads instead of 33.5 million, 0 blurb
+// mismatches against a normal open+read. Output is identical to scanDirInto(): same
+// paths, same cover/manual/HD harvest, same organisational-folder recursion.
+// Differences, on purpose: .nfo files of disk 2+ of a multi-disk set are not read
+// (only disk 1's blurb is ever used - saves ~half the blurb PSRAM on TOSEC sets), and
+// the walk stops cleanly if PSRAM runs short instead of crashing later.
+// FASTSCAN=OFF in CONFIG.TXT forces the old walker (A/B timing).
+static bool     g_fastscan=true;
+static int      g_fw_drv=-2;                    // FatFs drive of the card: -2 unknown, -1 none (use the old walker)
+static uint8_t* g_fw_sec=nullptr;               // one DMA-capable 512-byte sector for raw .nfo heads
+static uint32_t g_fw_nfo_raw=0,g_fw_nfo_open=0,g_fw_nfo_skip=0,g_fw_entries=0;
+static bool     g_fw_lowmem=false;
+// 5.9.41-lab14b: TWO PASSES. lab14 read .nfo blurbs during the walk and on the 26 GB card
+// they ate the PSRAM before the walk reached T (25,800 of ~33,400 images), and grouping then
+// ran out. Now pass 1 collects every disk image (the list is what matters), noting which
+// folders hold .nfo files; pass 2 re-reads just those folders and takes blurbs only while
+// PSRAM stays above what grouping will need for the images we now know we have.
+static int      g_fw_pass=1;
+static std::vector<String> g_fw_nfodirs;        // folders with .nfo files, in walk order
+static uint32_t g_fw_disk2=0,g_fw_nfo_budget=0; // images that are disk 2+ (no game of their own); blurbs dropped for memory
+static size_t   g_fw_floor=0;                   // pass 2: keep at least this much PSRAM free
+// PSRAM that grouping + the UI will need for `files` images making `games` games: grouping
+// scratch (~24 B/image), one GameEntry + name + disk list per game (~180 B), plus 1.5 MB for the
+// RAM disk's minimum (1 MB) and the tile cache. During the walk the game count is estimated at
+// half the images (the bulk card is 0.46); after the walk it is counted exactly.
+// lab14e: PSRAM the running GTi needs AFTER the library: reel tiles, cover decode, screensaver,
+// UI. The RAM disk is no longer in here - it is allocated before the library is sized.
+#define LIB_RUNTIME_RESERVE (1024u*1024u+64u*1024u)
+static size_t g_fw_rt_reserve=LIB_RUNTIME_RESERVE;   // + the BIGDISK size only if the RAM disk isn't allocated yet
+static uint32_t g_fw_nfodir_skip=0;              // lab14e: .nfo folders pass 2 never opened (no memory left for blurbs)
+static bool   g_liblimit=true;                  // LIBLIMIT=OFF: load what fits (the rated amount) instead of halting (documented in CONFIG.TXT since lab14o)
+static bool   g_devmode=true;                   // lab14p: DEVMODE=OFF hides Settings -> TEST TOOLS
+static uint32_t g_fw_nfo1=0;                    // pass 1: .nfo files that would give a blurb (disk 1 / single)
+// lab14d: once the list can't grow (LIBLIMIT on), the walk carries on COUNTING only, so the
+// halt screen and GTI_CAPACITY.TXT report the card's real size and every folder, not "at least".
+static bool     g_fw_countonly=false;
+static String   g_fw_cutdir;                    // lab14i: the folder where a too-big walk stopped loading (later covers/saves in it were never seen)
+static uint32_t g_fw_xtra=0,g_fw_xtra2=0;          // images (and disk-2+ images) counted but not listed
+static std::vector<std::pair<String,uint32_t>> g_fw_xtra_per;   // counted-only images per top-level folder
+static std::vector<uint64_t> g_fw_xkeys; static uint32_t g_fw_xsingles=0;   // counted-only: game keys (8 B each) -> exact game count
+static inline size_t fwNeedAfter(size_t files,size_t games){ return files*24+games*180+g_fw_rt_reserve; }
+static size_t fwCountGames(const std::vector<String>& v){   // same key as buildGameList's grouping
+  std::vector<uint64_t> keys; size_t singles=0;
+  for(const auto& f: v){ if(getDiskNumber(f)>0){ String k=parentDir(f)+"\x01"+getGameBaseName(f); keys.push_back(coverHash(k)); } else singles++; }
+  std::sort(keys.begin(),keys.end());
+  return singles+(size_t)(std::unique(keys.begin(),keys.end())-keys.begin());
+}
+static int fwFindDrive(const String& vdir){
+  FF_DIR* t=(FF_DIR*)malloc(sizeof(FF_DIR)); if(!t) return -1;
+  int found=-1;
+  for(int d=0; d<FF_VOLUMES && found<0; d++){ String p=String(d)+":"+vdir; if(f_opendir(t,p.c_str())==FR_OK){ f_closedir(t); found=d; } }
+  free(t); return found;
+}
+// Room for the next entry? Checked per entry (cheap) - the vectors double as they grow,
+// so the next doubling must fit in one PSRAM block as well as leaving the reserve.
+static bool fwMemOk(size_t outSize,size_t outCap){
+  size_t freeP=heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+  if(freeP<fwNeedAfter(outSize,outSize/2)) return false;   // lab14b: reserve scales with the library found so far
+  size_t need=0;
+  if(outSize+1>=outCap) need=outCap*2*sizeof(String);
+  if(g_nfoharvest.size()+1>=g_nfoharvest.capacity()) need=std::max(need,g_nfoharvest.capacity()*2*sizeof(NfoRec));
+  if(need && heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)<need+65536) return false;
+  return true;
+}
+// One entry of folder `pdir` (VFS path, e.g. "/ADF/A"), exactly as scanDirInto's loops treat it.
+static void fwEntry(const String& pdir, FF_DIR* dp, FILINFO* fi, std::vector<String>& out, const String& ext, int& count){
+  if(fi->fname[0]=='.'&&fi->fname[1]=='_') return;   // lab14h: macOS "._name" metadata files - never a game, cover or blurb
+  String fn=fi->fname; String u=fn; u.toUpperCase();
+  g_fw_entries++;
+  if(g_fw_countonly){                                  // lab14d: list is full - just count what's left
+    if(scanTick(count+(int)g_fw_xtra))drawScanFrame(count+(int)g_fw_xtra);
+    if(u.endsWith(".NFO")){ if(!(fi->fattrib&AM_DIR)&&getDiskNumber(fn)<=1) g_fw_nfo1++; return; }
+    if(u.indexOf(".SAV.")>=0) return;
+    if(g_mode==MODE_GEN?isGenImage(u):(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ"))){
+      g_fw_xtra++; int dn=getDiskNumber(fn); if(dn>1) g_fw_xtra2++;
+      if(dn>0){ String k=pdir+"\x01"+getGameBaseName(fn); g_fw_xkeys.push_back(coverHash(k)); } else g_fw_xsingles++;   // same key as grouping
+      int a=pdir.indexOf('/',1); int b=a>=0?pdir.indexOf('/',a+1):-1; String top=a>=0?(b>a?pdir.substring(a+1,b):pdir.substring(a+1)):String("(top level)");
+      if(g_fw_xtra_per.empty()||g_fw_xtra_per.back().first!=top) g_fw_xtra_per.push_back({top,0});
+      g_fw_xtra_per.back().second++;
+    }
+    return;
+  }
+  if(scanTick(count))drawScanFrame(count);
+  String fp=pdir+"/"+fn; if(!fp.startsWith("/"))fp="/"+fp;
+  if(isCoverExtU(u)){String ap=fp;ap.toLowerCase();uint64_t ch=coverHash(ap);g_coverset.push_back(ch);
+    uint32_t cl=0;                                   // lab14f: and where it starts, for the cover-cache build
+    if(!(fi->fattrib&AM_DIR) && fi->fsize>0 && fw_entry_clust(dp,fi,&cl)){
+      g_coverloc.push_back({ch,cl,(uint32_t)fi->fsize,fi->fdate,fi->ftime});
+      if(!g_fw_fs){ g_fw_fs=dp->obj.fs; g_fw_fsid=dp->obj.fs->id; } } }
+  if(u.endsWith(".NFO")){
+    if(fi->fattrib&AM_DIR) return;
+    if(g_fw_pass==1){ if(g_fw_nfodirs.empty()||g_fw_nfodirs.back()!=pdir) g_fw_nfodirs.push_back(pdir); if(getDiskNumber(fn)<=1) g_fw_nfo1++; return; }   // lab14b: blurbs in pass 2
+    if(getDiskNumber(fn)>1){ g_fw_nfo_skip++; return; }          // disk 2+ blurb is never shown
+    char nb[513]; int nr=0; uint32_t n=0;
+    if(g_fw_sec && fw_read_head(dp,fi,g_fw_sec,512,&n)){ nr=(int)(n>512?512:n); memcpy(nb,g_fw_sec,nr); g_fw_nfo_raw++; }
+    else { File e=SD_MMC.open(fp.c_str(),FILE_READ); if(e){ nr=e.read((uint8_t*)nb,512); if(nr<0)nr=0; e.close(); } g_fw_nfo_open++; }
+    nb[nr]=0; sideNoteNfo(fn,String(nb)); return;
+  }
+  if(u.endsWith(".RTFM")){g_manualset.push_back(sideKey(fn));return;}
+  if(u.indexOf(".SAV.")>=0){ if(u.endsWith(".TMP"))SD_MMC.remove(fp); else if(!(fi->fattrib&AM_DIR))savSetNoteWalk(fp); return; }   // lab14i: note the save
+  if(g_mode==MODE_GEN?isGenImage(u):(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ"))){out.push_back(fp);count++;
+    if(getDiskNumber(fn)>1)g_fw_disk2++;
+    if((uint32_t)fi->fsize>HD_FLAG_BYTES)g_hdset.push_back(sideKey(fn));}
+}
+// lab14b pass 2: the .nfo files of one folder, blurbs taken while the PSRAM budget allows.
+static void fwNfoDir(const String& pdir,int count){
+  FF_DIR* d=(FF_DIR*)malloc(sizeof(FF_DIR)); FILINFO* fi=(FILINFO*)malloc(sizeof(FILINFO));
+  if(!d||!fi||f_opendir(d,(String(g_fw_drv)+":"+pdir).c_str())!=FR_OK){ free(d);free(fi); return; }
+  while(f_readdir(d,fi)==FR_OK && fi->fname[0]){
+    if(fi->fattrib&AM_DIR) continue;
+    size_t ln=strlen(fi->fname); if(ln<4||strcasecmp(fi->fname+ln-4,".nfo")!=0) continue;
+    if(scanTick(count))drawScanFrame(count);
+    String fn=fi->fname;
+    if(getDiskNumber(fn)>1){ g_fw_nfo_skip++; continue; }
+    bool grow=g_nfoharvest.size()+1>=g_nfoharvest.capacity();
+    if(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)<g_fw_floor ||
+       (grow && heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)<g_nfoharvest.capacity()*2*sizeof(NfoRec)+65536)){ g_fw_nfo_budget++; continue; }
+    char nb[513]; int nr=0; uint32_t n=0;
+    if(g_fw_sec && fw_read_head(d,fi,g_fw_sec,512,&n)){ nr=(int)(n>512?512:n); memcpy(nb,g_fw_sec,nr); g_fw_nfo_raw++; }
+    else { String fp=pdir+"/"+fn; File e=SD_MMC.open(fp.c_str(),FILE_READ); if(e){ nr=e.read((uint8_t*)nb,512); if(nr<0)nr=0; e.close(); } g_fw_nfo_open++; }
+    nb[nr]=0; sideNoteNfo(fn,String(nb));
+  }
+  f_closedir(d); free(d); free(fi);
+}
+static void scanDirFast(const String& dir, std::vector<String>& out, const String& ext, int depth, int& count){
+  if(depth>5||g_fw_lowmem) return;                                  // safety cap against pathological trees
+  FF_DIR* d=(FF_DIR*)malloc(sizeof(FF_DIR)); FILINFO* fi=(FILINFO*)malloc(sizeof(FILINFO));
+  FF_DIR* d2=(FF_DIR*)malloc(sizeof(FF_DIR)); FILINFO* f2=(FILINFO*)malloc(sizeof(FILINFO));
+  String drv=String(g_fw_drv)+":";
+  if(!d||!fi||!d2||!f2||f_opendir(d,(drv+dir).c_str())!=FR_OK){ free(d);free(fi);free(d2);free(f2); return; }
+  while(!g_fw_lowmem && f_readdir(d,fi)==FR_OK && fi->fname[0]){
+    String en=dir+"/"+fi->fname;
+    if(fi->fattrib&AM_DIR){
+      {String leaf=fi->fname;leaf.toUpperCase(); if(leaf=="SAMPLE"||leaf.startsWith("."))continue;}   // skip SAMPLE + dot-folders at every level
+      size_t _imgs0=out.size()+g_fw_xtra;                           // lab14d: counted-only images count too
+      if(f_opendir(d2,(drv+en).c_str())==FR_OK){
+        while(f_readdir(d2,f2)==FR_OK && f2->fname[0]){
+          if(!g_fw_countonly&&!fwMemOk(out.size(),out.capacity())){ if(!g_fw_cutdir.length())g_fw_cutdir=en; if(g_liblimit) g_fw_countonly=true; else { g_fw_lowmem=true; break; } }   // lab14i: remember the cut folder
+          fwEntry(en,d2,f2,out,ext,count);
+        }
+        f_closedir(d2);
+      }
+      if(g_fw_lowmem) break;
+      if(out.size()+g_fw_xtra==_imgs0){                              // image-less folder = organisational
+        if(g_categories&&(g_libpath.length()==0||g_nesting)){ g_cats.push_back(String(fi->fname)); }
+        else scanDirFast(en,out,ext,depth+1,count);                  // recurse-and-flatten
+      }
+    } else {
+      if(!g_fw_countonly&&!fwMemOk(out.size(),out.capacity())){ if(!g_fw_cutdir.length())g_fw_cutdir=dir; if(g_liblimit) g_fw_countonly=true; else { g_fw_lowmem=true; break; } }   // lab14i: remember the cut folder
+      fwEntry(dir,d,fi,out,ext,count);
+    }
+  }
+  f_closedir(d); free(d);free(fi);free(d2);free(f2);
+}
 // Recurse the mode tree collecting disk images into `out` (flattened). A folder with
 // NO direct disk images is an ORGANISATIONAL folder: in Categories mode it becomes a
 // browsable bucket (g_cats); otherwise we recurse into it so games nested under
@@ -1234,13 +1423,14 @@ static void scanDirInto(const String& dir, std::vector<String>& out, const Strin
       {String leaf=en;int sl2=leaf.lastIndexOf('/');if(sl2>=0)leaf=leaf.substring(sl2+1);leaf.toUpperCase();
        if(leaf=="SAMPLE"||leaf.startsWith(".")){gd.close();continue;}}   // skip SAMPLE + dot-folders at every level
       size_t _imgs0=out.size();
-      File e;while((e=gd.openNextFile())){String fn=e.name();int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
+      File e;while((e=gd.openNextFile())){String fn=e.name();int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);if(fn.startsWith("._")){e.close();continue;}String u=fn;u.toUpperCase();   // lab14h: skip macOS "._" files
       if(scanTick(count))drawScanFrame(count);   // every entry: a folder of 2000 covers must not look hung
       if(isCoverExtU(u)){String ap=en+"/"+fn;if(!ap.startsWith("/"))ap="/"+ap;ap.toLowerCase();g_coverset.push_back(coverHash(ap));}
       if(u.endsWith(".NFO")){char _nb[513];int _nr=e.read((uint8_t*)_nb,512);if(_nr<0)_nr=0;_nb[_nr]=0;sideNoteNfo(fn,String(_nb));e.close();continue;}   // 5.9.31-lab1: read the blurb while the handle is open (no extra dir-scan)
       if(u.endsWith(".RTFM")){g_manualset.push_back(sideKey(fn));e.close();continue;}
       if(u.indexOf(".SAV.")>=0){
         if(u.endsWith(".TMP")){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;SD_MMC.remove(fp);}
+        else{String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;savSetNoteWalk(fp);}   // lab14i
         e.close();continue;}
       if(g_mode==MODE_GEN?isGenImage(u):(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ"))){String fp=en+"/"+fn;if(!fp.startsWith("/"))fp="/"+fp;out.push_back(fp);count++;
         if((uint32_t)e.size()>HD_FLAG_BYTES)g_hdset.push_back(sideKey(fn));   // 5.9.31-lab1: HD flag straight off the directory entry — isHDImage's stat() was a whole walk
@@ -1253,23 +1443,120 @@ static void scanDirInto(const String& dir, std::vector<String>& out, const Strin
         }
       }
     }
-    else{String fn=en;int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);String u=fn;u.toUpperCase();
+    else{String fn=en;int sl=fn.lastIndexOf('/');if(sl>=0)fn=fn.substring(sl+1);if(fn.startsWith("._")){gd.close();continue;}String u=fn;u.toUpperCase();   // lab14h
       if(scanTick(count))drawScanFrame(count);   // per entry, as above
       if(isCoverExtU(u)){String ap=en;ap.toLowerCase();g_coverset.push_back(coverHash(ap));}
       if(u.endsWith(".NFO")){char _nb[513];int _nr=gd.read((uint8_t*)_nb,512);if(_nr<0)_nr=0;_nb[_nr]=0;sideNoteNfo(fn,String(_nb));gd.close();continue;}
       if(u.endsWith(".RTFM")){g_manualset.push_back(sideKey(fn));gd.close();continue;}
       if(u.indexOf(".SAV.")>=0){
         if(u.endsWith(".TMP"))SD_MMC.remove(en);
+        else{String fp=en;if(!fp.startsWith("/"))fp="/"+fp;savSetNoteWalk(fp);}   // lab14i
         gd.close();continue;}
       if(g_mode==MODE_GEN?isGenImage(u):(u.endsWith(ext)||u.endsWith(".IMG")||u.endsWith(".ADZ"))){out.push_back(en);count++;
         if((uint32_t)gd.size()>HD_FLAG_BYTES)g_hdset.push_back(sideKey(fn));}}
     gd.close();}
   root.close();
 }
+// ── 5.9.41-lab14d: LIBRARY TOO BIG ─────────────────────────────────────────
+// The card holds more games than this GTi's memory can list (with the RAM disk at its
+// configured size). Say so loudly, change nothing, write a report to the card, and offer
+// SD ACCESS so it can be trimmed from a PC. Never returns: SD ACCESS or RESCAN restart.
+static void capReport(const std::vector<String>& files,uint32_t images,uint32_t games,uint32_t fit,uint32_t pct){
+  const bool atLeast=false;
+  std::vector<std::pair<String,int>> per;                 // disk images per top-level folder (listed + counted-only)
+  auto add=[&per](const String& top,int n){ for(auto&p:per) if(p.first==top){p.second+=n;return;} per.push_back({top,n}); };
+  for(const auto& f: files){ int a=f.indexOf('/',1); int b=a>=0?f.indexOf('/',a+1):-1; String top=(a>=0&&b>a)?f.substring(a+1,b):String("(top level)");
+    if(!per.empty()&&per.back().first==top) per.back().second++; else add(top,1); }
+  for(auto&x:g_fw_xtra_per) add(x.first,(int)x.second);
+  File r=SD_MMC.open("/GTI_CAPACITY.TXT",FILE_WRITE); if(!r) return;
+  r.printf("GTi library capacity report - %s\r\n\r\n",FW_VERSION);
+  r.printf("Your card         : %s%u games (%u disk images)\r\n",atLeast?"at least ":"",(unsigned)games,(unsigned)images);
+  r.printf("GTi limit         : about %u games (with a %u KB disk buffer, BIGDISK=%s)\r\n",(unsigned)fit,(unsigned)g_img_max_kb,g_img_max_kb>DISK_IMG_DEF_KB?"ON":"OFF");
+  if(fit<games) r.printf("Over by           : about %u games (roughly %u disk images)\r\n",(unsigned)(games-fit),(unsigned)((uint64_t)images*(games-fit)/(games?games:1)));
+  r.printf("Memory needed     : %s%u%% of what this GTi has\r\n\r\n",atLeast?"over ":"",(unsigned)pct);
+  r.printf("Disk images per folder%s:\r\n",atLeast?" (the scan stopped early)":"");
+  for(auto&p:per) r.printf("  %-24s %6d\r\n",p.first.c_str(),p.second);
+  r.printf("\r\nOptions: move whole folders off the card (e.g. a second card for N-Z),\r\n");
+  r.printf("use a one-copy-per-title library (prep_library.py --mode library --1g1r),\r\n");
+  r.printf("or BIGDISK=OFF if it is ON (smaller disk buffer, more room for the list).\r\n");
+  r.printf("To load the first ~%u games instead of stopping, add LIBLIMIT=OFF to CONFIG.TXT.\r\n",(unsigned)fit);
+  r.close();
+}
+// lab14e: one flashing halt screen for LIBRARY TOO BIG and LIBRARY LOAD CRASHED. `nt` lines are
+// a left-aligned table (so the colons line up), the rest centred. SD ACCESS on the left; the
+// right button (RESCAN / TRY AGAIN) restarts. Never returns.
+static void haltScreen(const char* title,const String* lines,int nl,int nt,const char* b2){
+  const int bw=150,bh=40,by=gH-bh-10,b1x=gW/2-bw-10,b2x=gW/2+10;
+  bool on=false; uint32_t t=0; int pressed=0,rel=0;
+  for(;;){
+    if(millis()-t>450){ t=millis(); on=!on;
+      uint16_t bg=0x0000, fr=on?(uint16_t)0xF800:(uint16_t)0x6000;
+      gfx_fillScreen(bg); for(int k=0;k<6;k++) gfx_drawRect(k,k,gW-2*k,gH-2*k,fr);
+      gfx_setTextSize(3);gfx_setTextColor(on?(uint16_t)0xF800:(uint16_t)0xFFFF,bg);
+      gfx_setCursor((gW-gfx_textWidth(title))/2,18);gfx_print(title);
+      gfx_setTextSize(1);
+      int tw=0; for(int i=0;i<nt;i++){ int w=gfx_textWidth(lines[i].c_str()); if(w>tw)tw=w; }
+      int y=62;
+      for(int i=0;i<nl;i++){
+        gfx_setTextColor(i<nt?(uint16_t)0xFFE0:(uint16_t)0xFFFF,bg);
+        gfx_setCursor(i<nt?(gW-tw)/2:(gW-gfx_textWidth(lines[i].c_str()))/2,y); gfx_print(lines[i].c_str());
+        y+=(i==nt-1)?22:16;
+      }
+      gfx_fillRoundRect(b1x,by,bw,bh,8,(uint16_t)0x05FF); gfx_setTextSize(2); gfx_setTextColor(0x0000,(uint16_t)0x05FF);
+      {const char*s="SD ACCESS";gfx_setCursor(b1x+(bw-gfx_textWidth(s))/2,by+12);gfx_print(s);}
+      gfx_fillRoundRect(b2x,by,bw,bh,8,(uint16_t)0x4208); gfx_setTextColor(0xFFFF,(uint16_t)0x4208);
+      gfx_setCursor(b2x+(bw-gfx_textWidth(b2))/2,by+12);gfx_print(b2);
+      gfx_flush();
+    }
+    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){ rel=0; if(!pressed){ pressed=1;
+      if(ty>=by&&ty<by+bh){
+        if(tx>=b1x&&tx<b1x+bw){ gfx_fillScreen(0x0000); g_sdaccess_magic=SDACCESS_MAGIC; delay(300); ESP.restart(); }
+        if(tx>=b2x&&tx<b2x+bw){ gfx_fillScreen(0x0000); g_cap_magic=0; delay(300); ESP.restart(); } } } }
+    else if(pressed&&++rel>=3) pressed=0;
+    delay(30);
+  }
+}
+static void libTooBig(const std::vector<String>& files,uint32_t images,uint32_t games,uint32_t fit,uint32_t pct){
+  gLog("[capacity] TOO BIG: %u images, %u games, fits ~%u games, %u%% - halted\n",(unsigned)images,(unsigned)games,(unsigned)fit,(unsigned)pct);
+  capReport(files,images,games,fit,pct);
+  g_cap_magic=CAP_MAGIC; g_cap_images=images; g_cap_games=games; g_cap_fit=fit; g_cap_pct=pct; g_cap_atleast=0;
+  // lab14e: "This GTi can list about N" sat right under the card's total and read as the
+  // card's own count. Label both, and say how far over it is.
+  String L[6];
+  L[0]=String("Your card : ")+String(games)+" games ("+String((unsigned)images)+" disk images)";
+  L[1]=String("GTi limit : about ")+String(fit)+" games";
+  L[2]=String("Over by   : about ")+String(games>fit?games-fit:0)+" games (needs "+String(pct)+"% of memory)";
+  L[3]="Nothing on the card was changed.";
+  L[4]="Remove games or split the card, then RESCAN.";
+  L[5]="Details: GTI_CAPACITY.TXT on the card";
+  haltScreen("LIBRARY TOO BIG",L,6,3,"RESCAN");
+}
+// lab14e: the last boot panicked while building the library. Don't try again on our own (that
+// was the reboot loop) - say what happened and let the user choose.
+static void libCrashed(){
+  gLog("[crash] library load crashed last boot - halted instead of retrying\n");
+  String L[6];
+  L[0]=String("Died in   : ")+bcName(g_bc_prev.stage);
+  L[1]=String("Working on: ")+String(g_bc_prev.n)+(g_bc_prev.stage==BC_THUMBS?" games":" items");
+  L[2]=String("Free then : ")+String(g_bc_prev.psram/1024)+" KB PSRAM, "+String(g_bc_prev.intr/1024)+" KB internal";
+  L[3]="The last boot crashed while loading the library.";
+  L[4]="Nothing on the card was changed. Details: GTI/gti.log";
+  L[5]="TRY AGAIN, or SD ACCESS to make the library smaller.";
+  haltScreen("LOAD CRASHED",L,6,3,"TRY AGAIN");
+}
+static void showCardTooBig(int count){
+  gfx_setTextSize(1);gfx_setTextColor(0xFD20,0x1082);
+  {const char*s="LIBRARY TOO BIG FOR THIS GTi";int tw=gfx_textWidth(s);gfx_fillRect(0,gH/2+60,gW,32,0x1082);gfx_setCursor((gW-tw)/2,gH/2+64);gfx_print(s);}
+  {String s2="loading the first "+String(count)+" disk images - the rest are left out";int tw=gfx_textWidth(s2.c_str());gfx_setCursor((gW-tw)/2,gH/2+78);gfx_print(s2.c_str());}
+  gfx_flush();delay(4000);
+}
 static std::vector<String> scanImagesAnimated(){
   std::vector<String>out;out.reserve(4096);   // scan-fix: no vector-growth copy-storm on big cards
   g_coverset.clear();g_coverset.reserve(4096);g_cats.clear();
+  fwLocFree(); g_fw_fs=nullptr; g_fw_fsid=0;         // lab14f: fresh walk, fresh locations
   g_nfoharvest.clear();g_manualset.clear();g_hdset.clear();g_sidecars_harvested=false;   // 5.9.31-lab1
+  g_savset.clear(); g_savset_ok=false;   // lab14i: fresh walk, fresh save list
   String dir=g_mode==MODE_ADF?"/ADF":g_mode==MODE_DSK?"/DSK":"/GENERIC";if(g_categories&&g_libpath.length())dir+=g_libpath;String ext=g_mode==MODE_ADF?".ADF":".DSK";
   // Draw the scan screen ONCE, here. drawScanFrame() then only repaints the
   // counter, so a RESCAN gets immediate feedback without a second full paint.
@@ -1282,19 +1569,97 @@ static std::vector<String> scanImagesAnimated(){
   gfx_flush();
   g_scan_painted=true; g_scan_lastdraw=millis(); g_scan_lastcount=-1;   // reset per scan, so RESCAN works too
   int count=0;
-  scanDirInto(dir,out,ext,0,count);
+  // 5.9.41-lab14: one-pass FatFs walker when the card's FatFs drive is found, else the old one.
+  g_fw_nfo_raw=g_fw_nfo_open=g_fw_nfo_skip=g_fw_entries=0; g_fw_lowmem=false;
+  g_fw_disk2=g_fw_nfo_budget=0; g_fw_nfodirs.clear(); g_fw_pass=1; g_fw_nfo1=0;
+  g_fw_countonly=false; g_fw_cutdir=""; g_fw_xtra=g_fw_xtra2=0; g_fw_xtra_per.clear(); g_fw_xkeys.clear(); g_fw_xsingles=0;
+  // lab14d: what the library may use = PSRAM free now minus the RAM disk at its configured size
+  // (the BIGDISK size, allocated after the scan) and ~1 MB for cover tiles/UI.
+  const size_t _cap_psram0=heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+  // lab14e: the same budget whether LIBLIMIT is on or off. lab14d gave OFF a thin 1.5 MB margin
+  // that ignored the 2.9 MB RAM disk, so OFF ran the board at 99% and panicked. Now OFF simply
+  // loads what the halt screen says fits. The RAM disk is normally already allocated (setup does
+  // it first); if not, its size is held back here too.
+  g_fw_rt_reserve = (size_t)LIB_RUNTIME_RESERVE + (g_disk ? 0u : (size_t)g_img_max_kb*1024u);
+  g_fw_nfodir_skip=0;
+  bcSet(BC_SCAN,0);
+  uint32_t _fw_t0=millis();
+  if(g_fastscan && g_fw_drv==-2) g_fw_drv=fwFindDrive(dir);
+  if(g_fastscan && g_fw_drv>=0 && !g_fw_sec) g_fw_sec=(uint8_t*)heap_caps_malloc(512,MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+  bool _fw_fast=g_fastscan && g_fw_drv>=0;
+  uint32_t _fw_t1=0;
+  if(_fw_fast){
+    scanDirFast(dir,out,ext,0,count);                        // pass 1: every disk image
+    _fw_t1=millis();
+    // What grouping + UI will need for exactly these images. If the walk's estimate was
+    // optimistic (a library with more games per image), drop images from the END of the walk
+    // until it fits - a shorter list beats a crash in buildGameList.
+    size_t games=fwCountGames(out);
+    size_t freeP=heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    { // lab14d: capacity. core = file list (measured) + grouping; blurbs are optional extras.
+      size_t budget=_cap_psram0>g_fw_rt_reserve?_cap_psram0-g_fw_rt_reserve:1;
+      size_t listed=_cap_psram0>freeP?_cap_psram0-freeP:0;
+      size_t imgs=out.size()+g_fw_xtra;                              // whole card (listed + counted-only)
+      size_t gamesAll=games;
+      if(g_fw_xtra){ std::sort(g_fw_xkeys.begin(),g_fw_xkeys.end()); gamesAll+=g_fw_xsingles+(size_t)(std::unique(g_fw_xkeys.begin(),g_fw_xkeys.end())-g_fw_xkeys.begin()); std::vector<uint64_t>().swap(g_fw_xkeys); }
+      size_t listedAll=out.empty()?0:(size_t)((uint64_t)listed*imgs/out.size());   // list bytes scaled to the whole card
+      size_t core=listedAll+imgs*24+gamesAll*180, full=core+(size_t)g_fw_nfo1*175;
+      uint32_t pctCore=(uint32_t)((uint64_t)core*100/budget), pctFull=(uint32_t)((uint64_t)full*100/budget);
+      uint32_t fit=gamesAll?(uint32_t)((uint64_t)gamesAll*budget/(core?core:1)):0;
+      gLog("[capacity] %u images, %u games, %u blurbs: list %u%% (+blurbs %u%%) of %u KB, fits ~%u games%s\n",(unsigned)imgs,(unsigned)gamesAll,(unsigned)g_fw_nfo1,
+           (unsigned)pctCore,(unsigned)pctFull,(unsigned)(budget/1024),(unsigned)fit,g_fw_countonly?" (list full - rest counted)":"");
+      if(g_liblimit && (g_fw_countonly||pctCore>100)) libTooBig(out,(uint32_t)imgs,(uint32_t)gamesAll,fit,pctCore);   // never returns
+      if(g_liblimit){                                   // fits: show the meter on the scan screen
+        uint16_t c=pctFull<85?(uint16_t)0x07E0:(pctFull<=100?(uint16_t)0xFD20:(uint16_t)0xFD20);
+        String m="Library: "+String((unsigned)games)+" games - memory "+String(pctFull>100?pctCore:pctFull)+"%";
+        if(pctFull>100) m+=" (some descriptions skipped)";
+        gfx_setTextSize(1);gfx_setTextColor(c,0x1082);gfx_fillRect(0,gH/2+58,gW,12,0x1082);
+        gfx_setCursor((gW-gfx_textWidth(m.c_str()))/2,gH/2+60);gfx_print(m.c_str());gfx_flush();
+      }
+      g_cap_magic=0;
+    }
+    if(!out.empty() && freeP<fwNeedAfter(out.size(),games)){
+      size_t n=out.size(); double gpf=(double)games/n;          // games per image
+      double fit=((double)freeP+n*112.0-(double)g_fw_rt_reserve)/(112.0+24.0+180.0*gpf);   // lab14e: same reserve as the budget
+      size_t keep=fit<0?0:(size_t)fit; if(keep<n){ out.resize(keep); count=(int)keep; g_fw_lowmem=true; games=fwCountGames(out); }
+    }
+    g_fw_floor=fwNeedAfter(out.size(),games);                // pass 2 keeps this much PSRAM free
+    g_fw_pass=2; bcSet(BC_BLURBS,(uint32_t)out.size());
+    for(size_t i=0;i<g_fw_nfodirs.size();i++){                     // pass 2: blurbs within budget
+      // lab14e: on a card this full pass 2 spent 24 s reading 18,000 .nfo heads only to drop every
+      // one for memory. Once there's no room left, stop opening folders.
+      if(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)<g_fw_floor+64u*1024u){ g_fw_nfodir_skip=(uint32_t)(g_fw_nfodirs.size()-i); break; }
+      fwNfoDir(g_fw_nfodirs[i],count);
+    }
+    g_fw_pass=1; std::vector<String>().swap(g_fw_nfodirs);
+  }
+  else scanDirInto(dir,out,ext,0,count);
+  gLog("[scan] %s walker drv=%d: %u entries, %d images (%u are disk 2+) in %lums (blurbs %lums) | nfo raw=%u open=%u skipped(disk2+)=%u dropped(memory)=%u dirs-skipped=%u | psram=%u floor=%u int=%u%s\n",
+       _fw_fast?"two-pass":"legacy",g_fw_drv,(unsigned)g_fw_entries,count,(unsigned)g_fw_disk2,(unsigned long)(millis()-_fw_t0),(unsigned long)(_fw_t1?millis()-_fw_t1:0),
+       (unsigned)g_fw_nfo_raw,(unsigned)g_fw_nfo_open,(unsigned)g_fw_nfo_skip,(unsigned)g_fw_nfo_budget,(unsigned)g_fw_nfodir_skip,(unsigned)ESP.getFreePsram(),(unsigned)g_fw_floor,
+       (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),g_fw_lowmem?" | TRIMMED: library too big, loaded what fits":"");
   std::sort(g_coverset.begin(),g_coverset.end());   // 5.8.8: sorted for binary_search
+  std::sort(g_coverloc.begin(),g_coverloc.end(),[](const FwLoc&a,const FwLoc&b){return a.h<b.h;}); g_coverloc.shrink_to_fit();   // lab14f
   std::sort(g_manualset.begin(),g_manualset.end());
   std::sort(g_hdset.begin(),g_hdset.end());
   std::sort(g_nfoharvest.begin(),g_nfoharvest.end(),[](const NfoRec&a,const NfoRec&b){return a.k<b.k;});
+  g_nfoharvest.shrink_to_fit(); g_coverset.shrink_to_fit(); g_hdset.shrink_to_fit(); g_manualset.shrink_to_fit();   // lab14b: drop vector slack before grouping
   g_sidecars_harvested=true;   // 5.9.31-lab1: tree walked -> harvest authoritative (an empty set means genuinely none, not "unknown")
+  std::sort(g_savset.begin(),g_savset.end()); g_savset.erase(std::unique(g_savset.begin(),g_savset.end()),g_savset.end());   // lab14i
+  g_savset_ok=true; g_savset_cutdir=g_fw_cutdir;
+  if(!(g_categories&&g_libpath.length())) savSetWrite();   // lab14i: top level only (a category level holds only its own saves)
   // Final count
   drawScanFrame(count);delay(500);
-  std::sort(out.begin(),out.end());return out;
+  if(g_fw_lowmem) showCardTooBig(count);            // 5.9.41-lab14: say so instead of crashing later
+  std::sort(out.begin(),out.end());out.shrink_to_fit();return out;   // lab14b: no doubling slack (up to 0.5 MB at 33k)
 }
 
+static String gameCachePath();   // fwd (lab14b)
 static bool listImages(fs::FS&fs,std::vector<String>&out){
-  if(readIndexCache(out))return!out.empty();
+  // lab14b: the .index alone is not enough. Without a .gamecache the game list is rebuilt, and
+  // that needs this boot's walk harvest (covers, blurbs, HD) - otherwise every game falls back to
+  // per-game SD_MMC.exists() probes (hours on a big card). The one-pass walk is cheap; do it.
+  if(SD_MMC.exists(gameCachePath().c_str())&&readIndexCache(out)){savSetLoad();return!out.empty();}   // lab14i: no walk -> the save list from the card
   out=scanImagesAnimated();writeIndexCache(out);return!out.empty();
 }
 
@@ -1420,6 +1785,15 @@ static const uint8_t SAMPLE_JPG[] PROGMEM = {
   0,0,0,0,0,0,0,0,0,0,255,217
 };
 
+// lab14o: write data that lives in the firmware's FLASH (string constants, PROGMEM arrays) via a RAM copy.
+// Handed straight to the card, a flash pointer reaches the SD driver's DMA path: the driver only asks
+// "is this PSRAM?" (no), assumes internal RAM and DMAs from an address it cannot read - the card gets
+// garbage. That is why every freshly written CONFIG.TXT had its first 4 KB blank (stdio passes 4 KB
+// chunks straight through). The SD guard now catches this too; this keeps it right without the guard.
+static void sdWriteFromFlash(File& f,const uint8_t* p,size_t n){
+  uint8_t tmp[256];
+  for(size_t o=0;o<n;o+=sizeof(tmp)){ size_t k=(n-o<sizeof(tmp))?(n-o):sizeof(tmp); memcpy(tmp,p+o,k); f.write(tmp,k); }
+}
 static void ensureSampleFolder(){
   if(SD_MMC.exists("/ADF/SAMPLE"))return;
   SD_MMC.mkdir("/ADF/SAMPLE");
@@ -1450,7 +1824,7 @@ static void ensureSampleFolder(){
     "Multi-disk games: YourGame-1.adf, YourGame-2.adf, ...\r\n"
     "Same pattern applies in /DSK for .dsk images.\r\n");f.close();}
   f=SD_MMC.open("/ADF/SAMPLE/Sample.jpg",FILE_WRITE);
-  if(f){f.write(SAMPLE_JPG,sizeof(SAMPLE_JPG));f.close();}
+  if(f){sdWriteFromFlash(f,SAMPLE_JPG,sizeof(SAMPLE_JPG));f.close();}   // lab14o: via RAM
   // v4.9.4: a self-documenting manual — the reader opened by the book button explains itself.
   f=SD_MMC.open("/ADF/SAMPLE/Sample.rtfm",FILE_WRITE);
   if(f){f.print(
@@ -1534,8 +1908,9 @@ static int getDiskNumber(const String&fp){String b=basenameNoExt(filenameOnly(fp
   int d=b.lastIndexOf('-');if(d>0){int n=b.substring(d+1).toInt();if(n>0)return n;}return 0;}
 
 static bool findInDir(const String&dir,const String&target,String&out){
-  String tgt=target;tgt.toLowerCase();File d=SD_MMC.open(dir.c_str());if(!d||!d.isDirectory())return false;
-  File f;while((f=d.openNextFile())){if(!f.isDirectory()){String nm=f.name();int sl=nm.lastIndexOf('/');if(sl>=0)nm=nm.substring(sl+1);String nl=nm;nl.toLowerCase();if(nl==tgt){out=dir+"/"+nm;f.close();d.close();return true;}}f.close();}d.close();return false;
+  // lab14i: FAT name lookups ignore case, so ONE by-name lookup answers this. The old loop opened every
+  // file in the folder (openNextFile = a stat and an open per entry) - minutes in a 2,000-file folder.
+  String c=dir+"/"+target; if(SD_MMC.exists(c.c_str())){ out=c; return true; } return false;
 }
 static bool findNFOFor(const String&p,String&out){
   String b=basenameNoExt(filenameOnly(p)),d=parentDir(p),gb=getGameBaseName(p);
@@ -1550,7 +1925,7 @@ static bool findJPGFor(const String&p,String&out){ if(!g_covers_on){out="";retur
   String stems[3];int ns=0;stems[ns++]=b;if(gb!=b)stems[ns++]=gb;
   String folderName=d;{int ls=folderName.lastIndexOf('/');if(ls>0)folderName=folderName.substring(ls+1);}
   if(folderName.length()&&folderName!=b&&folderName!=gb)stems[ns++]=folderName;
-  bool harvested=!g_coverset.empty();   // set populated by the scan? then it's authoritative — zero card I/O
+  bool harvested=g_sidecars_harvested||!g_coverset.empty();   // walked this boot (lab14: even if it found NO covers) or set populated -> authoritative, zero card I/O
   for(int si=0;si<ns;si++)for(auto e:exts){String c=d+"/"+stems[si]+e;
     if(harvested){String cl=c;cl.toLowerCase();if(std::binary_search(g_coverset.begin(),g_coverset.end(),coverHash(cl))){out=c;return true;}}
     else if(SD_MMC.exists(c.c_str())){out=c;return true;}}   // fallback: lazy call with no harvest (warm-boot cover-less game)
@@ -1616,7 +1991,12 @@ static bool g_forceswap=false;  // ON = swap disk bytes in place without the USB
 static int g_info_x=0,g_info_w=150,g_info_bottom=0;
 static String g_manual_path=""; static int g_manual_bx=0,g_manual_by=0,g_manual_bw=0,g_manual_bh=0;  // v4.9.2 .rtfm book button rect
 struct GameEntry{String name;int first_file_idx;int disk_count;String jpg_path;std::vector<int>disk_indices;bool fav=false;uint16_t plays=0;bool cover_ok=false;String blurb;bool nfo_done=false;bool has_manual=false;bool is_hd=false;};   // 5.9.31-lab1: sidecar results cached in PSRAM (see .nfocache) so selecting a game costs ZERO directory walks
-static std::vector<String>g_files;static std::vector<GameEntry>g_games;
+// 5.9.41-lab14b: g_games is a deque, not a vector. At 15k games a vector needs ONE 1.2 MB block
+// (80 B x 15k); after tens of thousands of small String allocations PSRAM is too fragmented for
+// that even with 3 MB free, and the failed reserve/grow threw bad_alloc -> reboot loop (seen on the
+// 26 GB card: 15 boots, each dying in buildGameList with psram=2997416). A deque grows in 480 B
+// blocks. Same interface for everything here (index, size, push_back, sort, range-for).
+static std::vector<String>g_files;static std::deque<GameEntry>g_games;
 static int g_sel=0,g_scroll=0,g_disk_sel=0,g_loaded_game_idx=-1,g_loaded_disk_idx=-1;
 static int g_disk_page=0;  // current page of disk selector (6 disks/page)
 #define DISKS_PER_PAGE 6
@@ -1637,13 +2017,17 @@ static char bucketOf(const String&name){char c=toupper(name.charAt(0));return (c
 // ── Game cache — caches buildGameList output so NFO/JPG lookups only happen once ──
 static String gameCachePath(){return g_mode==MODE_ADF?"/ADF/.gamecache":g_mode==MODE_DSK?"/DSK/.gamecache":"/GENERIC/.gamecache";}
 
+// lab14i: a too-big library stops the walk part-way through one folder (g_fw_cutdir). Covers later in that
+// folder were never seen, so a "?" there is only a guess - it is saved as unknown and looked up when shown.
+static bool coverCutDir(int fileIdx){ return g_fw_cutdir.length() && fileIdx>=0 && fileIdx<(int)g_files.size() && parentDir(g_files[fileIdx]).equalsIgnoreCase(g_fw_cutdir); }
 static void writeGameCache(){ if(g_nocache)return;
   File f=SD_MMC.open(gameCachePath().c_str(),FILE_WRITE);if(!f)return;
   f.println("#V=590");                            // 5.9.0: bump invalidates pre-shard caches -> one clean rebuild into the bucketed .thumbs
   f.println("#FILES="+String(g_files.size()));  // bind to the index this was built from
+  if(g_covers_on)f.println("#NC=1");            // lab14i: a "?" below is a real "no cover" (found by a scan with covers on) - trusted until the next RESCAN
   for(auto&g:g_games){
     f.print(g.name);f.print("|");f.print(g.first_file_idx);f.print("|");
-    f.print(g.disk_count);f.print("|");f.print(g.jpg_path);f.print("|");
+    f.print(g.disk_count);f.print("|");f.print((g.jpg_path=="?"&&coverCutDir(g.first_file_idx))?String(""):g.jpg_path);f.print("|");
     for(int i=0;i<(int)g.disk_indices.size();i++){if(i>0)f.print(",");f.print(g.disk_indices[i]);}
     f.println();
   }
@@ -1651,14 +2035,15 @@ static void writeGameCache(){ if(g_nocache)return;
 }
 
 static bool readGameCache(){ if(g_nocache){g_games.clear();return false;}
-  g_games.clear();g_games.reserve(g_files.size());
+  g_games.clear(); bcSet(BC_CACHEREAD,(uint32_t)g_files.size());
   File f=SD_MMC.open(gameCachePath().c_str(),FILE_READ);
   if(!f){return false;}
-  long declaredFiles=-1; int cacheVer=-1;
+  long declaredFiles=-1; int cacheVer=-1; bool ncOk=false;   // lab14i: ncOk = this cache's "?" marks are real
   while(f.available()){
     String line=f.readStringUntil('\n');line.trim();if(!line.length())continue;
     if(line.startsWith("#V=")){cacheVer=line.substring(3).toInt();continue;}
     if(line.startsWith("#FILES=")){declaredFiles=line.substring(7).toInt();continue;}
+    if(line.startsWith("#NC=")){ncOk=(line.substring(4).toInt()==1);continue;}   // lab14i
     int p1=line.indexOf('|');if(p1<0)continue;
     int p2=line.indexOf('|',p1+1);if(p2<0)continue;
     int p3=line.indexOf('|',p2+1);if(p3<0)continue;
@@ -1668,7 +2053,7 @@ static bool readGameCache(){ if(g_nocache){g_games.clear();return false;}
     e.first_file_idx=line.substring(p1+1,p2).toInt();
     e.disk_count=line.substring(p2+1,p3).toInt();
     e.jpg_path=line.substring(p3+1,p4);
-    if(e.jpg_path=="?")e.jpg_path="";  // never trust a persisted sentinel
+    if(e.jpg_path=="?"&&!ncOk)e.jpg_path="";  // lab14i: an old cache's "?" is not trusted; a #NC=1 cache's is (until the next RESCAN) - a warm boot no longer re-searches the card for every cover-less game
     String indices=line.substring(p4+1);
     if(indices.length()){int pos=0;while(pos<(int)indices.length()){int comma=indices.indexOf(',',pos);if(comma<0)comma=indices.length();e.disk_indices.push_back(indices.substring(pos,comma).toInt());pos=comma+1;}}
     if(e.first_file_idx>=0&&e.first_file_idx<(int)g_files.size()) g_games.push_back(e);
@@ -1722,8 +2107,8 @@ static bool assignSidecarsFromHarvest(){
       auto it=std::lower_bound(g_nfoharvest.begin(),g_nfoharvest.end(),k,
                                [](const NfoRec&r,uint64_t kk){return r.k<kk;});
       if(it!=g_nfoharvest.end()&&it->k==k){
-        if(it->t.length()&&g.name==raw){ g.name=it->t; nameChanged=true; }
-        g.blurb=it->b; break;
+        if(it->t.length()&&g.name==raw){ g.name=std::move(it->t); nameChanged=true; }   // lab14b: move, not copy -
+        g.blurb=std::move(it->b); break;                                                // the harvest is freed right after
       }
       if(k2==k1) break;
     }
@@ -1735,32 +2120,76 @@ static bool assignSidecarsFromHarvest(){
   return nameChanged;
 }
 static void buildGameList(){
-  g_games.clear();g_games.reserve(g_files.size());   // scan-fix: no GameEntry copy-storm (2 Strings each)
+  g_games.clear();
   gLog("[buildGameList] files=%d int=%u psram=%u\n",(int)g_files.size(),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
-  std::vector<bool>used(g_files.size(),false);
-  for(int i=0;i<(int)g_files.size();i++){if(used[i])continue;
-    String bn=getGameBaseName(g_files[i]);int dn=getDiskNumber(g_files[i]);String dir=parentDir(g_files[i]);
-    GameEntry e;e.first_file_idx=i;e.disk_count=1;e.disk_indices.push_back(i);
-    if(dn>0){e.name=bn;for(int j=i+1;j<(int)g_files.size();j++){if(used[j])continue;if(parentDir(g_files[j])==dir&&getGameBaseName(g_files[j])==bn&&getDiskNumber(g_files[j])>0){used[j]=true;e.disk_count++;e.disk_indices.push_back(j);}}
-      // Sort disk_indices by disk number so D1,D2,D3 are in order
-      std::sort(e.disk_indices.begin(),e.disk_indices.end(),[](int a,int b){return getDiskNumber(g_files[a])<getDiskNumber(g_files[b]);});
-      // Point first_file_idx at the lowest-numbered disk (for cover/NFO lookup)
+  uint32_t _bg0=millis();
+  bcSet(BC_GROUP,(uint32_t)g_files.size());   // lab14e breadcrumb
+  // 5.9.41-lab14: group multi-disk sets by sorting a hashed (folder, game base) key instead
+  // of comparing every disk against every later file. That inner loop was O(n^2) String
+  // work: fine at 1,000 files, ~500 million compares at the 26 GB card's 33,000. Same
+  // games, same order and same disk order as before (representative = lowest index,
+  // members in index order, then std::sort by disk number exactly as the old code did).
+  // lab14b: if PSRAM still runs out while grouping (bad_alloc), don't reboot-loop: drop the last
+  // 15% of the images and try again, up to 6 times, and say so on screen.
+  bool _trimmed=false;
+  for(int attempt=0;;attempt++){
+    const int n=(int)g_files.size();
+    try{
+    std::vector<int> dnum(n);
+    std::vector<std::pair<uint64_t,int>> keyed;
+    for(int i=0;i<n;i++){ dnum[i]=getDiskNumber(g_files[i]); if(dnum[i]>0) keyed.push_back({0,i}); }
+    for(auto&k:keyed){ const String&f=g_files[k.second]; String key=parentDir(f)+"\x01"+getGameBaseName(f); k.first=coverHash(key); }
+    std::sort(keyed.begin(),keyed.end());
+    std::vector<int> grp(n,-1);                         // multi-disk member -> its representative's index
+    for(size_t a=0;a<keyed.size();){
+      size_t b=a; while(b<keyed.size()&&keyed[b].first==keyed[a].first) b++;
+      if(b-a==1){ grp[keyed[a].second]=keyed[a].second; }
+      else for(size_t x=a;x<b;x++){                      // equal hash: confirm with the real strings (collision-proof)
+        int ix=keyed[x].second; if(grp[ix]>=0) continue; grp[ix]=ix;
+        String dx=parentDir(g_files[ix]),bx=getGameBaseName(g_files[ix]);
+        for(size_t y=x+1;y<b;y++){ int iy=keyed[y].second; if(grp[iy]<0&&parentDir(g_files[iy])==dx&&getGameBaseName(g_files[iy])==bx) grp[iy]=ix; }
+      }
+      a=b;
+    }
+    std::vector<std::pair<uint64_t,int>>().swap(keyed);
+    for(int i=0;i<n;i++){
+      if(dnum[i]>0&&grp[i]!=i){ int gi=-(grp[grp[i]]+2); g_games[gi].disk_count++; g_games[gi].disk_indices.push_back(i); continue; }
+      GameEntry e;e.first_file_idx=i;e.disk_count=1;e.disk_indices.push_back(i);
+      e.name = dnum[i]>0 ? getGameBaseName(g_files[i]) : basenameNoExt(filenameOnly(g_files[i]));
+      if(dnum[i]>0) grp[i]=-((int)g_games.size()+2);  // representative now remembers its game index
+      // NO NFO/JPG lookups here — done lazily in drawCoverPanel
+      g_games.push_back(e);
+    }
+    for(auto&e:g_games){
+      if(dnum[e.first_file_idx]<=0) continue;
+      // Sort disk_indices by disk number so D1,D2,D3 are in order; first_file_idx -> lowest disk (cover/NFO lookup)
+      std::sort(e.disk_indices.begin(),e.disk_indices.end(),[&dnum](int a,int b){return dnum[a]<dnum[b];});
       e.first_file_idx=e.disk_indices[0];
     }
-    else e.name=basenameNoExt(filenameOnly(g_files[i]));
-    used[i]=true;
-    // NO NFO/JPG lookups here — done lazily in drawCoverPanel
-    g_games.push_back(e);
+    std::vector<int>().swap(dnum); std::vector<int>().swap(grp);
+      break;
+    }catch(...){
+      g_games.clear();
+      size_t keep=g_files.size()*85/100;
+      gLog("[buildGameList] OUT OF PSRAM grouping %d images (attempt %d) - keeping %u\n",n,attempt+1,(unsigned)keep);
+      if(attempt>=5||keep==0){ g_files.clear(); break; }
+      g_files.resize(keep); g_fw_lowmem=true; _trimmed=true;
+    }
   }
+  if(_trimmed){ writeIndexCache(g_files); showCardTooBig((int)g_files.size()); }   // the .index must match the list we kept
+  bcSet(BC_SIDECARS,(uint32_t)g_games.size());
   assignSidecarsFromHarvest();   // 5.9.31-lab1: adopt NFO titles BEFORE the sort so the list (and the A-Z buckets) order by the display name
-  std::sort(g_games.begin(),g_games.end(),[](const GameEntry&a,const GameEntry&b){String al=a.name,bl=b.name;al.toLowerCase();bl.toLowerCase();return al<bl;});
-  gLog("[buildGameList] done games=%d int=%u psram=%u\n",(int)g_games.size(),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
+  bcSet(BC_SORT,(uint32_t)g_games.size());
+  // lab14b: same order as lower-casing both names and comparing, without two String copies per compare
+  std::sort(g_games.begin(),g_games.end(),[](const GameEntry&a,const GameEntry&b){return strcasecmp(a.name.c_str(),b.name.c_str())<0;});
+  gLog("[buildGameList] done games=%d in %lums int=%u psram=%u\n",(int)g_games.size(),(unsigned long)(millis()-_bg0),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
+  bcSet(BC_CACHEWRITE,(uint32_t)g_games.size());
   if(g_libpath.length()==0)writeGameCache();   // v5.6.0: only cache the top level; category sub-levels scan fresh each time
 }
 // ── Per-game stats: favourites + play counts, keyed by name, survives RESCAN ──
-static String statsPath(){return "/.gtistats";}
+static String statsPath(bool forRead){return gtiStatePath(".gtistats",forRead);}   // lab14g: /GTI/.gtistats
 static void applyStats(){
-  File f=SD_MMC.open(statsPath().c_str(),FILE_READ);if(!f)return;
+  File f=SD_MMC.open(statsPath(true).c_str(),FILE_READ);if(!f)return;
   while(f.available()){String line=f.readStringUntil('\n');line.trim();if(!line.length())continue;
     int p1=line.indexOf('|');if(p1<0)continue;int p2=line.indexOf('|',p1+1);if(p2<0)continue;
     int fv=line.substring(0,p1).toInt();int pl=line.substring(p1+1,p2).toInt();String nm=line.substring(p2+1);
@@ -1769,13 +2198,13 @@ static void applyStats(){
 }
 static void saveStats(){
   std::vector<String>names;std::vector<int>favs,plays;
-  File f=SD_MMC.open(statsPath().c_str(),FILE_READ);
+  File f=SD_MMC.open(statsPath(true).c_str(),FILE_READ);
   if(f){while(f.available()){String line=f.readStringUntil('\n');line.trim();if(!line.length())continue;
     int p1=line.indexOf('|');if(p1<0)continue;int p2=line.indexOf('|',p1+1);if(p2<0)continue;
     names.push_back(line.substring(p2+1));favs.push_back(line.substring(0,p1).toInt());plays.push_back(line.substring(p1+1,p2).toInt());}f.close();}
   for(auto&g:g_games){if(!g.fav&&g.plays==0)continue;int idx=-1;for(size_t i=0;i<names.size();i++)if(names[i]==g.name){idx=(int)i;break;}
     if(idx<0){names.push_back(g.name);favs.push_back(g.fav?1:0);plays.push_back(g.plays);}else{favs[idx]=g.fav?1:0;plays[idx]=g.plays;}}
-  File w=SD_MMC.open(statsPath().c_str(),FILE_WRITE);if(!w)return;
+  File w=SD_MMC.open(statsPath(false).c_str(),FILE_WRITE);if(!w)return;
   for(size_t i=0;i<names.size();i++){if(favs[i]==0&&plays[i]==0)continue;w.print(favs[i]);w.print("|");w.print(plays[i]);w.print("|");w.println(names[i]);}
   w.close();
 }
@@ -1858,6 +2287,7 @@ static void applyFont(int f);   // defined with the layout section; used by load
 static void drawFullUI();
 static String savPathFor(const String&adfPath);   // v4.8.0 saves — defined with the save engine
 static bool savExistsFor(const String&adfPath);
+static bool savBadgeFor(const String&adfPath);   // lab14i: the badge (from the save list)
 static void drawListAndCover();
 static bool doLoadSelected(const String&p);
 static void doUnload();
@@ -1997,6 +2427,10 @@ COMPACT=OFF
 # BTNSTYLE: reel button style. PILL=rounded coloured buttons (default), FLAT=flat bar.
 BTNSTYLE=PILL
 
+# REELBORDER: frame drawn around each cover in the reel. ON=framed (default),
+#   OFF=clean/frameless look (the game you have loaded is still marked green).
+REELBORDER=ON
+
 # COVERMIN: hide covers whose short side is under N px (0 = show all) - keeps the reel + panel clean.
 COVERMIN=140
 
@@ -2020,6 +2454,10 @@ CRACKTRO=0
 # Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s
 LOOP=0
 
+# LASTUSED: ON = on power-up, jump the selection back to the game you last loaded.
+#   OFF (default) = always start at the top of the list.
+LASTUSED=OFF
+
 
 # ============================================================
 #  LIBRARY      how the game collection is organised
@@ -2031,6 +2469,11 @@ CATEGORIES=OFF
 
 # NESTING: OFF = categories are one level deep. ON = allow sub-categories (folders within category folders).
 NESTING=OFF
+
+# LIBLIMIT: ON (default) = if the card holds more games than this GTi can list, stop at boot with a
+#   LIBRARY TOO BIG screen and a GTI_CAPACITY.TXT report, so nothing is left out silently.
+#   OFF = load as many games as fit and leave the rest out.
+LIBLIMIT=ON
 
 
 # ============================================================
@@ -2055,6 +2498,13 @@ SAVES=COPY
 #   20 = safe default, works with every card.
 #   40 = ~1.7x faster reads if your card can hold it (auto-falls back to 20 if it can't mount).
 SDSPEED=20
+
+# BIGDISK: OFF (default) = 1.76 MB set aside for save-game write-back over the cable
+#   and for disks sent to a wireless dongle (an Amiga HD disk; the SuperMini's limit).
+#   ON = 2.9 MB, for large Atari ST .HFE images (saving to them, or sending them wirelessly).
+#   Loading any size over the cable works either way. ON costs ~1.1 MB of memory, so fewer
+#   games fit on a big card. Takes effect on the next boot. (Replaces DISKMAXKB.)
+BIGDISK=OFF
 
 
 # ============================================================
@@ -2132,11 +2582,46 @@ DAV_PATH=/
 # Language: EN, FR, IT, ES, DE, NL  (pull the SD and edit this line if you get stuck)
 LANG=EN
 
-# LOG: the /gti.log diagnostic log is ON by default.
+# LOG: the GTI/gti.log diagnostic log is ON by default.
 #      Uncomment the next line to turn it off.
 # LOG=OFF
+
+# DIAG-DISP: live diagnostic overlay box (FPS / free SRAM+PSRAM / uptime / CPU temp). ON or OFF.
+DIAGDISP=OFF
+
+# NOCACHE: ON = ignore every on-SD cache (.index .gamecache .nfocache micro .tnl).
+#   Nothing is deleted; caches are just not read or written. Everything is rebuilt every
+#   boot. Diagnostic/benchmark use only - leave OFF for normal running.
+NOCACHE=OFF
+
+# COVERS: OFF = no cover art at all (nothing decoded, letter placeholders instead).
+#   Diagnostic: isolates list and .nfo cost from cover-decode time.
+COVERS=ON
+
+# STRIPROWS: how many screen rows go to the panel per SPI burst (1-40, default 10).
+#   The push is 48 bursts at 10 rows, 12 at 40 - and each burst costs FLUSHUS below.
+#   Higher = faster screen updates. Drop it back if you see torn bands.
+STRIPROWS=10
+
+# FLUSHUS: microseconds to wait after each burst (0-5000, default 500).
+#   At the default that is 48 x 500us = 24ms of pure waiting in EVERY frame.
+#   0 is fastest; raise it if the picture tears.
+FLUSHUS=500
+
+# LISTTILE: ON (default) = the list's cover panel reuses the reel's cached 45KB
+#   thumbnail. OFF = re-decode the full JPEG on every selection change (the old way,
+#   and much slower on a big library). Same picture either way.
+LISTTILE=ON
+
+# REELPROF: ON = print a reel frame-time breakdown to GTI/gti.log every ~1.5s
+#   while the reel is on screen. Diagnostic only.
+REELPROF=OFF
+
+# DEVMODE: ON (default) = show the TEST TOOLS button in Settings (SD soak test, reel profiler,
+#   no-cache, diagnostic overlay). OFF = hide the button. Their CONFIG.TXT keys still work either way.
+DEVMODE=ON
 )CFG";
-  f.print(DEFAULT_CONFIG);
+  sdWriteFromFlash(f,(const uint8_t*)DEFAULT_CONFIG,sizeof(DEFAULT_CONFIG)-1);   // lab14o: via RAM (was f.print - first 4 KB came out blank)
   f.close();
 }
 
@@ -2160,9 +2645,11 @@ static void selfHealConfig(){
     {"COVERS",   "\n# COVERS: OFF = no cover art at all (nothing decoded, letter placeholders instead).\n#   Diagnostic: isolates list and .nfo cost from cover-decode time.\nCOVERS=ON\n"},
     {"STRIPROWS","\n# STRIPROWS: how many screen rows go to the panel per SPI burst (1-40, default 10).\n#   The push is 48 bursts at 10 rows, 12 at 40 - and each burst costs FLUSHUS below.\n#   Higher = faster screen updates. Drop it back if you see torn bands.\nSTRIPROWS=10\n"},
     {"FLUSHUS",  "# FLUSHUS: microseconds to wait after each burst (0-5000, default 500).\n#   At the default that is 48 x 500us = 24ms of pure waiting in EVERY frame.\n#   0 is fastest; raise it if the picture tears.\nFLUSHUS=500\n"},
-    {"DISKMAXKB","\n# DISKMAXKB: largest disk image the Gotek can be handed, in KB (1024-4096).\n#   2880 (default) = 3.5\" ED capacity - fits every ADF/ADZ/ST/IMG/DSK and most HFE.\n#   Atari ST .HFE stores the raw bitstream, so it can be much bigger than the\n#   floppy it came from; raise this if an HFE reports TOO BIG. Costs that much\n#   PSRAM for the whole session, so lower it on a card with thousands of games.\n#   Takes effect on the next boot.\nDISKMAXKB=2880\n"},
+    {"BIGDISK",  "\n# BIGDISK: OFF (default) = 1.76 MB set aside for save-game write-back over the cable\n#   and for disks sent to a wireless dongle (an Amiga HD disk; the SuperMini's limit).\n#   ON = 2.9 MB, for large Atari ST .HFE images (saving to them, or sending them wirelessly).\n#   Loading any size over the cable works either way. ON costs ~1.1 MB of memory, so fewer\n#   games fit on a big card. Takes effect on the next boot. (Replaces DISKMAXKB.)\nBIGDISK=OFF\n"},
+    {"LIBLIMIT", "\n# LIBLIMIT: ON (default) = if the card holds more games than this GTi can list, stop at boot with a\n#   LIBRARY TOO BIG screen and a GTI_CAPACITY.TXT report, so nothing is left out silently.\n#   OFF = load as many games as fit and leave the rest out.\nLIBLIMIT=ON\n"},
+    {"DEVMODE",  "\n# DEVMODE: ON (default) = show the TEST TOOLS button in Settings (SD soak test, reel profiler,\n#   no-cache, diagnostic overlay). OFF = hide the button. Their CONFIG.TXT keys still work either way.\nDEVMODE=ON\n"},
     {"LISTTILE", "\n# LISTTILE: ON (default) = the list's cover panel reuses the reel's cached 45KB\n#   thumbnail. OFF = re-decode the full JPEG on every selection change (the old way,\n#   and much slower on a big library). Same picture either way.\nLISTTILE=ON\n"},
-    {"REELPROF", "# REELPROF: ON = print a reel frame-time breakdown to /gti.log every ~1.5s\n#   while the reel is on screen. Diagnostic only.\nREELPROF=OFF\n"},
+    {"REELPROF", "# REELPROF: ON = print a reel frame-time breakdown to GTI/gti.log every ~1.5s\n#   while the reel is on screen. Diagnostic only.\nREELPROF=OFF\n"},
     {"REELBORDER","\n# REELBORDER: frame drawn around each cover in the reel. ON=framed (default),\n#   OFF=clean/frameless look (the game you have loaded is still marked green).\nREELBORDER=ON\n"},
     {"LASTUSED", "\n# LASTUSED: ON = on power-up, jump the selection back to the game you last loaded.\n#   OFF (default) = always start at the top of the list.\nLASTUSED=OFF\n"},
     {"FONT",     "\n# Font size: SMALL, NORMAL, LARGE\nFONT=NORMAL\n"},
@@ -2178,7 +2665,7 @@ static void selfHealConfig(){
     {"HOTSWAP",  "# HOTSWAP: ON = tapping another disk while loaded swaps to it instantly\nHOTSWAP=OFF\n"},
     {"FORCESWAP","# FORCESWAP: ON = swap disk contents without the USB eject/re-attach cycle\nFORCESWAP=OFF\n"},
     {"SAVES",    "\n# SAVES: save-game persistence. OFF = classic (lost on eject),\n# COPY = kept as GameName.sav.adf beside the master, OVERWRITE = patch the master.\nSAVES=COPY\n"},
-    {"SDSPEED",  "\n# SDSPEED: SD card clock. 20 = safe default, 40 = ~1.7x faster reads if your card holds it (auto-falls back to 20).\nSDSPEED=20\n"},
+    {"SDSPEED",  "\n# SDSPEED: SD card clock. 20 = default, 40 = ~1.7x faster reads if your card holds it (auto-falls back to 20), 10 = slow and careful.\nSDSPEED=20\n"},
     {"CATEGORIES","\n# CATEGORIES: OFF = flat library. ON = browse by category (a top-level folder with no disk images, only subfolders, is a category).\nCATEGORIES=OFF\n"},
     {"NESTING",  "# NESTING: OFF = one category level. ON = allow sub-categories (folders within category folders).\nNESTING=OFF\n"},
     {"SCREENSAVER","\n# SCREENSAVER: idle slideshow. ON = show it after a few minutes idle, OFF = never.\nSCREENSAVER=ON\n"},
@@ -2212,11 +2699,73 @@ static void selfHealConfig(){
   if(fw){fw.print(add);fw.close();}
 }
 
+// lab14g: the log and the GTi's small state files live in /GTI, not in the card's root. Every
+// log line rewrites the directory sector that holds the log's entry (its size and time live
+// there); on 25 Sep a bad read of the ROOT sector was written back that way and took the
+// library folder with it. A folder of its own keeps that sector away from ADF/DSK/GENERIC.
+#define GTI_DIR      "/GTI"
+#define GTI_LOG_PATH "/GTI/gti.log"
+static String gtiStatePath(const char* name,bool forRead){   // "/GTI/<name>"; reads fall back to the old root copy once
+  String np=String(GTI_DIR)+"/"+name;
+  if(forRead && !SD_MMC.exists(np.c_str())){ String op=String("/")+name; if(SD_MMC.exists(op.c_str())) return op; }
+  return np;
+}
 static bool g_log_enabled=true;   // 5.8.8 test build: /gti.log ON by default; LOG=OFF in CONFIG.TXT disables
 static void gLog(const char*fmt,...){
-  char buf[192]; va_list ap; va_start(ap,fmt); vsnprintf(buf,sizeof buf,fmt,ap); va_end(ap);
+  char buf[320]; va_list ap; va_start(ap,fmt); vsnprintf(buf,sizeof buf,fmt,ap); va_end(ap);   // lab14e: was 192 - the [scan] line was being cut off
   Serial.print(buf);
-  if(g_log_enabled){ File lf=SD_MMC.open("/gti.log",FILE_APPEND); if(lf){ lf.print(buf); lf.close(); } }
+  if(g_log_enabled){ File lf=SD_MMC.open(GTI_LOG_PATH,FILE_APPEND); if(lf){ lf.print(buf); lf.close(); } }
+}
+
+// ── lab14g: SD GUARD install (see gti_sdguard.h for the why) ──────────────────
+// The card's FatFs drive (pdrv) gets our checking driver; the real SD driver is registered a
+// second time on a spare drive slot and our driver calls it. Everything above FatFs - VFS,
+// SD_MMC, the one-pass walker - is untouched.
+static SdGuard g_sdg; static BYTE g_sdg_pdrv=0xFF, g_sdg_lower=0xFF;
+static bool g_sdguard_cfg=true;                  // SDGUARD=OFF (hidden): checks off, straight pass-through
+static bool g_sdpullup_cfg=true;                 // SDPULLUP=OFF (hidden): no internal pull-ups on CMD/D0
+struct SdmmcPeek : public fs::SDMMCFS { static sdmmc_card_t* card(fs::SDMMCFS& f){ return static_cast<SdmmcPeek&>(f)._card; } };
+static DRESULT sgLowRead(BYTE* b,LBA_t s,UINT c){ return disk_read(g_sdg_lower,b,s,c); }
+static DRESULT sgLowWrite(const BYTE* b,LBA_t s,UINT c){ return disk_write(g_sdg_lower,b,s,c); }
+static DSTATUS sgInit(BYTE){ return disk_initialize(g_sdg_lower); }
+static DSTATUS sgStatus(BYTE){ return disk_status(g_sdg_lower); }
+static DRESULT sgRead(BYTE,BYTE* b,LBA_t s,UINT c){ return sg_read(&g_sdg,b,s,c); }
+static DRESULT sgWrite(BYTE,const BYTE* b,LBA_t s,UINT c){ return sg_write(&g_sdg,b,s,c); }
+static DRESULT sgIoctl(BYTE,BYTE cmd,void* b){ return disk_ioctl(g_sdg_lower,cmd,b); }
+static const ff_diskio_impl_t g_sgImpl={sgInit,sgStatus,sgRead,sgWrite,sgIoctl};
+static bool sdGuardInstall(){
+  sdmmc_card_t* card=SdmmcPeek::card(SD_MMC); if(!card) return false;
+  BYTE p=ff_diskio_get_pdrv_card(card); if(p>=FF_VOLUMES) return false;
+  BYTE lower=0xFF; if(ff_diskio_get_drive(&lower)!=ESP_OK||lower>=FF_VOLUMES) return false;   // a free slot for the real driver
+  ff_diskio_register_sdmmc(lower,card);
+  FF_DIR* d=(FF_DIR*)malloc(sizeof(FF_DIR)); FATFS* fs=nullptr;
+  if(d){ char drv[4]={(char)('0'+p),':','/',0}; if(f_opendir(d,drv)==FR_OK){ fs=d->obj.fs; f_closedir(d); } free(d); }
+  if(!fs){ ff_diskio_unregister(lower); return false; }
+  memset(&g_sdg,0,sizeof g_sdg); g_sdg.fs=fs; g_sdg.lread=sgLowRead; g_sdg.lwrite=sgLowWrite; g_sdg.on=g_sdguard_cfg;
+  g_sdg_pdrv=p; g_sdg_lower=lower;
+  ff_diskio_register(p,&g_sgImpl);               // from here every FatFs transfer on the card goes through sg_read/sg_write
+  return true;
+}
+static void sdGuardRemove(){                     // before SD_MMC.end(): give the drive back to the plain driver
+  if(g_sdg_pdrv==0xFF) return;
+  ff_diskio_register_sdmmc(g_sdg_pdrv,SdmmcPeek::card(SD_MMC));
+  ff_diskio_unregister(g_sdg_lower);
+  g_sdg_pdrv=g_sdg_lower=0xFF; g_sdg.fs=nullptr;
+}
+static void sdPullups(){                          // CMD + D0 idle high between transfers (the board may have none)
+  if(g_sdpullup_cfg){ gpio_pullup_en((gpio_num_t)SD_CMD); gpio_pullup_en((gpio_num_t)SD_D0); }
+  else { gpio_pullup_dis((gpio_num_t)SD_CMD); gpio_pullup_dis((gpio_num_t)SD_D0); }
+}
+// Called from loop() and after big jobs: anything the guard caught goes to the log (the guard
+// itself can't log - logging is a card write that goes through the guard).
+static void sdGuardReport(bool always){
+  if(g_sdg_pdrv==0xFF) return;
+  if(!always && !g_sdg.pending_report) return;
+  g_sdg.pending_report=false;
+  gLog("[sdguard] %s | metadata reads %u writes %u | bad reads fixed %u, odd-but-consistent %u, unreadable %u | writes refused %u | write verify: fixed %u failed %u | last: sector %u shift %d bits, first bytes %02X %02X %02X %02X %02X %02X %02X %02X\n",
+       g_sdg.on?"ON":"OFF",(unsigned)g_sdg.meta_reads,(unsigned)g_sdg.meta_writes,(unsigned)g_sdg.reads_fixed,(unsigned)g_sdg.reads_odd,(unsigned)g_sdg.reads_failed,
+       (unsigned)g_sdg.writes_refused,(unsigned)g_sdg.verify_fixed,(unsigned)g_sdg.verify_failed,(unsigned)g_sdg.last_sector,g_sdg.last_shift,
+       g_sdg.last_bad[0],g_sdg.last_bad[1],g_sdg.last_bad[2],g_sdg.last_bad[3],g_sdg.last_bad[4],g_sdg.last_bad[5],g_sdg.last_bad[6],g_sdg.last_bad[7]);
 }
 static void loadConfig(){
   applyTheme(0);
@@ -2242,20 +2791,25 @@ static void loadConfig(){
     else if(k=="SSTIME"){uint32_t s=(uint32_t)v.toInt(); if(s<2)s=2; if(s>120)s=120; g_ss_time_ms=s*1000UL;}
     else if(k=="SSFAV"){g_ss_fav=(v!="OFF"&&v!="0");}
     else if(k=="CAP"){int c=v.toInt(); if(c>=1&&c<=64)g_dongle_cap=c;}
-    else if(k=="CRACKTRO"){String cu=v;cu.trim();cu.toUpperCase(); if(cu=="OFF"||cu=="NONE")g_cracktro=-1; else if(cu=="OMEGA"||cu=="OMEGAWARE")g_cracktro=7; else if(cu=="DENISE")g_cracktro=8; else if(cu=="WRANGLER")g_cracktro=9; else if(cu=="RETRONAUT")g_cracktro=10; else{int c=v.toInt(); if(c==666){g_doom_egg=true;g_cracktro=0;} /* lab13: hidden - random cracktro + Doom trigger */ else if(c>=0&&c<=7)g_cracktro=c; /* 7=OMEGAWARE; DENISE/WRANGLER/RETRONAUT are hidden, name-only */}}
+    else if(k=="CRACKTRO"){String cu=v;cu.trim();cu.toUpperCase(); if(cu=="OFF"||cu=="NONE")g_cracktro=-1; else if(cu=="OMEGA"||cu=="OMEGAWARE")g_cracktro=7; else if(cu=="DENISE")g_cracktro=8; else if(cu=="WRANGLER")g_cracktro=9; else if(cu=="RETRONAUT")g_cracktro=10; else{int c=v.toInt(); if(c>=0&&c<=7)g_cracktro=c; /* 7=OMEGAWARE; DENISE/WRANGLER/RETRONAUT are hidden, name-only */}}
     else if(k=="SAVES"){v.toUpperCase(); g_saves_mode=(v=="OVERWRITE")?2:(v=="OFF"||v=="0")?0:1;}
-    else if(k=="SDSPEED"){int hz=v.toInt(); g_sd_freq=(hz>=40||hz>=40000)?40000:20000;}
+    else if(k=="SDSPEED"){int hz=v.toInt(); g_sd_freq=(hz>=40||hz>=40000)?40000:(hz==10||hz==10000)?10000:20000;}   // lab14g: 10 = slow and careful
+    else if(k=="SDGUARD"){String nv=v;nv.toUpperCase();g_sdguard_cfg=!(nv=="OFF"||nv=="0"||nv=="FALSE");}     // lab14g (hidden)
+    else if(k=="SDPULLUP"){String nv=v;nv.toUpperCase();g_sdpullup_cfg=!(nv=="OFF"||nv=="0"||nv=="FALSE");}   // lab14g (hidden)
     else if(k=="LOG"){String lu=v;lu.toUpperCase();g_log_enabled=(lu!="OFF"&&lu!="0");}
     else if(k=="HIVEMIND"){g_hivemind=(v=="OFF"||v=="0")?0:1;}
     else if(k=="CATEGORIES"){String cv=v;cv.toUpperCase();g_categories=(cv=="ON"||cv=="1"||cv=="TRUE");}
     else if(k=="DIAGDISP"){String dv=v;dv.toUpperCase();g_diagdisp=(dv=="ON"||dv=="1"||dv=="TRUE");}
     else if(k=="NOCACHE"){String nv=v;nv.toUpperCase();g_nocache=(nv=="ON"||nv=="1"||nv=="TRUE");}
+    else if(k=="DEVMODE"){String dv=v;dv.toUpperCase();g_devmode=!(dv=="OFF"||dv=="0"||dv=="FALSE");}   // lab14p
+    else if(k=="LIBLIMIT"){String nv=v;nv.toUpperCase();g_liblimit=!(nv=="OFF"||nv=="0"||nv=="FALSE");}   // 5.9.41-lab14d (hidden): OFF = load what fits instead of halting
+    else if(k=="FASTSCAN"){String nv=v;nv.toUpperCase();g_fastscan=!(nv=="OFF"||nv=="0"||nv=="FALSE");}   // 5.9.41-lab14 (hidden): OFF = old per-entry walker
     else if(k=="COVERS"){String cv=v;cv.toUpperCase();g_covers_on=!(cv=="OFF"||cv=="0"||cv=="NO");}
     else if(k=="STRIPROWS"){int r=v.toInt(); if(r<1)r=1; if(r>g_strip_cap)r=g_strip_cap; g_strip_rows=r;}   // 5.9.33-lab3
     else if(k=="FLUSHUS"){int u=v.toInt(); if(u<0)u=0; if(u>5000)u=5000; g_flush_us=u;}                     // 5.9.33-lab3
     else if(k=="REELPROF"){String rv=v;rv.toUpperCase();g_reelprof=(rv=="ON"||rv=="1"||rv=="TRUE");}        // 5.9.33-lab3
     else if(k=="LISTTILE"){String lv=v;lv.toUpperCase();g_listtile=!(lv=="OFF"||lv=="0"||lv=="NO");}        // 5.9.34-lab4
-    else if(k=="DISKMAXKB"){long d=v.toInt(); if(d>0)g_img_max_kb=(uint32_t)d;}                             // 5.9.35 (applied at boot, before the RAM disk is allocated)
+    else if(k=="BIGDISK"){String bu=v;bu.trim();bu.toUpperCase(); if(!g_disk) g_img_max_kb=(bu=="ON"||bu=="1"||bu=="YES")?DISK_IMG_BIG_KB:DISK_IMG_DEF_KB;}   // lab14m: boot only (the RAM disk is sized once); DISKMAXKB= is no longer read
     else if(k=="REELBORDER"){String rv=v;rv.toUpperCase();g_reelborder=!(rv=="OFF"||rv=="0"||rv=="NO");}   // MasterTelly CR: default ON
     else if(k=="LASTUSED"){String lv=v;lv.toUpperCase();g_lastused=(lv=="ON"||lv=="1"||lv=="TRUE");}
     else if(k=="NESTING"){String nv=v;nv.toUpperCase();g_nesting=(nv=="ON"||nv=="1"||nv=="TRUE");}
@@ -2615,10 +3169,7 @@ static void drawCracktro(int style){
   unsigned long startMs=millis();
   gfx_fillScreen(TFT_BLACK);gfx_flush();
   while(true){
-    if(Touch_ReadFrame()){
-      uint16_t _tx=0,_ty=0; getTouchXY(&_tx,&_ty);
-      if(g_doom_egg && _tx<60 && _ty<60) doomLaunch();   // lab13: only returns if Doom could not start
-      unsigned long t0=millis();while(Touch_ReadFrame()&&millis()-t0<500)delay(10);break;}
+    if(Touch_ReadFrame()){unsigned long t0=millis();while(Touch_ReadFrame()&&millis()-t0<500)delay(10);break;}
     if(!g_loop_cracktro&&millis()-startMs>=6000)break;
     float t=(float)(millis()-startMs);
     if(omega)crkOmega(t);
@@ -2766,7 +3317,7 @@ static void drawCoverPanel(){
       {String mp;if(manualFor(_fp,mp))cachedManual=mp;}
       game.blurb=cachedNfoBlurb;game.has_manual=cachedManual.length()>0;game.is_hd=cachedHD;game.nfo_done=true;   // remember for the session even without a cache file
     }
-    cachedHasSav=(g_saves_mode==1)&&savExistsFor(_fp);}   // still a live check: saves are created at runtime
+    cachedHasSav=savBadgeFor(_fp);}   // lab14i: from the save list (kept current when the GTi writes a save) - no card lookup
   // Cover art
   gfx_fillRoundRect(COVER_ART_X,COVER_ART_Y,COVER_ART_W,COVER_ART_H,5,COL_BAR);
   gfx_drawRoundRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,6,COL_ACCENT);
@@ -2826,12 +3377,13 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_TESTPAGE, IA_TESTBACK };
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
 static InfoItem g_ii[32]; static int g_ii_n=0;
 struct InfoRect { int x,y,w,h; uint8_t act; };
 static InfoRect g_ir[20]; static int g_ir_n=0;
 static int g_info_page=0, g_info_pages=1;
+static bool g_info_test=false;   // lab14k: true = Settings is showing its TEST TOOLS sub-page
 static void drawInfoFull();   // paginated settings + INFO bottom bar + flush
 // v5.6.7: readable ink for a key's colour on the dim fill — dark key colours
 // (COL_BAR OFF-states, the dark-red RESET) get promoted to light grey so they
@@ -2848,6 +3400,14 @@ static void drawInfoPanel(){
   auto add=[&](const String&l,uint16_t bg,uint16_t fg,uint8_t act){
     if(g_ii_n>=32)return; strncpy(g_ii[g_ii_n].lbl,l.c_str(),31); g_ii[g_ii_n].lbl[31]=0;
     g_ii[g_ii_n].bg=bg; g_ii[g_ii_n].fg=fg; g_ii[g_ii_n].act=act; g_ii_n++; };
+  // lab14k: TEST TOOLS sub-page - the tools for testing the GTi itself, kept off the main Settings list.
+  if(g_info_test){
+    add("< BACK TO SETTINGS", COL_ACCENT, TFT_WHITE, IA_TESTBACK);
+    add("SD SOAK TEST", COL_BLUE, TFT_WHITE, IA_SDSOAK);   // lab14g: read-only SD reliability test -> GTI/gti.log
+    add(String("REEL PROF")+": "+(g_reelprof?T(L_ON):T(L_OFF)), g_reelprof?(uint16_t)0x8000:COL_BAR, g_reelprof?TFT_WHITE:COL_LIT, IA_REELPROF);   // 5.9.33-lab3 frame profiler -> gti.log
+    add(String("NO-CACHE")+": "+(g_nocache?T(L_ON):T(L_OFF)), g_nocache?(uint16_t)0x8000:COL_BAR, g_nocache?TFT_WHITE:COL_LIT, IA_NOCACHE);   // 5.9.32-lab2 benchmark control -> CONFIG.TXT NOCACHE=
+    add(String("DIAG-DISP")+": "+(g_diagdisp?T(L_ON):T(L_OFF)), g_diagdisp?COL_GREEN:COL_BAR, g_diagdisp?TFT_BLACK:COL_LIT, IA_DIAGDISP);   // live diagnostic overlay -> CONFIG.TXT DIAGDISP=
+  } else {
   // 5.9.12: single 3-way MODE — STANDALONE (radio off) / ESP-NOW (blind dongles, no router) / WiFi (home router).
   {const char* mlbl = !g_wireless_mode ? "STANDALONE" : (g_link_home ? "WiFi" : "ESP-NOW");
    uint16_t     mcol = !g_wireless_mode ? COL_GREEN   : (g_link_home ? COL_BLUE : COL_ACCENT);
@@ -2874,22 +3434,21 @@ static void drawInfoPanel(){
   if(g_ss_enabled) add(String(T(L_CFG_SAVER))+" FX: "+(g_ss_matrix?T(L_MATRIX):(g_ss_slides?T(L_SLIDES):T(L_BOUNCE))), COL_BLUE, TFT_WHITE, IA_SSMODE);   // 5.8.3 screensaver mode (only shown when ON)
   add(String(T(L_CFG_FAVSAVER))+": "+(g_ss_fav?T(L_ON):T(L_OFF)), g_ss_fav?COL_GREEN:COL_BAR, g_ss_fav?TFT_BLACK:COL_LIT, IA_SSFAV);   // 5.8.3 favourites into slideshow
   add(String("CRACKTRO")+": "+(g_cracktro>=0?T(L_ON):T(L_OFF)), g_cracktro>=0?COL_GREEN:COL_BAR, g_cracktro>=0?TFT_BLACK:COL_LIT, IA_CRACKTRO);   // boot intro on/off -> CONFIG.TXT CRACKTRO=
-  add(String("DIAG-DISP")+": "+(g_diagdisp?T(L_ON):T(L_OFF)), g_diagdisp?COL_GREEN:COL_BAR, g_diagdisp?TFT_BLACK:COL_LIT, IA_DIAGDISP);   // live diagnostic overlay -> CONFIG.TXT DIAGDISP=
   add(String("REEL BORDER")+": "+(g_reelborder?T(L_ON):T(L_OFF)), g_reelborder?COL_GREEN:COL_BAR, g_reelborder?TFT_BLACK:COL_LIT, IA_REELBORDER);   // MasterTelly CR: frame around reel covers -> CONFIG.TXT REELBORDER=
-  add(String("NO-CACHE")+": "+(g_nocache?T(L_ON):T(L_OFF)), g_nocache?(uint16_t)0x8000:COL_BAR, g_nocache?TFT_WHITE:COL_LIT, IA_NOCACHE);   // 5.9.32-lab2 benchmark control -> CONFIG.TXT NOCACHE=
   add(String("COVER ART")+": "+(g_covers_on?T(L_ON):T(L_OFF)), g_covers_on?COL_GREEN:COL_BAR, g_covers_on?TFT_BLACK:COL_LIT, IA_COVERS);   // 5.9.32-lab2 -> CONFIG.TXT COVERS=
-  add(String("REEL PROF")+": "+(g_reelprof?T(L_ON):T(L_OFF)), g_reelprof?(uint16_t)0x8000:COL_BAR, g_reelprof?TFT_WHITE:COL_LIT, IA_REELPROF);   // 5.9.33-lab3 frame profiler -> /gti.log
   add(String("LIST TILE")+": "+(g_listtile?T(L_ON):T(L_OFF)), g_listtile?COL_GREEN:COL_BAR, g_listtile?TFT_BLACK:COL_LIT, IA_LISTTILE);   // 5.9.34-lab4 -> CONFIG.TXT LISTTILE=
   add(String("LAST USED")+": "+(g_lastused?T(L_ON):T(L_OFF)), g_lastused?COL_GREEN:COL_BAR, g_lastused?TFT_BLACK:COL_LIT, IA_LASTUSED);   // restore last-loaded game on boot -> CONFIG.TXT LASTUSED=
+  if(g_devmode) add("TEST TOOLS >", (uint16_t)0x4208, TFT_WHITE, IA_TESTPAGE);   // lab14p: DEVMODE=OFF hides it   // lab14k: SD SOAK TEST, REEL PROF, NO-CACHE, DIAG-DISP live here now
   add(T(L_RESCAN_SD), COL_BLUE, TFT_WHITE, IA_RESCAN);
   add(T(L_SOFT_RESET), (uint16_t)0x8000, TFT_WHITE, IA_RESET);
   {bool diagOn=(g_loaded&&g_loaded_name=="AMIGA TEST KIT");   // v5.6.1: ATK is Amiga-only — hide LOAD DIAG in DSK/GEN (keep EJECT DIAG if somehow still loaded)
    if(g_mode==MODE_ADF||diagOn) add(diagOn?T(L_EJECT_DIAG):T(L_LOAD_DIAG), diagOn?(uint16_t)0xE8C4:COL_ACCENT, diagOn?TFT_BLACK:TFT_WHITE, IA_DIAG);}
   add(T(L_SD_ACCESS), (uint16_t)0x05FF, TFT_BLACK, IA_SDACCESS);
   add(T(L_FW_UPDATE), COL_AMBER, TFT_BLACK, IA_FWUPDATE);
+  }   // lab14k: end of the main Settings list
   int ix=0,iy=STATUS_H,iw=VW,ih=VH-STATUS_H-BOTTOM_H;
   gfx_fillRect(ix,iy,iw,ih,COL_BG);
-  gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,iy+5);gfx_print(T(L_SETTINGS));
+  gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,iy+5);gfx_print(g_info_test?"SETTINGS > TEST TOOLS":T(L_SETTINGS));   // lab14k
   int headerH=18, footerH=14, pad=8, gap=6, colGap=8, bh=34, cols=(g_portrait?1:2);   // v5.5.5: 2 cols landscape (half-width), 1 col portrait (full-width, paginates)
   int areaTop=iy+headerH, areaH=ih-headerH-footerH;
   int colW=(iw-pad*2-colGap*(cols-1))/cols;
@@ -3187,16 +3746,67 @@ static bool carLoadThumb(int gi,uint16_t*dst){ if(g_nocache)return false;
   size_t got=f.read((uint8_t*)dst,want);f.close();
   return got==want;
 }
+// ── lab14f: the .thumbs folders, listed ONCE per build ─────────────────────────
+// buildThumbs used to stat() every tile by name (a search of its bucket folder, ~480 files on
+// a big card) and carSaveThumb checked the root and bucket folders exist before every write.
+// Now the buckets are walked once: each tile's location + FAT date/time goes into g_thumbloc,
+// and which folders exist into g_thumb_dirs. A tile is up to date when its FAT date/time
+// EQUALS its cover's - carSaveThumb stamps it that way (f_utime). The old test was "tile newer
+// than cover", but the GTi has no clock, so every tile it wrote was dated 1980 and looked stale:
+// every RESCAN rebuilt every tile.
+#define TILE_BYTES ((uint32_t)CAR_TILE*CAR_TILE*2)
+static uint32_t g_thumb_dirs[2]={0,0};          // [0]=/ADF/.thumbs [1]=/DSK/.thumbs: bit 16 = root exists, bits 0-15 = bucket 0-F exists
+static bool g_thumb_indexed=false;
+static const FwLoc* g_tile_stamp=nullptr;        // set by buildThumbs around carSaveThumb: the cover whose date the tile takes
+static int thumbNib(char c){ if(c>='0'&&c<='9')return c-'0'; if(c>='A'&&c<='F')return c-'A'+10; if(c>='a'&&c<='f')return c-'a'+10; return -1; }
+static void thumbIndexBuild(){
+  std::vector<FwLoc>().swap(g_thumbloc); g_thumb_dirs[0]=g_thumb_dirs[1]=0; g_thumb_indexed=false;
+  if(g_fw_drv<0) return;                          // no FatFs drive: the by-name path does everything
+  FF_DIR* d=(FF_DIR*)malloc(sizeof(FF_DIR)); FF_DIR* d2=(FF_DIR*)malloc(sizeof(FF_DIR));
+  FILINFO* fi=(FILINFO*)malloc(sizeof(FILINFO)); FILINFO* f2=(FILINFO*)malloc(sizeof(FILINFO));
+  if(!d||!d2||!fi||!f2){ free(d);free(d2);free(fi);free(f2); return; }
+  const char* roots[2]={"/ADF/.thumbs","/DSK/.thumbs"};
+  uint32_t unloc=0;
+  for(int r=0;r<2;r++){
+    if(f_opendir(d,(String(g_fw_drv)+":"+roots[r]).c_str())!=FR_OK) continue;
+    g_thumb_dirs[r]|=1u<<16;
+    while(f_readdir(d,fi)==FR_OK && fi->fname[0]){
+      if(!(fi->fattrib&AM_DIR)) continue;
+      int nb=(fi->fname[0]&&!fi->fname[1])?thumbNib(fi->fname[0]):-1; if(nb<0) continue;
+      g_thumb_dirs[r]|=1u<<nb;
+      String bdir=String(roots[r])+"/"+fi->fname;
+      if(f_opendir(d2,(String(g_fw_drv)+":"+bdir).c_str())!=FR_OK) continue;
+      while(f_readdir(d2,f2)==FR_OK && f2->fname[0]){
+        if(f2->fattrib&AM_DIR) continue;
+        uint32_t cl=0; if(!fw_entry_clust(d2,f2,&cl)||!cl){ cl=0xFFFFFFFFu; unloc++; }   // present, location unknown -> read it by name
+        String tp=bdir+"/"+f2->fname; tp.toLowerCase();
+        g_thumbloc.push_back({coverHash(tp),cl,(uint32_t)f2->fsize,f2->fdate,f2->ftime});
+        if(!g_fw_fs){ g_fw_fs=d2->obj.fs; g_fw_fsid=d2->obj.fs->id; }
+      }
+      f_closedir(d2);
+    }
+    f_closedir(d);
+  }
+  free(d);free(d2);free(fi);free(f2);
+  std::sort(g_thumbloc.begin(),g_thumbloc.end(),[](const FwLoc&a,const FwLoc&b){return a.h<b.h;});
+  g_thumb_indexed=true;
+  gLog("[thumbs] index: %u tiles listed (%u by name only), dirs ADF=%05X DSK=%05X\n",(unsigned)g_thumbloc.size(),(unsigned)unloc,(unsigned)g_thumb_dirs[0],(unsigned)g_thumb_dirs[1]);
+}
 static void carSaveThumb(int gi,uint16_t*src){ if(g_nocache)return;   // 5.9.32-lab2: NOCACHE - never write a .tnl either
   auto&g=g_games[gi];
   if(!(g.jpg_path.length()>0&&g.jpg_path!="?"))return;
-  String root=carThumbRoot(gi);
-  if(!SD_MMC.exists(root.c_str()))SD_MMC.mkdir(root.c_str());
+  String root=carThumbRoot(gi); int ri=root.startsWith("/DSK")?1:0;
+  if(!(g_thumb_dirs[ri]&(1u<<16))){ if(!SD_MMC.exists(root.c_str()))SD_MMC.mkdir(root.c_str()); g_thumb_dirs[ri]|=1u<<16; }   // lab14f: once, not per tile
   String tp=carThumbPath(gi);
   int sl=tp.lastIndexOf('/'); String dir=tp.substring(0,sl);          // 5.9.0: ensure the shard bucket (.thumbs/<nibble>) exists
-  if(!SD_MMC.exists(dir.c_str()))SD_MMC.mkdir(dir.c_str());
+  int nb=dir.length()?thumbNib(dir[dir.length()-1]):-1;
+  if(nb<0||!(g_thumb_dirs[ri]&(1u<<nb))){ if(!SD_MMC.exists(dir.c_str()))SD_MMC.mkdir(dir.c_str()); if(nb>=0)g_thumb_dirs[ri]|=1u<<nb; }
   File f=SD_MMC.open(tp.c_str(),FILE_WRITE);if(!f)return;
   f.write((uint8_t*)src,(size_t)CAR_TILE*CAR_TILE*2);f.close();
+  if(g_tile_stamp && g_fw_drv>=0){                // lab14f: the tile takes its cover's FAT date/time (see above)
+    FILINFO fno; memset(&fno,0,sizeof fno); fno.fdate=g_tile_stamp->fdate; fno.ftime=g_tile_stamp->ftime;
+    f_utime((String(g_fw_drv)+":"+tp).c_str(),&fno);
+  }
 }
 // Fetch a game's tile (NULL if uncached and decoding isn't allowed right now).
 static uint16_t* carTileEx(int gi,bool mayDecode,bool*okOut){
@@ -3222,7 +3832,7 @@ static uint16_t* carTile(int gi,bool mayDecode){return carTileEx(gi,mayDecode,NU
 // (Michael's call: one predictable pass with a progress bar, never live jank).
 // Fresh thumbs are stat-checked and skipped, so a re-run over a built card is
 // seconds, not minutes. v4.8.5: carousel is first-class, so thumbs always build.
-static void carMicroInit(); static void carMicroFromTile(int gi,const uint16_t*tile); static void carMicroSave();  // 5.9.0 fwd-decls (definitions below)
+static void carMicroInit(); static void carMicroFromTile(int gi,const uint16_t*tile); static void carMicroSave(); static bool carMicroActive();  // 5.9.0 fwd-decls (definitions below)
 // v5.9.2: mark which games have a real cover (cached thumb present = passed COVERMIN).
 static void ensureCoverFlags(){
   if(g_cover_flags_ready && g_cover_flags_n==(int)g_games.size()) return;
@@ -3236,8 +3846,11 @@ static void ensureCoverFlags(){
   }
   g_cover_flags_ready=true; g_cover_flags_n=(int)g_games.size();
 }
-static void buildThumbs(){ if(!g_covers_on)return;   // 5.9.32-lab2: COVERS=OFF - nothing to decode
-  int n=(int)g_games.size(); if(!n)return;
+static void buildThumbs(){ if(!g_covers_on){fwLocFree();return;}   // 5.9.32-lab2: COVERS=OFF - nothing to decode
+  int n=(int)g_games.size(); if(!n){fwLocFree();return;}
+  bcSet(BC_THUMBS,(uint32_t)n);
+  thumbIndexBuild();                               // lab14f: every tile's location + date, one walk
+  uint32_t nBuilt=0,nReused=0,nNoCover=0,nFast=0,nSlow=0; g_fw_open_at=g_fw_open_at_fail=0;
   uint16_t*tmp=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2);
   if(!tmp)return;
   carMicroInit();                          // 5.9.0: build the resident micro-thumb set in-line with the thumb pass
@@ -3249,20 +3862,31 @@ static void buildThumbs(){ if(!g_covers_on)return;   // 5.9.32-lab2: COVERS=OFF 
   for(int i=0;i<n;i++){
     auto&g=g_games[i];
     if(!g.jpg_path.length()){String jpg;if(findJPGFor(g_files[g.first_file_idx],jpg))g.jpg_path=jpg;else g.jpg_path="?";}
-    bool need=false;
+    bool need=false; const FwLoc* J=nullptr; const FwLoc* Tl=nullptr;
     if(g.jpg_path.length()>0&&g.jpg_path!="?"){
-      String vT="/sdcard"+carThumbPath(i),vJ="/sdcard"+g.jpg_path;
-      struct stat stT,stJ;
-      if(stat(vT.c_str(),&stT)!=0)need=true;
-      else if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))need=true;
-      else if(stat(vJ.c_str(),&stJ)==0&&stJ.st_mtime>stT.st_mtime)need=true;
-    }
+      String tp=carThumbPath(i);
+      J=fwLocFor(g_coverloc,g.jpg_path);
+      if(g_thumb_indexed && J){                    // lab14f: all from memory - no card I/O to decide
+        nFast++; Tl=fwLocFor(g_thumbloc,tp);
+        need = !Tl || Tl->size!=TILE_BYTES || Tl->fdate!=J->fdate || Tl->ftime!=J->ftime;
+      } else {                                     // not in the walk: the old by-name checks
+        nSlow++;
+        String vT="/sdcard"+tp,vJ="/sdcard"+g.jpg_path;
+        struct stat stT,stJ;
+        if(stat(vT.c_str(),&stT)!=0)need=true;
+        else if(stT.st_size!=(long)((size_t)CAR_TILE*CAR_TILE*2))need=true;
+        else if(stat(vJ.c_str(),&stJ)==0&&stJ.st_mtime>stT.st_mtime)need=true;
+      }
+    } else nNoCover++;
     bool haveTile=false;                                     // 5.9.0: seed the micro-thumb in the SAME pass (no second 45 MB re-read)
-    if(need){ if(carDecodeTile(i,tmp)){carSaveThumb(i,tmp);haveTile=true;} }
-    else     { haveTile=carLoadThumb(i,tmp); }
+    if(need){ g_tile_stamp=J; if(carDecodeTile(i,tmp)){carSaveThumb(i,tmp);haveTile=true;nBuilt++;} g_tile_stamp=nullptr; }
+    else if(Tl && !carMicroActive()){ nReused++; }  // lab14f: tile is fresh and there are no micro-thumbs to seed - don't read it at all
+    else if(Tl && fwReadAt(Tl,(uint8_t*)tmp,TILE_BYTES)){ haveTile=true; nReused++; }   // lab14f: tile read from its location
+    else     { haveTile=carLoadThumb(i,tmp); if(haveTile)nReused++; }
     if(haveTile)carMicroFromTile(i,tmp);
     if(i-lastShown>=25||i==n-1){
       lastShown=i;
+      if((i%200)==0||i==n-1){ g_bc_n=(uint32_t)i; g_bc_psram=(uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM); }
       if((i%200)==0||i==n-1)gLog("[thumbs] %d/%d %lums int=%u psram=%u\n",i+1,n,(unsigned long)(millis()-t0),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
       gfx_fillScreen(0x1082);
       gfx_setTextSize(2);gfx_setTextColor(0xFC60,0x1082);
@@ -3281,6 +3905,9 @@ static void buildThumbs(){ if(!g_covers_on)return;   // 5.9.32-lab2: COVERS=OFF 
     if((i&7)==0)yield();
   }
   free(tmp);
+  gLog("[thumbs] done %d games in %lums: built %u, reused %u, no cover %u | decided from memory %u, by name %u | opened from walk %u (failed %u)\n",
+       n,(unsigned long)(millis()-t0),(unsigned)nBuilt,(unsigned)nReused,(unsigned)nNoCover,(unsigned)nFast,(unsigned)nSlow,(unsigned)g_fw_open_at,(unsigned)g_fw_open_at_fail);
+  fwLocFree();        // lab14f: locations have done their job
   carMicroSave();     // 5.9.0: persist /.gti_micro.pk now — the reel's "Preparing covers" pass never runs again
   writeGameCache();   // persist jpg paths resolved during the build (faster covers later too)
   g_coverset.clear();   // 5.3.7: cover set has done its job — free the PSRAM
@@ -3301,7 +3928,8 @@ static inline uint16_t carDim(uint16_t c,int lvl){
 #define SD_UNLOCK() do{}while(0)
 #endif
 static uint16_t* car_micro_block=NULL;   // n*dim*dim RGB565, contiguous
-static int       g_car_micro_dim=0;      // 16/24/32 (0 = disabled)
+static bool carMicroActive(){ return car_micro_block!=NULL; }   // lab14f
+static int       g_car_micro_dim=0;      // 8/16/24/32 (0 = disabled) - lab14e: 8 when memory is tight
 static int       g_car_micro_n=0;        // games covered
 static uint32_t carGamesSig(){
   uint32_t h=2166136261u; int n=(int)g_games.size();
@@ -3357,15 +3985,31 @@ static bool loadNfoCache(){ if(g_nocache)return false;
   return true;
 }
 static void carMicroFree(){ if(car_micro_block){free(car_micro_block);car_micro_block=NULL;} g_car_micro_dim=0; g_car_micro_n=0; }
+// lab14e: a RESCAN sizes the new library from free PSRAM, so first hand back what the old
+// library's reel was holding (up to 2.1 MB of cached tiles + the micro-thumb block). Both
+// refill on demand; every reader treats a NULL buffer as "not cached".
+static void carRuntimeRelease(){
+  carMicroFree();
+  for(int s=0;s<CAR_SLOTS;s++){ if(car_buf[s]){ free(car_buf[s]); car_buf[s]=NULL; } car_game[s]=0; car_stamp[s]=0; car_ok[s]=0; }
+}
 static void carMicroInit(){
   carMicroFree();
   int n=(int)g_games.size(); if(!n)return;
   int dim=(n<=1000)?32:(n<=1800)?24:16;
-  size_t bytes=(size_t)n*dim*dim*2;
-  car_micro_block=(uint16_t*)ps_malloc(bytes);
-  if(!car_micro_block&&dim!=16){dim=16;bytes=(size_t)n*dim*dim*2;car_micro_block=(uint16_t*)ps_malloc(bytes);}
-  if(!car_micro_block)return;
+  // lab14e: this block was never in the memory budget. At 16x16 it is 512 B a game - 3.9 MB
+  // at 7,600 games, enough to starve the reel tiles, cover decode and screensaver. Take the
+  // biggest size that still leaves the runtime reserve free, then a new 8x8 tier (128 B a
+  // game), then none: the reel just shows its plain placeholder until a tile loads.
+  size_t bytes=0;
+  for(;;){
+    bytes=(size_t)n*dim*dim*2;
+    size_t fr=heap_caps_get_free_size(MALLOC_CAP_SPIRAM), big=heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    if(fr>bytes+(size_t)LIB_RUNTIME_RESERVE && big>=bytes){ car_micro_block=(uint16_t*)ps_malloc(bytes); if(car_micro_block)break; }
+    if(dim>16)dim=16; else if(dim==16)dim=8;
+    else { gLog("[micro] no room for micro-thumbs (%d games, psram %u) - reel uses placeholders\n",n,(unsigned)fr); return; }
+  }
   g_car_micro_dim=dim; g_car_micro_n=n;
+  gLog("[micro] %dx%d micro-thumbs for %d games: %u KB\n",dim,dim,n,(unsigned)(bytes/1024));
   size_t px=bytes/2; for(size_t i=0;i<px;i++)car_micro_block[i]=COL_BAR;
 }
 static void carMicroFromTile(int gi,const uint16_t*tile){
@@ -3380,7 +4024,7 @@ static inline uint16_t* carMicro(int gi){
 }
 static bool carMicroLoad(){ if(g_nocache)return false;
   if(!car_micro_block)return false;
-  File f=SD_MMC.open("/.gti_micro.pk","r"); if(!f)return false;
+  File f=SD_MMC.open(gtiStatePath(".gti_micro.pk",true).c_str(),"r"); if(!f)return false;   // lab14g: /GTI
   uint32_t hdr[4]; if(f.read((uint8_t*)hdr,16)!=16){f.close();return false;}
   if(hdr[0]!=0x47544D31u||(int)hdr[1]!=g_car_micro_dim||(int)hdr[2]!=g_car_micro_n||hdr[3]!=carGamesSig()){f.close();return false;}
   size_t want=(size_t)g_car_micro_n*g_car_micro_dim*g_car_micro_dim*2;
@@ -3389,7 +4033,7 @@ static bool carMicroLoad(){ if(g_nocache)return false;
 }
 static void carMicroSave(){ if(g_nocache)return;
   if(!car_micro_block)return;
-  File f=SD_MMC.open("/.gti_micro.pk",FILE_WRITE); if(!f)return;
+  File f=SD_MMC.open(gtiStatePath(".gti_micro.pk",false).c_str(),FILE_WRITE); if(!f)return;
   uint32_t hdr[4]={0x47544D31u,(uint32_t)g_car_micro_dim,(uint32_t)g_car_micro_n,carGamesSig()};
   f.write((uint8_t*)hdr,16);
   f.write((uint8_t*)car_micro_block,(size_t)g_car_micro_n*g_car_micro_dim*g_car_micro_dim*2);
@@ -3546,7 +4190,7 @@ static void drawCarousel(){
     static int carSavSel=-1;static bool g_car_hasSav=false;
     if(!moving){uint32_t _s0=micros();
      int cgi=g_car_list[carWrap(ci)];
-     if(carSavSel!=cgi){carSavSel=cgi;g_car_hasSav=(g_saves_mode==1)&&savExistsFor(g_files[g_games[cgi].first_file_idx]);}
+     if(carSavSel!=cgi){carSavSel=cgi;g_car_hasSav=savBadgeFor(g_files[g_games[cgi].first_file_idx]);}   // lab14i: badge from the save list, no card lookup
      g_rp_sav+=micros()-_s0;}
     const bool showSav=(!moving)&&g_car_hasSav;
     // Warm the cache CENTER-FIRST when settled (painter's order would decode
@@ -3614,7 +4258,8 @@ static void drawCarousel(){
     gfx_setCursor((VW-gfx_textWidth(t))/2,190);gfx_print(t);
     // lazy NFO blurb (same pattern as the cover panel, keyed to the center game)
     static int carNfoSel=-1;static String carBlurb="";
-    if(carNfoSel!=gi){carNfoSel=gi;carBlurb="";
+    if(carNfoSel!=gi&&moving&&!game.nfo_done){carNfoSel=-1;carBlurb="";}   // lab14i: never search the card for a description while the reel moves - wait until it stops
+    else if(carNfoSel!=gi){carNfoSel=gi;carBlurb="";
       if(game.nfo_done)carBlurb=game.blurb;   // 5.9.31-lab1: straight out of PSRAM
       else{String nfoP,nT,nB;
         if(findNFOFor(g_files[game.first_file_idx],nfoP)){File nf=SD_MMC.open(nfoP,FILE_READ);
@@ -3712,15 +4357,13 @@ static void drawCarousel(){
 
 // v4.8.6: remember the last view for CAROUSEL=LAST — a tiny 1-char file beside
 // the stats, written on each list<->reel flip, read once at boot.
-static const char* viewPath(){return "/.gtiview";}
-static void writeLastView(int carousel){File f=SD_MMC.open(viewPath(),FILE_WRITE);if(f){f.print(carousel?'1':'0');f.close();}}
-static int  readLastView(){File f=SD_MMC.open(viewPath(),FILE_READ);if(!f)return 0;int c=f.read();f.close();return (c=='1')?1:0;}
+static void writeLastView(int carousel){File f=SD_MMC.open(gtiStatePath(".gtiview",false).c_str(),FILE_WRITE);if(f){f.print(carousel?'1':'0');f.close();}}   // lab14g: /GTI
+static int  readLastView(){File f=SD_MMC.open(gtiStatePath(".gtiview",true).c_str(),FILE_READ);if(!f)return 0;int c=f.read();f.close();return (c=='1')?1:0;}
 // LASTUSED — remember the last game you loaded so power-up jumps straight back to it.
 // Stores the game's first-file path (unique) beside the other tiny state files.
-static const char* lastUsedPath(){return "/.gtilastused";}
-static void writeLastUsed(const String&path){File f=SD_MMC.open(lastUsedPath(),FILE_WRITE);if(f){f.print(path);f.close();}}
+static void writeLastUsed(const String&path){File f=SD_MMC.open(gtiStatePath(".gtilastused",false).c_str(),FILE_WRITE);if(f){f.print(path);f.close();}}   // lab14g: /GTI
 static void restoreLastUsed(){
-  File f=SD_MMC.open(lastUsedPath(),FILE_READ); if(!f)return;
+  File f=SD_MMC.open(gtiStatePath(".gtilastused",true).c_str(),FILE_READ); if(!f)return;
   String want=f.readStringUntil('\n'); f.close(); want.trim(); if(!want.length())return;
   for(int i=0;i<(int)g_games.size();i++){
     if(g_files[g_games[i].first_file_idx]==want){
@@ -3923,6 +4566,48 @@ static String savPathFor(const String&adfPath){
   return adfPath.substring(0,dot)+".sav"+adfPath.substring(dot);
 }
 static bool savExistsFor(const String&adfPath){String sv=savPathFor(adfPath);return sv!=adfPath&&SD_MMC.exists(sv);}
+// lab14i: the save list (see g_savset). One small file per mode in /GTI:
+// [u32 "GSV1"][u16 len][cut folder, len bytes][u64 path hash]... - new saves are appended.
+static String savSetPath(){return String(GTI_DIR)+(g_mode==MODE_ADF?"/.gtisaves_adf":g_mode==MODE_DSK?"/.gtisaves_dsk":"/.gtisaves_gen");}
+#define SAVSET_MAGIC 0x31565347u
+static void savSetWrite(){ if(g_nocache)return;
+  File f=SD_MMC.open(savSetPath().c_str(),FILE_WRITE); if(!f)return;
+  uint32_t m=SAVSET_MAGIC; uint16_t L=(uint16_t)(g_savset_cutdir.length()>255?0:g_savset_cutdir.length());
+  f.write((uint8_t*)&m,4); f.write((uint8_t*)&L,2); if(L)f.write((const uint8_t*)g_savset_cutdir.c_str(),L);
+  if(!g_savset.empty())f.write((uint8_t*)g_savset.data(),g_savset.size()*8);
+  f.close();
+  gLog("[saves] %u save files listed%s\n",(unsigned)g_savset.size(),L?" (library trimmed: its last folder is checked live)":"");
+}
+static void savSetLoad(){
+  g_savset.clear(); g_savset_ok=false; g_savset_cutdir="";
+  if(g_nocache)return;
+  File f=SD_MMC.open(savSetPath().c_str(),FILE_READ);
+  if(!f){ gLog("[saves] no save list yet - the badge uses live checks until a RESCAN\n"); return; }
+  uint32_t m=0; uint16_t L=0; size_t sz=f.size();
+  if(f.read((uint8_t*)&m,4)!=4||m!=SAVSET_MAGIC||f.read((uint8_t*)&L,2)!=2||L>255||sz<6u+L){ f.close(); return; }
+  if(L){ char b[256]; if(f.read((uint8_t*)b,L)!=L){ f.close(); return; } b[L]=0; g_savset_cutdir=String(b); }
+  size_t n=(sz-6-L)/8; g_savset.resize(n);
+  if(n && f.read((uint8_t*)g_savset.data(),n*8)!=n*8){ f.close(); g_savset.clear(); g_savset_cutdir=""; return; }
+  f.close();
+  std::sort(g_savset.begin(),g_savset.end()); g_savset.erase(std::unique(g_savset.begin(),g_savset.end()),g_savset.end());
+  g_savset_ok=true;
+  gLog("[saves] %u save files from the list - no card lookups for the badge\n",(unsigned)g_savset.size());
+}
+static void savSetAdd(const String&sav){   // the GTi just wrote a save: badge it now, and on the card for next boot
+  String l=sav; l.toLowerCase(); uint64_t h=coverHash(l);
+  auto it=std::lower_bound(g_savset.begin(),g_savset.end(),h);
+  if(it!=g_savset.end()&&*it==h) return;
+  g_savset.insert(it,h);
+  if(!g_savset_ok||g_nocache) return;
+  File f=SD_MMC.open(savSetPath().c_str(),FILE_APPEND); if(f){ f.write((uint8_t*)&h,8); f.close(); }
+}
+static bool savBadgeFor(const String&adfPath){
+  if(g_saves_mode!=1) return false;
+  String sv=savPathFor(adfPath); if(sv==adfPath) return false;
+  if(!g_savset_ok||(g_savset_cutdir.length()&&parentDir(adfPath).equalsIgnoreCase(g_savset_cutdir)))
+    return SD_MMC.exists(sv);                   // no list yet, or the folder a too-big walk stopped in: live check
+  String l=sv; l.toLowerCase(); return std::binary_search(g_savset.begin(),g_savset.end(),coverHash(l));
+}
 // Copy base→sav.tmp, patch dirty sectors, atomic rename. Sector source is either
 // `packed` (k-th set bit = k-th 512B block; wireless) or `ram` (g_disk; standalone).
 static bool svPatchCore(const String&master,const String&sav,const uint8_t*map,uint32_t mapBits,
@@ -3946,7 +4631,9 @@ static bool svPatchCore(const String&master,const String&sav,const uint8_t*map,u
   f.flush();f.close();
   if(!ok){SD_MMC.remove(tmp);return false;}
   SD_MMC.remove(sav);
-  return SD_MMC.rename(tmp,sav);
+  bool _ok=SD_MMC.rename(tmp,sav);
+  if(_ok) savSetAdd(sav);   // lab14i: the badge (and next boot's list) know about it straight away
+  return _ok;
 }
 static void svToast(const String&msg){
   gfx_fillRect(0,0,VW,STATUS_H,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,COL_GREEN);
@@ -4033,7 +4720,7 @@ static bool doLoadSelected(const String&adfPath){
   if(g_wireless_mode){
     // ── WIRELESS: unchanged. The dongle receives the image bytes out of
     //    g_disk (espnowSendDisk reads from it), so it has to be copied there,
-    //    and DISKMAXKB remains the hard ceiling for anything sent by radio.
+    //    and the BIGDISK size remains the hard ceiling for anything sent by radio.
     if(fsz>MAX_FILE_BYTES){
       f.close();
       gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
@@ -4658,11 +5345,14 @@ static void doRescan(){
   // deliberately preserved — flipping standalone/wireless wants a clean boot, not a rescan.
   { bool wl=g_wireless_mode; selfHealConfig(); loadConfig(); g_wireless_mode=wl; relayout(); }
   // Rescan with animation
-  g_files.clear();g_games.clear();
-  heap_caps_malloc_extmem_enable(16);listImages(SD_MMC,g_files);buildGameList();buildThumbs();
+  std::vector<String>().swap(g_files);g_games.clear();g_games.shrink_to_fit();   // lab14e: free the buffers, not just the contents
+  carRuntimeRelease();   // lab14e: give the old reel tiles + micro-thumbs back before the new library is sized
+  heap_caps_malloc_extmem_enable(0);listImages(SD_MMC,g_files);buildGameList();buildThumbs();   // lab14e: 0, not 16 (see setup)
   writeNfoCacheIfChanged();   // 5.9.31-lab1: persist the freshly harvested sidecars
-  g_nfoharvest.clear();g_nfoharvest.shrink_to_fit();g_manualset.clear();g_manualset.shrink_to_fit();g_hdset.clear();g_hdset.shrink_to_fit();
+  g_nfoharvest.clear();g_nfoharvest.shrink_to_fit();fwLocFree();g_manualset.clear();g_manualset.shrink_to_fit();g_hdset.clear();g_hdset.shrink_to_fit();
   heap_caps_malloc_extmem_enable(4096);applyStats();buildActiveLetters();scanScreensaver();
+  bcSet(BC_READY,(uint32_t)g_games.size());   // lab14e
+  sdGuardReport(true);                          // lab14g
   g_sel=0;g_scroll=0;g_disk_sel=0;g_disk_page=0;g_scrollPx=0;g_az_page=0;g_inertia_on=false;
   if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
   drawFullUI();gfx_flush();
@@ -5312,6 +6002,79 @@ static void doPairNow(){ doScanDongles(); }
 // SETUP
 // ════════════════════════════════════════════════════════════════════════════
 // ── SD ACCESS boot mode (see the note by onReadSD). Blocking; NEVER returns — reboots. ──
+// ── lab14g: SD SOAK TEST (Settings) ───────────────────────────────────────────
+// Re-reads a fixed set of sectors (boot, FSINFO, the first FAT sectors, the root directory and
+// 40 sectors spread over the card) thousands of times, straight from the SD driver (under the
+// guard), and compares every read with the first. Half the time the destination is internal
+// RAM, half PSRAM (where FatFs keeps its buffers). Phase 2 repeats it while the other core
+// hammers PSRAM - heavy load. Any mismatch is logged with its bit shift. Read-only: it never
+// writes to the card. Tells us whether this GTi + card + clock can return a wrong sector.
+static volatile bool g_soak_hammer=false;
+static void soakHammerTask(void*){
+  uint8_t* a=(uint8_t*)ps_malloc(96*1024); uint8_t* b=(uint8_t*)ps_malloc(96*1024);
+  while(g_soak_hammer){ if(a&&b){ memcpy(a,b,96*1024); memcpy(b,a,96*1024); } vTaskDelay(1); }   // yield: core 0's idle task is watched
+  if(a)free(a); if(b)free(b);
+  g_soak_hammer=true; vTaskDelete(NULL);           // (true = "I'm gone", see the wait below)
+}
+static void sdSoakTest(){
+  auto msg=[&](int y,const String& t,uint16_t c,int sz){ gfx_setTextSize(sz); gfx_setTextColor(c,COL_BG); gfx_setCursor((VW-gfx_textWidth(t.c_str()))/2,y); gfx_print(t.c_str()); };
+  gfx_fillScreen(COL_BG); msg(18,"SD SOAK TEST",COL_LIT,3);
+  if(g_sdg_pdrv==0xFF||!g_sdg.fs){ msg(VH/2,"SD guard not installed - no test",TFT_RED,1); gfx_flush(); delay(2500); return; }
+  FATFS* fs=g_sdg.fs;
+  std::vector<LBA_t> secs;
+  secs.push_back(fs->volbase); secs.push_back(fs->volbase+1);
+  for(int i=0;i<8;i++) secs.push_back(fs->fatbase+i);
+  LBA_t rootS=fs->database+(LBA_t)(fs->dirbase-2)*fs->csize;
+  for(int i=0;i<16;i++) secs.push_back(rootS+i);
+  uint64_t span=(uint64_t)(fs->n_fatent-2)*fs->csize;
+  for(int i=1;i<=40;i++) secs.push_back(fs->database+(LBA_t)(span*i/41));
+  const int N=(int)secs.size();
+  uint8_t* ref=(uint8_t*)ps_malloc((size_t)N*512); uint8_t* pb=(uint8_t*)heap_caps_malloc(512,MALLOC_CAP_SPIRAM);
+  static uint8_t ib[512] __attribute__((aligned(4)));
+  if(!ref||!pb){ if(ref)free(ref); if(pb)free(pb); msg(VH/2,"not enough memory",TFT_RED,1); gfx_flush(); delay(2500); return; }
+  int refOdd=0;
+  for(int i=0;i<N;i++){ uint8_t* r=ref+(size_t)i*512; g_sdg.lread(r,secs[i],1);
+    for(int t=0;t<2;t++){ g_sdg.lread(ib,secs[i],1); if(memcmp(ib,r,512)){ refOdd++; gLog("[soak] reference read of sector %u disagreed (shift %d)\n",(unsigned)secs[i],sg_shift(r,ib)); } } }
+  const int ROUNDS=800; uint32_t bad[2][2]={{0,0},{0,0}}, reads[2]={0,0}, rdErr[2]={0,0}; int shown=0;
+  uint32_t t0=millis(); bool aborted=false;
+  gLog("[soak] start: %d sectors x %d rounds x 2 phases, SD %d kHz, pull-ups %s, reference disagreements %d\n",N,ROUNDS,g_sd_freq,g_sdpullup_cfg?"ON":"OFF",refOdd);
+  for(int ph=0;ph<2&&!aborted;ph++){
+    if(ph==1){ g_soak_hammer=true; xTaskCreatePinnedToCore(soakHammerTask,"soakh",3072,NULL,1,NULL,0); }
+    for(int r=0;r<ROUNDS&&!aborted;r++){
+      for(int i=0;i<N;i++){
+        bool ps=((r+i)&1); uint8_t* dst=ps?pb:ib;
+        if(g_sdg.lread(dst,secs[i],1)!=RES_OK){ rdErr[ph]++; continue; }
+        reads[ph]++;
+        if(memcmp(dst,ref+(size_t)i*512,512)){ bad[ph][ps]++;
+          if(shown<20){ shown++; gLog("[soak] %s: sector %u read into %s differs - shift %d bits, first bytes %02X %02X %02X %02X (ref %02X %02X %02X %02X)\n",
+            ph?"under load":"quiet",(unsigned)secs[i],ps?"PSRAM":"internal",sg_shift(ref+(size_t)i*512,dst),dst[0],dst[1],dst[2],dst[3],ref[(size_t)i*512],ref[(size_t)i*512+1],ref[(size_t)i*512+2],ref[(size_t)i*512+3]); } }
+      }
+      if((r&7)==0){
+        gfx_fillRect(0,56,VW,110,COL_BG);
+        msg(60,String(ph?"phase 2 of 2: under PSRAM load":"phase 1 of 2: quiet")+"   round "+String(r+1)+"/"+String(ROUNDS),COL_MID,1);
+        msg(80,String(reads[0]+reads[1])+" reads, "+String(bad[0][0]+bad[0][1]+bad[1][0]+bad[1][1])+" wrong, "+String(rdErr[0]+rdErr[1])+" read errors",
+            (bad[0][0]+bad[0][1]+bad[1][0]+bad[1][1])?TFT_RED:COL_GREEN,1);
+        msg(100,String("SD ")+String(g_sd_freq/1000)+" MHz  -  tap to stop",COL_DIM,1);
+        gfx_flush();
+        uint16_t tx,ty; if(Touch_ReadFrame()&&getTouchXY(&tx,&ty)) aborted=true;
+      }
+    }
+    if(ph==1){ g_soak_hammer=false; uint32_t w=millis(); while(!g_soak_hammer&&millis()-w<500) delay(5); g_soak_hammer=false; }
+  }
+  free(ref); free(pb);
+  uint32_t secsT=(millis()-t0)/1000;
+  gLog("[soak] %s in %us | quiet: %u reads, %u wrong (internal %u, PSRAM %u), %u errors | under load: %u reads, %u wrong (internal %u, PSRAM %u), %u errors\n",
+       aborted?"stopped":"done",(unsigned)secsT,(unsigned)reads[0],(unsigned)(bad[0][0]+bad[0][1]),(unsigned)bad[0][0],(unsigned)bad[0][1],(unsigned)rdErr[0],
+       (unsigned)reads[1],(unsigned)(bad[1][0]+bad[1][1]),(unsigned)bad[1][0],(unsigned)bad[1][1],(unsigned)rdErr[1]);
+  gfx_fillRect(0,56,VW,VH-56,COL_BG);
+  uint32_t tot=bad[0][0]+bad[0][1]+bad[1][0]+bad[1][1];
+  msg(66,tot?"WRONG DATA SEEN":"NO WRONG READS",tot?TFT_RED:COL_GREEN,2);
+  msg(96,String("quiet: ")+String(reads[0])+" reads, "+String(bad[0][0]+bad[0][1])+" wrong, "+String(rdErr[0])+" errors",COL_LIT,1);
+  msg(112,String("under load: ")+String(reads[1])+" reads, "+String(bad[1][0]+bad[1][1])+" wrong, "+String(rdErr[1])+" errors",COL_LIT,1);
+  msg(128,String("SD ")+String(g_sd_freq/1000)+" MHz, pull-ups "+(g_sdpullup_cfg?"on":"off")+", "+String(secsT)+" s - details in GTI/gti.log",COL_DIM,1);
+  msg(VH-30,"tap to return",COL_DIM,1); gfx_flush();
+  delay(600); uint16_t tx,ty; while(Touch_ReadFrame()&&getTouchXY(&tx,&ty)) delay(30); while(!(Touch_ReadFrame()&&getTouchXY(&tx,&ty))) delay(30); delay(200);
+}
 static void sdAccessReboot(){
   gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);
   const char*m="RETURNING...";gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();
@@ -5340,6 +6103,14 @@ static void runSDAccessBoot(bool sdok){
   gfx_fillScreen(COL_BG);
   gfx_setTextSize(3);gfx_setTextColor(COL_LIT,COL_BG);{const char*t="SD ACCESS";gfx_setCursor((VW-gfx_textWidth(t))/2,18);gfx_print(t);}
   gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);{String c=String("microSD  ")+sz;gfx_setCursor((VW-gfx_textWidth(c))/2,46);gfx_print(c);}
+  if(g_cap_magic==CAP_MAGIC){                          // 5.9.41-lab14d: we came here from LIBRARY TOO BIG - say what to fix
+    String c1="LIBRARY TOO BIG FOR THIS GTi";
+    String c2=String("your card: ")+(g_cap_atleast?"at least ":"")+String(g_cap_games)+" games  -  GTi limit: about "+String(g_cap_fit);   // lab14e: label both numbers
+    String c3=String("over by about ")+String(g_cap_games>g_cap_fit?g_cap_games-g_cap_fit:0)+" games: remove some, eject, then tap DONE";
+    String c4="details: GTI_CAPACITY.TXT on the card";
+    int y=104; gfx_setTextColor((uint16_t)0xF800,COL_BG); gfx_setCursor((VW-gfx_textWidth(c1.c_str()))/2,y); gfx_print(c1.c_str());
+    gfx_setTextColor(COL_LIT,COL_BG); for(const String* l: {&c2,&c3,&c4}){ y+=13; gfx_setCursor((VW-gfx_textWidth(l->c_str()))/2,y); gfx_print(l->c_str()); }
+  }
   while(true){
     bool conn=(g_sd_rd>0);
     if(conn!=lastConn||frame==0){lastConn=conn;gfx_fillRect(0,62,VW,16,COL_BG);gfx_setTextSize(1);
@@ -5404,7 +6175,7 @@ static void fwupIdfBegin(){ g_fwup_idf_n=0; g_fwup_idf[0]=0; g_fwup_idf_prev=esp
 static void fwupIdfEnd(){
   if(g_fwup_idf_prev){ esp_log_set_vprintf(g_fwup_idf_prev); g_fwup_idf_prev=NULL; }
   if(g_fwup_idf_n && g_log_enabled){
-    File lf=SD_MMC.open("/gti.log",FILE_APPEND);
+    File lf=SD_MMC.open(GTI_LOG_PATH,FILE_APPEND);
     if(lf){ lf.print("[fwup] --- IDF log ---\n"); lf.print(g_fwup_idf); lf.print("[fwup] --- end IDF ---\n"); lf.close(); }
   }
   g_fwup_idf_n=0;
@@ -5590,7 +6361,7 @@ static void doFirmwareUpdate(){
     fwupIdfEnd();                                   // flush the IDF reason to /gti.log
     Update.abort();gfx_fillScreen(COL_BG);fwupMsg(VH/2-14,"UPDATE FAILED",COL_ORANGE,COL_BG,2);
     fwupMsg(VH/2+12,err?(errKind==1?"SD read error - image unchanged":"flash write error - image unchanged"):es,COL_DIM,COL_BG,1);
-    {char l[64];snprintf(l,sizeof l,"err=%d  see /gti.log",ec);fwupMsg(VH/2+26,l,COL_DIM,COL_BG,1);}
+    {char l[64];snprintf(l,sizeof l,"err=%d  see GTI/gti.log",ec);fwupMsg(VH/2+26,l,COL_DIM,COL_BG,1);}
     fwupMsg(VH/2+40,"current firmware kept.",COL_DIM,COL_BG,1);fwupMsg(VH-22,"tap to return",COL_MID,COL_BG,1);fwupWait();return;}
   fwupIdfEnd();
   gLog("[fwup] end ok - activating new image, rebooting\n");
@@ -5599,7 +6370,7 @@ static void doFirmwareUpdate(){
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 5.9.38 — exFAT / NTFS CARD DETECTION + ON-DEVICE FAT32 FORMAT
+// 5.9.38 — exFAT / NTFS CARD DETECTION (lab14h: detection only - the GTi never formats)
 // ────────────────────────────────────────────────────────────────────────────
 // Windows formats anything over 32 GB as exFAT (or NTFS) and will not offer
 // FAT32 — that is a limit of the Windows dialog, not of FAT32, which goes to
@@ -5607,13 +6378,10 @@ static void doFirmwareUpdate(){
 // it), so such a card simply fails to mount. FlashFloppy has the same rule for
 // its USB stick ("FAT32 — exFAT and NTFS are not supported").
 //
-// Rather than send the user to a third-party formatter, the GTi does it: if the
-// mount fails AND sector 0 positively identifies exFAT or NTFS, offer to format
-// the card as FAT32 — behind two confirmations, with a 1 s arming delay on the
-// second so a bounced tap cannot get through. FatFs f_mkfs is a QUICK format:
-// partition table, boot sector, the two FATs and the root cluster. The data
-// area is never touched, but nothing points at it any more.
-// ════════════════════════════════════════════════════════════════════════════
+// If the mount fails AND sector 0 positively identifies exFAT or NTFS, the GTi says so and
+// explains how to format the card on a computer. lab14h: it never formats or erases a card
+// itself (5.9.38 used to offer a FatFs quick format here - removed).
+// ════════════════════════════════════════════════════════════════════════
 // Returns 1 = exFAT, 2 = NTFS, 0 = something else (FAT or unknown), -1 = no card.
 // Only ever called AFTER SD_MMC.begin() has failed and released the host.
 static int sdPeekForeignFs(){
@@ -5649,291 +6417,109 @@ static int sdPeekForeignFs(){
   sdmmc_host_deinit();
   return r;
 }
-// Two-wall confirm. Returns true only if the user passed both screens.
-static bool sdOfferFormat(int kind){
+// lab14h: THE GTi NEVER FORMATS OR ERASES A CARD (owner's rule, 25 Sep 2026). 5.9.38 offered
+// an on-device FAT32 format behind two confirmations; it is gone. The GTi only says what the
+// card is and how to fix it on a computer - and changes nothing.
+static void sdForeignFsNotice(int kind){
   const char* fsn = (kind==2) ? "NTFS" : "exFAT";
-  // ── wall 1 ──
   gfx_fillScreen(COL_BG);
   fwupMsg(22,"CARD NOT COMPATIBLE",COL_ORANGE,COL_BG,2);
-  {char l[64];snprintf(l,sizeof l,"This card is formatted %s.",fsn);fwupMsg(52,l,COL_LIT,COL_BG,1);}
-  fwupMsg(66,"The GTi (and the Gotek) need FAT32.",COL_LIT,COL_BG,1);
-  fwupMsg(80,"Windows won't make FAT32 above 32GB,",COL_DIM,COL_BG,1);
-  fwupMsg(94,"but the GTi can - a quick format.",COL_DIM,COL_BG,1);
-  fwupMsg(118,"EVERYTHING ON THIS CARD WILL BE LOST.",COL_ORANGE,COL_BG,1);
-  fwupMsg(132,"Copy off anything you want first.",COL_ORANGE,COL_BG,1);
-  int bw=124,bbh=42,gap=22,by=VH-64,lx=VW/2-bw-gap/2,rx=VW/2+gap/2;
-  gfx_fillRoundRect(lx,by,bw,bbh,8,COL_BAR);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setTextSize(2);gfx_setCursor(lx+(bw-gfx_textWidth("CANCEL"))/2,by+13);gfx_print("CANCEL");
-  gfx_fillRoundRect(rx,by,bw,bbh,8,COL_ORANGE);gfx_setTextColor(TFT_BLACK,COL_ORANGE);gfx_setTextSize(2);gfx_setCursor(rx+(bw-gfx_textWidth("FORMAT"))/2,by+13);gfx_print("FORMAT");
-  gfx_flush();
-  { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }   // require a release first
-  bool go=false;
-  while(true){uint16_t tx,ty;if(Touch_ReadFrame()&&getTouchXY(&tx,&ty)){
-    if(ty>=(uint16_t)(by-8)&&ty<(uint16_t)(by+bbh+8)){
-      if(tx>=(uint16_t)(lx-8)&&tx<(uint16_t)(lx+bw+8)){go=false;break;}
-      if(tx>=(uint16_t)(rx-8)&&tx<(uint16_t)(rx+bw+8)){go=true;break;}}}
-    delay(25);}
-  if(!go) return false;
-  // ── wall 2: RED = NO, GREEN = YES, armed only after 1 s ──
-  gfx_fillScreen(COL_BG);
-  fwupMsg(VH/2-60,"ARE YOU SURE?",COL_LIT,COL_BG,2);
-  fwupMsg(VH/2-30,"This erases the whole card.",COL_ORANGE,COL_BG,1);
-  fwupMsg(VH/2-16,"There is no undo.",COL_ORANGE,COL_BG,1);
-  gfx_fillRoundRect(lx,by,bw,bbh,8,TFT_RED);  gfx_setTextColor(TFT_WHITE,TFT_RED);  gfx_setTextSize(2);gfx_setCursor(lx+(bw-gfx_textWidth("NO"))/2,by+13); gfx_print("NO");
-  gfx_fillRoundRect(rx,by,bw,bbh,8,COL_GREEN);gfx_setTextColor(TFT_BLACK,COL_GREEN);gfx_setTextSize(2);gfx_setCursor(rx+(bw-gfx_textWidth("YES"))/2,by+13);gfx_print("YES");
-  gfx_flush();
-  { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }   // release the finger that hit FORMAT
-  uint32_t armed=millis()+1000;                                                     // 1 s: a bounced double-tap lands here and is ignored
-  bool yes=false;
-  while(true){uint16_t tx,ty;
-    if(Touch_ReadFrame()&&getTouchXY(&tx,&ty)){
-      if((int32_t)(millis()-armed)<0){ delay(25); continue; }                       // not armed yet: swallow it
-      if(ty>=(uint16_t)(by-8)&&ty<(uint16_t)(by+bbh+8)){
-        if(tx>=(uint16_t)(lx-8)&&tx<(uint16_t)(lx+bw+8)){yes=false;break;}
-        if(tx>=(uint16_t)(rx-8)&&tx<(uint16_t)(rx+bw+8)){yes=true;break;}}}
-    delay(25);}
-  return yes;
-}
-// Format via FatFs (SD_MMC.begin with format_if_mount_failed), then reboot into a
-// normal blank-card boot, which creates /ADF /DSK /GENERIC and the sample folder.
-static void sdFormatFat32AndReboot(){
-  gfx_fillScreen(COL_BG);
-  fwupMsg(VH/2-20,"FORMATTING - DO NOT REMOVE",COL_AMBER,COL_BG,2);
-  fwupMsg(VH/2+10,"about a minute on a big card",COL_DIM,COL_BG,1);
-  gfx_flush();
-  SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);delay(100);
-  bool ok=SD_MMC.begin("/sdcard",true,/*format_if_mount_failed=*/true,20000);
-  gfx_fillScreen(COL_BG);
-  if(ok){ SD_MMC.end(); fwupMsg(VH/2-8,"FORMATTED - RESTARTING",COL_GREEN,COL_BG,2); gfx_flush(); delay(1500); ESP.restart(); }
-  fwupMsg(VH/2-14,"FORMAT FAILED",COL_ORANGE,COL_BG,2);
-  fwupMsg(VH/2+12,"card may be locked or faulty",COL_DIM,COL_BG,1);
+  {char l[64];snprintf(l,sizeof l,"This card is formatted %s.",fsn);fwupMsg(56,l,COL_LIT,COL_BG,1);}
+  fwupMsg(70,"The GTi and the Gotek need FAT32.",COL_LIT,COL_BG,1);
+  fwupMsg(94,"Format it as FAT32 on a computer:",COL_LIT,COL_BG,1);
+  fwupMsg(110,"Mac: Disk Utility > Erase > MS-DOS (FAT)",COL_DIM,COL_BG,1);
+  fwupMsg(124,"Windows, 32 GB or less: Format > FAT32",COL_DIM,COL_BG,1);
+  fwupMsg(138,"Windows, over 32 GB: a FAT32 tool such as guiformat",COL_DIM,COL_BG,1);
+  fwupMsg(162,"Nothing on the card was changed.",COL_GREEN,COL_BG,1);
   fwupMsg(VH-22,"tap to continue",COL_MID,COL_BG,1);
   gfx_flush(); fwupWait();
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// lab13: DOOM — bridge for src/doom (C), WAD installer, one-shot boot
-// ═════════════════════════════════════════════════════════════════════════════
-extern "C" unsigned long gti_millis(void){ return millis(); }
-
-// Scale Doom's 320x240 8-bit frame onto the 480x320 landscape canvas (x*1.5, y*4/3) and push.
-// The JC3248 framebuffer is portrait-native 320x480 holding byte-swapped RGB565; lcdpal is
-// already byte-swapped, so this is one table lookup per pixel, written row-contiguously.
-extern "C" void gti_doom_present(const unsigned char* src,const unsigned short* pal,int w,int h){
-  static int16_t syOff[LCD_WIDTH]; static bool init=false; static int initRot=-1;
-  static bool firstFrame=true; if(firstFrame){ firstFrame=false; doomStage(7); }   // lab13c: engine is drawing
-  const bool flip=(g_rot==2);
-  if(!init||initRot!=g_rot){
-    for(int px=0;px<LCD_WIDTH;px++){ int vy=flip?(LCD_WIDTH-1-px):px; int sy=vy*h/LCD_WIDTH; if(sy>=h)sy=h-1; syOff[px]=(int16_t)sy; }
-    init=true; initRot=g_rot;
-  }
-  for(int py=0;py<LCD_HEIGHT;py++){
-    int vx=flip?py:(LCD_HEIGHT-1-py);
-    int sx=vx*w/LCD_HEIGHT; if(sx>=w)sx=w-1;
-    const unsigned char* col=src+sx;
-    uint16_t* row=&framebuffer[(size_t)py*LCD_WIDTH];
-    for(int px=0;px<LCD_WIDTH;px++) row[px]=pal[col[syOff[px]*w]];
-  }
-  gfx_flush();
-  vTaskDelay(1);   // let the idle task breathe (task watchdog) - costs ~1 ms a frame
-}
-
-// 1 = finger down, coordinates on the 480x320 canvas. Rides out up to 3 dropped
-// touch frames so a held d-pad does not stutter key-up/key-down.
-extern "C" int gti_doom_touch(int* x,int* y){
-  static int lx=0,ly=0,miss=99;
-  if(Touch_ReadFrame()){ uint16_t tx=0,ty=0; if(getTouchXY(&tx,&ty)){ lx=tx; ly=ty; miss=0; } }
-  else if(miss<99) miss++;
-  if(miss<=3){ *x=lx; *y=ly; return 1; }
-  return 0;
-}
-
-extern "C" void gti_doom_exit(void){
-  g_doom_magic=0; g_doom_trace=0;   // lab13c: a clean exit leaves nothing to report
-  gfx_fillScreen(TFT_BLACK); gfx_flush();
-  delay(100); ESP.restart();
-}
-
-static void doomMsg(const char* a,const char* b,uint16_t col){
-  gfx_fillScreen(TFT_BLACK);
-  gfx_setTextSize(3); gfx_setTextColor(0xF800,TFT_BLACK);
-  {const char*t="DOOM"; gfx_setCursor((gW-gfx_textWidth(t))/2,gH/2-50); gfx_print(t);}
-  gfx_setTextSize(1); gfx_setTextColor(col,TFT_BLACK);
-  if(a){gfx_setCursor((gW-gfx_textWidth(a))/2,gH/2); gfx_print(a);}
-  if(b){gfx_setCursor((gW-gfx_textWidth(b))/2,gH/2+14); gfx_print(b);}
-  gfx_flush();
-}
-
-// lab13c: I_Error (via I_SafeExit) lands here instead of exit(), which on the ESP32 is a silent
-// abort + reboot. Show the engine's last words on the panel, then go back to the GTi.
-extern "C" void gti_doom_fatal(int rc){
-  g_doom_trace=0; g_diagdisp=false;
-  g_doom_lastmsg[sizeof(g_doom_lastmsg)-1]=0;
-  gfx_fillScreen(TFT_BLACK);
-  gfx_setTextSize(2); gfx_setTextColor(0xF800,TFT_BLACK); gfx_setCursor(8,10); gfx_print("DOOM STOPPED");
-  gfx_setTextSize(1); gfx_setTextColor(TFT_WHITE,TFT_BLACK);
-  { const char* m=g_doom_lastmsg; int y=44; char line[80];
-    while(*m && y<gH-40){ int n=0; while(m[n] && n<76) n++; memcpy(line,m,n); line[n]=0; gfx_setCursor(8,y); gfx_print(line); m+=n; y+=12; } }
-  gfx_setTextColor(0xFD20,TFT_BLACK); gfx_setCursor(8,gH-20); gfx_print("Photo this screen for Claude - tap to return to the GTi");
-  gfx_flush();
-  Serial.printf("[doom] FATAL rc=%d: %s\n",rc,g_doom_lastmsg);
-  uint32_t t0=millis(); delay(800);
-  while(millis()-t0<60000){ if(Touch_ReadFrame()) break; delay(30); }
-  gti_doom_exit();
-}
-
-static const char* rstName(int r){
-  switch(r){ case ESP_RST_POWERON:return "power-on"; case ESP_RST_SW:return "software"; case ESP_RST_PANIC:return "PANIC (crash)";
-    case ESP_RST_INT_WDT:return "interrupt watchdog"; case ESP_RST_TASK_WDT:return "task watchdog"; case ESP_RST_WDT:return "watchdog";
-    case ESP_RST_BROWNOUT:return "BROWNOUT (power dip)"; default:return "other"; }
-}
-static const char* doomStageName(int s){
-  switch(s){ case 1:return "boot entered"; case 2:return "panel+touch up"; case 3:return "WAD found"; case 4:return "task started";
-    case 5:return "tables allocated"; case 6:return "engine starting (doom_main)"; case 7:return "in game (drawing frames)"; default:return "?"; }
-}
-
-static const esp_partition_t* doomPart(){ return esp_partition_find_first(DOOM_PART_TYPE,DOOM_PART_SUBTYPE,NULL); }
-
-// A WAD is "installed" when the partition starts with IWAD and its directory lies inside it.
-static bool doomWadInstalled(const esp_partition_t* p){
-  uint8_t h[12]; if(esp_partition_read(p,0,h,12)!=ESP_OK) return false;
-  if(memcmp(h,"IWAD",4)!=0) return false;
-  uint32_t n=h[4]|(h[5]<<8)|(h[6]<<16)|((uint32_t)h[7]<<24), ofs=h[8]|(h[9]<<8)|(h[10]<<16)|((uint32_t)h[11]<<24);
-  return n>0 && n<10000 && ofs>12 && (uint64_t)ofs+(uint64_t)n*16<=p->size;
-}
-
-// Copy /doom1.wad from the card into the partition (erase, write in 4 KB blocks, read-back compare).
-static bool doomInstallWad(const esp_partition_t* p){
-  File f=SD_MMC.open("/doom1.wad",FILE_READ);
-  if(!f){ doomMsg("No WAD installed.","Put the shareware doom1.wad in the card root.",0xFD20); delay(3500); return false; }
-  size_t sz=f.size();
-  uint8_t hdr[4]={0}; f.read(hdr,4); f.seek(0);
-  if(memcmp(hdr,"IWAD",4)!=0){ f.close(); doomMsg("doom1.wad is not an IWAD.",NULL,0xF800); delay(3000); return false; }
-  if(sz>p->size){ f.close(); doomMsg("That WAD does not fit.","Only the shareware doom1.wad (4.2 MB) is supported.",0xF800); delay(3500); return false; }
-  doomMsg("Installing doom1.wad into flash...","Erasing - do not power off",0x07FF);
-  size_t er=(sz+0xFFF)&~(size_t)0xFFF;
-  if(esp_partition_erase_range(p,0,er)!=ESP_OK){ f.close(); doomMsg("Flash erase failed.",NULL,0xF800); delay(3000); return false; }
-  uint8_t* buf=(uint8_t*)heap_caps_malloc(4096,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
-  uint8_t* chk=(uint8_t*)heap_caps_malloc(4096,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
-  if(!buf||!chk){ if(buf)free(buf); if(chk)free(chk); f.close(); return false; }
-  bool ok=true; size_t done=0; int lastPct=-1;
-  while(done<sz){
-    size_t n=sz-done; if(n>4096)n=4096;
-    if(f.read(buf,n)!=(int)n){ ok=false; break; }
-    if(esp_partition_write(p,done,buf,n)!=ESP_OK){ ok=false; break; }
-    if(esp_partition_read(p,done,chk,n)!=ESP_OK||memcmp(buf,chk,n)!=0){ ok=false; break; }
-    done+=n;
-    int pct=(int)(done*100/sz);
-    if(pct!=lastPct&&(pct%2==0)){ lastPct=pct;
-      int bw=gW-80, bx=40, by=gH/2+34;
-      gfx_drawRect(bx-1,by-1,bw+2,12,0x07FF); gfx_fillRect(bx,by,bw*pct/100,10,0x07FF);
-      gfx_fillRect(bx,by+14,bw,10,TFT_BLACK); gfx_setTextSize(1); gfx_setTextColor(TFT_WHITE,TFT_BLACK);
-      String t=String(pct)+"%"; gfx_setCursor((gW-gfx_textWidth(t))/2,by+14); gfx_print(t); gfx_flush(); }
-  }
-  free(buf); free(chk); f.close();
-  if(!ok){ esp_partition_erase_range(p,0,4096); doomMsg("Install failed - try again.",NULL,0xF800); delay(3000); return false; }
-  return doomWadInstalled(p);
-}
-
-// Called from the cracktro when armed and the top-left corner is tapped. Returns only on failure.
-static void doomLaunch(){
-  const esp_partition_t* p=doomPart();
-  if(!p){ doomMsg("This firmware's partition table has no Doom space.","Flash it once over USB (full erase) to add it.",0xFD20); delay(3500); return; }
-  if(!doomWadInstalled(p) && !doomInstallWad(p)) return;
-  doomMsg("Rise and shine...",NULL,0x07E0);
-  g_doom_rot=((g_rot==2)?2:0)|(g_diagdisp?0x100:0); g_doom_magic=DOOM_MAGIC;   // lab13b: bit 8 carries DIAGDISP into Doom
-  delay(600); ESP.restart();
-}
-
-static void doomTask(void*){
-  static const char* argv[]={"doom","-cout","ICWEFDA",NULL};
-  doomStage(4);
-  if(!gti_doom_alloc()){ doomMsg("Not enough memory for Doom.",NULL,0xF800); delay(2500); gti_doom_exit(); }
-  doomStage(5);
-  Serial.printf("[doom] tables up: int=%u psram=%u\n",(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
-  doomStage(6);
-  doom_main(3,argv);
-  gti_doom_exit();   // D_DoomLoop never returns; this is belt and braces
-}
-
-// The Doom boot: no card, no USB, no radio, no scan - just the panel, touch and the engine.
-static void doomBoot(){
-  g_doom_lastmsg[0]=0; doomStage(1);                // lab13c: breadcrumbs start
-  g_rot=((g_doom_rot&3)==2)?2:0; gW=480; gH=320;
-  g_diagdisp=(g_doom_rot&0x100)!=0;                 // lab13b: FPS/RAM overlay in Doom when DIAGDISP=ON
-  applyTheme(0); displayInit(); touchInit();
-  g_strip_rows=g_strip_cap; g_flush_us=0;          // ping-pong push in gfx_flush (lab13b), no sleeps
-  gfx_fillScreen(TFT_BLACK); gfx_flush();
-  doomStage(2);
-  const esp_partition_t* p=doomPart();
-  if(!p||!doomWadInstalled(p)){ doomMsg("No WAD in flash.",NULL,0xF800); delay(2500); gti_doom_exit(); }
-  doomStage(3);
-  doomMsg("Loading...",NULL,0x07E0);               // lab13c: something on screen while the engine initialises
-  heap_caps_malloc_extmem_enable(64);               // zone/level data to PSRAM; internal RAM keeps the screen + stack
-  Serial.printf("[doom] int=%u psram=%u\n",(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
-  xTaskCreatePinnedToCore(doomTask,"doom",24576,NULL,5,NULL,1);   // Espressif ran it in 22.5 KB
-  vTaskDelete(NULL);                                 // retire the Arduino loop task; Doom owns the board now
-}
-
 void setup(){
   Serial.begin(115200);delay(200);
-  // lab13c: did the last Doom boot die? (trace survives panic/WDT resets; never trusted after power-on)
-  if((g_doom_trace&0xFFFF0000u)==0xD00D0000u && esp_reset_reason()!=ESP_RST_POWERON){
-    int st=(int)(g_doom_trace&0xFF), rr=(int)esp_reset_reason();
-    g_doom_lastmsg[sizeof(g_doom_lastmsg)-1]=0;
-    for(char*q=g_doom_lastmsg;*q;q++) if(*q<32||*q>126)*q='?';
-    snprintf(g_doom_report,sizeof g_doom_report,"[doom] died at stage %d (%s), reset %d (%s), last: %s",st,doomStageName(st),rr,rstName(rr),g_doom_lastmsg);
-  }
-  g_doom_trace=0;
-  if(g_doom_magic==DOOM_MAGIC && esp_reset_reason()==ESP_RST_SW){ g_doom_magic=0; doomBoot(); }   // lab13: one-shot
-  g_doom_magic=0;
-  decodersInit();   // lab13: cover decoders from the internal heap (not a Doom boot)
   // v5.1: SD-access is requested only when our NOINIT flag survived a *software* restart
   // (cold power-on => reset reason POWERON => never a false trigger from RTC garbage).
   bool sdAccessReq=(g_sdaccess_magic==SDACCESS_MAGIC && esp_reset_reason()==ESP_RST_SW);
   if(g_bootMagic!=0xB007C047u){g_bootMagic=0xB007C047u;g_bootCount=1;}else{g_bootCount++;}   // boot-forensics counter
+  { // lab14e: read what the LAST boot left in RTC memory before anything overwrites it
+    esp_reset_reason_t rr=esp_reset_reason();
+    g_bc_prev.reason=(int)rr;
+    g_bc_prev.crashed=(rr==ESP_RST_PANIC||rr==ESP_RST_INT_WDT||rr==ESP_RST_TASK_WDT||rr==ESP_RST_WDT);
+    g_bc_prev.valid=(g_bc_magic==BC_MAGIC);
+    if(g_bc_prev.valid){ g_bc_prev.stage=g_bc_stage; g_bc_prev.n=g_bc_n; g_bc_prev.psram=g_bc_psram; g_bc_prev.intr=g_bc_int;
+                         g_bc_prev.failsz=g_bc_failsz; g_bc_prev.failcaps=g_bc_failcaps; }
+    g_bc_magic=BC_MAGIC; g_bc_stage=BC_NONE; g_bc_n=0; g_bc_failsz=0; g_bc_failcaps=0;
+    heap_caps_register_failed_alloc_callback(bcAllocFailed);
+  }
   Serial.printf("[BOOT] rst=%d magic=%08X sdAccess=%d\n",(int)esp_reset_reason(),(unsigned)g_sdaccess_magic,(int)sdAccessReq);
   applyTheme(0);displayInit();touchInit();
   gfx_fillScreen(TFT_BLACK);gfx_flush();
-  if(g_doom_report[0]){                               // lab13c: show why Doom did not make it
-    Serial.println(g_doom_report);
-    gfx_setTextSize(2); gfx_setTextColor(0xF800,TFT_BLACK); gfx_setCursor(8,10); gfx_print("DOOM CRASHED");
-    gfx_setTextSize(1); gfx_setTextColor(TFT_WHITE,TFT_BLACK);
-    { const char* m=g_doom_report+7; int y=44; char line[64];
-      while(*m && y<gH-40){ int n=0; while(m[n] && n<50) n++; memcpy(line,m,n); line[n]=0; gfx_setCursor(8,y); gfx_print(line); m+=n; y+=12; } }
-    gfx_setTextColor(0xFD20,TFT_BLACK); gfx_setCursor(8,gH-20); gfx_print("Photo this for Claude - tap to continue");
-    gfx_flush();
-    { uint32_t t0=millis(); delay(800); while(millis()-t0<30000){ if(Touch_ReadFrame()) break; delay(30); } }
-    gfx_fillScreen(TFT_BLACK);gfx_flush();
-  }
   // 5.9.35: the RAM disk is allocated AFTER the config is read (see below) so
-  // DISKMAXKB= can size it. Nothing between here and there touches g_disk.
+  // BIGDISK= can size it. Nothing between here and there touches g_disk.
   SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);delay(100);
   bool sdok=SD_MMC.begin("/sdcard",true,false,20000);if(!sdok){delay(200);sdok=SD_MMC.begin("/sdcard",true,false,20000);}
   if(!sdok && !sdAccessReq){                          // 5.9.38: is it an exFAT/NTFS card rather than no card?
     int fk=sdPeekForeignFs();
     if(fk==1||fk==2){
-      Serial.printf("[sd] card present but %s - offering FAT32 format\n",fk==2?"NTFS":"exFAT");
-      if(sdOfferFormat(fk)) sdFormatFat32AndReboot();   // reboots on success
-      gfx_fillScreen(TFT_BLACK);                       // declined: carry on to the normal no-card path
+      Serial.printf("[sd] card present but %s - needs FAT32 (the GTi does not format cards)\n",fk==2?"NTFS":"exFAT");
+      sdForeignFsNotice(fk);                           // lab14h: explain, change nothing
+      gfx_fillScreen(TFT_BLACK);                       // carry on to the normal no-card path
     }
   }
   if(sdok){
+    sdPullups();                                   // lab14g: CMD/D0 pull-ups, then the metadata guard before ANY card write
+    bool _sg=sdGuardInstall();
+    if(!SD_MMC.exists(GTI_DIR))SD_MMC.mkdir(GTI_DIR);   // lab14g: the log + state files live here, not in the root
     if(!SD_MMC.exists("/ADF")){SD_MMC.mkdir("/ADF");ensureSampleFolder();SD_MMC.mkdir("/screensaver");}   // blank card: SAMPLE example + arm the screensaver by default (v4.8.5 — DELETE /screensaver to disable it; empty = the bouncing starburst, drop in JPGs for a gallery)
     if(!SD_MMC.exists("/DSK"))SD_MMC.mkdir("/DSK");
     if(!SD_MMC.exists("/GENERIC"))SD_MMC.mkdir("/GENERIC");   // v5.2: generic/any-machine library
     generateDefaultConfig();
     selfHealConfig();           // append any documented keys an older CONFIG.TXT is missing
     loadConfig();
-    if(g_sd_freq==40000){           // 5.3.5: SDSPEED=40 opt-in — remount fast, fall back to 20 if it won't take
+    g_sdg.on=g_sdguard_cfg; sdPullups();           // lab14g: SDGUARD= / SDPULLUP= from CONFIG.TXT
+    if(g_sd_freq!=20000){           // 5.3.5: SDSPEED=40 opt-in (lab14g: or 10) — remount, fall back to 20 if it won't take
+      sdGuardRemove();
       SD_MMC.end();delay(30);SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);
-      if(!SD_MMC.begin("/sdcard",true,false,40000)){g_sd_freq=20000;SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);SD_MMC.begin("/sdcard",true,false,20000);}
+      if(!SD_MMC.begin("/sdcard",true,false,g_sd_freq)){g_sd_freq=20000;SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);SD_MMC.begin("/sdcard",true,false,20000);}
+      sdPullups(); _sg=sdGuardInstall();
     }
+    // lab14e: reserve the RAM disk FIRST, at its full BIGDISK size, so the library is sized
+    // from what is really left. It used to be allocated after the library, and a big library
+    // could leave it short (it stepped itself down) or panic the board before it got there.
+    bcSet(BC_RAMDISK,g_img_max_kb);
+    if(!g_disk && !diskAlloc()){gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,160);gfx_print("RAM ALLOC FAILED");gfx_flush();while(1)delay(1000);}
     espnowSetScanCap(g_dongle_cap);
     relayout();                 // apply ROTATE/COMPACT from config before first draw
+    { // lab14l: "it's alive" screen - up within a second of power-on and held while the library loads
+      // (a big card takes ~20 s before the cracktro). Drawn here, after CONFIG.TXT, so it has the right
+      // rotation. Anything that follows (scan screen, cover build, TOO BIG, cracktro) simply draws over it.
+      gfx_fillScreen(TFT_BLACK);
+      gfx_setTextSize(3); gfx_setTextColor(COL_ORANGE,TFT_BLACK);
+      gfx_setCursor((gW-gfx_textWidth("OMEGAWARE"))/2, gH/2-58); gfx_print("OMEGAWARE");
+      gfx_setTextSize(6); gfx_setTextColor(TFT_WHITE,TFT_BLACK);
+      gfx_setCursor((gW-gfx_textWidth("GTi"))/2, gH/2-16); gfx_print("GTi");
+      gfx_flush();
+    }
     gLog("[panel] strips=%d (cap %d) flushdelay=%dus  [lab3: STRIPROWS= / FLUSHUS=]\n",g_strip_rows,g_strip_cap,g_flush_us);
     gLog("\n=== BOOT %s === reset=%d boot=%u int=%u psram=%u ===\n",FW_VERSION,(int)esp_reset_reason(),(unsigned)g_bootCount,(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
-    if(g_doom_report[0]){ gLog("%s\n",g_doom_report); }   // lab13c
-    heap_caps_malloc_extmem_enable(16);   // 5.8.9: library index/list onto idle PSRAM, off the ~180KB internal SRAM
+    if(g_bc_prev.crashed){   // lab14e: where did the last boot die?
+      if(g_bc_prev.valid) gLog("[crash] last boot died (reset=%d) in: %s | n=%u psram=%u int=%u | first failed alloc: %u B caps=0x%X%s\n",
+                               g_bc_prev.reason,bcName(g_bc_prev.stage),(unsigned)g_bc_prev.n,(unsigned)g_bc_prev.psram,(unsigned)g_bc_prev.intr,
+                               (unsigned)g_bc_prev.failsz,(unsigned)g_bc_prev.failcaps,g_bc_prev.failsz?"":" (none)");
+      else gLog("[crash] last boot died (reset=%d) - no breadcrumb (older firmware or power loss)\n",g_bc_prev.reason);
+    }
+    gLog("[sd] clock %d kHz, 1-bit, internal pull-ups on CMD/D0 %s | guard %s (drive %d via %d)\n",g_sd_freq,g_sdpullup_cfg?"ON":"OFF",
+         _sg?(g_sdg.on?"ON":"installed, OFF (SDGUARD=OFF)"):"NOT INSTALLED",(int)g_sdg_pdrv,(int)g_sdg_lower);
+    gLog("[ramdisk] reserved first: max image %luKB, %lu bytes PSRAM | psram now %u\n",(unsigned long)g_img_max_kb,(unsigned long)TOTAL_SECTORS*512UL,(unsigned)ESP.getFreePsram());
+    if(!sdAccessReq){   // 5.9.41-lab14d: SD ACCESS never needs the library - and a too-big card must still be reachable
+    if(g_bc_prev.crashed && g_bc_prev.valid && bcIsLibrary(g_bc_prev.stage)) libCrashed();   // lab14e: never returns - no reboot loop
+    // 5.8.9 put the library in PSRAM with extmem_enable(16) - but that still sends every
+    // allocation UNDER 16 bytes to internal RAM first. Each game's disk list is one 4-byte
+    // block (20 B with heap overhead), so 13,550 games needed ~228 KB of internal RAM when
+    // only ~144 KB was free (measured on a 32-bit host model of the real code). Internal RAM
+    // ran dry, a driver's own allocation failed and the board panicked - with MB of PSRAM
+    // still free. lab14e: limit 0 = every size goes to PSRAM first while the library is built.
+    heap_caps_malloc_extmem_enable(0);
     uint32_t _tscan=millis();
     listImages(SD_MMC,g_files);
     uint32_t _tscanned=millis();
@@ -5942,21 +6528,27 @@ void setup(){
     // 5.9.31-lab1 sidecars. Walked the SD this boot? the harvest is authoritative: fold it in and
     // persist (the sig guard skips an unchanged rewrite). buildGameList already folded on the cold
     // path; this also covers warm-gamecache-but-index-rebuilt. No walk -> restore from .nfocache.
+    bcSet(BC_NFOCACHE,(uint32_t)g_games.size());   // lab14e breadcrumb
     if(g_sidecars_harvested){ if(assignSidecarsFromHarvest())writeGameCache(); writeNfoCacheIfChanged(); }
     else loadNfoCache();
     g_nfoharvest.clear(); g_nfoharvest.shrink_to_fit();   // harvest has done its job — give the PSRAM back
+    fwLocFree();                                            // lab14f: warm path (no buildThumbs) - drop the cover locations
     g_manualset.clear();  g_manualset.shrink_to_fit();
     g_hdset.clear();      g_hdset.shrink_to_fit();
     heap_caps_malloc_extmem_enable(4096);   // restore: runtime allocations back to internal (fast UI)
+    bcSet(BC_UISTART,(uint32_t)g_games.size());   // lab14e breadcrumb
+    sdGuardReport(true);                            // lab14g: what the guard saw during the scan/build
     gLog("[boot] build %lums | scan+build %lums int=%u psram=%u\n",(unsigned long)(millis()-_tscanned),(unsigned long)(millis()-_tscan),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
     applyStats();
     buildActiveLetters();
     if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
     if(g_lastused)restoreLastUsed();   // LASTUSED=ON: jump the selection back to the game loaded before power-off
     scanScreensaver();
+    }
   } else {gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,200);gfx_print(T(L_SD_MOUNT_FAIL));gfx_flush();delay(2000);relayout();}   // no card: still init layout so INFO/LOAD DIAG work
-  // 5.9.35: RAM disk sized from DISKMAXKB (default when there is no card to read).
-  if(!diskAlloc()){gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,160);gfx_print("RAM ALLOC FAILED");gfx_flush();while(1)delay(1000);}
+  // 5.9.35: RAM disk sized from the BIGDISK size (default when there is no card to read).
+  // lab14e: normally already allocated above, before the library; this covers the no-card path.
+  if(!g_disk && !diskAlloc()){gfx_setTextColor(TFT_RED,TFT_BLACK);gfx_setCursor(8,160);gfx_print("RAM ALLOC FAILED");gfx_flush();while(1)delay(1000);}
   gLog("[ramdisk] max image %luKB -> %lu sectors, %u sec/clus, %lu bytes PSRAM (free %u)\n",
        (unsigned long)g_img_max_kb,(unsigned long)TOTAL_SECTORS,(unsigned)SECTORS_PER_CLUSTER,
        (unsigned long)TOTAL_SECTORS*512UL,(unsigned)ESP.getFreePsram());
@@ -5970,6 +6562,7 @@ void setup(){
   MSC.begin(TOTAL_SECTORS,512);g_usb_announced=TOTAL_SECTORS;USB.begin();hardDetach();
   bool bootCar=(g_car_bootmode==1)||(g_car_bootmode==2&&readLastView()==1);   // v4.8.6: CAROUSEL= 0=list / 1=reel / LAST=restore
   if(bootCar&&!g_games.empty())carEnter();else{drawFullUI();gfx_flush();}
+  bcSet(BC_READY,(uint32_t)g_games.size());   // lab14e: boot finished - a crash from here on is not a library-load crash
   esp_ota_mark_app_valid_cancel_rollback();   // v5.3: confirm this image booted OK (satisfies the A/B rollback handshake; harmless no-op on non-rollback bootloaders)
   if(g_wireless_mode && g_link_home && !sdAccessReq) webPanelBegin();   // 5.9.12: web only in Wireless + WiFi (Standalone = radio off)
   // Merge step 1 smoke test: DAV_TEST=<remote path> in CONFIG.TXT fetches that
@@ -6089,8 +6682,18 @@ static String doUserDisks(){
 // v5.6.0: fresh (uncached) reload of the current library level = mode root + g_libpath.
 // Used for category browsing so per-level scans aren't served/polluted by the per-mode cache.
 static void reloadLevel(){
+  // lab14n: hand back the current library FIRST, exactly as doRescan does (lab14e). This used to walk the
+  // card into a new list while the old one (10,000 games + reel tiles) was still in memory: on a big card
+  // the memory check tripped at once and the level rebuilt as an EMPTY list ("no .adf files found").
+  std::vector<String>().swap(g_files); g_games.clear(); g_games.shrink_to_fit();
+  carRuntimeRelease(); g_cover_flags_ready=false;
+  heap_caps_malloc_extmem_enable(0);       // library build: small blocks to PSRAM too (see setup)
   g_files=scanImagesAnimated();            // fills g_files (titles) + g_cats (sub-categories) + g_coverset
-  buildGameList();buildThumbs();applyStats();   // buildGameList's cache write is guarded to the top level; applyStats restores fav/plays
+  buildGameList();buildThumbs();           // buildGameList's cache write is guarded to the top level
+  g_nfoharvest.clear();g_nfoharvest.shrink_to_fit();fwLocFree();g_manualset.clear();g_manualset.shrink_to_fit();g_hdset.clear();g_hdset.shrink_to_fit();
+  heap_caps_malloc_extmem_enable(4096);    // back to the runtime setting
+  bcSet(BC_READY,(uint32_t)g_games.size());   // lab14n: out of the library stages (a later crash must not read as a library crash)
+  applyStats();                            // applyStats restores fav/plays
   buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;g_disk_sel=0;g_disk_page=0;
   if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
 }
@@ -6144,7 +6747,12 @@ static void doCategoryBrowse(){
 static void switchLib(int m){   // int, not DiskMode: Arduino auto-generates this prototype ABOVE the enum decl, so an enum param won't compile
   g_mode=(DiskMode)m;g_libpath="";
   if(g_categories){reloadLevel();}
-  else{g_files.clear();heap_caps_malloc_extmem_enable(16);listImages(SD_MMC,g_files);if(!readGameCache()){buildGameList();buildThumbs();}heap_caps_malloc_extmem_enable(4096);buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));}
+  else{std::vector<String>().swap(g_files);g_games.clear();g_games.shrink_to_fit();   // lab14n: free the old library first (clear() kept the games + the vector's block)
+    carRuntimeRelease();g_cover_flags_ready=false;heap_caps_malloc_extmem_enable(0);listImages(SD_MMC,g_files);if(!readGameCache()){buildGameList();buildThumbs();}
+    if(g_sidecars_harvested){ if(assignSidecarsFromHarvest())writeGameCache(); writeNfoCacheIfChanged(); }   // lab14p: descriptions for the new library,
+    else loadNfoCache();                                                                                  //   exactly as setup() does
+    g_nfoharvest.clear();g_nfoharvest.shrink_to_fit();g_manualset.clear();g_manualset.shrink_to_fit();g_hdset.clear();g_hdset.shrink_to_fit();   // lab14n
+    fwLocFree();heap_caps_malloc_extmem_enable(4096);bcSet(BC_READY,(uint32_t)g_games.size());buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));}
   drawFullUI();gfx_flush();
 }
 static void drawInfoBottomBar(){
@@ -6196,7 +6804,8 @@ static void infoAction(uint8_t act){
     case IA_RESCAN: doRescan();break;
     case IA_RESET: {gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0xE8C4,COL_BG);const char*m=T(L_RESETTING);gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();delay(700);ESP.restart();}break;
     case IA_DIAG: if(g_loaded&&g_loaded_name=="AMIGA TEST KIT"){g_info_showing=false;doUnload();drawFullUI();gfx_flush();}else doLoadDiag();break;
-    case IA_SDACCESS: {gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0x05FF,COL_BG);const char*m="ENTERING SD ACCESS...";gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();g_sdaccess_magic=SDACCESS_MAGIC;delay(350);ESP.restart();}break;
+    case IA_SDACCESS: {gLog("[sdguard] entering SD ACCESS after %lu min up - totals since this boot:\n",(unsigned long)(millis()/60000)); sdGuardReport(true);   // lab14j: the session's reads, before the restart wipes them
+      gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0x05FF,COL_BG);const char*m="ENTERING SD ACCESS...";gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();g_sdaccess_magic=SDACCESS_MAGIC;delay(350);ESP.restart();}break;
     case IA_FWUPDATE: doFirmwareUpdate();g_info_showing=false;drawFullUI();gfx_flush();break;
     case IA_LIBMODE: switchLib((g_mode+1)%3); if(g_info_showing)drawInfoFull(); break;   // v5.6.0: cycle ADF->DSK->GEN, stay in INFO
     case IA_CATEG: g_categories=!g_categories; saveConfigKey("CATEGORIES", g_categories?"ON":"OFF"); g_libpath=""; drawInfoFull(); break;   // flip+save like COMPACT/HIVEMIND; NO rescan (g_cats builds when the CATEGORIES button is tapped)
@@ -6208,6 +6817,8 @@ static void infoAction(uint8_t act){
              String cv; if(g_cracktro==8)cv="DENISE"; else if(g_cracktro==9)cv="WRANGLER"; else if(g_cracktro==10)cv="RETRONAUT"; else cv=String(g_cracktro);
              saveConfigKey("CRACKTRO", cv); }
       drawInfoFull(); break;
+    case IA_TESTPAGE: g_info_test=true;  g_info_page=0; drawInfoFull(); break;   // lab14k: open the TEST TOOLS sub-page
+    case IA_TESTBACK: g_info_test=false; g_info_page=0; drawInfoFull(); break;   // lab14k: back to the main Settings list
     case IA_DIAGDISP: g_diagdisp=!g_diagdisp; saveConfigKey("DIAGDISP", g_diagdisp?"ON":"OFF"); drawInfoFull(); break;   // live diagnostic overlay ON/OFF
     case IA_REELBORDER: g_reelborder=!g_reelborder; saveConfigKey("REELBORDER", g_reelborder?"ON":"OFF"); drawInfoFull(); break;   // MasterTelly CR: reel cover frame ON/OFF (applies next reel draw)
     case IA_LASTUSED: g_lastused=!g_lastused; saveConfigKey("LASTUSED", g_lastused?"ON":"OFF"); drawInfoFull(); break;
@@ -6216,6 +6827,7 @@ static void infoAction(uint8_t act){
     case IA_REELPROF: g_reelprof=!g_reelprof; saveConfigKey("REELPROF", g_reelprof?"ON":"OFF");
                       g_rp_frames=g_rp_draw=g_rp_clear=g_rp_blit=g_rp_sav=g_rp_flush=0; g_rp_t0=millis();
                       drawInfoFull(); break;   // 5.9.33-lab3: live frame breakdown into /gti.log
+    case IA_SDSOAK: sdSoakTest(); drawInfoFull(); break;   // lab14g
     case IA_LISTTILE: g_listtile=!g_listtile; saveConfigKey("LISTTILE", g_listtile?"ON":"OFF"); drawInfoFull(); break;   // 5.9.34-lab4: list cover from the reel tile vs a fresh JPEG decode
     case IA_SSMODE:
       if(g_ss_slides){ g_ss_slides=false; g_ss_matrix=false; saveConfigKey("SSMODE","BOUNCE"); }
@@ -6309,7 +6921,7 @@ static void handleTap(uint16_t px,uint16_t py){
     if(btn==0&&g_sel>0){g_sel--;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[g_sel].name));if((float)(g_sel*LIST_ITEM_H)<g_scrollPx)g_scrollPx=g_sel*LIST_ITEM_H;drawListAndCover();gfx_flush();}
     else if(btn==1&&g_sel<(int)g_games.size()-1){g_sel++;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[g_sel].name));if((float)((g_sel+1)*LIST_ITEM_H)>g_scrollPx+(LIST_BOTTOM-LIST_TOP))g_scrollPx=(g_sel+1)*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP);drawListAndCover();gfx_flush();}
     else if(btn==2){ g_info_showing=false; carEnter(); }   // REEL — enter the carousel
-    else if(btn==3){ g_info_showing=!g_info_showing; if(g_info_showing){g_info_page=0;drawInfoFull();} else {drawFullUI();gfx_flush();} }
+    else if(btn==3){ g_info_showing=!g_info_showing; if(g_info_showing){g_info_page=0;g_info_test=false;drawInfoFull();} else {drawFullUI();gfx_flush();} }
     return;
   }
 }
@@ -6320,6 +6932,7 @@ static void handleTap(uint16_t px,uint16_t py){
 
 void loop(){
   webPanelService();   // one web client + one queued DAV load per pass (merge step 2)
+  { static uint32_t _sgT=0; if(g_sdg.pending_report && millis()-_sgT>2000){ _sgT=millis(); sdGuardReport(false); } }   // lab14g
   if(g_espnow_link_just_established){g_espnow_link_just_established=false;
     gfx_fillRect(0,0,VW,STATUS_H,0x07E0);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0x07E0);
     gfx_setCursor(VW/2-57,6);gfx_print(T(L_DONGLE_LINKED));gfx_flush();delay(2000);drawStatusBar();gfx_flush();}

@@ -19,6 +19,14 @@
     "appOffset": 65536,
     "builds": [
       {
+        "v": "5.9.41-lab14p",
+        "ch": "lab",
+        "date": "2026-09-26",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab14p-update.bin",
+        "note": "Big-library build, tested on a 10,000-game card. Scan + cover cache with no per-file name lookups (26 GB card: ~1 min scan, covers reused on RESCAN); LIBRARY TOO BIG check with a GTI_CAPACITY.TXT report (LIBLIMIT=OFF loads what fits); SD guard against bad SD reads/writes; GTi files moved to /GTI; the GTi never formats a card (5.9.38's format is gone); BIGDISK=OFF frees 1.1 MB (1.76 MB save/wireless buffer; ON = 2.9 MB for big HFEs); TEST TOOLS page in Settings (DEVMODE=OFF hides it); OMEGAWARE/GTi splash at power-on; fixes: every new CONFIG.TXT had its first 4 KB blank, reel/list stalls on cover-less games, CATEGORIES/LIBRARY switch emptying the list on big cards.",
+        "latest": false
+      },
+      {
         "v": "5.9.41-EE",
         "ch": "egg",
         "date": "2026-09-23",
