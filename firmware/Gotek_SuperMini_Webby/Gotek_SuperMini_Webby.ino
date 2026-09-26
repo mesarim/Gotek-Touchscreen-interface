@@ -47,7 +47,7 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-1.6.4"
+#define FW_VERSION     "Webby-1.6.5"   // 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
 #define ESPNOW_CHANNEL 6
 //  Board profile 
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -408,7 +408,12 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
     // (g_enroll_open is forced true at boot in ESPNOW mode when _owner_count==0).
     bool known = isOwner(p->mac);
     if (!known) {
-      if (!g_enroll_open) return;
+      // 1.6.5: an UNCLAIMED dongle (no owners) is always open - same rule as EJECT below (JFW).
+      // Before, the door shut when the first GTi paired and was never reopened when that GTi
+      // unpaired (deleted the dongle), and shut 6 minutes after power-on even with no owner, so
+      // the dongle went silent to every scan until it was power-cycled or BOOT was held 5 s.
+      // Once an owner exists the door is closed as before: a SECOND screen still needs BOOT 5 s.
+      if (!g_enroll_open && _owner_count > 0) return;
       if (!addOwner(p->mac)) { oledStatus("Gotek OMEGA " FW_VERSION,"OWNERS FULL","Hold BOOT 15s","to wipe & re-pair"); return; }
       saveOwners();
       if (_owner_count>0) g_enroll_open = false;   // once a real owner exists, close the door
@@ -435,6 +440,10 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
         if (_owner_count) memcpy(_wave_mac, _owners[0], 6); else memset(_wave_mac,0,6);
       }
       _paired = (_owner_count>0);
+      // 1.6.5: the last owner deleted this dongle -> back to "looking for a new owner", exactly like a
+      // fresh dongle at power-on (pairing open, pairing blink). The rule in PAIR_HELLO keeps it open
+      // for as long as it has no owner, so it never goes silent to a scan.
+      if (_owner_count == 0) { g_enroll_open = true; g_enroll_until = millis() + 6UL*60UL*1000UL; }
       oledStatus("Gotek OMEGA " FW_VERSION, "Unpaired", String(_owner_count)+" owner(s)", "");
     }
     return;
