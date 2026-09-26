@@ -1,0 +1,16 @@
+{
+  "name": "Gotek SuperMini — Webby BETA (needs GTi 5.9.41-lab14t+)",
+  "version": "Webby-1.6.6",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "Gotek_SuperMini_Webby-1.6.6.merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}

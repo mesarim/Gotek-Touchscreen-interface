@@ -161,6 +161,14 @@
     "chipFamily": "ESP32-S3",
     "builds": [
       {
+        "v": "Webby-1.6.6",
+        "ch": "beta",
+        "latest": false,
+        "date": "2026-09-26",
+        "full": "firmware/supermini-beta/manifest-1.6.6.json",
+        "note": "Testing. NEEDS GTi 5.9.41-lab14t or newer (older GTi builds can pair but cannot send it a disk - its Wi-Fi name is GotekOMEGA-xxxx). Deleting it on the GTi puts it back to 'looking for a new owner'; a dongle with no owner always accepts pairing; two screens can share it (SHARE, 'in use by', take-over question); DSK/GENERIC keep their extension over wireless; own Wi-Fi name, device name, web update. Pair again after flashing (full wipe)."
+      },
+      {
         "v": "Webby-1.6.4",
         "ch": "beta",
         "latest": false,
