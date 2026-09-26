@@ -19,6 +19,14 @@
     "appOffset": 65536,
     "builds": [
       {
+        "v": "5.9.41-lab14q",
+        "ch": "lab",
+        "date": "2026-09-26",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab14q-update.bin",
+        "note": "Everything in 5.9.41-lab14p (big-library build, tested on a 10,000-game card) PLUS: GENERIC disks with long file names (32+ characters) no longer lose extension letters on the Gotek (PROPHECY.HF -> FlashFloppy ERROR 34, reported by kodak80). New LONGNAME=ON in CONFIG.TXT: the Gotek sees the image's full file name (shown on a FlashFloppy OLED/LCD), for ADF, DSK and GENERIC; OFF (default) keeps DISK.ADF / DISK.DSK.",
+        "latest": false
+      },
+      {
         "v": "5.9.41-lab14p",
         "ch": "lab",
         "date": "2026-09-26",

@@ -44,7 +44,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "5.9.41-lab14p-JC3248"  // lab14p: DEVMODE=OFF hides Settings -> TEST TOOLS (ON by default); switching LIBRARY loads that library's saved descriptions; every documented key is in its own CONFIG.TXT section | lab14o: LIBLIMIT= documented in CONFIG.TXT (ON by default); built-in data (default CONFIG.TXT, SAMPLE cover) copied to RAM before it is written - it used to reach the card as garbage (first 4 KB of every new CONFIG.TXT blank) | lab14n: CATEGORIES and LIBRARY (ADF/DSK/GEN) free the old library before rebuilding, like RESCAN - a big card no longer rebuilds into an empty list | lab14m: BIGDISK=OFF (default) reserves 1.76 MB for save write-back / wireless sends (was 2.9 MB), BIGDISK=ON = 2.9 MB for big HFEs; DISKMAXKB retired | lab14l: "OMEGAWARE / GTi" shown the moment the card and CONFIG.TXT are read, so a big library's load time is never a black screen | lab14k: Settings -> TEST TOOLS sub-page holds the pure test tools (SD SOAK TEST, REEL PROF, NO-CACHE, DIAG-DISP) | lab14j: the SD guard's totals are written to gti.log on the way into SD ACCESS (so a normal session's card reads show up in the log) | lab14i: "no cover" remembered across restarts until the next RESCAN (a warm boot no longer searches the card for every cover-less game - the reel/list stalls), save badge answered from a list of .sav files made by the scan and kept current when the GTi writes a save, the .nfo fallback is one name lookup (not every file in the folder) and never runs while the reel moves | lab14h: the GTi never formats a card (exFAT/NTFS card -> explains how to format it on a computer, changes nothing), Mac "._" files ignored by the scanner | lab14g: SD guard (FatFs metadata checked on every read/write: bit-shifted sectors re-read, never written back; writes verified), gti.log + state files moved out of the root into /GTI, SD line pull-ups, SD SOAK TEST in Settings, SDSPEED=10 | lab14f: cover-cache build with no name lookups (covers opened from where the scan found them, .thumbs listed once), tiles stamped with their cover's date so a RESCAN only rebuilds changed covers | lab14e: library build keeps small allocations out of internal RAM (the real cause of the big-card panics), RAM disk reserved before the library, LIBLIMIT=OFF loads the rated amount, micro-thumbs sized to what is left (new 8x8 tier), crash breadcrumbs + no boot loops, clearer TOO BIG wording | lab14d: library capacity check - a card too big for this GTi halts with a loud warning + SD ACCESS (LIBLIMIT=OFF to load anyway) | lab14c: g_games is a deque (no 1.2 MB block), grouping retries with fewer images on bad_alloc instead of reboot-looping | lab14b: two-pass scan (all images first, blurbs within a memory budget), .index trusted only with a .gamecache, blurbs moved not copied, allocation-free name sort | lab14: one-pass FatFs scan walker (raw .nfo heads), O(n log n) multi-disk grouping, cover harvest trusted when empty, PSRAM guard
+#define FW_VERSION "5.9.41-lab14q-JC3248"  // lab14q: the disk the Gotek sees keeps its extension however long the file name is (32+ char GENERIC names lost letters -> FlashFloppy ERROR 34); LONGNAME=ON gives it the image's full file name (VFAT long name, shown on a FlashFloppy display) | lab14p: DEVMODE=OFF hides Settings -> TEST TOOLS (ON by default); switching LIBRARY loads that library's saved descriptions; every documented key is in its own CONFIG.TXT section | lab14o: LIBLIMIT= documented in CONFIG.TXT (ON by default); built-in data (default CONFIG.TXT, SAMPLE cover) copied to RAM before it is written - it used to reach the card as garbage (first 4 KB of every new CONFIG.TXT blank) | lab14n: CATEGORIES and LIBRARY (ADF/DSK/GEN) free the old library before rebuilding, like RESCAN - a big card no longer rebuilds into an empty list | lab14m: BIGDISK=OFF (default) reserves 1.76 MB for save write-back / wireless sends (was 2.9 MB), BIGDISK=ON = 2.9 MB for big HFEs; DISKMAXKB retired | lab14l: "OMEGAWARE / GTi" shown the moment the card and CONFIG.TXT are read, so a big library's load time is never a black screen | lab14k: Settings -> TEST TOOLS sub-page holds the pure test tools (SD SOAK TEST, REEL PROF, NO-CACHE, DIAG-DISP) | lab14j: the SD guard's totals are written to gti.log on the way into SD ACCESS (so a normal session's card reads show up in the log) | lab14i: "no cover" remembered across restarts until the next RESCAN (a warm boot no longer searches the card for every cover-less game - the reel/list stalls), save badge answered from a list of .sav files made by the scan and kept current when the GTi writes a save, the .nfo fallback is one name lookup (not every file in the folder) and never runs while the reel moves | lab14h: the GTi never formats a card (exFAT/NTFS card -> explains how to format it on a computer, changes nothing), Mac "._" files ignored by the scanner | lab14g: SD guard (FatFs metadata checked on every read/write: bit-shifted sectors re-read, never written back; writes verified), gti.log + state files moved out of the root into /GTI, SD line pull-ups, SD SOAK TEST in Settings, SDSPEED=10 | lab14f: cover-cache build with no name lookups (covers opened from where the scan found them, .thumbs listed once), tiles stamped with their cover's date so a RESCAN only rebuilds changed covers | lab14e: library build keeps small allocations out of internal RAM (the real cause of the big-card panics), RAM disk reserved before the library, LIBLIMIT=OFF loads the rated amount, micro-thumbs sized to what is left (new 8x8 tier), crash breadcrumbs + no boot loops, clearer TOO BIG wording | lab14d: library capacity check - a card too big for this GTi halts with a loud warning + SD ACCESS (LIBLIMIT=OFF to load anyway) | lab14c: g_games is a deque (no 1.2 MB block), grouping retries with fewer images on bad_alloc instead of reboot-looping | lab14b: two-pass scan (all images first, blurbs within a memory budget), .index trusted only with a .gamecache, blurbs moved not copied, allocation-free name sort | lab14: one-pass FatFs scan walker (raw .nfo heads), O(n log n) multi-disk grouping, cover harvest trusted when empty, PSRAM guard
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -591,6 +591,7 @@ static const uint16_t RESERVED_SECTORS=DISK_RESERVED_SECTORS,SECTORS_PER_FAT=DIS
 static const uint8_t NUM_FATS=1;static const uint16_t ROOT_ENTRIES=64;
 static const uint32_t FAT_LBA=DISK_RESERVED_SECTORS,ROOT_LBA=DISK_RESERVED_SECTORS+DISK_SECTORS_PER_FAT,DATA_LBA=DISK_DATA_LBA;
 static uint32_t g_img_max_kb=DISK_IMG_DEF_KB;   // lab14m: BIGDISK= (was DISKMAXKB=)
+static bool     g_longname=false;               // lab14q: LONGNAME=ON - the presented disk carries the image's real file name
 static uint32_t TOTAL_SECTORS=DISK_IMG_DEF_KB*2+DISK_DATA_LBA;   // real value set by diskGeomApply()
 static uint8_t  SECTORS_PER_CLUSTER=4;
 static uint32_t MAX_FILE_BYTES=0;
@@ -624,6 +625,10 @@ static const uint32_t ADF_HD_SIZE=1802240;                 // Amiga HD floppy = 
 static const uint32_t HD_FLAG_BYTES=1258291;               // >1.2MB => flag as HD; extended-DD disks (~900-960KB) stay DD (A500-readable)
 enum DiskMode{MODE_ADF=0,MODE_DSK=1,MODE_GEN=2};static DiskMode g_mode=MODE_ADF;   // v5.2: GEN = generic/any-machine library (/GENERIC)
 static const char*getOutputFilename(){return g_mode==MODE_ADF?"DISK.ADF":"DISK.DSK";}
+// lab14q: the name the Gotek sees for an image. GENERIC always uses the real name (FlashFloppy needs the
+// extension); ADF/DSK use DISK.ADF / DISK.DSK unless LONGNAME=ON.
+static String presentName(const String& imgPath){ int s=imgPath.lastIndexOf('/'); String fn=s>=0?imgPath.substring(s+1):imgPath;
+  return (g_longname||g_mode==MODE_GEN) ? fn : String(getOutputFilename()); }
 uint8_t*g_disk=nullptr;
 // Allocate the volume, stepping the request down 256 KB at a time if PSRAM is
 // short (a big library plus a big disk can be tighter than a blank card).
@@ -641,7 +646,53 @@ static void wr32(uint8_t*p,int o,uint32_t v){p[o]=v;p[o+1]=v>>8;p[o+2]=v>>16;p[o
 static void build_boot_sector(uint8_t*bs){memset(bs,0,512);bs[0]=0xEB;bs[1]=0x3C;bs[2]=0x90;memcpy(bs+3,"MSDOS5.0",8);wr16(bs,11,512);bs[13]=SECTORS_PER_CLUSTER;wr16(bs,14,RESERVED_SECTORS);bs[16]=NUM_FATS;wr16(bs,17,ROOT_ENTRIES);wr16(bs,19,(uint16_t)TOTAL_SECTORS);bs[21]=0xF8;wr16(bs,22,SECTORS_PER_FAT);wr16(bs,24,32);wr16(bs,26,64);bs[36]=0x80;bs[38]=0x29;wr32(bs,39,0x12345678);memcpy(bs+43,"ESP32MSC   ",11);memcpy(bs+54,"FAT12   ",8);bs[510]=0x55;bs[511]=0xAA;}
 static void fat12_set(uint8_t*fat,uint16_t cl,uint16_t v){uint32_t i=(cl*3)/2;if(!(cl&1)){fat[i]=v&0xFF;fat[i+1]=(fat[i+1]&0xF0)|((v>>8)&0x0F);}else{fat[i]=(fat[i]&0x0F)|((v<<4)&0xF0);fat[i+1]=(v>>4)&0xFF;}}
 static void build_fat(uint8_t*fat,uint32_t fsz){memset(fat,0,SECTORS_PER_FAT*512);fat[0]=0xF8;fat[1]=0xFF;fat[2]=0xFF;uint32_t clb=(uint32_t)SECTORS_PER_CLUSTER*512;uint32_t need=(fsz+clb-1)/clb;for(uint32_t i=0;i<need;i++)fat12_set(fat,2+i,i==need-1?0x0FFF:3+i);}
-static void build_root(uint8_t*root,const char*name,uint32_t fsz){memset(root,0,ROOT_DIR_SECTORS*512);char n[8],e[3];memset(n,' ',8);memset(e,' ',3);char tmp[32];size_t L=strlen(name);if(L>31)L=31;memcpy(tmp,name,L);tmp[L]=0;for(size_t i=0;i<L;i++)tmp[i]=toupper(tmp[i]);const char*dot=strrchr(tmp,'.');size_t nl=dot?(dot-tmp):strlen(tmp);size_t el=dot?strlen(dot+1):0;for(size_t i=0;i<nl&&i<8;i++)n[i]=tmp[i];for(size_t i=0;i<el&&i<3;i++)e[i]=dot[1+i];memcpy(root,n,8);memcpy(root+8,e,3);root[11]=0x20;wr16(root,26,2);wr32(root,28,fsz);}
+// lab14q: the root directory of the disk the Gotek sees.
+// The 8.3 entry is always valid and takes its extension from the FULL name. It used to copy the name into a
+// 32-byte buffer first, so a GENERIC file name of 32+ characters lost extension letters ("PROPHECY.HF") and
+// FlashFloppy could not recognise the format (ERROR 34). With LONGNAME=ON the real name goes in front of it as
+// VFAT long-name entries - what FlashFloppy shows on its display - and the 8.3 name becomes an alias (NAME~1.EXT).
+// The root has 64 slots; a 255-character name needs 20, so it always fits.
+static bool sfnChar(char c){ return (c>='A'&&c<='Z')||(c>='0'&&c<='9')||(c&&strchr("!#$%&'()-@^_`{}~",c)); }
+static void build_root(uint8_t*root,const char*name,uint32_t fsz){
+  memset(root,0,ROOT_DIR_SECTORS*512);
+  const char* dot=strrchr(name,'.');
+  size_t nl = dot ? (size_t)(dot-name) : strlen(name);
+  char n[8],e[3]; memset(n,' ',8); memset(e,' ',3);
+  int ni=0; bool lossy=false;
+  for(size_t i=0;i<nl;i++){ char c=(char)toupper((unsigned char)name[i]);
+    if(c==' '||c=='.'){ lossy=true; continue; }
+    if(!sfnChar(c)){ c='_'; lossy=true; }
+    if(ni<8) n[ni++]=c; else lossy=true; }
+  if(ni==0){ memcpy(n,"DISK",4); ni=4; lossy=true; }
+  if(dot){ int ei=0; for(const char*p=dot+1;*p;p++){ char c=(char)toupper((unsigned char)*p);
+    if(c==' '){ lossy=true; continue; } if(!sfnChar(c)){ c='_'; lossy=true; } if(ei<3) e[ei++]=c; else lossy=true; } }
+  bool hasLower=false; for(const char*p=name;*p;p++) if(*p>='a'&&*p<='z') hasLower=true;
+  uint8_t* sfn=root;
+  if(g_longname && (lossy||hasLower)){
+    int keep=ni<6?ni:6; n[keep]='~'; n[keep+1]='1'; for(int i=keep+2;i<8;i++) n[i]=' ';   // alias NAME~1.EXT
+    uint16_t u[255]; int ul=0;                          // the name as UCS-2 (UTF-8 decoded; anything else -> '_')
+    for(const uint8_t*p=(const uint8_t*)name; *p && ul<255; ){
+      uint32_t cp;
+      if(*p<0x80){ cp=*p++; }
+      else if((*p&0xE0)==0xC0 && (p[1]&0xC0)==0x80){ cp=((uint32_t)(p[0]&0x1F)<<6)|(p[1]&0x3F); p+=2; }
+      else if((*p&0xF0)==0xE0 && (p[1]&0xC0)==0x80 && (p[2]&0xC0)==0x80){ cp=((uint32_t)(p[0]&0x0F)<<12)|((uint32_t)(p[1]&0x3F)<<6)|(p[2]&0x3F); p+=3; }
+      else { cp='_'; p++; while((*p&0xC0)==0x80) p++; }
+      u[ul++]=(uint16_t)cp;
+    }
+    int cnt=(ul+12)/13; if(cnt<1) cnt=1;
+    uint8_t sn[11]; memcpy(sn,n,8); memcpy(sn+8,e,3);
+    uint8_t sum=0; for(int i=0;i<11;i++) sum=(uint8_t)(((sum&1)<<7)+(sum>>1)+sn[i]);
+    static const uint8_t off[13]={1,3,5,7,9,14,16,18,20,22,24,28,30};
+    for(int k=0;k<cnt;k++){                             // highest part first, part 1 just before the 8.3 entry
+      int ord=cnt-k; uint8_t* d=root+k*32;
+      d[0]=(uint8_t)(ord|(k==0?0x40:0)); d[11]=0x0F; d[13]=sum;
+      for(int jj=0;jj<13;jj++){ int ci=(ord-1)*13+jj; uint16_t ch= ci<ul ? u[ci] : (ci==ul ? 0x0000 : 0xFFFF);
+        d[off[jj]]=(uint8_t)(ch&0xFF); d[off[jj]+1]=(uint8_t)(ch>>8); }
+    }
+    sfn=root+cnt*32;
+  }
+  memcpy(sfn,n,8); memcpy(sfn+8,e,3); sfn[11]=0x20; wr16(sfn,26,2); wr32(sfn,28,fsz);
+}
 static void build_volume(const char*outName,uint32_t fsz){if(fsz>MAX_FILE_BYTES)fsz=MAX_FILE_BYTES;memset(g_disk,0,TOTAL_SECTORS*512);build_boot_sector(g_disk);build_fat(g_disk+RESERVED_SECTORS*512,fsz);build_root(g_disk+(RESERVED_SECTORS+SECTORS_PER_FAT)*512,outName,fsz);}
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2488,6 +2539,11 @@ HOTSWAP=OFF
 # FORCESWAP: ON = swap disk contents without the USB eject/re-attach cycle
 FORCESWAP=OFF
 
+# LONGNAME: OFF (default) = the Gotek sees the loaded disk as DISK.ADF / DISK.DSK (GENERIC images keep a
+#   short 8.3 version of their own name, e.g. PROPHECY.HFE). ON = the Gotek sees the image's full file name,
+#   e.g. "Prophecy I-The Viking Child-1.hfe" - shown on a FlashFloppy OLED/LCD display.
+LONGNAME=OFF
+
 # SAVES: save-game persistence when the Amiga writes to the disk.
 #   OFF       = writes live only until eject/power-off (classic behaviour)
 #   COPY      = writes are kept as GameName.sav.adf beside the master (recommended)
@@ -2648,6 +2704,7 @@ static void selfHealConfig(){
     {"BIGDISK",  "\n# BIGDISK: OFF (default) = 1.76 MB set aside for save-game write-back over the cable\n#   and for disks sent to a wireless dongle (an Amiga HD disk; the SuperMini's limit).\n#   ON = 2.9 MB, for large Atari ST .HFE images (saving to them, or sending them wirelessly).\n#   Loading any size over the cable works either way. ON costs ~1.1 MB of memory, so fewer\n#   games fit on a big card. Takes effect on the next boot. (Replaces DISKMAXKB.)\nBIGDISK=OFF\n"},
     {"LIBLIMIT", "\n# LIBLIMIT: ON (default) = if the card holds more games than this GTi can list, stop at boot with a\n#   LIBRARY TOO BIG screen and a GTI_CAPACITY.TXT report, so nothing is left out silently.\n#   OFF = load as many games as fit and leave the rest out.\nLIBLIMIT=ON\n"},
     {"DEVMODE",  "\n# DEVMODE: ON (default) = show the TEST TOOLS button in Settings (SD soak test, reel profiler,\n#   no-cache, diagnostic overlay). OFF = hide the button. Their CONFIG.TXT keys still work either way.\nDEVMODE=ON\n"},
+    {"LONGNAME", "\n# LONGNAME: OFF (default) = the Gotek sees the loaded disk as DISK.ADF / DISK.DSK (GENERIC images keep a\n#   short 8.3 version of their own name, e.g. PROPHECY.HFE). ON = the Gotek sees the image's full file name,\n#   e.g. \"Prophecy I-The Viking Child-1.hfe\" - shown on a FlashFloppy OLED/LCD display.\nLONGNAME=OFF\n"},
     {"LISTTILE", "\n# LISTTILE: ON (default) = the list's cover panel reuses the reel's cached 45KB\n#   thumbnail. OFF = re-decode the full JPEG on every selection change (the old way,\n#   and much slower on a big library). Same picture either way.\nLISTTILE=ON\n"},
     {"REELPROF", "# REELPROF: ON = print a reel frame-time breakdown to GTI/gti.log every ~1.5s\n#   while the reel is on screen. Diagnostic only.\nREELPROF=OFF\n"},
     {"REELBORDER","\n# REELBORDER: frame drawn around each cover in the reel. ON=framed (default),\n#   OFF=clean/frameless look (the game you have loaded is still marked green).\nREELBORDER=ON\n"},
@@ -2801,6 +2858,7 @@ static void loadConfig(){
     else if(k=="CATEGORIES"){String cv=v;cv.toUpperCase();g_categories=(cv=="ON"||cv=="1"||cv=="TRUE");}
     else if(k=="DIAGDISP"){String dv=v;dv.toUpperCase();g_diagdisp=(dv=="ON"||dv=="1"||dv=="TRUE");}
     else if(k=="NOCACHE"){String nv=v;nv.toUpperCase();g_nocache=(nv=="ON"||nv=="1"||nv=="TRUE");}
+    else if(k=="LONGNAME"){String lv=v;lv.toUpperCase();g_longname=(lv=="ON"||lv=="1"||lv=="TRUE"||lv=="YES");}   // lab14q
     else if(k=="DEVMODE"){String dv=v;dv.toUpperCase();g_devmode=!(dv=="OFF"||dv=="0"||dv=="FALSE");}   // lab14p
     else if(k=="LIBLIMIT"){String nv=v;nv.toUpperCase();g_liblimit=!(nv=="OFF"||nv=="0"||nv=="FALSE");}   // 5.9.41-lab14d (hidden): OFF = load what fits instead of halting
     else if(k=="FASTSCAN"){String nv=v;nv.toUpperCase();g_fastscan=!(nv=="OFF"||nv=="0"||nv=="FALSE");}   // 5.9.41-lab14 (hidden): OFF = old per-entry walker
@@ -4734,8 +4792,7 @@ static bool doLoadSelected(const String&adfPath){
       gfx_flush();delay(2200);drawFullUI();gfx_flush();return false;
     }
     g_alias=false;
-    if(g_mode==MODE_GEN){String gon=filenameOnly(adfPath);build_volume(gon.c_str(),fsz);}   // v5.2: keep the real name+ext so FlashFloppy detects the format
-    else build_volume(getOutputFilename(),fsz);
+    {String pn=presentName(adfPath);build_volume(pn.c_str(),fsz);}   // v5.2: GEN keeps the real name+ext so FlashFloppy detects the format; lab14q: LONGNAME
     uint8_t*dst=g_disk+DATA_LBA*512;uint8_t*buf=(uint8_t*)malloc(16384);uint32_t remain=fsz;
     while(remain&&buf){size_t n=remain>16384?16384:remain;int rd=f.read(buf,n);if(rd<=0)break;memcpy(dst+copied,buf,rd);remain-=rd;copied+=rd;}
     if(buf)free(buf);f.close();
@@ -4757,7 +4814,7 @@ static bool doLoadSelected(const String&adfPath){
     // Held in a named String: .c_str() on a temporary would dangle the moment
     // the full expression ended. GEN keeps the real name+ext so FlashFloppy can
     // detect the format, exactly as the RAM-disk path does.
-    String vn = (g_mode==MODE_GEN) ? filenameOnly(adfPath) : String(getOutputFilename());
+    String vn = presentName(adfPath);   // lab14q: GEN real name, ADF/DSK DISK.xxx unless LONGNAME=ON
     if(!geomOk || !aliasMount(loadPath,fsz,vn.c_str(),pS,pC,&aerr)){
       g_alias=false;
       gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
@@ -4849,7 +4906,7 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
   memset(g_disk,0,DATA_LBA*512);
   build_boot_sector(g_disk);
   build_fat(g_disk+RESERVED_SECTORS*512,(uint32_t)got);
-  String outn=(g_mode==MODE_GEN)?showName:String(getOutputFilename());
+  String outn=(g_mode==MODE_GEN||g_longname)?showName:String(getOutputFilename());   // lab14q: LONGNAME
   build_root(g_disk+(RESERVED_SECTORS+SECTORS_PER_FAT)*512,outn.c_str(),(uint32_t)got);
   g_sv_img_size=0;svDirtyReset();                 // no SD path to write saves back to — tracking off for now
   hardAttach();g_loaded=true;g_loaded_name=showName;g_loaded_path="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;
