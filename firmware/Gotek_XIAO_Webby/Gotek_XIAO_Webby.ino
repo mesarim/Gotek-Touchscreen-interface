@@ -29,6 +29,8 @@
 //   USB Mode       : USB-OTG (TinyUSB)       USB CDC on Boot: DISABLED   MSC on Boot: Disabled
 //   PSRAM          : *** OPI PSRAM ***  (XIAO ESP32-S3R8 = 8MB octal — NOT QSPI)
 //   Flash Size     : 8MB    Partition: Default 8MB w/ spiffs    CPU: 240MHz
+//                    (1.6.4-xiao: NOT "Huge APP" - it has no second app slot, so the web page's
+//                     firmware update cannot work. "8M with spiffs" = two 3.2MB app slots.)
 //   NOTE: a QSPI-built binary will NOT boot on this OPI board — must build with OPI.
 // ============================================================================
 
@@ -50,7 +52,7 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-1.5.1-xiao"
+#define FW_VERSION     "Webby-1.6.4-xiao"   // 1.6.4-xiao: brought level with SuperMini Webby-1.6.4 (DSK/GENERIC keep their extension over wireless, LED HAL + LED=OFF); same number = same features
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -64,6 +66,21 @@
 #endif
 #ifndef LED_BLUE
 #define LED_BLUE       2
+#endif
+// 1.6.4-xiao: the shared LED status HAL (from SuperMini Webby). The WS2812 output is
+// compiled out (LED_NP_ENABLE 0) exactly as on the SuperMini - driving it starved the
+// ESP-NOW radio (1.6.2) - so on the XIAO only the discrete GPIO1/GPIO2 outputs move.
+#ifndef LED_NP_PIN
+#define LED_NP_PIN     21
+#endif
+#ifndef LED_NP_SWAP_RG
+#define LED_NP_SWAP_RG 1
+#endif
+#ifndef LED_NP_BRIGHT
+#define LED_NP_BRIGHT  28
+#endif
+#ifndef LED_NP_ENABLE
+#define LED_NP_ENABLE  0
 #endif
 #ifndef BOOT_PIN
 #define BOOT_PIN       0
@@ -144,14 +161,54 @@ static uint32_t crc32sw(uint32_t crc,const uint8_t*p,size_t n){
   return ~crc;
 }
 
-static void setLeds(bool red, bool blue){ digitalWrite(LED_RED, red?HIGH:LOW); digitalWrite(LED_BLUE, blue?HIGH:LOW); }
+// --- LED status HAL (1.6.4-xiao, same as SuperMini Webby) ------------------
+// The rest of the firmware only calls setLeds()/ledRed()/ledBlue()/ledActivity();
+// LED=OFF in WEBBY.TXT silences it.
+static bool     g_led_enabled = true;
+static bool     g_led_red = false, g_led_blue = false;
+static uint32_t g_led_act_until = 0;   // activity pulse end (millis)
+
+static void ledRender() {
+  bool actv = ((int32_t)(g_led_act_until - millis()) > 0);
+  bool dred  = g_led_enabled && g_led_red;
+  bool dblue = g_led_enabled && (g_led_blue || actv);
+  uint8_t r=0,g=0,b=0;
+  if (g_led_enabled) {
+    if      (actv)                    { r=180; g=0;  b=200; }  // activity = magenta pulse (disk arriving)
+    else if (g_led_red && g_led_blue) { r=200; g=90; b=0;   }  // both  = amber (busy / unsaved writes)
+    else if (g_led_red)               { r=220; g=0;  b=0;   }  // red   = fault / not paired
+    else if (g_led_blue)              { r=0;   g=0;  b=220; }  // blue  = ready / disk loaded
+    else                              { r=0;   g=16; b=0;   }  // idle  = dim green
+  }
+  uint8_t R=(uint16_t)r*LED_NP_BRIGHT/255, G=(uint16_t)g*LED_NP_BRIGHT/255, B=(uint16_t)b*LED_NP_BRIGHT/255;
+  uint32_t sig=((uint32_t)R<<16)|((uint32_t)G<<8)|B|((uint32_t)(dred?1:0)<<25)|((uint32_t)(dblue?1:0)<<24);
+  static uint32_t last=0xFFFFFFFFu; if(sig==last) return; last=sig;
+  digitalWrite(LED_RED,  dred ? HIGH : LOW);
+  digitalWrite(LED_BLUE, dblue? HIGH : LOW);
+#if LED_NP_ENABLE
+#if LED_NP_SWAP_RG
+  neopixelWrite(LED_NP_PIN, G, R, B);
+#else
+  neopixelWrite(LED_NP_PIN, R, G, B);
+#endif
+#endif
+}
+static inline void ledRed(bool on){ g_led_red = on; ledRender(); }
+static inline void ledBlue(bool on){ g_led_blue = on; ledRender(); }
+static inline void setLeds(bool red, bool blue){ g_led_red = red; g_led_blue = blue; ledRender(); }
+static inline void ledActivity(uint16_t ms=350){ g_led_act_until = millis() + ms; ledRender(); }
+static inline void ledTick(){ ledRender(); }   // call each loop so time-based states refresh
+static void ledInit(){
+  pinMode(LED_RED, OUTPUT); pinMode(LED_BLUE, OUTPUT);
+  ledRender();
+}
 static void oledStatus(const String& l0, const String& l1, const String& l2, const String& l3) {
   (void)l1;(void)l2;(void)l3;
   if (l0.startsWith("**") || l0.startsWith("Receiving") || l0.startsWith("Gotek") || l0.startsWith("LOADED")) setLeds(false,true);
   else if (l0.startsWith("Not paired")) setLeds(true,false);
 }
 static void oledProgress(uint32_t done, uint32_t total) {
-  (void)total; static bool t=false; t=!t; digitalWrite(LED_BLUE, t?HIGH:LOW); (void)done;
+  (void)total; static bool t=false; t=!t; ledBlue(t); (void)done;
 }
 
 // TinyUSB
@@ -244,6 +301,24 @@ static String to83(const String& in){
     if((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')) base += (char)toupper(c); }
   if(base.length()==0) base="OMEGA";
   return base + ".ADF";
+}
+
+// Wireless DSK fix (SuperMini 1.6.3, XIAO 1.6.4-xiao): like to83() but PRESERVES the
+// real extension (ADF/DSK/IMG/HFE...) so the FAT12 root advertises the correct format
+// to FlashFloppy. A flung CPC .dsk used to be named DISK.ADF -> FF Error 34.
+// Base is upper-alnum, <=8 chars; extension is upper-alnum, <=3 chars; ADF fallback.
+static String to83keepext(const String& in){
+  const char* s=in.c_str(); const char* dot=strrchr(s,'.');
+  size_t nl = dot ? (size_t)(dot-s) : in.length();
+  String base;
+  for(size_t i=0;i<nl && base.length()<8;i++){ char c=s[i];
+    if((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')) base += (char)toupper(c); }
+  if(base.length()==0) base="OMEGA";
+  String ext;
+  if(dot){ for(size_t i=1;i<=3 && dot[i] && dot[i]!='.'; i++){ char c=dot[i];
+    if((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')) ext += (char)toupper(c); } }
+  if(ext.length()==0) ext="ADF";
+  return base + "." + ext;
 }
 
 static String macToStr(const uint8_t* mac) {
@@ -368,7 +443,7 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
     // 1.6.4 (#24): an unclaimed dongle stays open (JFW); once an owner exists, only an owner may eject.
     if (_owner_count > 0 && !(haveSrc && isOwner(src))) return;
     if (g_disk_loaded) { hardDetach(); g_disk_loaded=false; }
-    dirtyReset(); digitalWrite(LED_BLUE, LOW);
+    dirtyReset(); ledBlue(false);
     oledStatus("Gotek OMEGA " FW_VERSION, "Ejected", "", "Ready");
     return;
   }
@@ -428,6 +503,7 @@ static void loadWifiCfg() {
     else if (line.startsWith("PASS=")) g_pass    = line.substring(5);
     else if (line.startsWith("MODE=")) g_modeStr = line.substring(5);
     else if (line.startsWith("NAME=")) g_devname = line.substring(5);
+    else if (line.startsWith("LED="))  { String v=line.substring(4); v.trim(); v.toUpperCase(); g_led_enabled = !(v=="OFF"||v=="0"||v=="NO"); }
   }
   f.close();
 }
@@ -471,7 +547,7 @@ static inline void wrLE16(uint8_t*p,uint16_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v
 static void doEject(WiFiClient& client, bool force){
   if (!force && g_dirty_count > 0) { client.write((uint8_t)0x02); client.flush(); return; }
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
-  dirtyReset(); g_loaded_name=""; digitalWrite(LED_BLUE, LOW);
+  dirtyReset(); g_loaded_name=""; ledBlue(false);
   oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (app)", "", "Ready");
   client.write((uint8_t)0x01); client.flush();
 }
@@ -536,12 +612,15 @@ static void handleTCPClient(WiFiClient& client) {
     return;
   }
   if (size == 0 || size > MAX_FILE_BYTES) { client.write((uint8_t)0x00); return; }
-  const char* outName = "DISK.ADF";   // #24: FAT12 root stays a constant legal 8.3 (cosmetic); the pretty name lands in g_loaded_name
+  // Wireless DSK fix (1.6.4-xiao, from SuperMini 1.6.3): name the FAT12 root with the flung
+  // disk's REAL extension so FlashFloppy detects the format. The panel sends the real
+  // filename+ext via CMD_SET_NAME just before the fling; absent that (older panel), DISK.ADF.
+  String fatName = g_next_name.length() ? to83keepext(g_next_name) : String("DISK.ADF");
   // 1.6.4 (#24): if a disk is already attached, detach FIRST - otherwise the host stays
   // mounted on a volume we are rewriting underneath it for the whole transfer.
   // (The browser-upload path already did this; the TCP path now matches.)
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
-  build_volume(outName, size);
+  build_volume(fatName.c_str(), size);
   uint8_t* dst = g_disk + DATA_LBA * SECTOR_SIZE;
   uint32_t received = 0; const size_t BUF = 4096;
   uint8_t* buf = (uint8_t*)malloc(BUF); if (!buf) { client.write((uint8_t)0x00); return; }
@@ -556,10 +635,12 @@ static void handleTCPClient(WiFiClient& client) {
   free(buf);
   if (received == size) {
     g_load_id++; g_image_size = size; dirtyReset();
-    g_loaded_name = g_next_name.length() ? g_next_name : String("DISK.ADF");   // #24: pretty name from the set-next-name escape, else the constant
+    { String pretty = g_next_name.length() ? g_next_name : String("DISK.ADF");   // #24/1.6.3: pretty display name (extension stripped)
+      int d = pretty.lastIndexOf('.'); if (d > 0) pretty = pretty.substring(0, d);
+      g_loaded_name = pretty; }
     g_next_name = "";   // consume it — the next fling must set its own name
     uint8_t ack[5]; ack[0]=0x01; wrLE32(ack+1,g_load_id); client.write(ack,5); client.flush(); delay(100); client.stop();
-    if (g_disk_loaded) hardDetach(); hardAttach(); g_disk_loaded = true; g_next_status_ms = 0; digitalWrite(LED_BLUE, HIGH);
+    if (g_disk_loaded) hardDetach(); hardAttach(); g_disk_loaded = true; g_next_status_ms = 0; ledBlue(true); ledActivity();
     oledStatus("LOADED!", "", "USB: attached", "Gotek ready");
     sendSimple(PKT_XIAO_DONE);
   } else {
@@ -605,10 +686,10 @@ static String statusJson(){
 // Finalize a browser upload: lay metadata over the streamed data, re-insert.
 static void webFinishLoad(){
   uint32_t size = g_up_recv;
-  build_volume_ex(to83(g_up_name).c_str(), size, false);   // #24: 8.3-mangle for the FAT12 root; full name kept in g_loaded_name (below)
+  build_volume_ex(to83keepext(g_up_name).c_str(), size, false);   // #24/1.6.3: 8.3-mangle keeping the real extension so FF detects DSK/ADF/etc; full name kept in g_loaded_name (below)
   g_image_size = size; g_load_id++; dirtyReset();
   if (g_disk_loaded) hardDetach();
-  hardAttach(); g_disk_loaded = true; g_next_status_ms = 0; digitalWrite(LED_BLUE, HIGH);
+  hardAttach(); g_disk_loaded = true; g_next_status_ms = 0; ledBlue(true); ledActivity();
   oledStatus("LOADED!", "", "USB: attached", "Gotek ready");
   sendSimple(PKT_XIAO_DONE);   // harmless if no ESP-NOW peer
 }
@@ -618,7 +699,7 @@ static void handleUpload(){
     g_up_recv = 0; g_up_overflow = false;
     g_up_name = up.filename; if (g_up_name.length()==0) g_up_name = "DISK.ADF";
     // detach first so the Amiga isn't reading the disk while we rewrite its data region
-    if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; digitalWrite(LED_BLUE, LOW); }
+    if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; ledBlue(false); }
   } else if (up.status == UPLOAD_FILE_WRITE) {
     if (!g_up_overflow && g_up_recv + up.currentSize <= MAX_FILE_BYTES) {
       memcpy(g_disk + DATA_LBA*SECTOR_SIZE + g_up_recv, up.buf, up.currentSize);
@@ -637,7 +718,7 @@ static void handleUploadDone(){
 }
 static void handleEjectWeb(){
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
-  dirtyReset(); g_loaded_name=""; digitalWrite(LED_BLUE, LOW);
+  dirtyReset(); g_loaded_name=""; ledBlue(false);
   oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (web)", "", "Ready");
   server.send(200,"application/json", statusJson());
 }
@@ -863,7 +944,7 @@ static void apiDiskStatus(){
 }
 static void apiDiskUnload(){
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
-  dirtyReset(); g_loaded_name=""; digitalWrite(LED_BLUE, LOW);
+  dirtyReset(); g_loaded_name=""; ledBlue(false);
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiGamesUploadDone(){
@@ -1164,14 +1245,13 @@ static void startEspnowApMode(){
 
 void setup() {
   Serial.begin(115200); delay(200);
-  pinMode(LED_RED, OUTPUT); pinMode(LED_BLUE, OUTPUT); pinMode(BOOT_PIN, INPUT_PULLUP);
-  digitalWrite(LED_RED, LOW); digitalWrite(LED_BLUE, LOW);
+  ledInit(); pinMode(BOOT_PIN, INPUT_PULLUP);
   _rxQueue = xQueueCreate(32, sizeof(RxPkt));
 
   // PSRAM ramdisk
   g_disk = (uint8_t*)ps_malloc((size_t)TOTAL_SECTORS*SECTOR_SIZE);
   if (!g_disk) g_disk = (uint8_t*)malloc((size_t)TOTAL_SECTORS*SECTOR_SIZE);
-  if (!g_disk) { Serial.println("[FATAL] RAM disk alloc failed \u2014 enable PSRAM (QSPI) in the board menu, or the disk is too big for this board's PSRAM"); oledStatus("FATAL: no RAM","Set PSRAM=QSPI","in board menu",""); while(true){digitalWrite(LED_RED,HIGH);delay(200);digitalWrite(LED_RED,LOW);delay(200);} }
+  if (!g_disk) { Serial.println("[FATAL] RAM disk alloc failed \u2014 enable PSRAM (OPI - the XIAO S3R8 is octal) in the board menu, or the disk is too big for this board's PSRAM"); oledStatus("FATAL: no RAM","Set PSRAM=OPI","in board menu",""); while(true){ledRed(true);delay(200);ledRed(false);delay(200);} }
   build_volume("DISK.ADF", ADF_DEFAULT_SIZE);
 
   // USB MSC
@@ -1197,9 +1277,9 @@ void setup() {
       if (attempt) { WiFi.disconnect(true); delay(400); }
       WiFi.begin(g_ssid.c_str(), g_pass.c_str());
       uint32_t t0 = millis();
-      while (WiFi.status() != WL_CONNECTED && millis()-t0 < 12000) { digitalWrite(LED_RED, ((millis()/200)&1)?HIGH:LOW); delay(50); }
+      while (WiFi.status() != WL_CONNECTED && millis()-t0 < 12000) { ledRed(((millis()/200)&1)); delay(50); }
     }
-    digitalWrite(LED_RED, LOW);
+    ledRed(false);
     g_join_failed = (WiFi.status() != WL_CONNECTED);
     if (WiFi.status() == WL_CONNECTED) {
       g_webmode = 1;
@@ -1224,6 +1304,7 @@ void setup() {
 // LOOP
 // ============================================================================
 void loop() {
+  ledTick();
   server.handleClient();
   if (g_dns_up) dnsServer.processNextRequest();
 

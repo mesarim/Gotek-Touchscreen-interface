@@ -19,11 +19,19 @@
     "appOffset": 65536,
     "builds": [
       {
+        "v": "5.9.41-lab14r",
+        "ch": "beta",
+        "date": "2026-09-26",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab14r-update.bin",
+        "note": "Testing build. Everything in lab14q PLUS the wireless fix: games sent to a dongle (SuperMini / XIAO) load again - since 5.9.35 the disk arrived 1 KB shifted and the Amiga went back to the Kickstart screen (reported by fabienb). Big-library build (tested on a 10,000-game card), LONGNAME=ON for full file names on the Gotek, long GENERIC names keep their extension (no ERROR 34), BIGDISK, DEVMODE, TEST TOOLS page, SD guard, never formats a card.",
+        "latest": false
+      },
+      {
         "v": "5.9.41-lab14q",
-        "ch": "lab",
+        "ch": "beta",
         "date": "2026-09-26",
         "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab14q-update.bin",
-        "note": "Everything in 5.9.41-lab14p (big-library build, tested on a 10,000-game card) PLUS: GENERIC disks with long file names (32+ characters) no longer lose extension letters on the Gotek (PROPHECY.HF -> FlashFloppy ERROR 34, reported by kodak80). New LONGNAME=ON in CONFIG.TXT: the Gotek sees the image's full file name (shown on a FlashFloppy OLED/LCD), for ADF, DSK and GENERIC; OFF (default) keeps DISK.ADF / DISK.DSK.",
+        "note": "Everything in 5.9.41-lab14p (big-library build, tested on a 10,000-game card) PLUS: GENERIC disks with long file names (32+ characters) no longer lose extension letters on the Gotek (PROPHECY.HF -> FlashFloppy ERROR 34, reported by kodak80). New LONGNAME=ON in CONFIG.TXT: the Gotek sees the image's full file name (shown on a FlashFloppy OLED/LCD), for ADF, DSK and GENERIC; OFF (default) keeps DISK.ADF / DISK.DSK. WARNING: wireless (dongle) loading is broken in this build (since 5.9.35 the disk reached the dongle 1 KB shifted - the Amiga returns to the Kickstart screen). Use the USB cable, or 5.9.30 for wireless. Fixed in 5.9.41-lab14r.",
         "latest": false
       },
       {
@@ -145,12 +153,20 @@
     "chipFamily": "ESP32-S3",
     "builds": [
       {
-        "v": "Webby-1.5",
+        "v": "Webby-1.6.4",
+        "ch": "beta",
+        "latest": false,
+        "date": "2026-09-26",
+        "full": "firmware/supermini-beta/manifest-1.6.4.json",
+        "note": "PULLED 26 Sep (kept for the record, not recommended): the GTi could not work with it the way it works with Webby-0.8 - from 1.5 on the dongle's Wi-Fi name is GotekOMEGA-xxxx, which the GTi does not look for. Use Webby-0.8. Testing. Own Wi-Fi name per dongle (GotekOMEGA-xx), settable device name, update over the web page, Wi-Fi scan in the setup page; DSK/GENERIC images sent wirelessly keep their real extension (no more ERROR 34); status LED (radio fix from 1.6.2); owner checks use the real sender, eject only from an owner; a new disk sent while one is mounted is swapped cleanly. Pair it again after flashing (full wipe). HD ADFs over wireless: not yet (needs the HD-flag fix)."
+      },
+      {
+        "v": "Webby-0.8",
         "ch": "beta",
         "latest": true,
         "date": "2026-09-12",
         "full": "firmware/supermini-beta/manifest-1.5.json",
-        "note": "Webby: unique-SSID fix + settable device name + name-on-fling + screen-as-leader naming. (1.6.1 pulled — status-LED refresh starved the ESP-NOW radio; fix pending as 1.6.2)"
+        "note": "This file is Webby-0.8-fleetUI - it was listed here as Webby-1.5 by mistake, which is why the dongle's web page shows 0.8. Old build: no unique Wi-Fi name, no device name, no web update; DSK/GENERIC images sent wirelessly arrive as DISK.ADF (FlashFloppy ERROR 34). Amiga ADFs work."
       },
       {
         "v": "3.4.0-beta",
@@ -174,12 +190,12 @@
     "chipFamily": "ESP32-S3",
     "builds": [
       {
-        "v": "Webby-1.5",
+        "v": "Webby-0.8-xiao",
         "ch": "beta",
         "latest": true,
         "date": "2026-09-12",
         "full": "firmware/xiao-beta/manifest.json",
-        "note": "unique-SSID fix + settable name + name-on-fling + fleet naming (OPI 8MB)"
+        "note": "This file is Webby-0.8-xiao - it was listed here as Webby-1.5 by mistake (the dongle's web page shows 0.8). Old build: no unique Wi-Fi name, no device name, no web update; DSK/GENERIC images sent wirelessly arrive as DISK.ADF. Amiga ADFs work. A current XIAO build (matching SuperMini 1.6.x) is still to come."
       },
       {
         "v": "3.2.0",

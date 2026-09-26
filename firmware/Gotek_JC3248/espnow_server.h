@@ -18,7 +18,9 @@
 // Shared ramdisk — defined in main .ino
 extern uint8_t* g_disk;
 #define ESPNOW_SECTOR_SIZE  512
-#define ESPNOW_DATA_LBA     11
+#define ESPNOW_DATA_LBA     13   // lab14r: first data sector of the GTi RAM disk. Was 11 - left behind when 5.9.35 grew the FAT
+                                   // from 6 to 8 sectors, so every wireless send started 1 KB early (shifted ADF -> Amiga back at
+                                   // the Kickstart screen). The .ino static_asserts it equals DISK_DATA_LBA so it cannot drift again.
 
 // XIAO WiFi AP settings (fixed)
 #define DONGLE_AP_SSID   "GotekOMEGA"
