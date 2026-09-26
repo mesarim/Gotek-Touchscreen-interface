@@ -47,7 +47,7 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-1.6.5"   // 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
+#define FW_VERSION     "Webby-1.6.6"   // 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
 #define ESPNOW_CHANNEL 6
 //  Board profile 
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -98,6 +98,7 @@
 #define PKT_XIAO_DIRTY  0x15
 #define PKT_XIAO_STATUS 0x17
 #define PKT_UNPAIR      0x16
+#define PKT_SHARE       0x1A   // 1.6.6: an owner screen lets ONE more screen pair (pairing open 2 min)
 
 #define SAVE_PROTO_VER  1
 #define SAVE_SETTLE_MS  3000
@@ -108,6 +109,7 @@
 #define CMD_GET_STATUS  0x02
 #define CMD_EJECT       0x03
 #define CMD_EJECT_FORCE 0x04
+#define CMD_CLAIM       0x07   // 1.6.6: a screen claims the dongle before sending a disk (mac[6], flags bit0=take over, len, name)
 #define CMD_SET_NAME    0x06   // #24: set the pretty display name for the NEXT flung disk (g_loaded_name only; FAT12 stays DISK.ADF)
 //  FLEET: UDP discovery beacon (shared port: dongle, app, JC, browser-master) 
 #define GTI_DISCO_PORT   51703
@@ -289,6 +291,15 @@ static void build_volume(const char* outName, uint32_t fsz){ build_volume_ex(out
 // #24: the pretty display name for the NEXT flung disk (set-next-name escape),
 // consumed once when the disk lands. FAT12 root name stays constant (DISK.ADF).
 static String g_next_name = "";
+// 1.6.6: which screen put the current disk in (set by CMD_CLAIM just before a fling; all zero = unknown:
+// an older screen, the web page, or nothing loaded). Other screens see it in the pairing reply ("in use by").
+static uint8_t g_loader_mac[6]  = {0};
+static char    g_loader_name[25] = {0};
+static uint8_t g_claim_mac[6]   = {0};
+static char    g_claim_name[25] = {0};
+static bool    g_claim_pending  = false;
+static uint32_t g_claim_ms      = 0;      // a claim only counts for the fling that follows it (20 s)
+static void loaderClear(){ memset(g_loader_mac,0,6); g_loader_name[0]=0; }
 
 // #24: a valid, legal 8.3 FAT name from any display string (upper alnum only,
 // <=8 chars) + a constant .ADF  the FAT name is cosmetic (nothing reads it),
@@ -424,9 +435,22 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
     if (!_wavePeer->add_peer()) { delete _wavePeer; _wavePeer = nullptr; }
     PktHello reply = {}; reply.type = PKT_PAIR_REPLY;
     WiFi.softAPmacAddress(reply.mac); strncpy(reply.ip, AP_IP, 15); reply.pad[0] = SAVE_PROTO_VER;
+    // 1.6.6: who has a disk in me (pad[7] marker 0xA5, [8] loaded, [9..14] screen MAC, [15] len, [16..39] name).
+    // pad[1..6] stay free for the parked HD-capability fields.
+    reply.pad[7] = 0xA5; reply.pad[8] = g_disk_loaded ? 1 : 0; memcpy(reply.pad+9, g_loader_mac, 6);
+    { uint8_t L = (uint8_t)strlen(g_loader_name); if (L > 24) L = 24; reply.pad[15] = L; memcpy(reply.pad+16, g_loader_name, L); }
     XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
     if (dst) dst->send_pkt((uint8_t*)&reply, sizeof(reply));
     oledStatus("Gotek OMEGA " FW_VERSION, known?"Reconnected":"Owner added", macToStr(_wave_mac), String(_owner_count)+" owner(s)");
+    return;
+  }
+  if (type == PKT_SHARE) {
+    // 1.6.6: only an existing owner can open the door, and only for one more screen (the door closes again
+    // as soon as that screen pairs - see PAIR_HELLO) or after 2 minutes.
+    if (haveSrc && isOwner(src)) {
+      g_enroll_open = true; g_enroll_until = millis() + 2UL*60UL*1000UL;
+      oledStatus("Gotek OMEGA " FW_VERSION, "Sharing", "2 min to pair", "one more screen");
+    }
     return;
   }
   if (type == PKT_UNPAIR) {
@@ -452,7 +476,7 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
     // 1.6.4 (#24): an unclaimed dongle stays open (JFW); once an owner exists, only an owner may eject.
     if (_owner_count > 0 && !(haveSrc && isOwner(src))) return;
     if (g_disk_loaded) { hardDetach(); g_disk_loaded=false; }
-    dirtyReset(); ledBlue(false);
+    dirtyReset(); ledBlue(false); loaderClear();
     oledStatus("Gotek OMEGA " FW_VERSION, "Ejected", "", "Ready");
     return;
   }
@@ -556,7 +580,7 @@ static inline void wrLE16(uint8_t*p,uint16_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v
 static void doEject(WiFiClient& client, bool force){
   if (!force && g_dirty_count > 0) { client.write((uint8_t)0x02); client.flush(); return; }
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
-  dirtyReset(); g_loaded_name=""; ledBlue(false);
+  dirtyReset(); g_loaded_name=""; ledBlue(false); loaderClear();
   oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (app)", "", "Ready");
   client.write((uint8_t)0x01); client.flush();
 }
@@ -609,6 +633,29 @@ static void handleTCPClient(WiFiClient& client) {
     else if (cmd == CMD_GET_STATUS)  doGetStatus(client);
     else if (cmd == CMD_EJECT)       doEject(client,false);
     else if (cmd == CMD_EJECT_FORCE) doEject(client,true);
+    else if (cmd == CMD_CLAIM) {      // 1.6.6: mac[6] + flags + len + name. Reply 0x01 go ahead / 0x03 in use / 0x02 unsaved saves
+      uint8_t in[8]; int got=0; uint32_t tb=millis();
+      while(got<8 && millis()-tb<2000){ if(!client.connected())break; int c=client.read(); if(c<0){delay(1);continue;} in[got++]=(uint8_t)c; }
+      if (got<8) { client.write((uint8_t)0x00); return; }
+      int len = in[7] > 24 ? 24 : in[7]; char nb[25]; int ng=0; tb=millis();
+      while(ng<in[7] && millis()-tb<2000){ if(!client.connected())break; int c=client.read(); if(c<0){delay(1);continue;} if(ng<len)nb[ng]=(char)c; ng++; }
+      nb[ng<len?ng:len]=0;
+      static const uint8_t Z6[6]={0,0,0,0,0,0};
+      bool force   = (in[6] & 1) != 0;
+      bool other   = g_disk_loaded && memcmp(g_loader_mac, in, 6) != 0;
+      bool unknown = memcmp(g_loader_mac, Z6, 6) == 0;
+      // Refuse (unless forced) when another screen's disk is in, or anyone's unsaved saves are waiting.
+      uint8_t verdict = 0x01;
+      if (other && !force) { if (g_dirty_count > 0) verdict = 0x02; else if (!unknown) verdict = 0x03; }
+      if (verdict != 0x01) {
+        const char* who = g_loader_name[0] ? g_loader_name : "another screen";
+        uint8_t wl = (uint8_t)strlen(who); if (wl > 24) wl = 24;
+        client.write(verdict); client.write(wl); client.write((const uint8_t*)who, wl);
+        return;
+      }
+      memcpy(g_claim_mac, in, 6); memcpy(g_claim_name, nb, 25); g_claim_pending = true; g_claim_ms = millis();
+      client.write((uint8_t)0x01);
+    }
     else if (cmd == CMD_SET_NAME) {   // #24: 1-byte length + name bytes -> g_next_name
       uint32_t tn=millis(); while(client.available()<1 && millis()-tn<2000){ if(!client.connected())break; delay(1); }
       int len = client.available()>=1 ? client.read() : 0;
@@ -651,6 +698,17 @@ static void handleTCPClient(WiFiClient& client) {
     g_next_name = "";   // consume it  the next fling must set its own name
     uint8_t ack[5]; ack[0]=0x01; wrLE32(ack+1,g_load_id); client.write(ack,5); client.flush(); delay(100); client.stop();
     if (g_disk_loaded) hardDetach(); hardAttach(); g_disk_loaded = true; g_next_status_ms = 0; ledBlue(true); ledActivity();
+    // 1.6.6: remember which screen sent it; if that screen is an owner, its save reports go to it from now on
+    if (g_claim_pending && millis() - g_claim_ms < 20000) {
+      memcpy(g_loader_mac, g_claim_mac, 6); memcpy(g_loader_name, g_claim_name, 25); g_claim_pending = false;
+      if (isOwner(g_loader_mac) && memcmp(_wave_mac, g_loader_mac, 6) != 0) {
+        memcpy(_wave_mac, g_loader_mac, 6); _paired = true;
+        if (_wavePeer) { delete _wavePeer; _wavePeer = nullptr; }
+        _wavePeer = new XiaoPeer(_wave_mac, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
+        if (!_wavePeer->add_peer()) { delete _wavePeer; _wavePeer = nullptr; }
+      }
+    } else loaderClear();   // an older screen (no claim): unknown
+    g_claim_pending = false;
     oledStatus("LOADED!", "", "USB: attached", "Gotek ready");
     sendSimple(PKT_XIAO_DONE);
   } else {
@@ -696,6 +754,7 @@ static String statusJson(){
 // Finalize a browser upload: lay metadata over the streamed data, re-insert.
 static void webFinishLoad(){
   uint32_t size = g_up_recv;
+  loaderClear(); strcpy(g_loader_name, "web page");   // 1.6.6: loaded from the browser, not a screen
   build_volume_ex(to83keepext(g_up_name).c_str(), size, false);   // #24/1.6.3: 8.3-mangle keeping the real extension so FF detects DSK/ADF/etc; full name kept in g_loaded_name (below)
   g_image_size = size; g_load_id++; dirtyReset();
   if (g_disk_loaded) hardDetach();
@@ -728,7 +787,7 @@ static void handleUploadDone(){
 }
 static void handleEjectWeb(){
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
-  dirtyReset(); g_loaded_name=""; ledBlue(false);
+  dirtyReset(); g_loaded_name=""; ledBlue(false); loaderClear();
   oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (web)", "", "Ready");
   server.send(200,"application/json", statusJson());
 }
@@ -954,7 +1013,7 @@ static void apiDiskStatus(){
 }
 static void apiDiskUnload(){
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
-  dirtyReset(); g_loaded_name=""; ledBlue(false);
+  dirtyReset(); g_loaded_name=""; ledBlue(false); loaderClear();
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiGamesUploadDone(){

@@ -14,6 +14,7 @@
 #define PKT_XIAO_STATUS  0x17  // dongle → Waveshare: load-state heartbeat {loaded,load_id,image_size} (v5.7.x)
 #define PKT_LOCK         0x18  // Waveshare → dongle: enroll me as sole owner + LOCK (Webby security)
 #define PKT_UNLOCK       0x19  // Waveshare → dongle: clear owners + UNLOCK (open to any GTi)
+#define PKT_SHARE        0x1A  // lab14s: owner GTi → dongle: accept ONE more screen as owner for 2 minutes (Webby 1.6.6+)
 
 // Shared ramdisk — defined in main .ino
 extern uint8_t* g_disk;
@@ -78,6 +79,15 @@ void   espnowSendUnpair(const uint8_t* mac);       // tell a dongle to forget th
 void   espnowSendLock(const uint8_t* mac);         // Webby: lock this dongle to this GTi (unicast)
 void   espnowSendUnlock(const uint8_t* mac);       // Webby: unlock this dongle -> open to any GTi (unicast)
 void   espnowForgetActive(const uint8_t* mac);     // clear local pairing if mac is the active dongle
+void   espnowSendShare(const uint8_t* mac);        // lab14s: let one more screen pair with this dongle (2 min, Webby 1.6.6+)
+String espnowScanInUseBy(int i);                  // lab14s: name of ANOTHER screen that has a disk in this dongle ("" = free / us / unknown)
+// lab14s: two screens, one dongle. Before a disk is sent the GTi "claims" the dongle; if another screen has a
+// disk in it the dongle says so, and this callback asks the user (dirty = that screen's saves not handed back yet).
+// Return true = take over. The .ino supplies it; with none set the send just goes ahead (old behaviour).
+typedef bool (*ClaimAskCb)(bool dirty, const char* who);
+void   espnowSetClaimAsk(ClaimAskCb cb);
+void   espnowSetScreenName(const String& name);    // lab14s: CONFIG.TXT GTINAME= (shown on other screens as "in use by")
+bool   espnowClaimCancelled();                     // lab14s: last send was stopped because the user said no to a take-over
 
 // Transfer — sends via WiFi TCP, uses ESP-NOW only for DONE/ERROR reply
 bool   espnowSendNotify(const String& name, const String& mode, uint32_t size);

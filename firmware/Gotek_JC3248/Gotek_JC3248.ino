@@ -44,7 +44,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "5.9.41-lab14r-JC3248"  // lab14r: wireless sends to a dongle start at the right place again (since 5.9.35 they began 1 KB early, so the Gotek got a shifted disk and the Amiga went back to the Kickstart screen - reported by fabienb) | lab14q: the disk the Gotek sees keeps its extension however long the file name is (32+ char GENERIC names lost letters -> FlashFloppy ERROR 34); LONGNAME=ON gives it the image's full file name (VFAT long name, shown on a FlashFloppy display) | lab14p: DEVMODE=OFF hides Settings -> TEST TOOLS (ON by default); switching LIBRARY loads that library's saved descriptions; every documented key is in its own CONFIG.TXT section | lab14o: LIBLIMIT= documented in CONFIG.TXT (ON by default); built-in data (default CONFIG.TXT, SAMPLE cover) copied to RAM before it is written - it used to reach the card as garbage (first 4 KB of every new CONFIG.TXT blank) | lab14n: CATEGORIES and LIBRARY (ADF/DSK/GEN) free the old library before rebuilding, like RESCAN - a big card no longer rebuilds into an empty list | lab14m: BIGDISK=OFF (default) reserves 1.76 MB for save write-back / wireless sends (was 2.9 MB), BIGDISK=ON = 2.9 MB for big HFEs; DISKMAXKB retired | lab14l: "OMEGAWARE / GTi" shown the moment the card and CONFIG.TXT are read, so a big library's load time is never a black screen | lab14k: Settings -> TEST TOOLS sub-page holds the pure test tools (SD SOAK TEST, REEL PROF, NO-CACHE, DIAG-DISP) | lab14j: the SD guard's totals are written to gti.log on the way into SD ACCESS (so a normal session's card reads show up in the log) | lab14i: "no cover" remembered across restarts until the next RESCAN (a warm boot no longer searches the card for every cover-less game - the reel/list stalls), save badge answered from a list of .sav files made by the scan and kept current when the GTi writes a save, the .nfo fallback is one name lookup (not every file in the folder) and never runs while the reel moves | lab14h: the GTi never formats a card (exFAT/NTFS card -> explains how to format it on a computer, changes nothing), Mac "._" files ignored by the scanner | lab14g: SD guard (FatFs metadata checked on every read/write: bit-shifted sectors re-read, never written back; writes verified), gti.log + state files moved out of the root into /GTI, SD line pull-ups, SD SOAK TEST in Settings, SDSPEED=10 | lab14f: cover-cache build with no name lookups (covers opened from where the scan found them, .thumbs listed once), tiles stamped with their cover's date so a RESCAN only rebuilds changed covers | lab14e: library build keeps small allocations out of internal RAM (the real cause of the big-card panics), RAM disk reserved before the library, LIBLIMIT=OFF loads the rated amount, micro-thumbs sized to what is left (new 8x8 tier), crash breadcrumbs + no boot loops, clearer TOO BIG wording | lab14d: library capacity check - a card too big for this GTi halts with a loud warning + SD ACCESS (LIBLIMIT=OFF to load anyway) | lab14c: g_games is a deque (no 1.2 MB block), grouping retries with fewer images on bad_alloc instead of reboot-looping | lab14b: two-pass scan (all images first, blurbs within a memory budget), .index trusted only with a .gamecache, blurbs moved not copied, allocation-free name sort | lab14: one-pass FatFs scan walker (raw .nfo heads), O(n log n) multi-disk grouping, cover harvest trusted when empty, PSRAM guard
+#define FW_VERSION "5.9.41-lab14t-JC3248"  // lab14t: FIX - after loading an image bigger than the BIGDISK size (most HFEs) the Gotek saw the drive as write-protected until power-off (FlashFloppy FATFS error on that HFE and every image after it) - broken since 5.9.37, hit by most HFEs since lab14m | lab14s: finds a Webby 1.5+ dongle by its own Wi-Fi name (GotekOMEGA-XXXX) so disks reach it; two screens can share a dongle - SHARE lets one more screen pair, the dongle list shows "in use: <screen>", and taking over another screen's dongle asks first (and warns if its saves are not handed back); GTINAME= names this screen | lab14r: wireless sends to a dongle start at the right place again (since 5.9.35 they began 1 KB early, so the Gotek got a shifted disk and the Amiga went back to the Kickstart screen - reported by fabienb) | lab14q: the disk the Gotek sees keeps its extension however long the file name is (32+ char GENERIC names lost letters -> FlashFloppy ERROR 34); LONGNAME=ON gives it the image's full file name (VFAT long name, shown on a FlashFloppy display) | lab14p: DEVMODE=OFF hides Settings -> TEST TOOLS (ON by default); switching LIBRARY loads that library's saved descriptions; every documented key is in its own CONFIG.TXT section | lab14o: LIBLIMIT= documented in CONFIG.TXT (ON by default); built-in data (default CONFIG.TXT, SAMPLE cover) copied to RAM before it is written - it used to reach the card as garbage (first 4 KB of every new CONFIG.TXT blank) | lab14n: CATEGORIES and LIBRARY (ADF/DSK/GEN) free the old library before rebuilding, like RESCAN - a big card no longer rebuilds into an empty list | lab14m: BIGDISK=OFF (default) reserves 1.76 MB for save write-back / wireless sends (was 2.9 MB), BIGDISK=ON = 2.9 MB for big HFEs; DISKMAXKB retired | lab14l: "OMEGAWARE / GTi" shown the moment the card and CONFIG.TXT are read, so a big library's load time is never a black screen | lab14k: Settings -> TEST TOOLS sub-page holds the pure test tools (SD SOAK TEST, REEL PROF, NO-CACHE, DIAG-DISP) | lab14j: the SD guard's totals are written to gti.log on the way into SD ACCESS (so a normal session's card reads show up in the log) | lab14i: "no cover" remembered across restarts until the next RESCAN (a warm boot no longer searches the card for every cover-less game - the reel/list stalls), save badge answered from a list of .sav files made by the scan and kept current when the GTi writes a save, the .nfo fallback is one name lookup (not every file in the folder) and never runs while the reel moves | lab14h: the GTi never formats a card (exFAT/NTFS card -> explains how to format it on a computer, changes nothing), Mac "._" files ignored by the scanner | lab14g: SD guard (FatFs metadata checked on every read/write: bit-shifted sectors re-read, never written back; writes verified), gti.log + state files moved out of the root into /GTI, SD line pull-ups, SD SOAK TEST in Settings, SDSPEED=10 | lab14f: cover-cache build with no name lookups (covers opened from where the scan found them, .thumbs listed once), tiles stamped with their cover's date so a RESCAN only rebuilds changed covers | lab14e: library build keeps small allocations out of internal RAM (the real cause of the big-card panics), RAM disk reserved before the library, LIBLIMIT=OFF loads the rated amount, micro-thumbs sized to what is left (new 8x8 tier), crash breadcrumbs + no boot loops, clearer TOO BIG wording | lab14d: library capacity check - a card too big for this GTi halts with a loud warning + SD ACCESS (LIBLIMIT=OFF to load anyway) | lab14c: g_games is a deque (no 1.2 MB block), grouping retries with fewer images on bad_alloc instead of reboot-looping | lab14b: two-pass scan (all images first, blurbs within a memory budget), .index trusted only with a .gamecache, blurbs moved not copied, allocation-free name sort | lab14: one-pass FatFs scan walker (raw .nfo heads), O(n log n) multi-disk grouping, cover harvest trusted when empty, PSRAM guard
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -976,9 +976,13 @@ static int32_t onRead(uint32_t lba,uint32_t off,void*buf,uint32_t n);    // fwd:
 static void mscAnnounce(uint32_t sectors){
   if(sectors==g_usb_announced) return;
   if(g_usb_online) hardDetach();                 // never change capacity under a live host (FORCESWAP)
-  MSC.end();
+  // lab14t: NO MSC.end() here. In core 3.3.x end() also clears the LUN's "writable" flag and nothing set it
+  // back, so after the first image that needed its own volume size (every HFE over the BIGDISK size - most
+  // HFEs once BIGDISK=OFF made that 1.76 MB in lab14m) the Gotek saw a WRITE-PROTECTED drive until power-off:
+  // FlashFloppy "FATFS error" on that HFE and on every image after it (kodak80, 26 Sep). begin() alone just
+  // updates the block count; the writable flag is set explicitly as well.
   MSC.vendorID("ESP32");MSC.productID("RAMDISK");MSC.productRevision("1.0");
-  MSC.onRead(onRead);MSC.onWrite(onWrite);MSC.mediaPresent(true);
+  MSC.onRead(onRead);MSC.onWrite(onWrite);MSC.isWritable(true);MSC.mediaPresent(true);
   MSC.begin(sectors,512);
   g_usb_announced=sectors;
 }
@@ -2594,6 +2598,10 @@ CAP=32
 # HIVEMIND: wireless FLING fan-out. ON=send to all paired MuCa dongles (classic), OFF=only the selected dongle.
 HIVEMIND=ON
 
+# GTINAME: this screen's name, shown on another screen that shares the same dongle ("in use by DESK").
+#   Up to 24 characters. Empty = GTi-XXXX (from this screen's radio address).
+GTINAME=
+
 # LINK: dongle transport. ESPNOW = the dongle's own AP + ESP-NOW (default).
 #       HOMEWIFI = route the FLING via your home router to a Webby dongle's gotek.local.
 LINK=ESPNOW
@@ -2719,6 +2727,7 @@ static void selfHealConfig(){
     {"BTNSTYLE", "\n# BTNSTYLE: reel button style. PILL=rounded coloured buttons (default), FLAT=flat bar.\nBTNSTYLE=PILL\n"},
     {"CAP",      "\n# CAP: max wireless dongles the scan will list (default 32, up to 64)\nCAP=32\n"},
     {"HIVEMIND", "\n# HIVEMIND: wireless FLING fan-out. ON=all paired MuCa dongles (classic), OFF=selected dongle only.\nHIVEMIND=ON\n"},
+    {"GTINAME",  "\n# GTINAME: this screen's name, shown on another screen that shares the same dongle (\"in use by DESK\").\n#   Up to 24 characters. Empty = GTi-XXXX (from this screen's radio address).\nGTINAME=\n"},
     {"TAPLOAD",  "\n# TAPLOAD: ON = tapping the already-highlighted game row loads it (old double-tap)\nTAPLOAD=OFF\n"},
     {"HOTSWAP",  "# HOTSWAP: ON = tapping another disk while loaded swaps to it instantly\nHOTSWAP=OFF\n"},
     {"FORCESWAP","# FORCESWAP: ON = swap disk contents without the USB eject/re-attach cycle\nFORCESWAP=OFF\n"},
@@ -2856,6 +2865,7 @@ static void loadConfig(){
     else if(k=="SDPULLUP"){String nv=v;nv.toUpperCase();g_sdpullup_cfg=!(nv=="OFF"||nv=="0"||nv=="FALSE");}   // lab14g (hidden)
     else if(k=="LOG"){String lu=v;lu.toUpperCase();g_log_enabled=(lu!="OFF"&&lu!="0");}
     else if(k=="HIVEMIND"){g_hivemind=(v=="OFF"||v=="0")?0:1;}
+    else if(k=="GTINAME"){espnowSetScreenName(v.substring(0,24));}   // lab14s
     else if(k=="CATEGORIES"){String cv=v;cv.toUpperCase();g_categories=(cv=="ON"||cv=="1"||cv=="TRUE");}
     else if(k=="DIAGDISP"){String dv=v;dv.toUpperCase();g_diagdisp=(dv=="ON"||dv=="1"||dv=="TRUE");}
     else if(k=="NOCACHE"){String nv=v;nv.toUpperCase();g_nocache=(nv=="ON"||nv=="1"||nv=="TRUE");}
@@ -4738,6 +4748,36 @@ static void svFetchWireless(){
   else svToast("SAVE FETCH FAILED");
 }
 
+// lab14s: asked in the middle of a wireless send when the dongle already holds ANOTHER screen's disk.
+// dirty = that screen's saves have not been handed back yet (taking over loses them). true = take over.
+static bool claimAskUI(bool dirty, const char* who){
+  uint32_t r0=millis(); while(Touch_ReadFrame()&&millis()-r0<1500) delay(10);   // let go of the tap that started the load
+  gfx_fillScreen(COL_BG);
+  gfx_setTextSize(2); gfx_setTextColor(COL_AMBER,COL_BG);
+  {const char*s="DONGLE IN USE"; gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-86); gfx_print(s);}
+  gfx_setTextSize(1); gfx_setTextColor(COL_LIT,COL_BG);
+  {String a=String("It holds a disk from ")+who; gfx_setCursor((VW-gfx_textWidth(a))/2,VH/2-52); gfx_print(a);}
+  if(dirty){ gfx_setTextColor((uint16_t)0xE8C4,COL_BG);
+    {const char*s="Its game saves are NOT handed back yet."; gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-34); gfx_print(s);}
+    {const char*s="Taking over now LOSES those saves."; gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-20); gfx_print(s);} }
+  else { const char*s="Take it over for this game?"; gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-30); gfx_print(s); }
+  int bw=(VW-36)/2, by=VH-70, bh=44;
+  uint16_t cT=dirty?(uint16_t)0x8000:COL_ORANGE, cC=COL_BAR;
+  gfx_fillRoundRect(12,by,bw,bh,8,cT); gfx_setTextColor(inkFor(cT),cT); {const char*s="TAKE OVER"; gfx_setCursor(12+(bw-gfx_textWidth(s))/2,by+18); gfx_print(s);}
+  gfx_fillRoundRect(24+bw,by,bw,bh,8,cC); gfx_setTextColor(inkFor(cC),cC); {const char*s="CANCEL"; gfx_setCursor(24+bw+(bw-gfx_textWidth(s))/2,by+18); gfx_print(s);}
+  gfx_flush();
+  bool take=false, down=false; uint16_t lx=0,ly=0; uint32_t t0=millis();
+  while(millis()-t0<30000){                         // no answer in 30 s = CANCEL
+    bool t=Touch_ReadFrame(); uint16_t tx=0,ty=0; if(t)t=getTouchXY(&tx,&ty);
+    if(t){down=true;lx=tx;ly=ty;}
+    else if(down){down=false;
+      if(ly>=by&&ly<by+bh){ if(lx<12+bw){take=true;break;} if(lx>=24+bw){break;} } }
+    delay(15);
+  }
+  drawFullUI(); gfx_flush();
+  return take;
+}
+
 static bool doLoadSelected(const String&adfPath){
   // v4.9 / v5.x: HD (1.76MB) over wireless is now gated by the dongle's advertised
   // capability (pad[1] of the pairing reply). An HD-capable XIAO (2MB ramdisk,
@@ -4856,13 +4896,13 @@ static bool doLoadSelected(const String&adfPath){
       String prevIp=g_dongle_home_ip;
       if(espnowSendDiskHome(g_home_ssid,g_home_pass,g_dongle_home_ip,copied)){
         g_sv_wl_path=loadPath;g_sv_wl_loadid=g_espnow_load_id;
-      }
+      } else if(espnowClaimCancelled()) svToast("NOT SENT - dongle kept for the other screen");   // lab14s
       if(g_dongle_home_ip!=prevIp&&g_dongle_home_ip.length())saveConfigKey("DONGLE_HOME_IP",g_dongle_home_ip);  // persist the resolved IP for next time
     } else if(espnowIsPaired()){                            // single paired dongle — unchanged
       espnowSendNotify(g_loaded_name,g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN",copied);
       if(espnowSendDisk(copied)){                           // v4.8.0: remember what we flung, keyed by the dongle's load_id
         g_sv_wl_path=loadPath;g_sv_wl_loadid=g_espnow_load_id;
-      }
+      } else if(espnowClaimCancelled()) svToast("NOT SENT - dongle kept for the other screen");   // lab14s
     }
   }
   drawStatusBar();drawListAndCover();gfx_flush();return true;
@@ -6010,14 +6050,15 @@ static void doScanDongles(){
         gfx_fillRoundRect(8,y,VW-16,rowH-4,6,bg);gfx_drawRoundRect(8,y,VW-16,rowH-4,6,isSel?COL_AMBER:COL_ACCENT);
         gfx_setTextSize(1);gfx_setTextColor(isSel?inkFor(bg):((inkFor(bg)==TFT_BLACK)?TFT_BLACK:COL_AMBER),bg);gfx_setCursor(18,y+7);gfx_print(nm.length()?nm:("Dongle "+String(i+1)));
         gfx_setTextColor(isSel?inkFor(bg):COL_MID,bg);gfx_setCursor(18,y+20);gfx_print("OMEGA-"+suffix);
+        {String iu=espnowScanInUseBy(i); if(iu.length()>12)iu=iu.substring(0,12); if(iu.length()){gfx_setTextColor(isSel?inkFor(bg):COL_ORANGE,bg);gfx_print("   in use: "+iu);}}   // lab14s
         if(isActive){gfx_setTextColor(COL_GREEN,bg);gfx_setCursor(VW-70,y+13);gfx_print(T(L_ACTIVE));}
       }
       if(n>maxRows){int trackY=listTop,trackH=maxRows*rowH-4,thumbH=trackH*maxRows/n;if(thumbH<10)thumbH=10;
         int thumbY=trackY+(trackH-thumbH)*scanScroll/maxScroll;
         gfx_fillRect(VW-4,trackY,3,trackH,COL_PANEL);gfx_fillRect(VW-4,thumbY,3,thumbH,COL_AMBER);}
       bool selLocked=(n>0)?getDongleLock(espnowScanGetMac(sel)):false;
-      int bw=(VW-6*4)/5,bx=4;const char* BL[5]={"USE","RENAME","DEL",selLocked?"UNLOCK":"LOCK","BACK"};uint16_t BC[5]={COL_GREEN,COL_ACCENT,(uint16_t)0x8000,COL_AMBER,COL_BAR};
-      for(int i=0;i<5;i++){gfx_fillRoundRect(bx,btnBarY+2,bw,34,6,BC[i]);gfx_setTextColor(inkFor(BC[i]),BC[i]);gfx_setTextSize(1);gfx_setCursor(bx+(bw-gfx_textWidth(BL[i]))/2,btnBarY+14);gfx_print(BL[i]);bx+=bw+4;}
+      int bw=(VW-7*4)/6,bx=4;const char* BL[6]={"USE","RENAME","DEL","SHARE",selLocked?"UNLOCK":"LOCK","BACK"};uint16_t BC[6]={COL_GREEN,COL_ACCENT,(uint16_t)0x8000,COL_ORANGE,COL_AMBER,COL_BAR};   // lab14s: + SHARE
+      for(int i=0;i<6;i++){gfx_fillRoundRect(bx,btnBarY+2,bw,34,6,BC[i]);gfx_setTextColor(inkFor(BC[i]),BC[i]);gfx_setTextSize(1);gfx_setCursor(bx+(bw-gfx_textWidth(BL[i]))/2,btnBarY+14);gfx_print(BL[i]);bx+=bw+4;}
       gfx_flush();
     }
     bool t=Touch_ReadFrame(); uint16_t tx=0,ty=0; if(t)t=getTouchXY(&tx,&ty);
@@ -6030,21 +6071,28 @@ static void doScanDongles(){
     } else if(down){
       down=false;
       if(!moved){
-        if(downY>=btnBarY){int bw=(VW-6*4)/5,i=(downX-4)/(bw+4);
+        if(downY>=btnBarY){int bw=(VW-7*4)/6,i=(downX-4)/(bw+4);
           if(i==0){espnowScanSelect(sel);gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_GREEN,COL_BG);{const char*s="PAIRED";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);}gfx_print(T(L_PAIRED));gfx_flush();delay(700);break;}
           else if(i==1){String mac=espnowScanGetMac(sel);String label="OMEGA-"+mac.substring(12),nm=getDongleName(mac),out;if(onScreenKeyboard(label,nm,out)){setDongleName(mac,out);}uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<500)delay(10);down=false;dirty=true;}
           else if(i==2){   // DEL — forget this dongle: tell it to drop us (over-air) + clear its name & active link
             uint8_t m[6]; espnowScanMacBytes(sel,m);
             espnowSendUnpair(m); espnowForgetActive(m); setDongleName(espnowScanGetMac(sel),"");
             gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0xE8C4,COL_BG);{const char*s="REMOVED";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);}gfx_print("REMOVED");gfx_flush();delay(800);break;}
-          else if(i==3){   // LOCK / UNLOCK — Webby security: lock this dongle to this GTi, or open it up
+          else if(i==3){   // lab14s SHARE: this dongle accepts ONE more screen for 2 minutes (Webby 1.6.6+; only an owner can ask)
+            uint8_t m[6]; espnowScanMacBytes(sel,m); espnowSendShare(m);
+            gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_ORANGE,COL_BG);{const char*s="SHARED";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-24);gfx_print(s);}
+            gfx_setTextSize(1);gfx_setTextColor(COL_LIT,COL_BG);{const char*s="Within 2 minutes, on the other screen:";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2+4);gfx_print(s);}
+            {const char*s="SCAN, pick this dongle, USE.";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2+18);gfx_print(s);}
+            gfx_flush();delay(2200);
+            uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<500)delay(10);down=false;dirty=true;}
+          else if(i==4){   // LOCK / UNLOCK — Webby security: lock this dongle to this GTi, or open it up
             uint8_t m[6]; espnowScanMacBytes(sel,m); String mac=espnowScanGetMac(sel);
             bool now=!getDongleLock(mac);
             if(now) espnowSendLock(m); else espnowSendUnlock(m);
             setDongleLock(mac,now);
             gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_AMBER,COL_BG);{const char*s=now?"LOCKED":"UNLOCKED";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);gfx_print(s);}gfx_flush();delay(800);
             uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<500)delay(10);down=false;dirty=true;}
-          else break; // BACK (i==4)
+          else break; // BACK (i==5)
         } else if(downY>=listTop&&downY<listTop+maxRows*rowH){int slot=(downY-listTop)/rowH,idx=scanScroll+slot; if(idx>=0&&idx<n&&idx!=sel){sel=idx;dirty=true;}}
       }
     }
@@ -6611,6 +6659,7 @@ void setup(){
        (unsigned long)g_img_max_kb,(unsigned long)TOTAL_SECTORS,(unsigned)SECTORS_PER_CLUSTER,
        (unsigned long)TOTAL_SECTORS*512UL,(unsigned)ESP.getFreePsram());
   build_volume(getOutputFilename(),g_mode==MODE_ADF?ADF_DEFAULT_SIZE:64);
+  espnowSetClaimAsk(claimAskUI);   // lab14s: take-over question for a shared dongle
   if(g_wireless_mode && !g_link_home && !sdAccessReq){espnowBegin();g_espnow_started=true;}   // v5.1: don't arm the radio when booting into SD access — no stray FATFS writes while the PC holds the card
   if(g_cracktro>=0)drawCracktro(g_cracktro);   // CRACKTRO=OFF/NONE (-1) skips the boot demo entirely
   USB.onEvent(usbEventCB);
