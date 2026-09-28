@@ -12,7 +12,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/.fleetcheck"
 
 # user-visible words that must never reach a normal user
-STRINGS='RELEASE LOCKS|UNCLAIM|Claiming|Not claimed|claimed elsewhere|claimed by another screen|/api/fleet/enroll|/api/fleet/unenroll'
+STRINGS='[(]mine[)]|[(]locked[)]|RELEASE LOCKS|UNCLAIM|Claiming|Not claimed|claimed elsewhere|claimed by another screen|/api/fleet/enroll|/api/fleet/unenroll'
 # symbols that must not be linked in
 SYMS='pfSendEnroll|pfSendUnenroll|pfWriteAuth|pfElect|pfOrphanCount|doReleaseOrphans'
 

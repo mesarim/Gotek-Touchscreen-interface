@@ -370,6 +370,7 @@ static void hFleetCmd() {
   else { g_pfCmd = (uint8_t)cmd; g_pfCmdIp = ip; webPanelHttp.send(200, "application/json", "{\"status\":\"queued\"}"); }
 }
 
+#if defined(GTI_FLEET)   // club-only: the roster, send and cmd stay in every build
 // #lock: the token only ever leaves this screen toward a dongle we can SEE with its BOOT
 // pairing window open - never toward a hand-typed address.
 static void hFleetEnroll() {
@@ -394,6 +395,7 @@ static void hFleetUnenroll() {
                                webPanelHttp.send(409, "application/json", "{\"error\":\"Fleet busy\"}");
   else { g_pfUnenrollIp = ip; webPanelHttp.send(200, "application/json", "{\"status\":\"queued\"}"); }
 }
+#endif
 #endif
 // ── Firmware OTA (streamed to the inactive slot) ───────────────────────────
 
@@ -719,8 +721,10 @@ static void webPanelRegister() {
   webPanelHttp.on("/api/fleet",          HTTP_GET,  hFleet);
   webPanelHttp.on("/api/fleet/send",     HTTP_POST, hFleetSend);
   webPanelHttp.on("/api/fleet/cmd",      HTTP_POST, hFleetCmd);
+#if defined(GTI_FLEET)
   webPanelHttp.on("/api/fleet/enroll",   HTTP_POST, hFleetEnroll);
   webPanelHttp.on("/api/fleet/unenroll", HTTP_POST, hFleetUnenroll);
+#endif
 #endif
 #if defined(GTI_WEB_SD_FILES)
   webPanelHttp.on("/api/sd/list",    HTTP_GET,  hSdList);

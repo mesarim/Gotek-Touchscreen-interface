@@ -35,9 +35,20 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#define FW_VERSION "5.9.23-fleet-JC3248"   // -fleet so the bench can tell this apart from a
-                                           // cracktro build: both were "5.9.23-JC3248" and the
-                                           // panel on the desk could not be attributed to either.
+// -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
+// contention, orphan release and the fleet routes. OFF by default per #24: a normal
+// user should never meet the word, so this is compile-time only and deliberately NOT
+// a CONFIG.TXT key. Uncomment, or build with -DGTI_FLEET=1, for a club build.
+// The wire contract is unchanged either way, so the two builds interoperate.
+//#define GTI_FLEET 1
+
+// -fleet so the bench can tell the two apart: both used to be "5.9.23-JC3248" and the
+// panel on the desk could not be attributed to either.
+#if defined(GTI_FLEET)
+#define FW_VERSION "5.9.23-lab1-fleet-JC3248"
+#else
+#define FW_VERSION "5.9.23-lab1-JC3248"
+#endif
 #define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
 #define PF_MDNS_DEFAULT "gotekomega"   // the name this screen answers to unless MDNS_NAME says otherwise.
                                        // Must match what the dongles cede (their portal points users here).
@@ -1191,6 +1202,7 @@ static void forgetNet(const String&ssid){
   saveKnownNets();
 }
 
+#if defined(GTI_FLEET)
 // #lock: load this panel's owner token from CONFIG.TXT (PANEL_TOKEN=<32 hex>); generate + persist if absent.
 static void pfEnsureToken(){
   String hex="";
@@ -1205,6 +1217,7 @@ static void pfEnsureToken(){
   saveConfigKey("PANEL_TOKEN", String(b));
   g_panel_token_ok=true;
 }
+#endif
 
 // ── Dongle friendly names (touchscreen-side only; keyed to the dongle MAC) ──
 static String macKey(const String&mac){String h="";for(unsigned i=0;i<mac.length();i++){char c=mac[i];if(c!=':')h+=(char)toupper(c);}return "DONGLE_"+h;}
@@ -2182,8 +2195,10 @@ static void drawActionStrip(){
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
 enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVEDWIFI, IA_FLEET, IA_ORPHAN };
+#if defined(GTI_FLEET)
 static int  pfOrphanCount();     // #lock: locked dongles this screen does not own (defined with the fleet console below)
 static void doReleaseOrphans();  // #lock: offer our token to each of them - only a real owner token releases one
+#endif
 static void doFleetPick();       // #console: the multi-select fleet manager (called from doLoadSelected, far above its definition)
 static void savedWifiManage();   // #clubday: remembered-networks manager
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
@@ -2226,7 +2241,9 @@ static void drawInfoPanel(){
       if(g_pfTargetName.length())fl+=" > "+g_pfTargetName;
       add(fl, vis?COL_GREEN:COL_AMBER, TFT_BLACK, IA_FLEET); }   // #console: dongles we may drive / dongles heard
     add(String("SAVED WIFI: ")+String((int)g_known.size()), COL_BLUE, TFT_WHITE, IA_SAVEDWIFI);   // #clubday: remembered networks
+#if defined(GTI_FLEET)
     if(g_wireless_mode){ int orp=pfOrphanCount(); if(orp) add(String("RELEASE LOCKS: ")+String(orp), COL_AMBER, TFT_BLACK, IA_ORPHAN); }   // #lock: only when there is something to release
+#endif
   }
   add(String(T(L_CFG_FONT))+": "+fontName(g_font), COL_AMBER, TFT_BLACK, IA_FONT);
   add(String(T(L_THEME))+": "+THEMES[g_theme_idx].name, COL_ACCENT, TFT_WHITE, IA_THEME);   // Vince test: moved off the bottom bar
@@ -4545,6 +4562,7 @@ static void doPairNow(){ doScanDongles(); }
 
 // #lock: which dongles THIS screen owns over WiFi (CONFIG.TXT DONGLE_<mac>.MINE=1).
 // The dongle keeps the authoritative list; this is only our memory of it, and without it
+#if defined(GTI_FLEET)
 // a claimed dongle hides itself from the very screen that claimed it after a reboot.
 static void setDongleMine(const String& id, bool on){ saveConfigKey(macKey(id)+".MINE", on?"1":"0"); }
 static void loadMineIds(){
@@ -4553,6 +4571,7 @@ static void loadMineIds(){
     if(l.startsWith("DONGLE_") && l.endsWith(".MINE=1")){ pfAddMine(l.substring(7, l.length()-7)); } }
   f.close();
 }
+#endif
 
 static void fleetSendChecked(String* ids, int n){
   if(!g_loaded || g_img_bytes==0){ hwMsg("No disk staged","load a game first",COL_AMBER,1800); return; }
@@ -4572,6 +4591,7 @@ static void fleetEjectChecked(String* ids, int n){
   hwMsg("Ejected",("on "+String(ok)+" dongle(s)").c_str(),COL_AMBER,1500);
 }
 
+#if defined(GTI_FLEET)
 static int pfOrphanCount(){ int n=0; for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].lkd && !pfIsMine(g_pfPeers[i].id)) n++; return n; }
 static void doReleaseOrphans(){
   pfService(); pfPrune();
@@ -4583,6 +4603,7 @@ static void doReleaseOrphans(){
   if(!tried) hwMsg("Nothing to release","no locked dongles",COL_AMBER,1500);
   else hwMsg(freed?"Released":"Not ours",(String(freed)+" of "+String(tried)+" dongle(s)").c_str(),freed?COL_GREEN:COL_AMBER,1800);
 }
+#endif
 
 static void doFleetPick(){
   pfService(); pfPrune();
@@ -4612,9 +4633,15 @@ static void doFleetPick(){
       gfx_setTextSize(1);gfx_setTextColor(COL_ORANGE,COL_BG);gfx_setCursor(8,7);
       { String hdr;
         if(vn) { hdr="FLEET ("+String(vn)+")  tap = select  |  checked: "+String(chkN);
-                 const int hid=g_pfPeerN-vn; if(hid>0) hdr+="  |  "+String(hid)+" claimed elsewhere"; }
+#if defined(GTI_FLEET)
+                 const int hid=g_pfPeerN-vn; if(hid>0) hdr+="  |  "+String(hid)+" claimed elsewhere";
+#endif
+               }
         else    { hdr="FLEET - searching for dongles...";
-                  const int hid=g_pfPeerN; if(hid>0) hdr="FLEET - "+String(hid)+" dongle(s) claimed by another screen"; }
+#if defined(GTI_FLEET)
+                  const int hid=g_pfPeerN; if(hid>0) hdr="FLEET - "+String(hid)+" dongle(s) claimed by another screen";
+#endif
+               }
         gfx_print(hdr); }
       if(vn==0){ gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,30);gfx_print(T(L_NO_DONGLES)); }
       for(int r=0;r<maxRows&&(scroll+r)<vn;r++){ int i=pfPeerIdx(visId[scroll+r]); if(i<0) continue; int y=listTop+r*rowH; PfPeer&p=g_pfPeers[i]; bool ck=isChk(p.id);
@@ -4624,9 +4651,15 @@ static void doFleetPick(){
         gfx_setTextColor(inkFor(bg),bg);gfx_setCursor(44,y+7);gfx_print(p.name.length()?p.name:("Dongle "+String(i+1)));
         uint16_t sub=(inkFor(bg)==TFT_BLACK)?COL_MID:COL_DIM;
         gfx_setTextColor(p.loaded?COL_GREEN:sub,bg);gfx_setCursor(44,y+23);gfx_print(p.loaded?(String("* ")+(p.disk.length()?p.disk:String("disk"))):String("empty"));
+#if defined(GTI_FLEET)
         gfx_setTextColor(sub,bg);gfx_setCursor(44,y+35);gfx_print(p.ip+(pfIsMine(p.id)?"  (mine)":(p.lkd?"  (locked)":"")));
+#else
+        gfx_setTextColor(sub,bg);gfx_setCursor(44,y+35);gfx_print(p.ip);
+#endif
+#if defined(GTI_FLEET)
         if(p.enr){ gfx_fillRoundRect(actX,y+9,actW,rowH-22,6,COL_GREEN);gfx_setTextColor(TFT_BLACK,COL_GREEN);gfx_setCursor(actX+(actW-gfx_textWidth("CLAIM"))/2,y+rowH/2-8);gfx_print("CLAIM"); }
         else if(pfIsMine(p.id)){ gfx_fillRoundRect(actX,y+9,actW,rowH-22,6,(uint16_t)0x8000);gfx_setTextColor(TFT_WHITE,(uint16_t)0x8000);gfx_setCursor(actX+(actW-gfx_textWidth("UNCLAIM"))/2,y+rowH/2-8);gfx_print("UNCLAIM"); }
+#endif
       }
       if(vn>maxRows){ int trackY=listTop,trackH=maxRows*rowH-4,thumbH=trackH*maxRows/vn;if(thumbH<10)thumbH=10;
         int thumbY=trackY+(trackH-thumbH)*scroll/(maxScroll?maxScroll:1);
@@ -4649,12 +4682,16 @@ static void doFleetPick(){
           else break; // BACK
         } else if(downY>=listTop&&downY<listTop+maxRows*rowH){ int slot=(downY-listTop)/rowH,vidx=scroll+slot;
           if(vidx>=0&&vidx<vn){ int i=pfPeerIdx(visId[vidx]); if(i<0){ dirty=true; } else { PfPeer&p=g_pfPeers[i];
+#if defined(GTI_FLEET)
             if((int)downX>=actX && (p.enr||pfIsMine(p.id))){   // per-row CLAIM / UNCLAIM
               String err;
               if(p.enr){ hwMsg("Claiming...",p.name.c_str(),COL_ACCENT,1); bool ok=pfSendEnroll(p.ip,p.tcp,err); if(ok){pfAddMine(p.id);setDongleMine(p.id,true);} hwMsg(ok?"Claimed":"Not claimed",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,1500); }
               else { hwMsg("Releasing...",p.name.c_str(),COL_ACCENT,1); bool ok=pfSendUnenroll(p.ip,p.tcp,err); if(ok){pfDelMine(p.id);setDongleMine(p.id,false);} hwMsg(ok?"Released":"Failed",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,1500); }
               drainTouch(); dirty=true;
             } else { toggleChk(p.id); dirty=true; }   // toggle select
+#else
+              toggleChk(p.id); dirty=true;   // no claims in this build: a tap only selects
+#endif
           } }
         }
       }
@@ -4852,8 +4889,10 @@ void setup(){
     generateDefaultConfig();
     selfHealConfig();           // append any documented keys an older CONFIG.TXT is missing
     loadConfig();
+#if defined(GTI_FLEET)
     pfEnsureToken();            // #lock: this screen's owner identity (PANEL_TOKEN in CONFIG.TXT)
     loadMineIds();              // #lock: which dongles we have claimed
+#endif
     loadKnownNets();            // #clubday: remembered WiFi networks (NETWORKS.TXT)
     if(g_sd_freq==40000){           // 5.3.5: SDSPEED=40 opt-in — remount fast, fall back to 20 if it won't take
       SD_MMC.end();delay(30);SD_MMC.setPins(SD_CLK,SD_CMD,SD_D0);
@@ -5125,7 +5164,9 @@ static void infoAction(uint8_t act){
     case IA_WEBUI: doWebUiSetup(); drawInfoFull(); break;   // 5.9.9
     case IA_WIFICHECK: doWifiCheck(); drawInfoFull(); break;   // 5.9.10
     case IA_FLEET: doFleetPick(); g_info_showing=true; drawInfoFull(); break;        // #console: multi-select fleet manager
+#if defined(GTI_FLEET)
     case IA_ORPHAN: doReleaseOrphans(); g_info_showing=true; drawInfoFull(); break;  // #lock: release a claim this screen has forgotten
+#endif
     case IA_SAVEDWIFI: savedWifiManage(); drawInfoFull(); break;                     // #clubday: remembered networks
     default: break;
   }
@@ -5240,8 +5281,10 @@ void loop(){
         }
       }
     } else wdOut=0; }
+#if defined(GTI_FLEET)
   if(g_pfClaimedId.length()){ setDongleMine(g_pfClaimedId,true); g_pfClaimedId=""; }      // #lock: a CLAIM from the web page persists ownership too
   if(g_pfReleasedId.length()){ setDongleMine(g_pfReleasedId,false); g_pfReleasedId=""; }  // #lock: and an UNCLAIM forgets it (never write SD inside a request handler)
+#endif
   if(g_wifiNotice && !g_info_showing){   // #clubday: one notice, once the UI is actually there
     if(g_wifiNotice==1) hwMsg("No WiFi found","using ESP-NOW instead",COL_AMBER,2500);
     else                hwMsg("WiFi lost","tap MODE for ESP-NOW",COL_AMBER,2500);
