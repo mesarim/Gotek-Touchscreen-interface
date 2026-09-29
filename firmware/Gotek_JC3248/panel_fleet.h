@@ -27,6 +27,16 @@
          // names disagree in HIS tree; see the branch note.)
 #define PF_CMD_EJECT   0x03
 #define PF_CMD_SETNAME 0x06   // #24: tell the dongle the pretty display name for the NEXT disk (its FAT12 root stays DISK.ADF)
+// A dongle claimed by a club screen answers 0x05 to anyone else. A default panel can
+// still receive that byte - it just has no concept of a claim, so it reports the refusal
+// as what it is to that user rather than naming a lock. Ignoring 0x05 is not an option:
+// the send loop would then report a broken cable (see the comment in pfSendDisk).
+#if defined(GTI_FLEET)
+#define PF_REFUSED_MSG "locked to another screen"
+#else
+#define PF_REFUSED_MSG "dongle refused the disk"
+#endif
+
 #if defined(GTI_FLEET)   // club opcodes: the default build never sends these
 #define PF_CMD_ENROLL  0x07   // #lock: enroll this panel's token as an owner (dongle's enroll window must be open)
 #define PF_CMD_AUTH    0x08   // #lock: token preamble before a disk fling, proving this panel is an enrolled owner
@@ -149,15 +159,23 @@ static void pfElect() {
   if (want != g_pfMdnsName) { g_pfMdnsName = want; g_pfMdnsDirty = true; g_pfMdnsHeld = false; }
 }
 #else
-// No election in this build: one screen, one name. Take MDNS_NAME if the user set
-// one, otherwise the default, and never yield it to anybody. Same name as the fleet
-// version on purpose - pfApplyMdns() is the only writer of the registration and it
-// needs SOMEBODY to fill g_pfMdnsName, or the screen silently answers to nothing.
+// No election in this build: one screen, one name. Same function name on purpose -
+// pfApplyMdns() is the only writer of the registration and it needs SOMEBODY to fill
+// g_pfMdnsName, or the screen silently answers to no mDNS name at all.
 static void pfElect() {
   if (!g_pfMyId.length()) g_pfMyId = pfMyMac();
-  String want = g_mdns_name.length() ? g_mdns_name : String(PF_MDNS_DEFAULT);
+  pfPanelPrune();                               // its only other caller is the fleet election;
+                                                // without this the panel count only ever grows
+  // Test that MDNS_NAME was SET, not what it says: choosing the default name on purpose
+  // is still a choice. Comparing values is the bug dd61f0b fixed - do not reintroduce it.
+  String want = g_mdns_named ? g_mdns_name : String(PF_MDNS_DEFAULT);
   if (want != g_pfMdnsName) { g_pfMdnsName = want; g_pfMdnsDirty = true; }
-  g_pfIsLeader = true;
+  // Leadership here only decides whether pfMdnsReadback() takes the name BACK after the
+  // IDF responder renames us. A screen the user named insists; a screen sitting on the
+  // default accepts the rename. Without that split, two default screens on one LAN both
+  // insist and trade gotekomega.local back and forth every 20s, forever - and unlike the
+  // fleet build there is no MAC election left to settle it.
+  g_pfIsLeader = g_mdns_named;
 }
 #endif
 // Ask the responder what hostname it actually holds. begin() returning true is NOT that
@@ -357,7 +375,7 @@ static bool pfWriteAuth(WiFiClient &c, String &err) {
   // short window. Without this the refusal arrives mid-payload and surfaces as "connection lost".
   const uint32_t t0 = millis();
   while (!c.available() && millis() - t0 < 400) { if (!c.connected()) break; delay(5); }
-  if (c.available()) { const int r = c.read(); err = (r == 0x05) ? "locked to another screen" : "refused"; return false; }
+  if (c.available()) { const int r = c.read(); err = (r == 0x05) ? PF_REFUSED_MSG : "refused"; return false; }
   return true;
 }
 #endif
@@ -391,10 +409,10 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
     // A refusal arrives mid-stream: the dongle answers 0x05 and hangs up while we are still
     // writing. Read it, or the caller reports a broken cable when it was actually a locked dongle.
     if (c.available()) { const int r = c.read(); c.stop();
-      err = (r == 0x05) ? "locked to another screen" : (r == 0x00) ? "dongle refused the disk" : ("refused (0x" + String(r, HEX) + ")");
+      err = (r == 0x05) ? PF_REFUSED_MSG : (r == 0x00) ? "dongle refused the disk" : ("refused (0x" + String(r, HEX) + ")");
       return false; }
     if (!c.connected()) {
-      if (c.available()) { const int r = c.read(); if (r == 0x05) { err = "locked to another screen"; c.stop(); return false; } }
+      if (c.available()) { const int r = c.read(); if (r == 0x05) { err = PF_REFUSED_MSG; c.stop(); return false; } }
       err = "connection lost at " + String(sent) + "B"; c.stop(); return false; }
     if ((int32_t)(millis() - deadline) > 0) { err = "too slow - " + String(sent*100/size) + "% in 3 min"; c.stop(); return false; }
     uint32_t chunk = size - sent; if (chunk > 8192) chunk = 8192;
@@ -409,7 +427,7 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
   while (c.available() < 1 && millis() - t0 < 10000) { if (!c.connected()) break; delay(5); }
   const int a = c.available() >= 1 ? c.read() : -1;
   c.stop();
-  if (a != 0x01) { err = (a==0x05) ? "locked to another screen" : (a < 0) ? "no ack" : "dongle refused"; return false; }   // #lock: 0x05 = the dongle rejected us (not an owner)
+  if (a != 0x01) { err = (a==0x05) ? PF_REFUSED_MSG : (a < 0) ? "no ack" : "dongle refused"; return false; }   // #lock: 0x05 = the dongle rejected us (not an owner)
   return true;
 }
 
@@ -433,7 +451,7 @@ static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &
   c.stop();
   // Only 0x01 is success. The dongle answers 0x02 for "refused, unsaved data", 0x05 for "locked".
   if (a == 0x01) return true;
-  err = (a < 0) ? "no reply" : (a == 0x02) ? "refused - unsaved data (use force)" : (a == 0x05) ? "locked to another screen" : "refused";
+  err = (a < 0) ? "no reply" : (a == 0x02) ? "refused - unsaved data (use force)" : (a == 0x05) ? PF_REFUSED_MSG : "refused";
   return false;
 }
 
