@@ -45,9 +45,9 @@
 // -fleet so the bench can tell the two apart: both used to be "5.9.23-JC3248" and the
 // panel on the desk could not be attributed to either.
 #if defined(GTI_FLEET)
-#define FW_VERSION "5.9.23-lab2-fleet-JC3248"
+#define FW_VERSION "5.9.23-lab3-fleet-JC3248"
 #else
-#define FW_VERSION "5.9.23-lab2-JC3248"
+#define FW_VERSION "5.9.23-lab3-JC3248"
 #endif
 #define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
 #define PF_MDNS_DEFAULT "gotekomega"   // the name this screen answers to unless MDNS_NAME says otherwise.

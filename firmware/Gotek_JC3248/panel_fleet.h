@@ -27,6 +27,10 @@
          // names disagree in HIS tree; see the branch note.)
 #define PF_CMD_EJECT   0x03
 #define PF_CMD_SETNAME 0x06   // #24: tell the dongle the pretty display name for the NEXT disk (its FAT12 root stays DISK.ADF)
+// Mainline, not fleet. Webby 1.6.6 remembers which screen put the disk in and asks
+// before another screen takes it over; 1.6.7 moved it here from 0x07 because that is
+// ENROLL in the fleet contract. Same word "claim", a different thing - see the Registry.
+#define PF_CMD_CLAIM   0x0A
 // A dongle claimed by a club screen answers 0x05 to anyone else. A default panel can
 // still receive that byte - it just has no concept of a claim, so it reports the refusal
 // as what it is to that user rather than naming a lock. Ignoring 0x05 is not an option:
@@ -380,6 +384,46 @@ static bool pfWriteAuth(WiFiClient &c, String &err) {
 }
 #endif
 
+// Tell the dongle which screen is about to send it a disk (Webby 1.6.6+).
+// Frame: mac[6], flags (bit0 = take over), one length byte, then the name.
+// Reply: 0x01 go ahead, or 0x02 unsaved saves / 0x03 in use - both followed by a
+// length byte and the name of the screen that holds it, so we can say who.
+// An older dongle does not know 0x0A and answers 0x00; that is not an error, it
+// just has no loader to remember. Never fatal: a refused claim stops the fling,
+// an unanswered one does not.
+static bool pfSendClaim(const String &ip, uint16_t port, bool takeover, String &err) {
+  WiFiClient c;
+  if (!c.connect(ip.c_str(), port, 5000)) { err = "connect failed"; return false; }
+  c.setNoDelay(true);
+  const uint8_t f[5] = { 0xFF, 0xFF, 0xFF, 0xFF, PF_CMD_CLAIM };
+  c.write(f, 5);
+  uint8_t mac[6]; WiFi.macAddress(mac);
+  c.write(mac, 6);
+  c.write((uint8_t)(takeover ? 1 : 0));
+  String nm = pfMdnsName(); if (nm.length() > 24) nm = nm.substring(0, 24);
+  c.write((uint8_t)nm.length());
+  if (nm.length()) c.write((const uint8_t *)nm.c_str(), nm.length());
+  const uint32_t t0 = millis();
+  while (c.available() < 1 && millis() - t0 < 3000) { if (!c.connected()) break; delay(5); }
+  const int a = c.available() >= 1 ? c.read() : -1;
+  if (a == 0x01 || a < 0 || a == 0x00) { c.stop(); return true; }   // go ahead, or a dongle that predates 0x0A
+  // refused: read the length-prefixed name of whoever holds it
+  String who;
+  const uint32_t t1 = millis();
+  while (c.available() < 1 && millis() - t1 < 1000) { if (!c.connected()) break; delay(5); }
+  int wl = c.available() >= 1 ? c.read() : 0;
+  for (int i = 0; i < wl && millis() - t1 < 2000; ) {
+    if (!c.connected() && !c.available()) break;
+    int ch = c.read();
+    if (ch < 0) { delay(1); continue; }
+    who += (char)ch; i++;
+  }
+  c.stop();
+  if (!who.length()) who = "another screen";
+  err = (a == 0x02) ? ("unsaved saves on " + who) : ("in use by " + who);
+  return false;
+}
+
 // Push the loaded disk to a dongle. BLOCKING — loop() only.
 static void pfNoteTarget(const String &ip) {   // NOW PLAYING shows where the disk went
   g_pfTargetName = ip;
@@ -389,6 +433,9 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
 #if defined(GTI_FLEET)
   if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
 #endif
+  // Mainline: say who is sending before sending. A refusal here is the dongle
+  // protecting somebody else's disk or unsaved saves, so it stops the fling.
+  if (!pfSendClaim(ip, port, false, err)) return false;
   if (!g_loaded || g_img_bytes == 0) { err = "no disk loaded"; return false; }
   const uint8_t *data = g_disk + DATA_LBA * 512;
   const uint32_t size = g_img_bytes;
