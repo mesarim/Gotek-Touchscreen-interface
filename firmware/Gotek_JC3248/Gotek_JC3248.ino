@@ -45,9 +45,9 @@
 // -fleet so the bench can tell the two apart: both used to be "5.9.23-JC3248" and the
 // panel on the desk could not be attributed to either.
 #if defined(GTI_FLEET)
-#define FW_VERSION "5.9.23-lab1-fleet-JC3248"
+#define FW_VERSION "5.9.23-lab2-fleet-JC3248"
 #else
-#define FW_VERSION "5.9.23-lab1-JC3248"
+#define FW_VERSION "5.9.23-lab2-JC3248"
 #endif
 #define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
 #define PF_MDNS_DEFAULT "gotekomega"   // the name this screen answers to unless MDNS_NAME says otherwise.
@@ -3875,6 +3875,7 @@ static bool kbInput(const char* title, String& io, int maxlen){
   kbWaitRelease(600);   // drain the tap that opened the keyboard (robust to dropped touch frames)
 
   while (true) {
+    webPanelPoll();   // the web UI must not die while this screen owns the loop
     if (dirty) { dirty = false;
       gfx_fillScreen(COL_BG);
       bool liteBar = (inkFor(COL_BAR) == TFT_BLACK);
@@ -4000,6 +4001,7 @@ static bool wifiPickBestKnownInto(){
 static int wifiPickFromScan(String& outSsid, bool& outSecured){
   const int hdr=24, rowH=32, gap=4, ctlH=34, bm=6;
   while(true){                                            // outer loop = Rescan
+    webPanelPoll();   // the web UI must not die while this screen owns the loop
     gfx_fillScreen(COL_BG); gfx_setTextSize(2); gfx_setTextColor(COL_ACCENT,COL_BG);
     { const char* s="Scanning WiFi..."; gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8); gfx_print(s); } gfx_flush();
     WiFi.mode(WIFI_STA);
@@ -4015,6 +4017,7 @@ static int wifiPickFromScan(String& outSsid, bool& outSecured){
     int avail=(VH-hdr-(ctlH+gap+bm))/(rowH+gap); if(avail<1)avail=1; int vis=m<avail?m:avail;
     bool dirty=true,pressed=true; int rel=0; kbWaitRelease(600);   // #clubday: start "pressed" + drain -> no phantom tap from the opening touch landing on a network
     while(true){
+      webPanelPoll();   // the web UI must not die while this screen owns the loop
       if(dirty){ dirty=false; gfx_fillScreen(COL_BG);
         gfx_fillRect(0,0,VW,hdr,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_BAR),COL_BAR); gfx_setCursor(6,8); gfx_print("Choose WiFi network");
         if(m==0){ gfx_setTextColor(COL_AMBER,COL_BG); gfx_setCursor(14,hdr+gap+6); gfx_print("No networks found"); }
@@ -4065,6 +4068,7 @@ static void savedWifiManage(){
   const int hdr=24,rowH=34,gap=5,bm=6,ctlH=34,FGW=84;   // FGW = width of the FORGET button
   bool dirty=true,pressed=true; int rel=0; kbWaitRelease(600);   // start "pressed": the opening tap must be released before anything here counts (no phantom tap)
   while(true){
+    webPanelPoll();   // the web UI must not die while this screen owns the loop
     int m=g_known.size(); int avail=(VH-hdr-(ctlH+gap+bm))/(rowH+gap); if(avail<1)avail=1; int vis=m<avail?m:avail;
     if(dirty){ dirty=false; gfx_fillScreen(COL_BG);
       gfx_fillRect(0,0,VW,hdr,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_BAR),COL_BAR); gfx_setCursor(6,8); gfx_print("Saved WiFi  -  tap FORGET to remove");
@@ -4185,6 +4189,7 @@ static void doWifiCheck(){
 
   bool pressed=false; int rel=0;                    // wait for a tap to dismiss
   while(true){
+    webPanelPoll();   // the web UI must not die while this screen owns the loop
     uint16_t tx=0,ty=0; bool have = Touch_ReadFrame() && getTouchXY(&tx,&ty);
     if(have){ if(!pressed){ pressed=true; kbWaitRelease(); break; } }
     else { if(pressed && ++rel>=3) pressed=false; }
@@ -4215,6 +4220,7 @@ static bool doSearch(){
     for(int i=0;i<(int)g_games.size();i++){String nm=g_games[i].name;nm.toLowerCase();
       if(nm.indexOf(ql)>=0){if(nMatch<resMax)matches[nMatch++]=i;totalMatch++;}}};
   while(true){
+    webPanelPoll();   // the web UI must not die while this screen owns the loop
     if(dirty){dirty=false;
       gfx_fillScreen(COL_BG);
       bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
@@ -4289,6 +4295,7 @@ static int rtfmSectionMenu(const std::vector<String>& sec){         // full-scre
   bool down=false, moved=false; int dY=0, dScroll=0, lastY=0; bool dirty=true;
   {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<400)delay(10);}
   while(true){
+    webPanelPoll();   // the web UI must not die while this screen owns the loop
     if(dirty){ dirty=false;
       gfx_fillScreen(COL_BG);
       bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
@@ -4355,6 +4362,7 @@ static void doManual(const String& path){
   if(path==g_rtfmLastPath){ scroll=g_rtfmLastScroll; float ms=maxScroll(); if(scroll<0)scroll=0; if(scroll>ms)scroll=ms; }   // v2: restore last read position
   {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<600)delay(10);}   // drain the entering tap
   while(true){
+    webPanelPoll();   // the web UI must not die while this screen owns the loop
     int nbtn = secName.size()? 4 : 3;   // v2 buttons: SIZE, TOP, [SECTIONS], CLOSE
     int bw = VW/nbtn;
     if(dirty||vel!=0){ dirty=false;
@@ -4417,6 +4425,7 @@ static bool onScreenKeyboard(const String&macLabel,const String&initial,String&o
   bool kbPressed=false;int kbRelease=0;   // press-edge de-dupe: one key per finger-down
   kbWaitRelease(600);   // drain the tap that opened this keyboard (bleed-through fix)
   while(true){
+    webPanelPoll();   // the web UI must not die while this screen owns the loop
     if(dirty){dirty=false;
       gfx_fillScreen(COL_BG);
       // Theme-aware inks: on light bars/panels (PAPER) amber/white/dim gray are
@@ -4504,6 +4513,7 @@ static void doScanDongles(){
   if(sel>=maxRows)scanScroll=sel-maxRows+1; if(scanScroll>maxScroll)scanScroll=maxScroll; if(scanScroll<0)scanScroll=0;
   bool dirty=true, down=false, moved=false; int downX=0,downY=0,downScroll=0;
   while(true){
+    webPanelPoll();   // the web UI must not die while this screen owns the loop
     if(dirty){dirty=false;
       gfx_fillScreen(COL_BG);
       gfx_setTextSize(1);gfx_setTextColor(COL_ORANGE,COL_BG);gfx_setCursor(8,7);gfx_print("Dongles ("+String(n)+") - pick one:");
@@ -5010,6 +5020,7 @@ static String doUserDisks(){
   bool dirty=true, pressed=false; int rel=0, scroll=0;
   {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<500)delay(10);}
   while(true){
+    webPanelPoll();   // the web UI must not die while this screen owns the loop
     if(dirty){dirty=false;
       gfx_fillScreen(COL_BG); drawStatusBar();
       gfx_fillRect(0,STATUS_H,VW,MODE_BAR_H,COL_BAR); gfx_setTextSize(1);
@@ -5072,6 +5083,7 @@ static void doCategoryBrowse(){
   bool dirty=true, pressed=false; int rel=0, scroll=0;
   {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<500)delay(10);}
   while(true){
+    webPanelPoll();   // the web UI must not die while this screen owns the loop
     if(g_cats.empty()) return;             // nothing to browse here -> back to the game list of this level
     if(dirty){dirty=false;
       gfx_fillScreen(COL_BG); drawStatusBar();

@@ -765,6 +765,16 @@ static void webPanelStop() {
   g_web_up = false; g_web_joining = false; g_web_srv_started = false;
 }
 
+// Answer one web client. Safe to call from anywhere, including the blocking modal
+// screens, because it only serves HTTP and never loads a disk - see webPanelService().
+// Without this the web UI simply stops responding while the user sits in a settings
+// page, which is what every screen except the savers and the fleet console used to do.
+static void webPanelPoll() {
+  if (!g_web_up) return;
+  webPanelHttp.handleClient();
+  davClient.dropIdle();
+}
+
 static void webPanelService() {
   if (g_web_joining && !g_web_up) {
     if (WiFi.status() == WL_CONNECTED) {
@@ -789,12 +799,14 @@ static void webPanelService() {
     return;
   }
   if (!g_web_up) return;
-  webPanelHttp.handleClient();
+  webPanelPoll();
+  // A queued WebDAV load attaches a disk to the USB port. That may only happen from
+  // loop(), never from inside a modal screen: a load landing under the user's fingers
+  // while they are in a settings page re-enters code that is not written for it.
   if (g_webPendingDav.length() > 0) {
     const String remote = g_webPendingDav;
     const String name   = g_webPendingName;
     g_webPendingDav = ""; g_webPendingName = "";
     if (doLoadWebdav(remote, name)) g_webDavLoaded = remote;
   }
-  davClient.dropIdle();
 }
