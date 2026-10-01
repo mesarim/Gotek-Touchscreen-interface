@@ -45,9 +45,9 @@
 // -fleet so the bench can tell the two apart: both used to be "5.9.23-JC3248" and the
 // panel on the desk could not be attributed to either.
 #if defined(GTI_FLEET)
-#define FW_VERSION "5.9.23-lab4-fleet-JC3248"
+#define FW_VERSION "5.9.23-lab5-fleet-JC3248"
 #else
-#define FW_VERSION "5.9.23-lab4-JC3248"
+#define FW_VERSION "5.9.23-lab5-JC3248"
 #endif
 #define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
 #define PF_MDNS_DEFAULT "gotekomega"   // the name this screen answers to unless MDNS_NAME says otherwise.
@@ -1615,6 +1615,10 @@ static void gLog(const char*fmt,...){
   Serial.print(buf);
   if(g_log_enabled){ File lf=SD_MMC.open("/gti.log",FILE_APPEND); if(lf){ lf.print(buf); lf.close(); } }
 }
+
+// Battery telemetry. Placed here, not with the other includes: it draws with the
+// gfx_ wrappers above and logs through gLog(), which is defined just above this.
+#include "battery.h"
 static void loadConfig(){
   applyTheme(0);
   File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);if(!f)return;
@@ -2062,6 +2066,8 @@ static void drawStatusBar(){
                  lw=multi?("DISK "+String(g_loaded_disk_idx+1)):String("DISK"); lc=COL_GREEN; fill=true; }
     else { lw="EMPTY"; lc=COL_DIM; fill=false; }
     gfx_setTextSize(1); int lww=gfx_textWidth(lw); int wx=VW-6-lww, cx=wx-9;
+    // battery sits left of that badge, and takes no width when none is fitted
+    if(battery_width()) battery_draw(cx-3-6-battery_width(), (STATUS_H-14)/2, COL_MID, COL_AMBER);
     if(fill) gfx_fillCircle(cx,STATUS_H/2,3,lc); else gfx_drawCircle(cx,STATUS_H/2,3,lc);
     gfx_setTextColor(lc,COL_BAR); gfx_setCursor(wx,6); gfx_print(lw);
   }
@@ -4899,6 +4905,7 @@ void setup(){
     generateDefaultConfig();
     selfHealConfig();           // append any documented keys an older CONFIG.TXT is missing
     loadConfig();
+    battery_begin();            // reads the pack once and seeds the average; no-op without one
 #if defined(GTI_FLEET)
     pfEnsureToken();            // #lock: this screen's owner identity (PANEL_TOKEN in CONFIG.TXT)
     loadMineIds();              // #lock: which dongles we have claimed
@@ -5274,6 +5281,8 @@ static void handleTap(uint16_t px,uint16_t py){
 // ════════════════════════════════════════════════════════════════════════════
 
 void loop(){
+  { static uint32_t batNext = 0;          // every 5s: 16 ADC samples, nothing needs it faster
+    if ((int32_t)(millis() - batNext) >= 0) { batNext = millis() + 5000; battery_poll(); } }
   webPanelService();   // one web client + one queued DAV load per pass (merge step 2)
   pfService();          // #console: hear dongle beacons so /api/fleet has a roster
   pfWorker();           // #console: run one queued fling/eject/claim per pass (non-blocking)
