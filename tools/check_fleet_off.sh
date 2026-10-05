@@ -34,7 +34,9 @@ build() {   # $1 = on|off, $2 = outdir
   if [ "$1" = on ]; then extra="--build-property compiler.cpp.extra_flags=-DGTI_FLEET=1"; else extra=""; fi
   rc=0
   # shellcheck disable=SC2086
-  arduino-cli compile --fqbn "$FQBN" $extra --output-dir "$2" "$ROOT/firmware/$SKETCH" >"$2/build.log" 2>&1 || rc=$?
+  # JOBS caps parallel compilers. On a loaded Windows box the default (one per core) can
+  # exhaust the desktop heap and fail with 0xc0000142 before a single file compiles.
+  arduino-cli compile --fqbn "$FQBN" $extra --jobs "${JOBS:-0}" --output-dir "$2" "$ROOT/firmware/$SKETCH" >"$2/build.log" 2>&1 || rc=$?
   # Judge the artefact, not the exit code. That same post-build hook returns 1 when
   # another process is holding a file in the committed build directory, which reports
   # a failure on a compile and link that actually succeeded.
@@ -52,6 +54,20 @@ build() {   # $1 = on|off, $2 = outdir
 scan() {    # $1 = outdir ; echoes every hit, one per line
   strings "$1/$SKETCH.ino.bin" 2>/dev/null | grep -Eo "$STRINGS" | sort -u
   nm -C "$1/$SKETCH.ino.elf" 2>/dev/null | grep -Eo "$SYMS" | sort -u
+}
+
+# The web page ships inside the image as a gzip array, which `strings` cannot read, so a
+# club word on the page would sail through the image scan above. It is the same page in
+# both builds, so this half is one-sided: the page must name none of the club layer.
+page_hits() {
+  python - "$ROOT/firmware/shared/webui.h" "$STRINGS" <<'PYEOF'
+import sys, re, gzip, io
+s = io.open(sys.argv[1], encoding='utf-8', errors='surrogateescape').read()
+body = s.split('webui_gz[] PROGMEM = {', 1)[1].rsplit('};', 1)[0]
+html = gzip.decompress(bytes(int(x, 16) for x in re.findall(r'0x([0-9a-fA-F]{2})', body)))
+for hit in sorted(set(re.findall(sys.argv[2], html.decode('utf-8', 'replace')))):
+    print(hit)
+PYEOF
 }
 
 echo "=== building WITHOUT the flag ==="; build off "$OUT/off"
@@ -73,6 +89,15 @@ if [ -z "$on_hits" ]; then
   rc=1
 else
   echo "OK: fleet build still has it ($(echo "$on_hits" | wc -l | tr -d ' ') markers), so the check can see"
+fi
+
+page_hits_out="$(page_hits || true)"
+if [ -n "$page_hits_out" ]; then
+  echo "FAIL: the web page (the same in both builds) names the club layer:"
+  echo "$page_hits_out" | sed 's/^/  /'
+  rc=1
+else
+  echo "OK: the web page is clean too"
 fi
 
 off_size=$(wc -c < "$OUT/off/$SKETCH.ino.bin")
