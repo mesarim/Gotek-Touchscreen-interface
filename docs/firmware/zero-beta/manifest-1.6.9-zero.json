@@ -1,0 +1,16 @@
+{
+  "name": "Gotek S3-Zero — Webby (needs GTi 5.9.41-lab14t+)",
+  "version": "Webby-1.6.9-zero",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "Gotek_Zero_Webby-1.6.9-zero.merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}

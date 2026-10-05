@@ -1,0 +1,14 @@
+[About]
+MegaBall 4 by Ed and Al Mackey - registered version, now under the Apache 2.0 licence.
+
+[Installing]
+MegaBall does not run straight from the floppies. Install it to a hard drive:
+1. Boot Workbench from a hard drive.
+2. Insert disk 1 and run its installer.
+3. Insert disks 2 and 3 when asked.
+
+[Emulators]
+The authors note that only accurate sound emulation works, because of the sound set-up routines.
+
+[Licence]
+Apache License 2.0. Original readme: megaball_readme.html in this folder.

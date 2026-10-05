@@ -1,0 +1,17 @@
+# ESP32-S3 Waveshare 7" RGB Touch LCD (16MB flash / 8MB OPI PSRAM)
+# Matches the layout Gotek_7inch is built with: 3MB APP / 9.9MB FATFS
+# ("16M Flash (3MB APP/9.9MB FATFS)" in the Tools menu).
+#
+# Gotek_7inch itself has NO sketch-local partitions.csv — it relies on whoever
+# compiles it picking the right menu entry. A new sketch folder does NOT inherit
+# that choice, so this file is here to pin it: a sketch-local partitions.csv
+# OVERRIDES the Partition Scheme menu. One less thing that can differ from the
+# known-good firmware.
+#
+# Tools -> Flash Size MUST still be 16MB, or this table will not fit.
+# Name,     Type, SubType,  Offset,    Size,      Flags
+nvs,        data, nvs,      0x9000,    0x5000,
+otadata,    data, ota,      0xe000,    0x2000,
+app0,       app,  ota_0,    0x10000,   0x300000,
+app1,       app,  ota_1,    0x310000,  0x300000,
+ffat,       data, fat,      0x610000,  0x9F0000,

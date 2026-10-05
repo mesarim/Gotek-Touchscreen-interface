@@ -1,5 +1,5 @@
 {
-  "_note": "Per-device firmware version history for the web flasher. To add a build: drop its <ver>-update.bin (the app image \u2014 byte-identical to the merged app region at 0x10000) somewhere under firmware/, then add one entry to that device's 'builds'. 'app' entries flash multi-part (that device's shared bootloader/partitions/boot_app0 + this app) \u2014 a clean bootable install that leaves SPIFFS/NVS intact. 'full' entries point at a complete merged.bin manifest.json (full erase). Newest first. 'latest:true' marks the default selection. P4 is intentionally not listed.",
+  "_note": "Per-device firmware version history for the web flasher. To add a build: drop its <ver>-update.bin (the app image — byte-identical to the merged app region at 0x10000) somewhere under firmware/, then add one entry to that device's 'builds'. 'app' entries flash multi-part (that device's shared bootloader/partitions/boot_app0 + this app) — a clean bootable install that leaves SPIFFS/NVS intact. 'full' entries point at a complete merged.bin manifest.json (full erase). Newest first. 'latest:true' marks the default selection. P4 is intentionally not listed.",
   "jc3248": {
     "chipFamily": "ESP32-S3",
     "shared": [
@@ -19,84 +19,178 @@
     "appOffset": 65536,
     "builds": [
       {
+        "v": "A600",
+        "ch": "stable",
+        "date": "2026-10-04",
+        "app": "firmware/jc3248/GTi-JC35-A600-update.bin",
+        "note": "STABLE - A600 (4 Oct 2026, the pre-Kickstart release). Everything from the 5.9.41 lab series in one: big libraries (tested to 20,000 games), safe saves (Game.sav.adf; a dongle's saves go to their own Game.sav.XXXX file), never formats a card, SD guard; tap a game's text for its whole .nfo; covers fill their frame; Polish and Czech screen text; take-over check when two screens share a dongle; in ESP-NOW mode the GTi's own Wi-Fi is GTi_Omega-XXXX (password gotekXXXX) with its web page at 192.168.4.1. Pairs with Webby-1.6.10 dongles. Built with ESP32 core 3.3.12.",
+        "latest": true
+      },
+      {
+        "v": "5.9.41-lab15q",
+        "ch": "beta",
+        "date": "2026-10-03",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab15q-update.bin",
+        "note": "Latest (3 Oct). Same as lab15m, plus: two new screen languages, Polish (PL, checked by 8-Bitz) and Czech (CS) - Settings > LANG, or LANG=PL / LANG=CS in CONFIG.TXT; the web page's language list now has NL, PL and CS. In ESP-NOW mode the GTi's own Wi-Fi is now GTi_Omega-XXXX with password gotekXXXX (it used to be an open, unnamed ESP_xxxxxx network) and serves the GTi web page at 192.168.4.1; Settings shows the name and password. Your phone drops off it for a few seconds while a disk is sent to a dongle. Built with ESP32 core 3.3.12.",
+        "latest": false
+      },
+      {
+        "v": "5.9.41-lab15m",
+        "ch": "beta",
+        "date": "2026-09-30",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab15m-update.bin",
+        "note": "Latest (30 Sep). Same as lab15i, plus: the cover picture in the list fills its frame - the empty bands round a cover (letterbox and black PAL borders) are cut off and the frame hugs the picture; and tapping a game's text (title + description) in the list opens its whole .nfo full-screen in the manual reader (drag to scroll, tap to close). Built with ESP32 core 3.3.12.",
+        "latest": false
+      },
+      {
+        "v": "5.9.41-lab15i",
+        "ch": "beta",
+        "date": "2026-09-29",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab15i-update.bin",
+        "note": "(29 Sep) Same as lab15h, plus: each wireless dongle keeps its OWN save file (Game.sav.XXXX.<ext>, XXXX = 4 characters from the dongle's ID; with Webby-1.6.8 they match its Wi-Fi name GotekOMEGA-XXXX). So the Amiga on the GTi's cable and an Amiga on a dongle can play the same game without mixing their saves. Cable saves stay Game.sav.<ext>. Works with any Webby. Built with ESP32 core 3.3.12.",
+        "latest": false
+      },
+      {
+        "v": "5.9.41-lab15h",
+        "ch": "beta",
+        "date": "2026-09-27",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab15h-update.bin",
+        "note": "Testing build. Replaces lab15e and lab15f (loading a disk froze them). Game saves over the cable for ADF, DSK and GENERIC (HFE, ST, IMG ...) - SAVES=COPY (default) writes 'Game.sav.<ext>' beside the game, OVERWRITE writes into the image; the GTi's card writes and the Gotek's reads take turns, so saving can't damage the card's folders (the lab15c problem). For HFE saves set BIGDISK=ON. Big libraries: compact game list (tested with 20,000 games) and fast loading (20,000 games boot in ~3 s from the cache). One LIBRARY button on the list cycles ADF/DSK/GEN (Settings keeps LIBRARY); a library switch no longer loses its descriptions.",
+        "latest": false
+      },
+      {
+        "v": "5.9.41-lab15f",
+        "ch": "beta",
+        "date": "2026-09-27",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab15f-update.bin",
+        "note": "Testing build. Everything in lab15e (safe cable saves for ADF, DSK and GENERIC/HFE/ST, compact game list - tested with 20,000 games) PLUS faster loading of big libraries: the cache files are read and written in large blocks (same files on the card), a card with no covers skips the per-game cover search, and the cover-building screens redraw once a second instead of every 25 games. KNOWN ISSUE: loading a disk over the cable freezes the GTi (the Gotek/PC never sees the disk, EJECT locks the screen) - do not use; use 5.9.41-lab15h.",
+        "latest": false
+      },
+      {
+        "v": "5.9.41-lab15e",
+        "ch": "beta",
+        "date": "2026-09-27",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab15e-update.bin",
+        "note": "Testing build. Replaces lab15c. Game saves over the cable for ADF, DSK and GENERIC (HFE, ST, IMG ...) - SAVES=COPY (default) writes 'Game.sav.<ext>' beside the game, OVERWRITE writes into the image. FIX: the GTi's card writes (saves, log, settings) and the Gotek's reads now take turns - in lab15c a save made while the Gotek was reading could damage the card's folders. A failed save is retried once and says why in GTI/gti.log; a save copy that can't be completed is thrown away. Files the GTi writes get a real date. For HFE saves set BIGDISK=ON. Also: compact game list - big libraries use about half the memory. KNOWN ISSUE: loading a disk over the cable freezes the GTi (the Gotek/PC never sees the disk, EJECT locks the screen) - do not use; use 5.9.41-lab15h.",
+        "latest": false
+      },
+      {
+        "v": "5.9.41-lab15c",
+        "ch": "beta",
+        "date": "2026-09-27",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab15c-update.bin",
+        "note": "Testing build (kodak80 edition). Everything in lab14u PLUS: FIX - game saves over the cable now work for GENERIC images (HFE, ST, IMG ...): before, nothing was saved and the game even read its old data back (high scores reverted; reported by kodak80). Saves go to 'Game.sav.<ext>' beside the game (SAVES=COPY, default) or into the image itself (SAVES=OVERWRITE). FIX (all libraries): after a save the Gotek keeps reading its own latest data until eject, and an existing save file is updated in place. For HFE saves set BIGDISK=ON (most Atari HFEs are bigger than 1.76 MB; only the first BIGDISK-size of an image can be saved). Also: compact game list (lab15a/b) - big libraries use about half the memory. KNOWN ISSUE: saving while the Gotek is reading can damage the card's folders (a big first save in COPY mode emptied a game folder for kodak80) - do not use for saving; use 5.9.41-lab15e.",
+        "latest": false
+      },
+      {
+        "v": "5.9.41-lab14u",
+        "ch": "beta",
+        "date": "2026-09-26",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab14u-update.bin",
+        "note": "Testing build. Same as lab14t (HFE write-protect fix, Webby 1.5+ dongles reachable, two screens sharing a dongle, GTINAME=) with one wireless correction: the take-over check now uses dongle command 0x0A (0x07 already belongs to the fleet build's ENROLL). Pairs with Webby-1.6.7; mixed versions still load, just without the take-over question.",
+        "latest": false
+      },
+      {
+        "v": "5.9.41-lab14t",
+        "ch": "beta",
+        "date": "2026-09-26",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab14t-update.bin",
+        "note": "Testing build. Everything in lab14r PLUS: FIX - HFE (and any image bigger than the BIGDISK size) no longer leaves the drive write-protected until power-off (FlashFloppy 'FATFS error' on the HFE and every image after it, reported by kodak80). Wireless: finds Webby 1.5+ dongles by their own Wi-Fi name (GotekOMEGA-XXXX) so disks reach them; two screens can share a dongle (SHARE button, 'in use by' in the dongle list, take-over question that warns about unsent saves); GTINAME= names this screen.",
+        "latest": false
+      },
+      {
+        "v": "5.9.41-lab14r",
+        "ch": "beta",
+        "date": "2026-09-26",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab14r-update.bin",
+        "note": "Testing build. Everything in lab14q PLUS the wireless fix: games sent to a dongle (SuperMini / XIAO) load again - since 5.9.35 the disk arrived 1 KB shifted and the Amiga went back to the Kickstart screen (reported by fabienb). Big-library build (tested on a 10,000-game card), LONGNAME=ON for full file names on the Gotek, long GENERIC names keep their extension (no ERROR 34), BIGDISK, DEVMODE, TEST TOOLS page, SD guard, never formats a card. KNOWN ISSUE: an HFE bigger than 1.76 MB leaves the drive write-protected until power-off (FlashFloppy FATFS error) - use BIGDISK=ON or 5.9.41-lab14t.",
+        "latest": false
+      },
+      {
+        "v": "5.9.41-lab14q",
+        "ch": "beta",
+        "date": "2026-09-26",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab14q-update.bin",
+        "note": "Everything in 5.9.41-lab14p (big-library build, tested on a 10,000-game card) PLUS: GENERIC disks with long file names (32+ characters) no longer lose extension letters on the Gotek (PROPHECY.HF -> FlashFloppy ERROR 34, reported by kodak80). New LONGNAME=ON in CONFIG.TXT: the Gotek sees the image's full file name (shown on a FlashFloppy OLED/LCD), for ADF, DSK and GENERIC; OFF (default) keeps DISK.ADF / DISK.DSK. WARNING: wireless (dongle) loading is broken in this build (since 5.9.35 the disk reached the dongle 1 KB shifted - the Amiga returns to the Kickstart screen). Use the USB cable, or 5.9.30 for wireless. Fixed in 5.9.41-lab14r.",
+        "latest": false
+      },
+      {
+        "v": "5.9.41-lab14p",
+        "ch": "lab",
+        "date": "2026-09-26",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.41-lab14p-update.bin",
+        "note": "Big-library build, tested on a 10,000-game card. Scan + cover cache with no per-file name lookups (26 GB card: ~1 min scan, covers reused on RESCAN); LIBRARY TOO BIG check with a GTI_CAPACITY.TXT report (LIBLIMIT=OFF loads what fits); SD guard against bad SD reads/writes; GTi files moved to /GTI; the GTi never formats a card (5.9.38's format is gone); BIGDISK=OFF frees 1.1 MB (1.76 MB save/wireless buffer; ON = 2.9 MB for big HFEs); TEST TOOLS page in Settings (DEVMODE=OFF hides it); OMEGAWARE/GTi splash at power-on; fixes: every new CONFIG.TXT had its first 4 KB blank, reel/list stalls on cover-less games, CATEGORIES/LIBRARY switch emptying the list on big cards.",
+        "latest": false
+      },
+      {
+        "v": "5.9.41-EE",
+        "ch": "egg",
+        "date": "2026-09-23",
+        "full": "firmware/jc3248-egg/manifest.json",
+        "note": "EASTER EGG EDITION. Full clean flash: erases the whole board (your settings live in CONFIG.TXT on the SD card, so they survive). New flash layout, so there is no SD update.bin for this one. Something is hiding in the cracktro... Contains GPL-2 code (PrBoom); full source: firmware/jc3248-egg/GTi-5.9.41-lab13e-EasterEgg-source.zip",
+        "latest": false
+      },
+      {
+        "v": "5.9.38",
+        "ch": "lab",
+        "date": "2026-09-21",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.38-update.bin",
+        "note": "5.9.37's direct SD access (any-size images, saves via RAM-disk overlay) PLUS: an exFAT or NTFS card (the Windows default for 64GB+) is now detected at boot instead of 'SD MOUNT FAILED', and the GTi offers to format it as FAT32 itself - no third-party tools. Two confirmations, RED NO / GREEN YES, 1s arming delay. Quick format (boot sector + FATs); ERASES THE CARD. Reboots into a fresh /ADF /DSK /GENERIC layout.",
+        "latest": false
+      },
+      {
+        "v": "5.9.37",
+        "ch": "lab",
+        "date": "2026-09-21",
+        "app": "firmware/jc3248-lab/GTi-JC35-5.9.37-update.bin",
+        "note": "DIRECT SD ACCESS (standalone): disk images are no longer copied into the RAM disk - the volume the Gotek sees is mapped straight onto the file on the card, so ANY size .adf/.dsk/.hfe/.st/.img mounts (up to 32MB). Saves still work: writes land in the RAM disk as an overlay and are written back as GameName.sav.<ext> exactly as before; DISKMAXKB now bounds how much of an image can be SAVED, not loaded. Wireless is unchanged (dongle RAM disk, DISKMAXKB ceiling). exFAT cards not supported. Also 5.9.36's boot-progress rework.",
+        "latest": false
+      },
+      {
+        "v": "5.9.30",
+        "ch": "beta",
+        "date": "2026-09-18",
+        "app": "firmware/jc3248-beta/GTi-JC35-5.9.30-update.bin",
+        "note": "SD FW-UPDATE now refuses a merged/full-flash image up front (it can only ever flash the ~1.8MB app image) and shows the INCOMING firmware version on the confirm screen before you commit. Settings tab fully follows BTNSTYLE incl. the page/close bar. Keeps 5.9.29's /gti.log diagnostics, plus REEL BORDER and LAST USED.",
+        "latest": false
+      },
+      {
         "v": "5.9.23",
         "ch": "beta",
-        "latest": true,
         "date": "2026-09-12",
         "app": "firmware/jc3248-beta/GTi-JC35-5.9.23-update.bin",
-        "note": "WiFi SD file access over home WiFi (browse / upload / download / recursive-delete ADFs from a browser) + live 3-way mode switch Standalone/ESP-NOW/WiFi (no reboot) + folder upload incl. subfolders + GTi.local + tidied sectioned CONFIG.TXT"
+        "note": "WiFi SD file access over home WiFi (browse / upload / download / recursive-delete ADFs from a browser) + live 3-way mode switch Standalone/ESP-NOW/WiFi (no reboot) + folder upload incl. subfolders + GTi.local + tidied sectioned CONFIG.TXT",
+        "latest": false
       },
       {
         "v": "5.9.7",
         "ch": "beta",
-        "latest": false,
         "date": "2026-09-09",
         "app": "firmware/jc3248-beta/GTi-JC35-5.9.7-update.bin",
-        "note": "sample manual rewrite (jump [Section] markers); config names OMEGA theme & Dutch"
-      },
-      {
-        "v": "5.9.6",
-        "ch": "beta",
-        "latest": false,
-        "date": "2026-09-09",
-        "app": "firmware/jc3248-beta/GTi-JC35-5.9.6-update.bin",
-        "note": "touch fix (AXS15231B idle-frame reject) + shared web panel / web-OTA + config names OMEGA theme & Dutch"
-      },
-      {
-        "v": "5.9.4-ghost2-tfix",
-        "ch": "beta",
-        "date": "2026-09-08",
-        "app": "firmware/jc3248-ghost/GTi-JC35-5.9.4-ghost2-tfix-update.bin",
-        "note": "first touch-fix build (frozen / bouncing-board fix)"
-      },
-      {
-        "v": "5.9.4-beta",
-        "ch": "beta",
-        "date": "2026-09-08",
-        "app": "firmware/jc3248-beta/GTi-JC35-5.9.4-update.bin",
-        "note": "OMEGAWARE cracktro + OMEGA theme + Dutch, reel cover-filter, pill bar"
-      },
-      {
-        "v": "5.9.3-beta",
-        "ch": "beta",
-        "date": "2026-09-07",
-        "app": "firmware/jc3248-beta/GTi-JC35-5.9.3-update.bin",
-        "note": "cracktro + theme groundwork"
-      },
-      {
-        "v": "5.9.1-beta",
-        "ch": "beta",
-        "date": "2026-09-04",
-        "app": "firmware/jc3248-beta/GTi-JC35-5.9.1-update.bin",
-        "note": "Home-WiFi setup on the touchscreen"
-      },
-      {
-        "v": "5.9.0-beta",
-        "ch": "beta",
-        "date": "2026-09-01",
-        "app": "firmware/jc3248-beta/GTi-JC35-5.9.0-update.bin",
-        "note": "sharded cover cache, faster reel on big libraries"
-      },
-      {
-        "v": "5.8.4-beta",
-        "ch": "beta",
-        "date": "2026-08-23",
-        "app": "firmware/jc3248-beta/GTi-JC35-5.8.4-update.bin",
-        "note": "1000+ cards without reboot, on-SD log"
-      },
-      {
-        "v": "5.8.3-beta",
-        "ch": "beta",
-        "date": "2026-08-21",
-        "app": "firmware/jc3248-beta/GTi-JC35-5.8.3-update.bin",
-        "note": "recurse-flatten library baseline"
+        "note": "sample manual rewrite (jump [Section] markers); config names OMEGA theme & Dutch",
+        "latest": false
       },
       {
         "v": "5.5.5",
         "ch": "stable",
         "date": "2026-08-07",
-        "full": "firmware/jc3248/manifest.json",
-        "note": "last 5.5.x stable \u2014 full image (clean wipe)"
+        "shared": [
+          {
+            "path": "firmware/_shared/jc3248-55x/bootloader.bin",
+            "offset": 0
+          },
+          {
+            "path": "firmware/_shared/jc3248-55x/partitions.bin",
+            "offset": 32768
+          },
+          {
+            "path": "firmware/_shared/jc3248/boot_app0.bin",
+            "offset": 57344
+          }
+        ],
+        "app": "firmware/jc3248/GTi-JC35-5.5.5-update.bin",
+        "note": "last 5.5.x stable (carries its own bootloader/partitions - predates the 5.8+ layout)",
+        "latest": false
       }
     ]
   },
@@ -119,48 +213,107 @@
     "appOffset": 65536,
     "builds": [
       {
+        "v": "A600",
+        "ch": "stable",
+        "date": "2026-10-04",
+        "full": "firmware/jc4827/manifest-A600.json",
+        "note": "STABLE - A600 (4 Oct 2026, the pre-Kickstart release), same features as the 3.5\" A600: big libraries, safe saves, SD guard, .nfo reader, covers fill their frame, Polish and Czech, take-over check, GTi_Omega-XXXX Wi-Fi + web page in ESP-NOW mode; buttons and covers sized for the 4.3\" panel. FULL CLEAN FLASH: new flash layout with two larger app slots (your settings live in CONFIG.TXT on the SD card, so they survive). Already on a 5.9.x build? The SD update.bin also works: firmware/jc4827/GTi-JC43-A600-update.bin. Built with ESP32 core 3.3.12.",
+        "latest": true
+      },
+      {
         "v": "5.9.7",
         "ch": "beta",
-        "latest": true,
         "date": "2026-09-09",
         "app": "firmware/jc4827-beta/GTi-JC43-5.9.7-update.bin",
-        "note": "sample manual rewrite (jump [Section] markers); config names OMEGA theme & Dutch"
+        "note": "sample manual rewrite (jump [Section] markers); config names OMEGA theme & Dutch",
+        "latest": false
       },
       {
         "v": "5.9.6",
         "ch": "beta",
-        "latest": false,
         "date": "2026-09-09",
         "app": "firmware/jc4827-beta/GTi-JC43-5.9.6-update.bin",
         "note": "shared web panel / web-OTA + config names OMEGA theme & Dutch"
+      }
+    ]
+  },
+  "p4": {
+    "chipFamily": "ESP32-P4",
+    "shared": [
+      {
+        "path": "firmware/_shared/p4/bootloader.bin",
+        "offset": 8192
       },
       {
-        "v": "5.9.4-beta",
+        "path": "firmware/_shared/p4/partitions.bin",
+        "offset": 32768
+      },
+      {
+        "path": "firmware/_shared/p4/boot_app0.bin",
+        "offset": 57344
+      }
+    ],
+    "appOffset": 65536,
+    "builds": [
+      {
+        "v": "5.9.42-lab1-P4",
+        "ch": "lab",
+        "date": "2026-10-03",
+        "full": "firmware/p4-beta/manifest-5.9.42-lab1.json",
+        "app": "firmware/p4-beta/GTi-P4-5.9.42-lab1-update.bin",
+        "note": "LAB - the new NEO look: list + game panel, big covers, up/down reel in portrait; cable + wireless tested. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (the IDE says \"Before v3.00\"). After flashing, power it off and on once before saving games.",
+        "latest": true
+      },
+      {
+        "v": "5.9.11-P4",
+        "ch": "beta",
+        "date": "2026-09-14",
+        "full": "firmware/p4-beta/manifest.json",
+        "app": "firmware/p4-beta/GTi-P4-5.9.11-update.bin",
+        "note": "BETA (older look) - WiFi co-processor bring-up fixes, stable mode switch, dongle scan + send, 40 MHz SD. The C6 update comes from the SD card file (c6_network_adapter_2.12.13.bin)."
+      },
+      {
+        "v": "5.9.7-P4",
+        "ch": "beta",
+        "date": "2026-09-09",
+        "app": "firmware/p4-beta/GTi-P4-5.9.7-update.bin",
+        "note": "BETA (older look) - sample manual rewrite (jump [Section] markers), OMEGA theme + Dutch in the config names. App image only: flashes with the P4 boot parts and keeps the rest of the flash."
+      },
+      {
+        "v": "5.9.4-P4",
         "ch": "beta",
         "date": "2026-09-08",
-        "app": "firmware/jc4827-beta/GTi-JC43-5.9.4-update.bin",
-        "note": "OMEGAWARE cracktro + OMEGA theme + Dutch, reel cover-filter, pill bar"
+        "app": "firmware/p4-beta/GTi-P4-5.9.4-update.bin",
+        "note": "BETA (older look) - first public P4 build. App image only."
+      }
+    ]
+  },
+  "jc1060": {
+    "chipFamily": "ESP32-P4",
+    "shared": [
+      {
+        "path": "firmware/_shared/p4/bootloader.bin",
+        "offset": 8192
       },
       {
-        "v": "5.9.3-beta",
-        "ch": "beta",
-        "date": "2026-09-07",
-        "app": "firmware/jc4827-beta/GTi-JC43-5.9.3-update.bin",
-        "note": "cracktro + theme groundwork"
+        "path": "firmware/_shared/p4/partitions.bin",
+        "offset": 32768
       },
       {
-        "v": "5.8.4-beta",
-        "ch": "beta",
-        "date": "2026-08-23",
-        "app": "firmware/jc4827-beta/GTi-JC43-5.8.4-update.bin",
-        "note": "1000+ cards without reboot, on-SD log"
-      },
+        "path": "firmware/_shared/p4/boot_app0.bin",
+        "offset": 57344
+      }
+    ],
+    "appOffset": 65536,
+    "builds": [
       {
-        "v": "5.8.3-beta",
-        "ch": "beta",
-        "date": "2026-08-21",
-        "app": "firmware/jc4827-beta/GTi-JC43-5.8.3-update.bin",
-        "note": "recurse-flatten library baseline"
+        "v": "5.9.42-lab4-P4G7",
+        "ch": "lab",
+        "date": "2026-10-03",
+        "full": "firmware/p4g7-lab/manifest-5.9.42-lab4.json",
+        "app": "firmware/p4g7-lab/GTi-P4G7-5.9.42-lab4-update.bin",
+        "note": "LAB - first 7\" P4 build: the NEO look at 1024x600, cable + wireless tested (send, eject, save pull back). Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). The Gotek / PC goes on the HIGH-SPEED USB-C (next to the Ethernet jack).",
+        "latest": true
       }
     ]
   },
@@ -168,12 +321,105 @@
     "chipFamily": "ESP32-S3",
     "builds": [
       {
-        "v": "Webby-1.6.1",
-        "ch": "beta",
+        "v": "Webby-1.6.10-supermini",
+        "ch": "stable",
         "latest": true,
-        "date": "2026-09-13",
-        "full": "firmware/supermini-beta/manifest.json",
-        "note": "status LED \u2014 discrete red/blue + WS2812 RGB (drives SuperMini LEDs and the S3-Zero pixel); magenta flash on ADF receive; LED=OFF to silence. (incl. 1.5 fleet/naming fixes)"
+        "date": "2026-10-03",
+        "full": "firmware/supermini-beta/manifest-1.6.10-supermini.json",
+        "note": "STABLE (4 Oct, with the GTi A600 release). For the Super Mini (two small LEDs, red + blue); for a Waveshare S3-Zero (one colour LED) use the S3-Zero entry. NEEDS GTi 5.9.41-lab14t or newer on the screen. Same as 1.6.9, plus: the dongle's page (192.168.4.1) in Polish (checked by 8-Bitz) and Czech - a phone or browser set to either gets it automatically, or tap PL / CS. Pair again after flashing (full wipe)."
+      },
+      {
+        "v": "Webby-1.6.9-supermini",
+        "ch": "beta",
+        "latest": false,
+        "date": "2026-09-29",
+        "full": "firmware/supermini-beta/manifest-1.6.9-supermini.json",
+        "note": "Latest. For the Super Mini (two small LEDs, red + blue); for a Waveshare S3-Zero (one colour LED) use the S3-Zero entry. NEEDS GTi 5.9.41-lab14t or newer on the screen (older screens can pair but not send disks) - update the screen too. Same as 1.6.8 (unique Wi-Fi name GotekOMEGA-XXXX), plus a fixed page at 192.168.4.1: real version, any disk image (ADF DSK HFE ST IMG ...) up to 1.75 MB, fits a phone, all six languages, the real Wi-Fi name, links to the full interface / web flasher / help. Pair again after flashing (full wipe)."
+      },
+      {
+        "v": "Webby-1.6.8-supermini",
+        "ch": "lab",
+        "latest": false,
+        "date": "2026-09-29",
+        "full": "firmware/supermini-beta/manifest-1.6.8-supermini.json",
+        "note": "Lab build for testers - not yet hardware-tested by us. For the Super Mini (two small LEDs, red + blue). Have a Waveshare S3-Zero (one colour LED)? Use the S3-Zero entry instead. Same as 1.6.7, plus: the Wi-Fi name is really unique now (GotekOMEGA-XXXX - every dongle used to be GotekOMEGA-0000), so a phone or PC has to join the new name once. NEEDS GTi 5.9.41-lab14t or newer. Pair again after flashing (full wipe)."
+      },
+      {
+        "v": "Webby-1.6.7",
+        "ch": "beta",
+        "latest": false,
+        "date": "2026-09-26",
+        "full": "firmware/supermini-beta/manifest-1.6.7.json",
+        "note": "Testing. NEEDS GTi 5.9.41-lab14t or newer (best with lab14u). Same as 1.6.6 with the take-over check on dongle command 0x0A (0x07 is ENROLL in the fleet build). Deleting it on the GTi puts it back to 'looking for a new owner'; two screens can share it (SHARE, 'in use by', take-over question); DSK/GENERIC keep their extension over wireless. Pair again after flashing (full wipe)."
+      },
+      {
+        "v": "Webby-1.6.6",
+        "ch": "beta",
+        "latest": false,
+        "date": "2026-09-26",
+        "full": "firmware/supermini-beta/manifest-1.6.6.json",
+        "note": "Testing. NEEDS GTi 5.9.41-lab14t or newer (older GTi builds can pair but cannot send it a disk - its Wi-Fi name is GotekOMEGA-xxxx). Deleting it on the GTi puts it back to 'looking for a new owner'; a dongle with no owner always accepts pairing; two screens can share it (SHARE, 'in use by', take-over question); DSK/GENERIC keep their extension over wireless; own Wi-Fi name, device name, web update. Pair again after flashing (full wipe)."
+      },
+      {
+        "v": "Webby-1.6.4",
+        "ch": "beta",
+        "latest": false,
+        "date": "2026-09-26",
+        "full": "firmware/supermini-beta/manifest-1.6.4.json",
+        "note": "PULLED 26 Sep (kept for the record, not recommended): the GTi could not work with it the way it works with Webby-0.8 - from 1.5 on the dongle's Wi-Fi name is GotekOMEGA-xxxx, which the GTi does not look for. Use Webby-0.8. Testing. Own Wi-Fi name per dongle (GotekOMEGA-xx), settable device name, update over the web page, Wi-Fi scan in the setup page; DSK/GENERIC images sent wirelessly keep their real extension (no more ERROR 34); status LED (radio fix from 1.6.2); owner checks use the real sender, eject only from an owner; a new disk sent while one is mounted is swapped cleanly. Pair it again after flashing (full wipe). HD ADFs over wireless: not yet (needs the HD-flag fix)."
+      },
+      {
+        "v": "Webby-0.8",
+        "ch": "beta",
+        "latest": false,
+        "date": "2026-09-12",
+        "full": "firmware/supermini-beta/manifest-1.5.json",
+        "note": "This file is Webby-0.8-fleetUI - it was listed here as Webby-1.5 by mistake, which is why the dongle's web page shows 0.8. Old build: no unique Wi-Fi name, no device name, no web update; DSK/GENERIC images sent wirelessly arrive as DISK.ADF (FlashFloppy ERROR 34). Amiga ADFs work."
+      },
+      {
+        "v": "3.4.0-beta",
+        "ch": "beta",
+        "latest": false,
+        "date": "2026-08-13",
+        "full": "firmware/supermini/manifest-3.4.0.json",
+        "note": "classic pre-Webby dongle (later 3.x): ESP-NOW + WiFi transport, owner-lock, saves"
+      },
+      {
+        "v": "3.2.0",
+        "ch": "stable",
+        "latest": false,
+        "date": "2026-08-02",
+        "full": "firmware/supermini/manifest.json",
+        "note": "classic pre-Webby dongle: ESP-NOW + WiFi transport, owner-lock, save write-back"
+      }
+    ]
+  },
+  "zero": {
+    "chipFamily": "ESP32-S3",
+    "builds": [
+      {
+        "v": "Webby-1.6.10-zero",
+        "ch": "stable",
+        "latest": true,
+        "date": "2026-10-03",
+        "full": "firmware/zero-beta/manifest-1.6.10-zero.json",
+        "note": "STABLE (4 Oct, with the GTi A600 release). For the Waveshare ESP32-S3-Zero (one colour status LED) - same firmware as Webby-1.6.10-supermini, only the status light differs; don't put it on a Super Mini. NEEDS GTi 5.9.41-lab14t or newer on the screen. Same as 1.6.9, plus the dongle's page in Polish and Czech. Pair after flashing (full wipe)."
+      },
+      {
+        "v": "Webby-1.6.9-zero",
+        "ch": "beta",
+        "latest": false,
+        "date": "2026-09-29",
+        "full": "firmware/zero-beta/manifest-1.6.9-zero.json",
+        "note": "Latest. For the Waveshare ESP32-S3-Zero (one colour status LED) - same firmware as Webby-1.6.9-supermini, only the status light differs; don't put it on a Super Mini. NEEDS GTi 5.9.41-lab14t or newer on the screen - update the screen too. Fixed page at 192.168.4.1 (real version, any disk image up to 1.75 MB, fits a phone, all six languages, links). Pair after flashing (full wipe)."
+      },
+      {
+        "v": "Webby-1.6.8-zero",
+        "ch": "lab",
+        "latest": false,
+        "date": "2026-09-29",
+        "full": "firmware/zero-beta/manifest-1.6.8-zero.json",
+        "note": "Lab build for testers - the first build for the Waveshare ESP32-S3-Zero (one colour status LED). Same firmware as Webby-1.6.8-supermini; only the status light differs. Don't put it on a Super Mini - the colour-LED driver upset the Super Mini's radio pairing. NEEDS GTi 5.9.41-lab14t or newer. Pair after flashing (full wipe)."
       }
     ]
   },
@@ -181,12 +427,12 @@
     "chipFamily": "ESP32-S3",
     "builds": [
       {
-        "v": "Webby-1.5",
+        "v": "Webby-0.8-xiao",
         "ch": "beta",
         "latest": true,
         "date": "2026-09-12",
         "full": "firmware/xiao-beta/manifest.json",
-        "note": "unique-SSID fix + settable name + name-on-fling + fleet naming (OPI 8MB)"
+        "note": "This file is Webby-0.8-xiao - it was listed here as Webby-1.5 by mistake (the dongle's web page shows 0.8). Old build: no unique Wi-Fi name, no device name, no web update; DSK/GENERIC images sent wirelessly arrive as DISK.ADF. Amiga ADFs work. A current XIAO build (matching SuperMini 1.6.x) is still to come."
       },
       {
         "v": "3.2.0",

@@ -1,0 +1,16 @@
+{
+  "name": "Gotek Touchscreen Interface — JC4827 4.3\" (A600)",
+  "version": "A600",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "Gotek_JC4827W543-A600.merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}

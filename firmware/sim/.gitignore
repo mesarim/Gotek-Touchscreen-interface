@@ -1,0 +1,6 @@
+build/
+lib_src/
+src/*
+!src/esp_lcd_axs15231b.h
+web/gti.wasm
+web/library/

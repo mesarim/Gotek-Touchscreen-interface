@@ -1,0 +1,8 @@
+{
+  "name": "Gotek Touchscreen Interface — Super Mini Dongle (classic 3.4.0-beta)",
+  "version": "3.4.0-beta",
+  "new_install_prompt_erase": true,
+  "builds": [
+    { "chipFamily": "ESP32-S3", "parts": [ { "path": "Gotek_SuperMini-3.4.0.merged.bin", "offset": 0 } ] }
+  ]
+}

@@ -1,16 +1,8 @@
 {
-  "name": "Gotek Touchscreen Interface — JC4880 P4 BETA (5.9.7-P4 — OMEGAWARE cracktro + OMEGA theme + Dutch, embedded C6 self-update, landscape touch UI)",
-  "version": "5.9.7-P4",
+  "name": "Gotek Touchscreen Interface — JC4880 P4 BETA (5.9.11-P4 — wireless radio fixed: clean C6 bring-up, stable mode-switch, ESP-NOW dongle scan/fling, 40MHz SD)",
+  "version": "5.9.11-P4",
   "new_install_prompt_erase": true,
   "builds": [
-    {
-      "chipFamily": "ESP32-P4",
-      "parts": [
-        {
-          "path": "Gotek_P4.ino.merged.bin",
-          "offset": 0
-        }
-      ]
-    }
+    { "chipFamily": "ESP32-P4", "parts": [ { "path": "Gotek_P4.ino.merged.bin", "offset": 0 } ] }
   ]
 }

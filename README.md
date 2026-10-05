@@ -11,6 +11,8 @@ Built by **Mez** and **Dimmy** (Dimitri Hilverda) — **OMEGAWARE**.
 
 💬 **Community & support:** join the [OMEGAWARE Discord](https://discord.gg/7gY4PKUnnf) for help, beta/HD testing, and build chat.
 
+🕹️ **Try it in your browser:** the [GTi simulator](https://mesarim.github.io/Gotek-Touchscreen-interface/demo/) runs the real 3.5″ firmware (A600) with free demo games, or your own folder. No hardware needed. · ⚡ [Web flasher](https://mesarim.github.io/Gotek-Touchscreen-interface/)
+
 ---
 
 **Current release: A.5.0.0** — the save-game era, proven on a real Amiga and now the recommended stable build.

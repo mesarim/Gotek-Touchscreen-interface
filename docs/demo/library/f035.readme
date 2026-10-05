@@ -1,0 +1,40 @@
+Short:        L'Abbaye Des Morts
+Author:       Locomalito, Amiga port by jeegfro@gmail.com
+Uploader:     jeegfro gmail com
+Type:         game/actio
+Version:      1.1
+Requires:     All Amiga with 1MB of memory
+Architecture: m68k-amigaos >= 1.3.0
+URL:          http://www.locomalito.com/abbaye_des_morts.php
+
+DESCRIPTION
+A platform game adapted from the original Locomalito version.
+23 screens to explore.
+Riddles and hints to find items.
+Around 30 minutes of game length (once fully mastered).
+
+LICENSE
+GNU General Public License (GNU GPL)
+
+AMIGA PORT
+Coding by Jeegfro.
+Music by Simone "JMD" Bernacchia loosely based on Saul Cross C64 soundtrack.
+Tests by Amigars
+
+Many thanks to :
+- Frank Wille for his stunning Protracker player.
+- Johan "Doynax" Forslöf for his Lempel-Ziv decompressor.
+- David "Vevat" Lara for the assets and his game version which helped me for the code logic.
+
+
+PLAYING
+Use the joystick in port 2
+
+KEYS FROM MENU ONLY
+'i' informations
+'s' switch sfx only / sfx + music
+'Esc' quit the game
+
+CHANGES SINCE VERSION 1.0
+- Add new sounds effects
+- Minor bugs fixes

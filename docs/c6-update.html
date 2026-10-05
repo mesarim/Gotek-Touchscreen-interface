@@ -100,6 +100,15 @@
 
   <h2>Under the hood</h2>
   <p>The image streams to the C6 over the <b>esp-hosted</b> SDIO link in 1400-byte chunks (<code>esp_hosted_slave_ota_begin / write / end / activate</code>) with a progress bar on the panel, then the P4 reboots so the host re-links to the freshly-updated radio. The whole chain — SDIO link → C6 → WiFi stack — comes up live: it scans, joins, and opens a TCP socket to a dongle. Lives in <code>Gotek_P4.ino → c6SelfUpdate()</code>; the <code>c6fw</code> partition is baked into the published firmware by <code>bake_c6.py</code>.</p>
+  <h2>Manual C6 update &mdash; download</h2>
+  <p>Most boards never need this: a web-flashed P4 already carries the C6 image in its own flash and offers the update at first boot. Use this only if the C6 is stale &mdash; WiFi crashes, or SCAN never finds a dongle &mdash; and the update screen isn't appearing on its own.</p>
+  <ol>
+    <li><b>Download:</b> <a href="firmware/p4-beta/c6_network_adapter_2.12.13.bin" download>c6_network_adapter_2.12.13.bin</a> (~1.2&nbsp;MB).</li>
+    <li>Copy it to the <b>root of the SD card</b>, exactly as named.</li>
+    <li>Insert the card and power the P4. If the C6 is behind, the amber <b>&ldquo;WiFi CO-PROCESSOR UPDATE &mdash; TAP to update&rdquo;</b> screen appears (25&nbsp;s to skip).</li>
+    <li><b>Tap the screen.</b> Let the progress bar reach 100&nbsp;% &mdash; <b>do not power off</b>. It activates and reboots.</li>
+    <li>Done. The radio should now scan and fling. An interrupted flash just boots the old C6 &mdash; no brick.</li>
+  </ol>
 </main>
 <footer>
   <a href="index.html">← GTi Flasher</a> · <a href="help.html">Help &amp; guides</a><br>

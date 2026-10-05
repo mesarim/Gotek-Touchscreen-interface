@@ -45,6 +45,9 @@
   .lane p{font-size:.77rem;color:var(--dim);line-height:1.45;margin:0}
   .lane .go{position:absolute;right:1rem;top:1.15rem;color:var(--copper2);font-size:1.05rem;opacity:.45;transition:opacity .15s,transform .15s}
   .lane:hover .go{opacity:1;transform:translateX(3px)}
+  a.lane{display:block;text-decoration:none}
+  .lane.wide{grid-column:1/-1;border-color:var(--copper1)}
+  .lane.wide .tag{display:inline-block;font-size:.66rem;letter-spacing:.12em;color:#1a1200;background:var(--copper2);border-radius:3px;padding:.1rem .4rem;margin-left:.5rem;vertical-align:middle}
 
   .subdoors{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1rem}
   .subdoor{flex:1 1 240px;text-align:left;background:none;border:1px dashed var(--border);border-radius:5px;padding:.75rem .9rem;cursor:pointer;color:var(--dim);font-family:var(--mono);font-size:.76rem;transition:border-color .15s,color .15s}
@@ -100,6 +103,13 @@
   .legacy-toggle{width:100%;margin-top:.8rem;background:none;border:1px dashed var(--border);border-radius:4px;color:var(--dim);font-family:var(--mono);font-size:.74rem;letter-spacing:.06em;padding:.6rem;cursor:pointer;transition:border-color .12s,color .12s}
   .legacy-toggle:hover{border-color:var(--dim);color:var(--text)}
   .legacy-wrap{margin-top:.7rem}
+  .szgrp{margin-bottom:1.1rem}
+  .szgrp-h{font-family:var(--mono);font-size:.78rem;letter-spacing:.08em;color:var(--text);
+    border-bottom:1px solid var(--border);padding-bottom:.35rem;margin-bottom:.6rem;display:flex;
+    align-items:baseline;gap:.6rem;flex-wrap:wrap}
+  .szgrp-h span{font-size:.7rem;letter-spacing:.03em;color:var(--dim)}
+  .dev.soon{opacity:.55;cursor:default}
+  .dev.soon:hover{border-color:var(--border)}
 
   .tag{display:inline-block;font-size:.58rem;letter-spacing:.08em;text-transform:uppercase;padding:.14rem .4rem;border-radius:3px;border:1px solid;white-space:nowrap}
   .t-rec{color:var(--copper2);border-color:var(--copper2)}
@@ -118,6 +128,17 @@
   .mode-note b{color:var(--text)}
   .dl{display:inline-flex;align-items:center;gap:.45rem;font-size:.75rem;color:var(--blue);border:1px solid #345b8f;border-radius:4px;padding:.4rem .7rem;background:#0e1626;text-decoration:none;margin:.1rem 0 .9rem;cursor:pointer}
   .dl:hover{background:#132038}
+  .dl small{color:var(--dim);font-weight:400}
+  .dlgrid{display:flex;flex-direction:column;gap:.35rem;margin:.2rem 0 .8rem}
+  .dlgrid-h{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}
+  .dlgrid .dl{margin:0}
+  /* method chooser — the FLASH vs SD ACCESS fork, shown first in step 2 */
+  .methodhelp{font-size:.78rem;color:var(--dim);line-height:1.5;margin:0 0 .8rem}
+  #mode-seg{display:flex;width:100%;margin-bottom:1.1rem}
+  #mode-seg button{flex:1;padding:.72rem 1rem;font-size:.82rem;text-align:center}
+  #mode-seg button .mh{display:block;font-size:.62rem;letter-spacing:.04em;text-transform:none;color:var(--dim);margin-top:.2rem;font-weight:400}
+  #mode-seg button.on .mh{color:var(--copper1)}
+  #mode-seg button.on{background:var(--panel2);color:var(--copper2);box-shadow:inset 0 -2px 0 var(--copper2)}
   .chk{display:flex;gap:.6rem;align-items:flex-start;font-size:.79rem;color:var(--text);cursor:pointer;user-select:none;margin-bottom:1rem}
   .chk input{margin-top:.2rem;accent-color:var(--copper1);width:16px;height:16px;flex-shrink:0}
   .trouble{font-size:.74rem;color:var(--dim);border:1px solid var(--border);border-radius:4px;padding:.7rem .85rem;margin-top:.2rem;line-height:1.55}
@@ -201,8 +222,14 @@
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="12" height="6" rx="1.5"/><path d="M15 10.5h3a2 2 0 0 1 0 3h-3"/><path d="M6 9V7.5"/><path d="M9 9V7.5"/><path d="M18.5 12h1.5"/></svg>
         <span class="go">→</span>
         <h3>Flash a wireless dongle</h3>
-        <p>Flash the little board that plugs into the Gotek and loads disks over the air — Super Mini or XIAO.</p>
+        <p>Flash the little board that plugs into the Gotek and loads disks over the air — Super Mini, S3-Zero or XIAO.</p>
       </button>
+      <a class="lane wide" href="demo/">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="12" rx="1.5"/><path d="M10 9l4 2-4 2z" fill="currentColor"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+        <span class="go">→</span>
+        <h3>Try it in your browser <span class="tag">NEW</span></h3>
+        <p>No hardware needed: the real 3.5″ firmware running in your browser. Browse the free demo games or your own folder, insert disks, try every screen and setting.</p>
+      </a>
     </div>
     <div class="subdoors">
       <button class="subdoor" onclick="go('howto')"><b>How to use the GTi</b>First boot, loading games, covers, settings — the full guide.</button>
@@ -226,28 +253,34 @@
     <!-- step 1: device -->
     <div class="card" id="s1">
       <div class="card-h"><span class="num">1</span><span id="s1h">Choose your device</span></div>
-      <div class="devgrid" id="dev-main"></div>
+      <div id="dev-main"></div>
       <button class="legacy-toggle" id="legacy-btn" onclick="toggleLegacy()">＋ Legacy boards — 2.8″ &amp; CYD</button>
       <div class="legacy-wrap" id="legacy-wrap" hidden><div class="devgrid" id="dev-legacy"></div></div>
       <button class="legacy-toggle" id="diag-btn" onclick="toggleDiag()" hidden>🔧 Diagnostics — panel test</button>
       <div class="legacy-wrap" id="diag-wrap" hidden>
-        <div class="diag-note">🔧 <b>Diagnostic — not the firmware.</b> This flashes a touch-panel tester onto a JC3248. Use it only to check the touch digitiser (AXS15231B), then re-flash the real firmware afterwards.</div>
+        <div class="diag-note">🔧 <b>Tools — not the firmware.</b> These flash a diagnostic onto a JC3248: the touch tester checks the digitiser (AXS15231B), the hardware diag reports chip ID, PSRAM, display and clocks over USB serial. Re-flash the real firmware afterwards.</div>
         <div class="devgrid" id="dev-diag"></div>
       </div>
     </div>
 
-    <!-- step 2: get ready -->
+    <!-- step 2: choose method, then version -->
     <div class="card muted" id="s2">
-      <div class="card-h"><span class="num">2</span>Get it ready</div>
+      <div class="card-h"><span class="num">2</span><span id="s2h">Choose how to update</span></div>
+      <div class="methodhelp" id="methodhelp" hidden>Two ways to put this firmware on: <b style="color:var(--text)">Flash</b> it over the USB cable from this page, or download an <b style="color:var(--text)">SD access</b> file and update from the SD card. Pick one — then choose the version.</div>
+      <div class="seg" id="mode-seg">
+        <button class="on" id="mode-fresh" onclick="setMode('fresh')">⚡ Flash<span class="mh">over USB · full install</span></button>
+        <button id="mode-sd" onclick="setMode('sd')">💾 SD access<span class="mh">download · keeps settings</span></button>
+      </div>
       <label class="verbox" id="verbox" hidden><span>Version</span> <select id="verSel" onchange="onVer()"></select> <span class="vhint" id="vhint"></span></label>
       <label class="betabox" id="betabox" hidden><input type="checkbox" id="beta-chk" onchange="onBeta()"> <span class="lab">Show the <b>beta / testing</b> build</span></label>
-      <div class="seg" id="mode-seg">
-        <button class="on" id="mode-fresh" onclick="setMode('fresh')">Fresh flash</button>
-        <button id="mode-sd" onclick="setMode('sd')">SD access</button>
-      </div>
       <div class="mode-note" id="mode-note" hidden></div>
       <div class="prep" id="prep">Pick a device first.</div>
       <a class="dl" id="sd-dl" hidden target="_blank" rel="noopener">⬇ Download <span id="sd-name">update.bin</span></a>
+      <!-- merged.bin download retired: it is a FULL-FLASH image (bootloader at 0x0) and cannot be
+           used for the on-screen FW UPDATE, which needs the ~1.8MB app image. Offering it here got
+           one dropped on an SD card and the OTA refused to activate it. The flasher still uses
+           merged images internally; only the download button is gone. Markup + setupDownloads()/
+           mergedDownload() kept below (uncalled) if it ever needs restoring. -->
       <label class="chk" id="ready-row"><input type="checkbox" id="ready-chk" onchange="onReady()"> <span id="ready-lbl">My board is plugged in via a USB data cable and in bootloader mode.</span></label>
       <button class="btn btn-confirm" id="btn-confirm" disabled onclick="doConfirm()">Confirm</button>
       <div class="status" id="confirm-status"></div>
@@ -401,40 +434,49 @@
 
 <footer>
   Same flasher engine under the hood — <span class="eng"><b>esp-web-tools</b> over Web Serial, Chrome / Edge on desktop.</span><br>
-  Need help? Join the <a href="https://discord.gg/7gY4PKUnnf" target="_blank" rel="noopener">OMEGAWARE Discord</a> · <a href="help.html">Help &amp; guides</a> · <a href="features.html">Feature list</a> (<a href="GTi-Features.pdf">PDF</a>) · <a href="matrix.html">Feature matrix</a> · <a href="c6-update.html">C6 update path</a> · <a href="contributors.html">Contributors</a> · <a href="https://ko-fi.com/mesarim" target="_blank" rel="noopener">Donate &#9829;</a>
+  Need help? Join the <a href="https://discord.gg/7gY4PKUnnf" target="_blank" rel="noopener">OMEGAWARE Discord</a> · <a href="demo/">Try it in your browser</a> · <a href="help.html">Help &amp; guides</a> · <a href="features.html">Feature list</a> (<a href="GTi-Features.pdf">PDF</a>) · <a href="matrix.html">Feature matrix</a> · <a href="c6-update.html">C6 update path</a> · <a href="contributors.html">Contributors</a> · <a href="https://ko-fi.com/mesarim" target="_blank" rel="noopener">Donate &#9829;</a>
 </footer>
 
 <script>
   // ── real device data: manifests + versions + SD-update bins from docs/firmware/ ──
   const TOUCH = {
     main:[
-      {id:'jc3248', img:'img/jc3248.jpg', nm:'Guition JC3248', sz:'3.5″', ar:480/320, meta:'ESP32-S3 · 480×320',
+      {id:'jc3248', grp:'3.5', img:'img/jc3248.jpg', nm:'Guition JC3248', sz:'3.5″', ar:480/320, meta:'ESP32-S3 · 480×320',
         spot:'Guition 3.5-inch capacitive panel', tags:[['RECOMMENDED','t-rec'],['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
         prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, then release BOOT. <span class="muted">The screen stays dark in flash mode — that\'s normal.</span>',
-        stable:{man:'firmware/jc3248/manifest.json', ver:'Firmware 5.5.5', sd:'firmware/jc3248/GTi-JC35-5.5.5-update.bin'},
+        stable:{man:'firmware/jc3248/manifest-A600.json', ver:'Firmware A600 — the pre-Kickstart release: big libraries, safe saves, SD guard, Polish + Czech, GTi_Omega Wi-Fi + web page', sd:'firmware/jc3248/GTi-JC35-A600-update.bin'},
         beta:{man:'firmware/jc3248-beta/manifest.json', ver:'Firmware 5.9.7 — sample manual (jump sections) + OMEGA/Dutch named; touch fix + shared web panel', sd:'firmware/jc3248-beta/GTi-JC35-5.9.7-update.bin'}},
-      {id:'jc4827', nm:'Guition JC4827W543', sz:'4.3″', ar:480/272, meta:'ESP32-S3 · 480×272',
+      {id:'jc4827', grp:'4.3', nm:'Guition JC4827W543', sz:'4.3″', ar:480/272, meta:'ESP32-S3 · 480×272',
         spot:'4.3-inch QSPI, single USB-C', tags:[['BETA','t-beta'],['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
         prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release BOOT.',
-        stable:null,
+        stable:{man:'firmware/jc4827/manifest-A600.json', ver:'Firmware A600 — the pre-Kickstart release (full clean flash, new flash layout; settings stay in CONFIG.TXT)', sd:'firmware/jc4827/GTi-JC43-A600-update.bin'},
         beta:{man:'firmware/jc4827-beta/manifest.json', ver:'Firmware 5.9.7 — sample manual (jump sections) + OMEGA/Dutch named; shared web panel', sd:'firmware/jc4827-beta/GTi-JC43-5.9.7-update.bin'}},
-      {id:'p4', nm:'Guition JC4880 · P4', sz:'4.3″', ar:800/480, meta:'ESP32-P4 + C6 · 480×800 DSI',
+      {id:'p4', grp:'4.3', nm:'Guition JC4880 · P4', sz:'4.3″', ar:800/480, meta:'ESP32-P4 + C6 · 480×800 DSI',
         spot:'The flagship — TWO USB-C ports', tags:[['RECOMMENDED','t-rec'],['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
         prep:'Use the USB-C port <b>furthest from the buttons</b>, with a <b>data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release. <span class="muted">First boot self-updates its WiFi co-processor from the SD card.</span>',
         stable:null,
-        beta:{man:'firmware/p4-beta/manifest.json', ver:'Firmware 5.9.7-P4 — OMEGAWARE cracktro + OMEGA theme + Dutch, embedded C6 self-update, landscape touch UI', sd:'firmware/p4-beta/GTi-P4-5.9.7-update.bin'}},
-      {id:'ws7b', img:'img/ws7b.jpg', nm:'Waveshare 7B', sz:'7″', ar:1024/600, meta:'ESP32-S3 · 7″ 1024×600 RGB',
-        spot:'Waveshare ESP32-S3-Touch-LCD-7B', tags:[['BETA','t-beta'],['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
-        prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release BOOT.',
-        stable:null,
-        beta:{man:'firmware/waveshare7b-beta/manifest.json', ver:'Firmware v5.0.1-7B — 1024×600, recurse-flatten library, 3×2 cover grid, dirty-rect perf engine', sd:'firmware/waveshare7b-beta/GTi-7B-5.0.1-update.bin'}},
-      {id:'ws7', img:'img/ws7.jpg', nm:'Waveshare 7″', sz:'7″', ar:800/480, meta:'ESP32-S3 · 7″ 800×480 RGB',
+        beta:{man:'firmware/p4-beta/manifest-5.9.42-lab1.json', ver:'Firmware 5.9.42-lab1-P4 (LAB) — the new NEO look: list + game panel, big covers, up/down reel in portrait; cable + ESP-NOW tested. For P4 chips revision v1.x (the IDE says "Before v3.00"). After flashing, power it off and on once before saving games.', sd:'firmware/p4-beta/GTi-P4-5.9.42-lab1-update.bin'}},
+      {id:'ws7', grp:'7', img:'img/ws7.jpg', nm:'Waveshare 7″', sz:'7″', ar:800/480, meta:'ESP32-S3 · 7″ 800×480 RGB',
         spot:'The original Waveshare 7-inch RGB panel', tags:[['BETA','t-beta'],['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
         prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release BOOT.',
         stable:null,
         beta:{man:'firmware/waveshare7/manifest.json', ver:'Firmware v5.0.1-7 — 800×480, ADF/DSK browser, cover art, USB-MSC RAM disk', sd:'firmware/waveshare7/GTi-7in-5.0.1-update.bin'}},
+      {id:'ws7b', grp:'7', img:'img/ws7b.jpg', nm:'Waveshare 7B', sz:'7″', ar:1024/600, meta:'ESP32-S3 · 7″ 1024×600 RGB',
+        spot:'Waveshare ESP32-S3-Touch-LCD-7B', tags:[['BETA','t-beta'],['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
+        prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release BOOT.',
+        stable:null,
+        beta:{man:'firmware/waveshare7b-beta/manifest.json', ver:'Firmware v5.0.1-7B — 1024×600, recurse-flatten library, 3×2 cover grid, dirty-rect perf engine', sd:'firmware/waveshare7b-beta/GTi-7B-5.0.1-update.bin'}},
+      {id:'jc1060', grp:'7', nm:'Guition JC1060 · P4', sz:'7″', ar:1024/600, meta:'ESP32-P4 + C6 · 7″ 1024×600 DSI',
+        spot:'Guition JC1060P470C — the big 7-inch P4 with a case', tags:[['LAB','t-beta'],['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
+        prep:'Use the <b>full-speed USB-C</b> port (the one marked for flashing) with a <b>data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release. The Gotek goes on the other (high-speed) USB-C port. <span class="muted">First boot offers a WiFi co-processor (C6) update — tap the screen to run it.</span>',
+        stable:null,
+        beta:{man:'firmware/p4g7-lab/manifest-5.9.42-lab4.json', ver:'Firmware 5.9.42-lab4-P4G7 (LAB) — first 7″ P4 build: the NEO look at 1024×600, cable + wireless tested (send, eject, save pull back). For P4 chips revision v1.x (the IDE says "Before v3.00"). Boards without "V2" on the back label (old glass) need a source build with JC1060_OLD_PANEL 1.', sd:'firmware/p4g7-lab/GTi-P4G7-5.9.42-lab4-update.bin'}},
+      {id:'ws7b-p4', grp:'7', nm:'Waveshare 7B · P4', sz:'7″', ar:1024/600, meta:'ESP32-P4 + C6 · 7″ 1024×600',
+        spot:'ESP32-P4-WIFI6-Touch-LCD-7B — the fast 7-inch', tags:[['IN BRING-UP','t-diag'],['STANDALONE','t-stand']],
+        soon:'In bring-up — display, touch, SD and large libraries all working on hardware; no public build yet.',
+        prep:'', stable:null, beta:null},
     ],
-    diag:[
+    tools:[
       {id:'jc3248-touchtest', nm:'JC3248 — Touch Test', sz:'3.5″', ar:480/320, meta:'ESP32-S3 · 480×320 · AXS15231B touch @ 0x3B',
         spot:'Diagnostic — verifies the touch panel, not the firmware', tags:[['DIAGNOSTIC','t-diag'],['TOUCH TEST','t-stand']],
         prep:'Connect the board to your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, then release BOOT. <span class="muted">Flashes a touch-panel tester — re-flash the real firmware when you\'re done.</span>',
@@ -443,10 +485,6 @@
         spot:'Diagnostic — reads the board ID, tests PSRAM/display/digitizer, sweeps clocks', tags:[['DIAGNOSTIC','t-diag'],['CHIP · PSRAM','t-stand']],
         prep:'Connect via <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release BOOT. <span class="muted">After flashing, open a serial monitor at <b>115200</b> for the full board report; drop <a href="firmware/jc3248-hwdiag/config.test">config.test</a> on the SD root to change the test mode or clocks.</span>',
         stable:{man:'firmware/jc3248-hwdiag/manifest.json', ver:'Board ID + PSRAM/display/digitizer test + CPU/QSPI/I2C clock sweep — reports over USB serial (config.test on SD)', sd:null}, beta:null},
-      {id:'jc3248-ghost', nm:'JC3248 — GHOST2 + Touch Fix', sz:'3.5″', ar:480/320, meta:'ESP32-S3 · touch idle-frame fix + liveness ghost',
-        spot:'5.9.4 with the digitizer idle-frame fix (kills phantom touches) + optional liveness ghost', tags:[['FIX','t-rec'],['DIAGNOSTIC','t-diag']],
-        prep:'Connect via <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release BOOT. <span class="muted">Add <b>GHOST=ON</b> to CONFIG.TXT — a small cyan ghost draws in a fixed panel corner: eyes moving = the board is alive, ghost frozen in place = the loop is wedged, no ghost = it died before the loop.</span>',
-        stable:{man:'firmware/jc3248-ghost/manifest.json', ver:'GTi 5.9.4-ghost2-tfix — rejects the AXS15231B 0xCA/0xFF idle frames that were read as phantom touches (fixes the “frozen/bouncing” boards); liveness ghost via GHOST=ON', sd:'firmware/jc3248-ghost/GTi-JC35-5.9.4-ghost2-tfix-update.bin'}, beta:null},
     ],
     legacy:[
       {id:'cyd', nm:'CYD', sz:'2.8″', ar:320/240, meta:'ESP32 · 320×240 ILI9341',
@@ -462,10 +500,14 @@
   const DONGLE = {
     main:[
       {id:'supermini', img:'img/supermini.jpg', nm:'Super Mini', sz:'', dongle:true, meta:'ESP32-S3 Super Mini + PSRAM',
-        spot:'The wider board with two side buttons', tags:[['PREFERRED','t-dongle'],['USB DONGLE','t-wifi']],
+        spot:'The wider board with two side buttons and two small LEDs (red + blue)', tags:[['PREFERRED','t-dongle'],['USB DONGLE','t-wifi']],
         prep:'Plug the Super Mini into your PC with a <b>USB data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release.',
-        stable:{man:'firmware/supermini/manifest.json', ver:'Firmware v3.2.0 — ESP-NOW + WiFi transport, owner-lock, save write-back', sd:null},
-        beta:{man:'firmware/supermini-beta/manifest.json', ver:'Webby-0.8-fleetUI — built-in multi-dongle web console (WebDAV / FTP)', sd:null}},
+        stable:{man:'firmware/supermini-beta/manifest-1.6.10-supermini.json', ver:'Webby-1.6.10-supermini — stable, pairs with GTi A600 (needs GTi 5.9.41-lab14t+ on the screen)', sd:null},
+        beta:null},
+      {id:'zero', img:'img/zero.jpg', nm:'Waveshare S3-Zero', sz:'', dongle:true, meta:'Waveshare ESP32-S3-Zero + PSRAM · USB-C',
+        spot:'Small square board with one colour status LED — pick this only if yours is a Zero', tags:[['USB DONGLE','t-wifi']],
+        prep:'<b>Super Mini or S3-Zero?</b> Pick the one that matches the board in your dongle. The firmware is the same; only the status light differs — the S3-Zero has one colour LED, the Super Mini two small ones. Don\'t swap them: the Zero build drives a colour LED that can upset the Super Mini\'s radio pairing.<br>Plug the Zero into your PC with a <b>USB-C data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release.',
+        stable:{man:'firmware/zero-beta/manifest-1.6.10-zero.json', ver:'Webby-1.6.10-zero — for the Waveshare S3-Zero (colour status LED); needs GTi 5.9.41-lab14t+', sd:null}, beta:null},
       {id:'xiao', img:'img/xiao.jpg', nm:'Seeed XIAO', sz:'', dongle:true, meta:'Seeed XIAO ESP32-S3 · 21×17mm',
         spot:'Tiny board, “seeed studio” metal shield — plug the antenna in first', tags:[['USB DONGLE','t-wifi']],
         prep:'Plug the XIAO into your PC with a <b>USB data cable</b> — and its <b>WiFi antenna</b> before powering on. Hold <b>BOOT</b>, tap <b>RESET</b>, release.',
@@ -518,12 +560,60 @@
   function manifestForVersion(cfg, b){
     if(b.full) return b.full;
     if(b._blob) return b._blob;
-    const parts = cfg.shared.map(p=>({path:_abs(p.path), offset:p.offset}));
+    const parts = (b.shared||cfg.shared).map(p=>({path:_abs(p.path), offset:p.offset}));
     parts.push({path:_abs(b.app), offset:cfg.appOffset});
     const man = {name:'GTi '+b.v, version:b.v, new_install_prompt_erase:false,
                  builds:[{chipFamily:cfg.chipFamily, parts:parts}]};
     b._blob = URL.createObjectURL(new Blob([JSON.stringify(man)], {type:'application/json'}));
     return b._blob;
+  }
+  // ── Per-version downloads: a merged.bin (full clean flash) for EVERY version, plus the
+  //    update.bin (SD-OTA, keeps settings) where an app image exists. 'full' entries link
+  //    their archived merged; 'app' entries assemble the merged in-browser from the shared
+  //    boot parts + this version's app (same data the flasher already uses to install). ──
+  function _dlAnchor(url,name){ const a=document.createElement('a'); a.href=url; if(name)a.download=name; document.body.appendChild(a); a.click(); a.remove(); }
+  async function mergedDownload(cfg, b){
+    const mg=$('dl-merged'); const html=mg.innerHTML; mg.style.pointerEvents='none'; mg.innerHTML='⏳ building merged.bin…';
+    try{
+      const mname = 'GTi-'+sel.id+'-'+b.v+'-merged.bin';   // version-unique name (so it's clear on the SD card / disk)
+      if(b.full){
+        const man = await fetch(_abs(b.full)).then(r=>r.json());
+        const rel = man.builds[0].parts[0].path;
+        const url = new URL(rel, _abs(b.full)).href;
+        _dlAnchor(url, mname);
+      } else if(b.app){
+        const items = (b.shared||cfg.shared).map(p=>({url:_abs(p.path),off:p.offset}));
+        items.push({url:_abs(b.app), off:cfg.appOffset});
+        const parts = await Promise.all(items.map(async it=>({off:it.off, data:new Uint8Array(await (await fetch(it.url)).arrayBuffer())})));
+        const end = Math.max.apply(null, parts.map(p=>p.off+p.data.length));
+        const out = new Uint8Array(end); out.fill(0xFF);
+        parts.forEach(p=>out.set(p.data, p.off));
+        const url = URL.createObjectURL(new Blob([out], {type:'application/octet-stream'}));
+        _dlAnchor(url, mname);
+        setTimeout(()=>URL.revokeObjectURL(url), 8000);
+      }
+    }catch(err){ alert('Could not build merged.bin — '+err+'\n(Try again once online, or use the update.bin.)'); }
+    mg.innerHTML=html; mg.style.pointerEvents='';
+  }
+  function setupDownloads(){
+    try{
+      const grid=$('dlgrid'); if(!grid) return;
+      const cfg=deviceVersions(sel);
+      const b = cfg ? (selVer || cfg.builds.find(x=>x.latest) || cfg.builds[0]) : null;
+      if(!cfg || !b){ grid.hidden=true; return; }
+      grid.hidden=false;
+      // merged.bin — version-stamped name shown in the label (double confirmation: label + saved file)
+      const mname='GTi-'+sel.id+'-'+b.v+'-merged.bin';
+      const mg=$('dl-merged');
+      mg.innerHTML='⬇ <b>'+mname+'</b>&nbsp;<small>full clean flash (esptool / recovery)</small>';
+      mg.onclick=(e)=>{ e.preventDefault(); mergedDownload(cfg,b); };
+      // update.bin — same, its name already carries the version
+      const up=$('dl-update');
+      if(b.app){ const an=b.app.split('/').pop();
+        up.hidden=false; up.href=_abs(b.app); up.setAttribute('download', an);
+        up.innerHTML='⬇ <b>'+an+'</b>&nbsp;<small>SD-card update — keeps your settings</small>'; }
+      else { up.hidden=true; }
+    }catch(e){ /* downloads are additive — never break the flow */ }
   }
   function populateVerSel(cfg){
     const el=$('verSel'); el.innerHTML='';
@@ -551,20 +641,42 @@
     $('mode-seg').hidden = (k!=='touch');
     renderDevices();
   }
+  // Boards are binned by panel size — that's what people actually know they own.
+  const SIZE_GROUPS=[
+    {key:'3.5', label:'3.5″', note:'Guition JC3248 — the shipping build'},
+    {key:'4.3', label:'4.3″', note:'Guition S3, and the P4 flagship'},
+    {key:'7',   label:'7″',   note:'Three panels — two ESP32-S3, one ESP32-P4'},
+  ];
   function curSet(){ return kind==='touch'?TOUCH:DONGLE; }
   function renderDevices(){
-    $('dev-main').innerHTML = curSet().main.map(devCard).join('');
-    $('dev-legacy').innerHTML = curSet().legacy.map(devCard).join('');
-    const _diag = curSet().diag||[];
-    $('dev-diag').innerHTML = _diag.map(devCard).join('');
-    $('diag-btn').hidden = !(kind==='touch' && _diag.length);
+    const set=curSet(), mains=set.main||[];
+    // grouped by screen size, smallest job first: pick your panel size, then the variant
+    const grouped = SIZE_GROUPS.map(g=>{
+      const items=mains.filter(d=>d.grp===g.key);
+      if(!items.length) return '';
+      return '<div class="szgrp"><div class="szgrp-h">'+g.label
+           +'<span>'+g.note+'</span></div><div class="devgrid">'
+           +items.map(devCard).join('')+'</div></div>';
+    }).join('');
+    const ungrouped = mains.filter(d=>!d.grp);
+    $('dev-main').innerHTML = grouped + (ungrouped.length?'<div class="devgrid">'+ungrouped.map(devCard).join('')+'</div>':'');
+    $('dev-legacy').innerHTML = (set.legacy||[]).map(devCard).join('');
+    const _tools = set.tools||[];
+    $('dev-diag').innerHTML = _tools.map(devCard).join('');
+    $('diag-btn').hidden = !(kind==='touch' && _tools.length);
     $('diag-wrap').hidden = true;
-    $('diag-btn').textContent='🔧 Diagnostics — panel test';
+    $('diag-btn').textContent='🔧 Tools — panel & hardware diagnostics';
     $('legacy-wrap').hidden = true;
     $('legacy-btn').textContent='＋ Legacy boards — 2.8″ & CYD';
   }
   function devCard(d){
     const szBadge = d.sz?'<span class="sz">'+d.sz+'</span>':'';
+    if(d.soon){   // listed so the range is visible, but there's no build to flash yet
+      return '<button class="dev soon" disabled title="'+d.soon+'">'
+        +szBadge+'<span class="pic">'+devPic(d)+'</span>'
+        +'<span class="nm">'+d.nm+'</span><span class="meta">'+d.meta+'</span>'
+        +'<span class="spot">'+d.soon+'</span><span class="tagrow">'+tagHtml(d.tags)+'</span></button>';
+    }
     return '<button class="dev '+(sel&&sel.id===d.id?'sel':'')+'" onclick="pickDev(\''+d.id+'\')">'
       +szBadge+'<span class="pic">'+devPic(d)+'</span>'
       +'<span class="nm">'+d.nm+'</span><span class="meta">'+d.meta+'</span>'
@@ -576,9 +688,9 @@
   }
   function toggleDiag(){
     const w=$('diag-wrap'); w.hidden=!w.hidden;
-    $('diag-btn').textContent=(w.hidden?'🔧':'－')+' Diagnostics — panel test';
+    $('diag-btn').textContent=(w.hidden?'🔧':'－')+' Tools — panel & hardware diagnostics';
   }
-  function findDev(id){const s=curSet(); return s.main.concat(s.legacy, s.diag||[]).find(d=>d.id===id);}
+  function findDev(id){const s=curSet(); return (s.main||[]).concat(s.legacy||[], s.tools||[]).find(d=>d.id===id);}
   function hasBeta(d){ return !!(d.stable && d.beta); }              // toggle only when there are two channels
   function curBuild(){
     if(!sel) return null;
@@ -610,25 +722,38 @@
   }
   function applyMode(){
     const b=curBuild();
+    // ── The FLASH / SD ACCESS fork is the FIRST choice in step 2 (before the version). ──
+    // SD access only exists for versions with a compatible update.bin, and only on a
+    // touchscreen (dongles have no SD). When there's no real second option, hide the whole
+    // fork (no dead greyed button) and flash straight — the version dropdown still shows.
+    const canSd = !!(b && b.sd) && kind==='touch';
+    $('mode-seg').hidden   = !canSd;
+    $('methodhelp').hidden = !canSd;
+    $('s2h').textContent   = canSd ? 'Choose how to update' : 'Get it ready';
+    if(!canSd) mode='fresh';
     $('mode-fresh').classList.toggle('on',mode==='fresh');
     $('mode-sd').classList.toggle('on',mode==='sd');
-    $('mode-sd').disabled = !(b && b.sd);
+    $('mode-sd').disabled = !canSd;
     if(mode==='sd' && b && b.sd){
+      // ── SD ACCESS path: pick a version above, then download its update.bin and drop it on the SD. ──
       $('mode-note').hidden=false;
       $('mode-note').innerHTML='<b>SD access</b> updates the firmware straight from the SD card — no bootloader mode, no serial port. The GTi mounts its own SD over USB, so you just drop the file on and reboot.';
       $('prep').innerHTML='<b>Firmware 5.4.0 or newer:</b>'
         +'<ol style="margin:.55rem 0 0;padding-left:1.15rem;line-height:1.75">'
         +'<li>On the GTi, open the <b>Config / Info</b> tab and turn on <b>SD access</b>.</li>'
         +'<li>Make sure a <b>USB-C data cable</b> runs from the device to your PC — the SD card mounts as a drive.</li>'
-        +'<li>Copy the <b>.bin</b> below to the <b>root of the SD card</b>, then reboot.</li>'
+        +'<li>Choose the version above, download the <b>update.bin</b> below, and copy it to the <b>root of the SD card</b>, then reboot. <span style="color:var(--dim)">(This is the only image the on-screen FW UPDATE accepts — a full merged.bin will not work.)</span></li>'
         +'</ol>';
       $('ready-lbl').textContent='I’ve copied the .bin to the SD card root.';
-      $('sd-dl').hidden=false; $('sd-dl').setAttribute('href', b.sd); $('sd-name').textContent=b.sd.split('/').pop();
+      $('sd-dl').hidden=false; $('sd-dl').setAttribute('href', b.sd); $('sd-dl').setAttribute('download', b.sd.split('/').pop()); $('sd-name').textContent=b.sd.split('/').pop();
       $('trouble').hidden=true;
     } else {
+      // ── FLASH path: pick a version above, then Confirm → Install flashes it over USB. ──
       $('mode-note').hidden=true; $('sd-dl').hidden=true; $('trouble').hidden=false;
       $('prep').innerHTML = sel?sel.prep:'Pick a device first.';
       $('ready-lbl').textContent='My board is plugged in via a USB data cable and in bootloader mode.';
+      // no raw-image downloads on the FLASH path: flashing happens over the cable from here,
+      // and the only file anyone should ever download is the SD update.bin (SD ACCESS method).
     }
     const sd=(mode==='sd');
     $('s3').hidden=sd; $('stln2').hidden=sd; $('step3-dot').hidden=sd;
@@ -670,6 +795,8 @@
     $('s2').classList.add('muted'); $('s3').classList.add('muted');
     $('s2').classList.remove('done'); $('s3').classList.remove('done');
     $('prep').innerHTML='Pick a device first.'; $('mode-note').hidden=true; $('sd-dl').hidden=true;
+    $('methodhelp').hidden=true; $('s2h').textContent='Choose how to update';
+    $('mode-seg').hidden = (kind!=='touch');
     $('mode-fresh').classList.add('on'); $('mode-sd').classList.remove('on');
     $('ready-chk').checked=false; $('btn-confirm').disabled=true;
     $('confirm-status').innerHTML='';

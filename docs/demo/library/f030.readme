@@ -1,0 +1,175 @@
+Short:        Classic 8-way soft scrolling jump'n run
+Author:       Frank Wille, Gerrit Wille, Pierre Horn
+Uploader:     frank phoenix owl de
+Type:         game/jump
+Version:      1.0
+Architecture: m68k-amigaos
+
+About:
+------
+
+SOLID GOLD is a Jump'n Run with 8-way soft scrolling. It's written for the
+classic Amiga hardware and designed in the style of the early 90s.
+
+The game features ten levels spanning four worlds, with different graphics 
+and enemies. Each level's goal is to find an artefact which will lead the 
+way to the next world.
+
+
+License:
+--------
+
+Solid Gold in electronic form (web download) is FREEWARE. A boxed version
+on a physical disk may be charged for, to cover expenses.
+
+The source text and all its data are PUBLIC DOMAIN.
+
+
+Solid Gold team:
+----------------
+
+Created by Night OWL Design in Herford/Germany.
+
+Frank Wille                     - Code (main programme and level editor)
+Gerrit Wille                    - Graphics, Music, Sound, Level Design
+Pierre Horn                     - Story
+
+David Steves                    - Beta testing
+Marcus Gerards                  - Beta testing
+
+
+System Requirements:
+--------------------
+
+Any OCS-PAL or ECS/AGA Amiga with a minimum of 1 MB RAM (512K Chip RAM
+required) will do. The game will also run on high-end Amigas but does
+not make full use of their capabilities. It also works on Minimig and
+emulators.
+
+Minimum OS version: Kickstart 1.2.
+
+Boots and works from any disk drive.
+
+
+Versions:
+---------
+
+V1.0 31-Dec-2013: First releaese.
+
+
+Story:
+------
+
+You are John Kayle, an adventurer and archeologist, trying to recover 
+important artefacts in four different places of the world, competing
+with a mysterious secret society.
+
+More information is provided by the in-game introduction sequence.
+
+
+Control:
+--------
+
+The game is played with a joystick in the second port. Recommended is a
+Competition Pro like input device, but also game pads are supported,
+including their secondary fire button.
+
+Running left: joystick left
+Running right: joystick right
+Jumping: joystick up (or secondary button)
+
+You can control the hero in mid-air while jumping by moving the joystick
+left or right.
+
+The first button (the only button on typical Amiga joysticks) is only used
+in the menu and to start the game.
+
+
+Scoring points:
+---------------
+
+Most enemies can be killed by jumping onto them. It is important to hit
+them from above. Touching an enemy's side or contact from below are lethal
+for the hero.
+
+Killing an additional enemy without touching ground will double the
+score for the kill.
+
+After collecting 50 gems of any kind you will be granted an extra life.
+
+Each level is concluded by a statistics screen. It will display the number 
+of collected items and killed enemies, opposed to total numbers. Upon 
+reaching the maximum possible numbers, an extra bonus is granted.
+
+
+History:
+--------
+
+November/December 2012: A vague plan to start an 8-way scrolling jump'n run
+was made.
+
+December 2012: The level editor was written.
+
+January 2013: The game has got a name. First graphics (Maya) and test map.
+
+February 2013: Hero animations. First map scrolling in the game. Starting
+with hero map collision checks.
+
+March 2013: Interaction with background objects (bridge, crushing stone
+blocks). Sprites to display messages. Sound effects. First Maya level.
+First simple monster movements. Dying animation sequences.
+
+April 2013: More complex monster animations (bat, jumping fish, etc.).
+Starting with Mansion graphics and maps. Collisions with monsters.
+Collectable gems and gold coins in the maps.
+
+May 2013: Checkpoints. Mansion monsters.
+
+June 2013: Menu. Introduction sequence.
+
+August 2013: Loading animation. Egypt graphics and maps.
+
+September 2013: Egypt music and debugging the maps.
+
+October 2013: Planning and design of new features in the Babylon world.
+First Babylon graphics and monsters.
+
+November 2013: Babylon maps. High score table. Announcing the release
+for this year. Recruiting beta testers.
+
+December 2013: Statistics screen. End sequence. Lots of map reworking,
+debugging and bug fixing. Partly redesign of Maya graphics. Trying to
+increase game difficulty. Release...
+
+
+Tools used during development:
+------------------------------
+
+Code: vasm and vlink.
+Graphics: Gimp.
+Music: Renoise and Milkytracker.
+Level editor: map8edit (own development).
+Hardware: Pegasos2 (MorphOS), PowerBook G3 (NetBSD), PCs (Windows).
+
+
+Test hardware:
+--------------
+
+Amiga 500  OCS, 68000/7MHz,     1MB Chip
+Amiga 500  ECS, 68000/7MHz,     512KB Chip, 512KB Fast
+Amiga 500  ECS, 68010/14MHz,    2MB Chip,   8MB Fast
+Amiga 500  ECS, 68030/33MHz,    1MB Chip,   128MB Fast
+Amiga CDTV ECS, 68000/7MHz,     1MB Chip
+Amiga 600  ECS, 68EC020/16MHz,  2MB Chip,   11MB Fast
+Amiga 1000 OCS, 68000/7MHz,     512KB Chip, 2MB Fast
+Amiga 1200 AGA, 68EC020/14MHz,  2MB Chip
+Amiga 1200 AGA, 68030/42MHz,    2MB Chip,   63MB Fast
+Amiga 1200 AGA, 68030/50MHz,    2MB Chip,   64MB Fast
+Amiga 2000 OCS, 68000/7MHz,     512KB Chip, 512KB Fast
+Amiga 2000 ECS, 68000/7MHz,     1MB Chip,   8MB Fast
+Amiga 2000 ECS, 68030/25MHz,    1MB Chip,   5MB Fast
+Amiga 2500 ECS, 68020/14MHz,    1MB Chip,   4MB Fast
+Amiga 3000 ECS, 68060/50MHz,    2MB Chip,   128MB Fast
+Amiga 4000 AGA, 68060/50MHz,    2MB Chip,   239MB Fast
+Mimimig    OCS, 68SEC000/7MHz,  512KB Chip, 512KB Fast
+Minimig    ECS, 68SEC000/50MHz, 1MB Chip,   512KB Fast
