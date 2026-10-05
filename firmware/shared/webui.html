@@ -3429,6 +3429,40 @@ async function updateTabVisibility() {
 }
 
 // ══════════════ FLEET: roster tab-bar (reads /api/fleet) ══════════════
+// Fling and Eject from a screen's own page (#24, 5 Oct: one fleet UI, on this tab bar).
+// Only a screen answers /api/fleet/send and /api/fleet/cmd, so the buttons appear only when
+// this page is served by one - its roster then says self:"panel". The screen runs the job
+// from its main loop and reports the outcome in /api/fleet, so the page polls for it.
+// Plain words only: the same page ships in the default build.
+async function fleetDo(path, params, verb, name){
+  try { await api(path, { method:'POST', body:new URLSearchParams(params) }); }
+  catch(e){ return; }                                   // api() has already said why
+  toast(verb + ': ' + name + '\u2026');
+  for (let i = 0; i < 40; i++){
+    await new Promise(r => setTimeout(r, 1000));
+    let d;
+    try { const r = await fetch(API + '/api/fleet'); d = await r.json(); } catch(e){ continue; }
+    if (d.busy || d.last_target !== params.ip) continue;
+    if (d.last_result === 'ok'){
+      let m = verb + ' done';
+      if (path.endsWith('/send') && d.last_kbps) m += ' \u2014 ' + d.last_kbps + ' KB/s';
+      toast(m);
+    } else {
+      toast(verb + ' failed: ' + d.last_result, 'error');
+    }
+    loadFleet();
+    return;
+  }
+  toast(verb + ': no answer after 40 s', 'error');
+}
+function fleetFling(ip, tcp, name){
+  if (!confirm('Send the loaded disk to ' + name + '?')) return;
+  fleetDo('/api/fleet/send', { ip:ip, tcp:String(tcp) }, 'Fling', name);
+}
+function fleetEject(ip, name){
+  fleetDo('/api/fleet/cmd', { ip:ip, cmd:'3' }, 'Eject', name);
+}
+
 async function loadFleet(){
   const bar = document.getElementById('fleet-bar');
   if (!bar) return;
@@ -3436,6 +3470,7 @@ async function loadFleet(){
   try { d = await api('/api/fleet'); } catch(e){ bar.hidden = true; return; }
   const devs = (d && d.devices) ? d.devices.filter(x=>x && x.id) : [];
   if (devs.length < 1) { bar.hidden = true; return; }
+  const onScreen = !!(d && d.self === 'panel');      // only a screen can fling or eject
   const masterId = devs.map(x=>x.id).sort()[0];   // lowest MAC = master (matches firmware election)
   let html = '<span class="fleet-label">Fleet</span>';
   for (const dev of devs){
@@ -3447,8 +3482,21 @@ async function loadFleet(){
     html += dev.self
       ? `<span class="${cls}">${inner}</span>`
       : `<a class="${cls}" href="http://${esc(dev.ip)}/" title="Open ${esc(dev.name||dev.ip)}">${inner}</a>`;
+    if (onScreen && !dev.self){
+      const nm = esc(dev.name || dev.ip || ''), ip = esc(dev.ip || '');
+      html += `<button class="btn btn-sm" data-act="fling" data-ip="${ip}" data-tcp="${dev.tcp || 3333}" data-name="${nm}"`
+            + (d.loaded ? '' : ' disabled title="Load a disk first"') + '>Fling</button>'
+            + `<button class="btn btn-sm" data-act="eject" data-ip="${ip}" data-name="${nm}">Eject</button>`;
+    }
   }
   bar.innerHTML = html;
+  // one delegated handler: the bar is re-rendered every few seconds, the buttons with it
+  bar.onclick = (ev) => {
+    const b = ev.target.closest('button[data-act]');
+    if (!b || b.disabled) return;
+    if (b.dataset.act === 'fling') fleetFling(b.dataset.ip, b.dataset.tcp, b.dataset.name);
+    else fleetEject(b.dataset.ip, b.dataset.name);
+  };
   bar.hidden = false;
 }
 

@@ -59,9 +59,9 @@
 
 // -fleet so the bench can tell the two apart (both sit on the A600 base above).
 #if defined(GTI_FLEET)
-#define FW_VERSION "A600-pf1-fleet-JC3248"
+#define FW_VERSION "A600-pf2-fleet-JC3248"
 #else
-#define FW_VERSION "A600-pf1-JC3248"
+#define FW_VERSION "A600-pf2-JC3248"
 #endif
 #define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
 #define PF_MDNS_DEFAULT "gotekomega"   // the name this screen answers to unless MDNS_NAME says otherwise.
