@@ -141,10 +141,7 @@ static void hConfigGet() {
   String j = "{";
   j += "\"WIFI_CLIENT_ENABLED\":\"1\",";
   j += "\"WIFI_CLIENT_SSID\":\"" + wpJsonEscape(g_home_ssid) + "\",";
-  // Never hand the password back. has_pass lets the page show "set" without
-  // knowing it, and an empty POST is ignored below so the page cannot clear it.
-  j += "\"WIFI_CLIENT_PASS\":\"\",";
-  j += "\"WIFI_CLIENT_HAS_PASS\":" + String(g_home_pass.length() ? "true" : "false") + ",";
+  j += "\"WIFI_CLIENT_PASS\":\"" + wpJsonEscape(g_home_pass) + "\",";
 #if defined(GTI_WEB_FLEET)
   j += "\"MDNS_NAME\":\"" + wpJsonEscape(g_mdns_name) + "\",";
 #endif
@@ -153,8 +150,7 @@ static void hConfigGet() {
   j += "\"DAV_PORT\":\"" + String(g_dav_port) + "\",";
   j += "\"DAV_HTTPS\":\"" + String(g_dav_https ? "1" : "0") + "\",";
   j += "\"DAV_USER\":\"" + wpJsonEscape(g_dav_user) + "\",";
-  j += "\"DAV_PASS\":\"\",";
-  j += "\"DAV_HAS_PASS\":" + String(g_dav_pass.length() ? "true" : "false") + ",";
+  j += "\"DAV_PASS\":\"" + wpJsonEscape(g_dav_pass) + "\",";
   j += "\"DAV_PATH\":\"" + wpJsonEscape(g_dav_path) + "\",";
   j += "\"CAROUSEL\":\"" + String(g_car_bootmode == 2 ? "LAST" : g_car_bootmode == 1 ? "ON" : "OFF") + "\",";
   j += "\"SCREENSAVER\":\"" + String(g_ss_enabled ? "ON" : "OFF") + "\",";
@@ -183,18 +179,11 @@ static void hConfigPost() {
   struct { const char *form; const char *cfg; String *dst; } sv[] = {
     { "DAV_HOST", "DAV_HOST", &g_dav_host },
     { "DAV_USER", "DAV_USER", &g_dav_user },
+    { "DAV_PASS", "DAV_PASS", &g_dav_pass },
     { "DAV_PATH", "DAV_PATH", &g_dav_path },
   };
   for (auto &f : sv) {
     if (webPanelHttp.hasArg(f.form)) { *f.dst = webPanelHttp.arg(f.form); saveConfigKey(f.cfg, *f.dst); }
-  }
-  // Out of the table above on purpose: the GET no longer returns this, so the page
-  // posts it back empty every time it saves. Empty means unchanged, or saving any
-  // other setting from the web page would erase the NAS password. Same rule as
-  // WIFI_CLIENT_PASS below, which already had it.
-  if (webPanelHttp.hasArg("DAV_PASS")) {
-    const String v = webPanelHttp.arg("DAV_PASS");
-    if (v.length()) { g_dav_pass = v; saveConfigKey("DAV_PASS", v); }
   }
   if (webPanelHttp.hasArg("DAV_PORT")) {
     const int p = webPanelHttp.arg("DAV_PORT").toInt();
