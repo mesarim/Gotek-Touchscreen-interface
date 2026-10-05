@@ -49,7 +49,8 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-lab1-JC3248"  // A600-lab1-JC3248 (Mez, 5 Oct): LANGUAGE and THEME open a pick page in Settings - every choice as its own button (languages in their own name, themes in their own colour), tap one and you are back where you were; the current one is marked > < | was A600 (4 Oct 2026, pre-Kickstart release) = 5.9.41-lab15q-JC3248, renamed only (no code change) | lab15q: Polish screen text corrected by 8-Bitz (ROLKA, TERAZ GRA, WSZYSTKIE, ULUBIONE...); the reel bar's ALL/FAV/MOST word shrinks when it is too long for its button | lab15p: ESP-NOW mode - the GTi's own Wi-Fi is now GTi_Omega-XXXX, password gotekXXXX (was an OPEN, unnamed ESP_xxxxxx), and serves the GTi web page at 192.168.4.1; Settings shows the name + password | lab15o: Polish (LANG=PL) and Czech (LANG=CS) on the screen + NL/PL/CS in the web page's language list; the STANDALONE banner centres on the translated word | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j: tap the game text in the list (title + description) = the whole .nfo full-screen in the manual reader (scroll, SIZE, TOP, CLOSE) | lab15i: each dongle keeps its OWN save file (Game.sav.XXXX.adf, XXXX = last 4 hex of the dongle MAC) - two Amigas on the same game (cable + dongle, or two dongles) never mix their saves | lab15h: FIX the lab15e/f/g freeze on disk insert (the Gotek's read took the SD lock twice - SD_MMC.readRAW already goes through the locked driver); includes lab15b-g
+// BASE (R19): "A600-lab1-JC3248"  // A600-lab1-JC3248 (Mez, 5 Oct): LANGUAGE and THEME open a pick page in Settings - every choice as its own button (languages in their own name, themes in their own colour), tap one and you are back where you were; the current one is marked > < | was A600 (4 Oct 2026, pre-Kickstart release) = 5.9.41-lab15q-JC3248, renamed only (no code change) | lab15q: Polish screen text corrected by 8-Bitz (ROLKA, TERAZ GRA, WSZYSTKIE, ULUBIONE...); the reel bar's ALL/FAV/MOST word shrinks when it is too long for its button | lab15p: ESP-NOW mode - the GTi's own Wi-Fi is now GTi_Omega-XXXX, password gotekXXXX (was an OPEN, unnamed ESP_xxxxxx), and serves the GTi web page at 192.168.4.1; Settings shows the name + password | lab15o: Polish (LANG=PL) and Czech (LANG=CS) on the screen + NL/PL/CS in the web page's language list; the STANDALONE banner centres on the translated word | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j: tap the game text in the list (title + description) = the whole .nfo full-screen in the manual reader (scroll, SIZE, TOP, CLOSE) | lab15i: each dongle keeps its OWN save file (Game.sav.XXXX.adf, XXXX = last 4 hex of the dongle MAC) - two Amigas on the same game (cable + dongle, or two dongles) never mix their saves | lab15h: FIX the lab15e/f/g freeze on disk insert (the Gotek's read took the SD lock twice - SD_MMC.readRAW already goes through the locked driver); includes lab15b-g
+#define FW_VERSION "A600-lab1-wifi2-JC3248"   // wifi2 = wifi1 rebased onto A600-lab1 (R19) | wifi1: remembered WiFi networks (NETWORKS.TXT, SAVED WIFI, rejoin) on the A600 base
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -2134,6 +2135,7 @@ static String g_home_ssid="", g_home_pass="", g_dongle_home_ip="";  // HOME_SSID
 static String g_dav_host="",g_dav_user="",g_dav_pass="",g_dav_path="/";static int g_dav_port=443;static bool g_dav_https=true,g_dav_on=false;   // DAV_* in CONFIG.TXT (merge step 1)
 static String g_dav_test="";   // DAV_TEST= : smoke test — fetch this remote path once at boot. Proves the wiring without UI; remove the key (or the hook) once real UI exists.
 static bool g_web_on=false;    // WEBUI= : serve the shared web interface over HOME_SSID (merge step 2)
+static uint8_t g_wifiNotice=0;   // #clubday: 1 = no known WiFi at boot, fell back to ESP-NOW; 2 = link lost while running
 static void davLogSerial(const String&m){Serial.println(m);}
 static void davApplyConfig(){DavConfig c;c.host=g_dav_host;c.port=(uint16_t)g_dav_port;c.https=g_dav_https;c.user=g_dav_user;c.pass=g_dav_pass;c.basePath=g_dav_path;c.enabled=g_dav_on;davClient.configure(c,davLogSerial);}
 // ── Item 4: load/eject behaviour toggles (all default OFF = safest) ──
@@ -2430,6 +2432,43 @@ static void saveConfigKey(const String&key,const String&val){
   if(fr){while(fr.available()){String l=fr.readStringUntil('\n');l.trim();if(l.startsWith(key+"=")){lines+=key+"="+val+"\n";written=true;}else lines+=l+"\n";}fr.close();}
   if(!written)lines+=key+"="+val+"\n";File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);if(fw){fw.print(lines);fw.close();}
   { uint32_t dt=millis()-_t0; if(dt>300) gLog("[slow] saveConfigKey %s: %lums, CONFIG.TXT %u bytes\n",key.c_str(),(unsigned long)dt,(unsigned)lines.length()); }
+}
+
+
+//    Stored on SD like the rest of the panel config (dongles have no SD; their equivalent lives in LittleFS). ──
+struct KnownNet { String ssid, pass; };
+static std::vector<KnownNet> g_known;   // most-recently-used first
+#define WIFI_MAX_KNOWN 8
+static bool   netIsKnown(const String&s){ for(auto&k:g_known) if(k.ssid==s) return true; return false; }
+static String netKnownPass(const String&s){ for(auto&k:g_known) if(k.ssid==s) return k.pass; return String(""); }
+static void saveKnownNets(){
+  File fw=SD_MMC.open("/NETWORKS.TXT",FILE_WRITE); if(!fw) return;
+  fw.print("# Remembered WiFi networks: SSID<TAB>password, most-recent first (max 8). Edit or delete lines to forget.\n");
+  int n=0; for(auto&k:g_known){ if(n++>=WIFI_MAX_KNOWN) break; fw.print(k.ssid); fw.print('\t'); fw.print(k.pass); fw.print('\n'); }
+  fw.close();
+}
+static void loadKnownNets(){
+  g_known.clear();
+  File fr=SD_MMC.open("/NETWORKS.TXT",FILE_READ);
+  if(fr){ while(fr.available()){ String l=fr.readStringUntil('\n'); if(l.endsWith("\r")) l.remove(l.length()-1);
+      if(l.length()==0||l.startsWith("#")) continue;
+      int t=l.indexOf('\t'); String ss,pw; if(t<0){ss=l;pw="";}else{ss=l.substring(0,t);pw=l.substring(t+1);}
+      ss.trim(); if(ss.length()&&!netIsKnown(ss)&&(int)g_known.size()<WIFI_MAX_KNOWN) g_known.push_back({ss,pw}); }
+    fr.close(); }
+  if(g_known.empty() && g_home_ssid.length()){ g_known.push_back({g_home_ssid,g_home_pass}); saveKnownNets(); }   // migrate the single HOME_SSID/HOME_PASS in
+}
+static void rememberNet(const String&ssid,const String&pass){
+  if(!ssid.length()) return;
+  for(size_t i=0;i<g_known.size();i++) if(g_known[i].ssid==ssid){ g_known.erase(g_known.begin()+i); break; }
+  g_known.insert(g_known.begin(), (KnownNet){ssid,pass});               // most-recent first
+  while((int)g_known.size()>WIFI_MAX_KNOWN) g_known.pop_back();
+  saveKnownNets();
+  g_home_ssid=ssid; g_home_pass=pass;                                    // the active network the rest of the firmware uses
+  saveConfigKey("HOME_SSID",ssid); saveConfigKey("HOME_PASS",pass);
+}
+static void forgetNet(const String&ssid){
+  for(size_t i=0;i<g_known.size();i++) if(g_known[i].ssid==ssid){ g_known.erase(g_known.begin()+i); break; }
+  saveKnownNets();
 }
 
 // ── Dongle friendly names (touchscreen-side only; keyed to the dongle MAC) ──
@@ -3593,7 +3632,7 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_TESTPAGE, IA_TESTBACK };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_TESTPAGE, IA_TESTBACK, IA_SAVEDWIFI };
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
 static InfoItem g_ii[32]; static int g_ii_n=0;
 struct InfoRect { int x,y,w,h; uint8_t act; };
@@ -3651,6 +3690,7 @@ static void drawInfoPanel(){
     add(String("HOME WIFI: ")+(g_home_ssid.length()?g_home_ssid:String("set up")), COL_ACCENT, TFT_WHITE, IA_HOMEWIFI);
     add(String("WEB UI: ")+(g_web_on?(g_home_ssid.length()?String("ON"):String("ON *set wifi*")):String("OFF")), g_web_on?COL_GREEN:COL_BAR, g_web_on?TFT_BLACK:COL_LIT, IA_WEBUI);
     if(g_home_ssid.length()) add(String("WIFI CHECK"), COL_BLUE, TFT_WHITE, IA_WIFICHECK);
+    add(String("SAVED WIFI: ")+String((int)g_known.size()), COL_BLUE, TFT_WHITE, IA_SAVEDWIFI);   // remembered networks
   }
   add(String(T(L_CFG_FONT))+": "+fontName(g_font), COL_AMBER, TFT_BLACK, IA_FONT);
   add(String(T(L_THEME))+": "+THEMES[g_theme_idx].name, COL_ACCENT, TFT_WHITE, IA_THEME);   // Vince test: moved off the bottom bar
@@ -5926,6 +5966,58 @@ static String doWifiScanPick(){
   }
 }
 
+// Does this mode join the home network? STANDALONE only with WEBUI=ON; the wireless
+// modes with LINK=HOMEWIFI. ESP-NOW serves its page on its own access point instead
+// (webPanelBeginAP) and has no home network to rejoin.
+static inline bool webWanted(){ return g_wireless_mode ? g_link_home : g_web_on; }
+
+static bool wifiJoin(const String&ssid,const String&pass,uint32_t timeoutMs){
+  WiFi.mode(WIFI_STA); WiFi.persistent(false);
+  WiFi.disconnect(false,true); delay(150);
+  if(pass.length()) WiFi.begin(ssid.c_str(),pass.c_str()); else WiFi.begin(ssid.c_str());
+  uint32_t t0=millis(); while(WiFi.status()!=WL_CONNECTED && millis()-t0<timeoutMs) delay(150);
+  return WiFi.status()==WL_CONNECTED;
+}
+static bool wifiAutoJoin(){
+  if(g_known.empty()) return WiFi.status()==WL_CONNECTED;
+  WiFi.mode(WIFI_STA);
+  int n=WiFi.scanNetworks(); if(n<0)n=0;
+  static const int MAXC=16; String cand[MAXC]; int rssi[MAXC]; int cn=0;
+  for(int i=0;i<n && cn<MAXC;i++){ String s=WiFi.SSID(i); if(!netIsKnown(s))continue; bool dup=false; for(int j=0;j<cn;j++) if(cand[j]==s){dup=true;break;} if(!dup){cand[cn]=s;rssi[cn]=WiFi.RSSI(i);cn++;} }
+  WiFi.scanDelete();
+  for(int a=0;a<cn;a++){ int best=a; for(int b=a+1;b<cn;b++) if(rssi[b]>rssi[best])best=b; if(best!=a){int tr=rssi[a];rssi[a]=rssi[best];rssi[best]=tr;String ts=cand[a];cand[a]=cand[best];cand[best]=ts;} }
+  for(int a=0;a<cn;a++){ if(wifiJoin(cand[a],netKnownPass(cand[a]),10000)){ rememberNet(cand[a],netKnownPass(cand[a])); g_link_home=true; return true; } }
+  return WiFi.status()==WL_CONNECTED;
+}
+
+static void savedWifiManage(){
+  const int hdr=24,rowH=34,gap=5,bm=6,ctlH=34,FGW=84;   // FGW = width of the FORGET button
+  bool dirty=true,pressed=true; int rel=0; kbWaitRelease(600);   // start "pressed": the opening tap must be released before anything here counts (no phantom tap)
+  while(true){
+    int m=g_known.size(); int avail=(VH-hdr-(ctlH+gap+bm))/(rowH+gap); if(avail<1)avail=1; int vis=m<avail?m:avail;
+    if(dirty){ dirty=false; gfx_fillScreen(COL_BG);
+      gfx_fillRect(0,0,VW,hdr,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_BAR),COL_BAR); gfx_setCursor(6,8); gfx_print("Saved WiFi  -  tap FORGET to remove");
+      if(m==0){ gfx_setTextColor(COL_DIM,COL_BG); gfx_setCursor(14,hdr+gap+8); gfx_print("(none remembered yet)"); }
+      String curSsid=(WiFi.status()==WL_CONNECTED && WiFi.SSID().length())?WiFi.SSID():g_home_ssid;   // #clubday: mark the net we are ACTUALLY on, not just list slot 0
+      for(int i=0;i<vis;i++){ int y=hdr+gap+i*(rowH+gap);
+        gfx_fillRoundRect(6,y,VW-12,rowH,6,COL_PANEL); gfx_drawRoundRect(6,y,VW-12,rowH,6,COL_BAR);
+        gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL);
+        String nm=g_known[i].ssid; int maxw=VW-12-FGW-24; while(gfx_textWidth(nm)>maxw&&nm.length()>3)nm=nm.substring(0,nm.length()-1);
+        gfx_setCursor(14,y+(rowH-8)/2); gfx_print(nm);
+        if(g_known[i].ssid==curSsid){ gfx_setTextColor(COL_GREEN,COL_PANEL); gfx_print("  (current)"); }
+        int bx=VW-12-FGW; gfx_fillRoundRect(bx,y+4,FGW-4,rowH-8,6,(uint16_t)0x8000); gfx_setTextColor(TFT_WHITE,(uint16_t)0x8000); gfx_setCursor(bx+(FGW-4-gfx_textWidth("FORGET"))/2,y+(rowH-8)/2); gfx_print("FORGET"); }
+      int cy=hdr+gap+vis*(rowH+gap); gfx_fillRoundRect(gap,cy,VW-2*gap,ctlH,6,COL_SEL); gfx_setTextColor(inkFor(COL_SEL),COL_SEL); gfx_setCursor((VW-gfx_textWidth("Back"))/2,cy+(ctlH-8)/2); gfx_print("Back");
+      gfx_flush(); }
+    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){ rel=0; if(!pressed){ pressed=true;
+      bool acted=false;
+      for(int i=0;i<vis;i++){ int y=hdr+gap+i*(rowH+gap); int bx=VW-12-FGW; if(ty>=y&&ty<y+rowH&&(int)tx>=bx){ forgetNet(g_known[i].ssid); dirty=true; acted=true; break; } }
+      if(!acted){ int cy=hdr+gap+vis*(rowH+gap); if(ty>=cy&&ty<cy+ctlH){ kbWaitRelease(); return; } }
+    } } else { if(pressed&&++rel>=3)pressed=false; }
+    delay(12);
+  }
+}
+
 // The Home-WiFi setup flow: enter SSID, enter password, save + enable HOMEWIFI.
 // Reached from the settings screen (IA_HOMEWIFI).
 static void doHomeWifiSetup(){
@@ -5935,9 +6027,12 @@ static void doHomeWifiSetup(){
   else if (!kbInput("Home WiFi: network name (SSID)", ssid, 32)) return;   // manual fallback / cancel
   ssid.trim();
   if (ssid.length() == 0) { hwMsg("No SSID", "nothing saved", COL_AMBER, 1200); return; }
+  { const String remembered = netKnownPass(ssid);                       // seen this one before?
+    if (remembered.length()) pass = remembered; }                       // prefill; the user just taps OK
   if (!kbInput("Home WiFi: password (blank = open)", pass, 63)) return; // cancel
 
   g_home_ssid = ssid; g_home_pass = pass; g_link_home = true;
+  rememberNet(ssid, pass);          // NETWORKS.TXT: most-recently-used first, at most 8
   saveConfigKey("HOME_SSID", ssid);
   saveConfigKey("HOME_PASS", pass);
   saveConfigKey("LINK", "HOMEWIFI");
@@ -6900,6 +6995,7 @@ void setup(){
     generateDefaultConfig();
     selfHealConfig();           // append any documented keys an older CONFIG.TXT is missing
     loadConfig();
+    loadKnownNets();            // remembered WiFi networks (NETWORKS.TXT)
     g_sdg.on=g_sdguard_cfg; sdPullups();           // lab14g: SDGUARD= / SDPULLUP= from CONFIG.TXT
     if(g_sd_freq!=20000){           // 5.3.5: SDSPEED=40 opt-in (lab14g: or 10) — remount, fall back to 20 if it won't take
       sdGuardRemove();
@@ -7273,6 +7369,7 @@ static void infoAction(uint8_t act){
     case IA_SSFAV: g_ss_fav=!g_ss_fav; saveConfigKey("SSFAV", g_ss_fav?"ON":"OFF"); drawInfoFull(); break;   // 5.8.3
     case IA_WEBUI: doWebUiSetup(); drawInfoFull(); break;   // 5.9.9
     case IA_WIFICHECK: doWifiCheck(); drawInfoFull(); break;   // 5.9.10
+    case IA_SAVEDWIFI: savedWifiManage(); drawInfoFull(); break;   // remembered networks
     default: break;
   }
 }
@@ -7376,6 +7473,25 @@ static void handleTap(uint16_t px,uint16_t py){
 
 void loop(){
   webPanelService();   // one web client + one queued DAV load per pass (merge step 2)
+  // #clubday: the link is gone for a while (moved to another location) -> rejoin the strongest
+  // remembered network. setAutoReconnect covers brief same-AP drops; this is for when the AP is truly gone.
+  { static uint32_t wdOut=0, wdWait=25000; static bool g_wifiToldLost=false;
+    if(webWanted() && !g_known.empty() && WiFi.status()!=WL_CONNECTED){
+      if(!wdOut) wdOut=millis();
+      else if(millis()-wdOut>wdWait){
+        wdOut=0;
+        if(wifiAutoJoin()){ wdWait=25000; g_wifiToldLost=false; }
+        else {
+          if(wdWait<300000) wdWait*=2;   // the AP is really gone: stop freezing the UI every 25 s
+          if(!g_wifiToldLost){ g_wifiToldLost=true; g_wifiNotice=2; }   // say it once per outage
+        }
+      }
+    } else wdOut=0; }
+  if(g_wifiNotice && !g_info_showing){   // #clubday: one notice, once the UI is actually there
+    if(g_wifiNotice==1) hwMsg("No WiFi found","using ESP-NOW instead",COL_AMBER,2500);
+    else                hwMsg("WiFi lost","tap MODE for ESP-NOW",COL_AMBER,2500);
+    g_wifiNotice=0; drawFullUI(); gfx_flush();
+  }
   { static uint32_t _sgT=0; if(g_sdg.pending_report && millis()-_sgT>2000){ _sgT=millis(); sdGuardReport(false); } }   // lab14g
   if(g_espnow_link_just_established){g_espnow_link_just_established=false;
     gfx_fillRect(0,0,VW,STATUS_H,0x07E0);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0x07E0);
