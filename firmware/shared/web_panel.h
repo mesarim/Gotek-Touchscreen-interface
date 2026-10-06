@@ -654,6 +654,9 @@ static void webPanelRegister() {
   webPanelHttp.on("/api/dav/rowmeta",HTTP_GET,  hDavRowmeta);
   webPanelHttp.on("/api/dav/nfo",    HTTP_GET,  hDavNfo);
   webPanelHttp.on("/api/dav/load",   HTTP_POST, hDavLoad);
+#if defined(GTI_NEO_BENCH)
+  webPanelHttp.on("/api/neobench", HTTP_GET, [](){ webPanelHttp.send(200, "application/json", neoBenchJson()); });   // A600-neo2e: NEO vs flat draw times
+#endif
 #if defined(GTI_WEB_SD_FILES)
   webPanelHttp.on("/api/sd/list",    HTTP_GET,  hSdList);
   webPanelHttp.on("/api/sd/get",     HTTP_GET,  hSdGet);
