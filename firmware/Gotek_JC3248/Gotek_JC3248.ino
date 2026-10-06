@@ -49,7 +49,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-neo2d-shot2-JC3248"  // A600-neo2-JC3248 (Dimmy, 6 Oct): NEO keys - one see-through button/panel look on every screen (list rows, cover panel, settings, bottom bars, carousel, text reader); INSERT amber, EJECT muted red, on/off as an edge + dot; the reader keeps the web page answering | A600-neo1-JC3248 (Dimmy, 6 Oct): NEO preview on branch neo-style - NEO theme + switch, background picture, NEO web pages | A600-lab1-JC3248 (Mez, 5 Oct): LANGUAGE and THEME open a pick page in Settings - every choice as its own button (languages in their own name, themes in their own colour), tap one and you are back where you were; the current one is marked > < | was A600 (4 Oct 2026, pre-Kickstart release) = 5.9.41-lab15q-JC3248, renamed only (no code change) | lab15q: Polish screen text corrected by 8-Bitz (ROLKA, TERAZ GRA, WSZYSTKIE, ULUBIONE...); the reel bar's ALL/FAV/MOST word shrinks when it is too long for its button | lab15p: ESP-NOW mode - the GTi's own Wi-Fi is now GTi_Omega-XXXX, password gotekXXXX (was an OPEN, unnamed ESP_xxxxxx), and serves the GTi web page at 192.168.4.1; Settings shows the name + password | lab15o: Polish (LANG=PL) and Czech (LANG=CS) on the screen + NL/PL/CS in the web page's language list; the STANDALONE banner centres on the translated word | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j: tap the game text in the list (title + description) = the whole .nfo full-screen in the manual reader (scroll, SIZE, TOP, CLOSE) | lab15i: each dongle keeps its OWN save file (Game.sav.XXXX.adf, XXXX = last 4 hex of the dongle MAC) - two Amigas on the same game (cable + dongle, or two dongles) never mix their saves | lab15h: FIX the lab15e/f/g freeze on disk insert (the Gotek's read took the SD lock twice - SD_MMC.readRAW already goes through the locked driver); includes lab15b-g
+#define FW_VERSION "A600-neo2e-shot2-JC3248"  // A600-neo2-JC3248 (Dimmy, 6 Oct): NEO keys - one see-through button/panel look on every screen (list rows, cover panel, settings, bottom bars, carousel, text reader); INSERT amber, EJECT muted red, on/off as an edge + dot; the reader keeps the web page answering | A600-neo1-JC3248 (Dimmy, 6 Oct): NEO preview on branch neo-style - NEO theme + switch, background picture, NEO web pages | A600-lab1-JC3248 (Mez, 5 Oct): LANGUAGE and THEME open a pick page in Settings - every choice as its own button (languages in their own name, themes in their own colour), tap one and you are back where you were; the current one is marked > < | was A600 (4 Oct 2026, pre-Kickstart release) = 5.9.41-lab15q-JC3248, renamed only (no code change) | lab15q: Polish screen text corrected by 8-Bitz (ROLKA, TERAZ GRA, WSZYSTKIE, ULUBIONE...); the reel bar's ALL/FAV/MOST word shrinks when it is too long for its button | lab15p: ESP-NOW mode - the GTi's own Wi-Fi is now GTi_Omega-XXXX, password gotekXXXX (was an OPEN, unnamed ESP_xxxxxx), and serves the GTi web page at 192.168.4.1; Settings shows the name + password | lab15o: Polish (LANG=PL) and Czech (LANG=CS) on the screen + NL/PL/CS in the web page's language list; the STANDALONE banner centres on the translated word | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j: tap the game text in the list (title + description) = the whole .nfo full-screen in the manual reader (scroll, SIZE, TOP, CLOSE) | lab15i: each dongle keeps its OWN save file (Game.sav.XXXX.adf, XXXX = last 4 hex of the dongle MAC) - two Amigas on the same game (cable + dongle, or two dongles) never mix their saves | lab15h: FIX the lab15e/f/g freeze on disk insert (the Gotek's read took the SD lock twice - SD_MMC.readRAW already goes through the locked driver); includes lab15b-g
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -5498,6 +5498,34 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
 // WEBUI=ON. Placed here because it calls doLoadWebdav and the disk builders.
 #define GTI_WEB_SD_FILES 1   // 5.9.9: WiFi SD file-access endpoints (JC3.5 only for now)
 #define GTI_WEB_SCREENSHOT 1 // GET /api/screenshot = BMP of the current screen (shotWriteBmp)
+// A600-neo2e: GET /api/neobench - NEO vs flat draw times on this screen (Mez's condition for NEO).
+// Draws every look in turn (the screen flashes for about a second), then puts the current screen back.
+#define GTI_NEO_BENCH 1
+static void drawInfoBottomBar();
+static String neoBenchJson(){
+  if(g_car_active) return String("{\"error\":\"leave the reel first\"}");
+  if(g_games.empty()) return String("{\"error\":\"no games in the list\"}");
+  const bool was=g_neo_on; const float sp=g_scrollPx; const bool info=g_info_showing;
+  uint32_t full[2],scr[2],sett[2],flush=0,build=0;
+  for(int k=0;k<2;k++){ const bool neo=(k==0);
+    g_neo_on=neo; applyTheme(g_theme_idx); g_info_showing=false;
+    drawFullUI();                                                        // warm-up: background + tint built here
+    uint32_t t=micros(); for(int i=0;i<10;i++)drawFullUI(); full[k]=(micros()-t)/10;
+    int mp=maxScrollPx(); t=micros();
+    for(int i=0;i<20;i++){ g_scrollPx=(float)((i*37)%(mp>0?mp:1)); drawFileList(); drawNowPlayingBar(); drawAZBar(); }   // one drag frame
+    scr[k]=(micros()-t)/20; g_scrollPx=sp;
+    t=micros(); for(int i=0;i<5;i++){ NeoScope _ns; clearBack(); drawStatusBar(); drawInfoPanel(); drawInfoBottomBar(); } sett[k]=(micros()-t)/5;
+    if(neo){ t=micros(); gfx_flush(); flush=micros()-t;
+      g_neo_bg_rot=-1; g_neo_tint_rot=-1; t=micros(); neoBgEnsure(); neoTintEnsure(); build=micros()-t; }   // first build after boot / rotation
+  }
+  g_neo_on=was; applyTheme(g_theme_idx); g_scrollPx=sp; g_info_showing=info;
+  if(info) drawInfoFull(); else { drawFullUI(); gfx_flush(); }
+  char j[320]; snprintf(j,sizeof j,
+    "{\"unit\":\"us\",\"neo\":{\"full\":%lu,\"scroll_frame\":%lu,\"settings\":%lu},\"flat\":{\"full\":%lu,\"scroll_frame\":%lu,\"settings\":%lu},\"flush\":%lu,\"neo_first_build\":%lu,\"games\":%u}",
+    (unsigned long)full[0],(unsigned long)scr[0],(unsigned long)sett[0],(unsigned long)full[1],(unsigned long)scr[1],(unsigned long)sett[1],
+    (unsigned long)flush,(unsigned long)build,(unsigned)g_games.size());
+  return String(j);
+}
 #include "../shared/web_panel.h"
 
 static void doUnload(){
