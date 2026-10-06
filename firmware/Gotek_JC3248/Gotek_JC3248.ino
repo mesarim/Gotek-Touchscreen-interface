@@ -59,12 +59,12 @@
 
 // -fleet so the bench can tell the two apart (both sit on the A600-lab1 base above).
 #if defined(GTI_FLEET)
-#define FW_VERSION "A600-lab1-pf3-fleet-JC3248"
+#define FW_VERSION "A600-lab1-pf4-fleet-JC3248"
 #else
-#define FW_VERSION "A600-lab1-pf3-JC3248"
+#define FW_VERSION "A600-lab1-pf4-JC3248"
 #endif
 #define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
-#define PF_MDNS_DEFAULT "gotekomega"   // the name this screen answers to unless MDNS_NAME says otherwise.
+#define PF_MDNS_ALIAS "gotekomega"     // pf4: the shared name one screen ALSO answers to, next to its own GTi-XXXX.
                                        // Must match what the dongles cede (their portal points users here).
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
@@ -2148,7 +2148,7 @@ static int g_car_bootmode=0;  // CONFIG.TXT CAROUSEL= : default boot VIEW — 0/
 // ── 5.8.6: home-WiFi dongle transport (LINK=HOMEWIFI) — route the FLING via the home router to a Webby dongle's gotek.local, instead of hopping to the dongle's own AP ──
 static bool   g_link_home=false;                                    // LINK: false=ESP-NOW/AP (default), true=HOME WIFI
 static uint8_t g_wifiNotice=0;   // #clubday: 1 = no known WiFi at boot, fell back to ESP-NOW; 2 = link lost while running
-static String g_mdns_name=PF_MDNS_DEFAULT;   // MDNS_NAME: this screen's own mDNS name. Two screens on one network sort it out between them (lowest MAC keeps it).
+static String g_mdns_name="";   // MDNS_NAME: this screen's own mDNS name. Two screens on one network sort it out between them (lowest MAC keeps it).
 static bool   g_mdns_named=false;   // MDNS_NAME was actually set. Not the same as "differs from the default":
                                     // picking the default name on purpose is still a deliberate choice.
 static String g_home_ssid="", g_home_pass="", g_dongle_home_ip="";  // HOME_SSID / HOME_PASS (set in CONFIG.TXT) + cached DONGLE_HOME_IP
@@ -3804,7 +3804,7 @@ static void drawInfoPanel(){
   g_info_pages=(g_ii_n+perPage-1)/perPage; if(g_info_pages<1)g_info_pages=1;
   if(g_info_page>=g_info_pages)g_info_page=g_info_pages-1; if(g_info_page<0)g_info_page=0;
   if(webWanted()){ gfx_setTextColor(TFT_CYAN,COL_BG); gfx_setCursor(8,iy+18);
-    gfx_print("WEB: "+pfMdnsName()+".local  ("+String(g_mdns_name!=PF_MDNS_DEFAULT?"named":(g_pfIsLeader?"LEADER":"secondary"))+")"); gfx_setTextColor(COL_DIM,COL_BG); }
+    gfx_print("WEB: "+pfMdnsName()+".local  ("+String(g_mdns_named?"named":(g_pfIsLeader?"+ " PF_MDNS_ALIAS ".local":"default"))+")"); gfx_setTextColor(COL_DIM,COL_BG); }
   {String pn="PAGE "+String(g_info_page+1)+"/"+String(g_info_pages);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(iw-8-gfx_textWidth(pn),iy+5);gfx_print(pn);}
   int startI=g_info_page*perPage, endI=min(g_ii_n,startI+perPage);
   g_ir_n=0;

@@ -19,12 +19,11 @@
 #define PF_TCP_PORT   3333
 #define PF_STALE_MS   40000UL
 #define PF_MAX_PEERS  16
-#ifndef PF_MDNS_DEFAULT
-#define PF_MDNS_DEFAULT "gotekomega"   // the name a screen answers to unless MDNS_NAME says otherwise.
+#ifndef PF_MDNS_ALIAS
+#define PF_MDNS_ALIAS "gotekomega"   // the shared name: one screen ALSO answers to it (see pfApplyAlias).
 #endif   // The dongles cede this exact name to a screen and their portal points users at it,
-         // so it has to match theirs. With two screens the lower MAC keeps it and the other
-         // becomes <name>-<mac>. (Mez's tree also registers "GTi" for the web panel - the two
-         // names disagree in HIS tree; see the branch note.)
+         // so it has to match theirs. A screen's own hostname is GTi-XXXX (pfDefaultHost) -
+         // unique per screen, so screens never fight over it (Mez, 6 Oct 2026, option d).
 #define PF_CMD_EJECT   0x03
 #define PF_CMD_SETNAME 0x06   // #24: tell the dongle the pretty display name for the NEXT disk (its FAT12 root stays DISK.ADF)
 // Mainline, not fleet. Webby 1.6.6 remembers which screen put the disk in and asks
@@ -99,11 +98,11 @@ static bool pfPeerVisible(const PfPeer &p){ (void)p; return true; }
 static int  pfVisibleCount(){ int n=0; for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])) n++; return n; }
 static int  pfPeerIdx(const String &id){ for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].id==id) return i; return -1; }   // rows are held by id: a prune must not shift one under your finger
 
-// ── Panel-vs-panel election (#clubday: many screens on one Wi-Fi, one <name>.local) ──
+// ── Panel-vs-panel election (#clubday: many screens on one Wi-Fi, one gotekomega.local) ──
 // Every screen beacons role:panel with its MAC id and the mDNS name it currently holds.
-// Among screens that still want the default name, the LOWEST MAC keeps
-// it; the rest fall back to <name>-<mac>.local (the same scheme the dongles
-// use). A screen given a custom MDNS_NAME never contends. Deterministic, no mDNS probing.
+// Every screen keeps its own GTi-XXXX hostname; the election only decides which one ALSO
+// answers to the shared gotekomega.local: among screens on their default name, the LOWEST
+// MAC. A screen given a custom MDNS_NAME never contends. Deterministic, no mDNS probing.
 struct PfPanel { String id, mdns; uint32_t seen; };
 static PfPanel  g_pfPanels[PF_MAX_PEERS];
 static int      g_pfPanelN = 0;
@@ -115,20 +114,29 @@ static uint32_t g_pfMdnsCheck = 0;     // last readback (throttled; the conflict
 static uint32_t g_pfMdnsRetry = 0;     // last re-registration after losing the name
 static uint16_t g_pfMdnsLost  = 0;     // how often we had to take it back (diagnostic)
 #define PF_MDNS_RETRY_MS 20000UL       // > the window a booting dongle holds the leader name
-static bool     g_pfIsLeader = true;   // do we own the undecorated <name>.local?
+static bool     g_pfIsLeader = true;   // do we ALSO answer to the shared gotekomega.local?
 static bool     g_pfMdnsDirty = true;  // set when the elected name changes -> re-register (no reboot)
+static bool     g_pfAliasUp   = false; // we currently answer to PF_MDNS_ALIAS as a delegated hostname
+static uint32_t g_pfAliasIp   = 0;     // ... at this address
+static uint32_t g_pfAliasTry  = 0;     // last attempt to (re)register it
 
 static String pfMyMac() {
   uint8_t m[6]; WiFi.macAddress(m);
   char b[13]; snprintf(b, sizeof(b), "%02X%02X%02X%02X%02X%02X", m[0], m[1], m[2], m[3], m[4], m[5]);
   return String(b);
 }
-static String pfMacSuffix() {   // last 2 bytes, lowercase — matches the dongle's <name>-<mac> scheme
+static String pfMacSuffix() {   // last 2 bytes, UPPERCASE - the same as screenName()'s GTi-XXXX in espnow_server.cpp
   uint8_t m[6]; WiFi.macAddress(m);
-  char b[8]; snprintf(b, sizeof(b), "%02x%02x", m[4], m[5]);
+  char b[8]; snprintf(b, sizeof(b), "%02X%02X", m[4], m[5]);
   return String(b);
 }
-static String pfMdnsName() { return g_pfMdnsName.length() ? g_pfMdnsName : g_mdns_name; }
+static String pfDefaultHost() { return String("GTi-") + pfMacSuffix(); }   // a screen's hostname unless MDNS_NAME says otherwise
+static String pfMdnsName() { return g_pfMdnsName.length() ? g_pfMdnsName : (g_mdns_named ? g_mdns_name : pfDefaultHost()); }
+// A screen on its default name, as its beacon tells it: GTi-XXXX, or the shared name itself
+// (a screen on older firmware still uses that as its hostname - it holds the alias, so it counts).
+static bool pfPanelOnDefault(const String &mdns) {
+  return mdns == PF_MDNS_ALIAS || (mdns.length() == 8 && mdns.startsWith("GTi-"));
+}
 
 static void pfPanelUpsert(const String &id, const String &mdns) {
   if (!id.length()) return;
@@ -147,19 +155,13 @@ static void pfPanelPrune() {
 static void pfElect() {
   if (!g_pfMyId.length()) g_pfMyId = pfMyMac();
   pfPanelPrune();
-  String want;
-  if (g_mdns_named) {                             // a named screen keeps its own name, never contends.
-    // Test the fact that MDNS_NAME was set, not whether its value differs from
-    // the default: choosing the default name on purpose is still a choice, and
-    // comparing values silently entered such a screen into the election.
-    want = g_mdns_name; g_pfIsLeader = true;
-  } else {
-    bool yield = false;                         // yield the default name to any live screen with a lower MAC that also wants it
-    for (int i = 0; i < g_pfPanelN; i++)
-      if (g_pfPanels[i].mdns == PF_MDNS_DEFAULT && g_pfPanels[i].id < g_pfMyId) { yield = true; break; }
-    want = yield ? (String(PF_MDNS_DEFAULT) + "-" + pfMacSuffix()) : String(PF_MDNS_DEFAULT);
-    g_pfIsLeader = !yield;
-  }
+  // Test the fact that MDNS_NAME was set, not whether its value differs from the
+  // default: choosing the default name on purpose is still a choice.
+  String want = g_mdns_named ? g_mdns_name : pfDefaultHost();
+  bool lead = !g_mdns_named;                      // a named screen never contends for the shared name
+  for (int i = 0; lead && i < g_pfPanelN; i++)    // yield it to any live default screen with a lower MAC
+    if (pfPanelOnDefault(g_pfPanels[i].mdns) && g_pfPanels[i].id < g_pfMyId) lead = false;
+  g_pfIsLeader = lead;
   if (want != g_pfMdnsName) { g_pfMdnsName = want; g_pfMdnsDirty = true; g_pfMdnsHeld = false; }
 }
 #else
@@ -172,14 +174,13 @@ static void pfElect() {
                                                 // without this the panel count only ever grows
   // Test that MDNS_NAME was SET, not what it says: choosing the default name on purpose
   // is still a choice. Comparing values is the bug dd61f0b fixed - do not reintroduce it.
-  String want = g_mdns_named ? g_mdns_name : String(PF_MDNS_DEFAULT);
+  String want = g_mdns_named ? g_mdns_name : pfDefaultHost();
   if (want != g_pfMdnsName) { g_pfMdnsName = want; g_pfMdnsDirty = true; }
-  // Leadership here only decides whether pfMdnsReadback() takes the name BACK after the
-  // IDF responder renames us. A screen the user named insists; a screen sitting on the
-  // default accepts the rename. Without that split, two default screens on one LAN both
-  // insist and trade gotekomega.local back and forth every 20s, forever - and unlike the
-  // fleet build there is no MAC election left to settle it.
-  g_pfIsLeader = g_mdns_named;
+  // No election: a screen on its default name simply also answers to the shared name, so the
+  // dongle portal's gotekomega.local link keeps working. Two such screens on one LAN both
+  // offer it - as before this change, when it was their hostname - but their own GTi-XXXX
+  // names are unique, so each one stays reachable.
+  g_pfIsLeader = !g_mdns_named;
 }
 #endif
 // Ask the responder what hostname it actually holds. begin() returning true is NOT that
@@ -198,7 +199,8 @@ static void pfMdnsReadback() {
   // still empty, so doElection makes it master) and cedes once it hears us - but by then the
   // responder has already renamed US, and pfApplyMdns only fires when the WANTED name changes.
   // So take it back, slower than that window, and only for a name we are entitled to.
-  if (!g_pfMdnsHeld && g_pfIsLeader && g_pfMdnsName.length() && g_pfMdnsActual[0]) {
+  // Our hostname is unique now (GTi-XXXX, or a name the user chose), so always take it back.
+  if (!g_pfMdnsHeld && g_pfMdnsName.length() && g_pfMdnsActual[0]) {
     if (millis() - g_pfMdnsRetry >= PF_MDNS_RETRY_MS) {
       g_pfMdnsRetry = millis(); g_pfMdnsDirty = true; g_pfMdnsLost++;
     }
@@ -209,11 +211,33 @@ static void pfMdnsReadback() {
 static void pfApplyMdns() {
   if (!g_pfMdnsDirty || g_pfMdnsName.length() == 0) return;
   MDNS.end();
+  g_pfAliasUp = false;                             // end() dropped the delegated shared name too
   if (!MDNS.begin(g_pfMdnsName.c_str())) return;   // stay dirty: a failed begin() must be retried,
                                                    // or the screen claims a name nothing answers to
   MDNS.addService("http", "tcp", 80);
   g_pfMdnsDirty = false;
   g_pfMdnsCheck = 0;        // force a readback on the next pass instead of claiming success here
+}
+
+// The shared gotekomega.local, answered by the leader as a delegated hostname next to its own
+// GTi-XXXX. A delegated host carries its own address, so it is re-set when our IP changes.
+static void pfApplyAlias() {
+  const bool want = g_pfIsLeader && !g_pfMdnsDirty && g_pfMdnsName.length() && WiFi.status() == WL_CONNECTED;
+  if (!want) {
+    if (g_pfAliasUp) { mdns_delegate_hostname_remove(PF_MDNS_ALIAS); g_pfAliasUp = false; }
+    return;
+  }
+  const uint32_t ip = (uint32_t)WiFi.localIP();
+  if (g_pfAliasUp && ip == g_pfAliasIp) return;
+  if (millis() - g_pfAliasTry < 5000) return;      // the responder may still be starting: retry, do not hammer
+  g_pfAliasTry = millis();
+  mdns_ip_addr_t a = {};
+  a.addr.type = ESP_IPADDR_TYPE_V4; a.addr.u_addr.ip4.addr = ip; a.next = NULL;
+  const esp_err_t e = g_pfAliasUp ? mdns_delegate_hostname_set_address(PF_MDNS_ALIAS, &a)
+                                  : mdns_delegate_hostname_add(PF_MDNS_ALIAS, &a);
+  if (e != ESP_OK) return;
+  if (!g_pfAliasUp) mdns_service_add_for_host(NULL, "_http", "_tcp", PF_MDNS_ALIAS, 80, NULL, 0);
+  g_pfAliasUp = true; g_pfAliasIp = ip;
 }
 
 static String pfJesc(const String &s) {
@@ -298,8 +322,9 @@ static void pfService() {
     // keeps no roster. Empty roster => pfVisibleCount()==0 => disks mount on our own USB port.
     if (g_wireless_mode && g_link_home) pfUpsert(s);
   }
-  pfElect();        // #clubday: pick our mDNS name from the screens we hear (lowest MAC keeps the undecorated one)
+  pfElect();        // #clubday: our own name, and whether we also answer gotekomega.local (lowest default MAC)
   pfApplyMdns();    // re-register if it changed — no reboot
+  pfApplyAlias();   // ... add or drop the shared name to match the election
   pfMdnsReadback(); // ... and check what the responder ended up called, rather than assuming
   pfSendBeacon();   // #rule: keep announcing ourselves (with the elected name) as a leader
 }
@@ -314,7 +339,8 @@ static String pfRosterJson() {
   j += "\"mdns_held\":" + String(g_pfMdnsHeld ? "true" : "false") + ",";   // ... true only when the responder REPORTS that same name
   j += "\"mdns_actual\":\"" + pfJesc(String(g_pfMdnsActual)) + "\",";       // ... and what it reports, renamed-on-conflict included
   j += "\"mdns_lost\":" + String(g_pfMdnsLost) + ",";                      // ... and how often we had to take the name back
-  j += "\"leader\":" + String(g_pfIsLeader ? "true" : "false") + ",";     // #clubday: true = owns the undecorated <name>.local
+  j += "\"leader\":" + String(g_pfIsLeader ? "true" : "false") + ",";     // #clubday: true = also answers gotekomega.local
+  j += "\"alias_up\":" + String(g_pfAliasUp ? "true" : "false") + ",";   // ... and the responder accepted it
   j += "\"panels\":" + String(g_pfPanelN + 1) + ",";                      // #clubday: screens seen on the net, incl. self
   // The SPA shows the fleet card only in WIRELESS mode: STANDALONE means the
   // panel is the local drive and has no dongles to control. Home WiFi + web are

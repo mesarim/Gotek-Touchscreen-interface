@@ -147,7 +147,7 @@ static void hConfigGet() {
   j += "\"WIFI_CLIENT_PASS\":\"\",";                                       // 5.9.39 (#24): never echo secrets to the LAN; the form shows blank = unchanged
   j += "\"HAS_WIFI_PASS\":\"" + String(g_home_pass.length() ? "1" : "0") + "\",";
 #if defined(GTI_WEB_FLEET)
-  j += "\"MDNS_NAME\":\"" + wpJsonEscape(g_mdns_name) + "\",";
+  j += "\"MDNS_NAME\":\"" + wpJsonEscape(pfMdnsName()) + "\",";   // pf4: the name in use, GTi-XXXX when none was set
 #endif
   j += "\"DAV_ENABLED\":\"" + String(g_dav_on ? "1" : "0") + "\",";
   j += "\"DAV_HOST\":\"" + wpJsonEscape(g_dav_host) + "\",";
@@ -207,7 +207,10 @@ static void hConfigPost() {
   // owners of one responder is exactly what makes <name>.local stop resolving.
   if (webPanelHttp.hasArg("MDNS_NAME")) {
     const String v = webPanelHttp.arg("MDNS_NAME");
-    if (v.length()) { g_mdns_name = v; saveConfigKey("MDNS_NAME", v); g_pfMdnsDirty = true; }
+    // pf4: the form always posts this field, prefilled with the name in use. Posting our own
+    // GTi-XXXX back unchanged is not a choice to name the screen, so it must not pin it (that
+    // would quietly take the screen out of the gotekomega.local election).
+    if (v.length() && (g_mdns_named || v != pfDefaultHost())) { g_mdns_name = v; g_mdns_named = true; saveConfigKey("MDNS_NAME", v); g_pfMdnsDirty = true; }
   }
 #endif
   static const char *passThrough[] = {
