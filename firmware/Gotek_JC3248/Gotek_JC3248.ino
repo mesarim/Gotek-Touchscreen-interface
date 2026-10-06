@@ -49,7 +49,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-neo2f-JC3248"  // A600-neo2-JC3248 (Dimmy, 6 Oct): NEO keys - one see-through button/panel look on every screen (list rows, cover panel, settings, bottom bars, carousel, text reader); INSERT amber, EJECT muted red, on/off as an edge + dot; the reader keeps the web page answering | A600-neo1-JC3248 (Dimmy, 6 Oct): NEO preview on branch neo-style - NEO theme + switch, background picture, NEO web pages | A600-lab1-JC3248 (Mez, 5 Oct): LANGUAGE and THEME open a pick page in Settings - every choice as its own button (languages in their own name, themes in their own colour), tap one and you are back where you were; the current one is marked > < | was A600 (4 Oct 2026, pre-Kickstart release) = 5.9.41-lab15q-JC3248, renamed only (no code change) | lab15q: Polish screen text corrected by 8-Bitz (ROLKA, TERAZ GRA, WSZYSTKIE, ULUBIONE...); the reel bar's ALL/FAV/MOST word shrinks when it is too long for its button | lab15p: ESP-NOW mode - the GTi's own Wi-Fi is now GTi_Omega-XXXX, password gotekXXXX (was an OPEN, unnamed ESP_xxxxxx), and serves the GTi web page at 192.168.4.1; Settings shows the name + password | lab15o: Polish (LANG=PL) and Czech (LANG=CS) on the screen + NL/PL/CS in the web page's language list; the STANDALONE banner centres on the translated word | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j: tap the game text in the list (title + description) = the whole .nfo full-screen in the manual reader (scroll, SIZE, TOP, CLOSE) | lab15i: each dongle keeps its OWN save file (Game.sav.XXXX.adf, XXXX = last 4 hex of the dongle MAC) - two Amigas on the same game (cable + dongle, or two dongles) never mix their saves | lab15h: FIX the lab15e/f/g freeze on disk insert (the Gotek's read took the SD lock twice - SD_MMC.readRAW already goes through the locked driver); includes lab15b-g
+#define FW_VERSION "A600-neo2g-JC3248"  // A600-neo2-JC3248 (Dimmy, 6 Oct): NEO keys - one see-through button/panel look on every screen (list rows, cover panel, settings, bottom bars, carousel, text reader); INSERT amber, EJECT muted red, on/off as an edge + dot; the reader keeps the web page answering | A600-neo1-JC3248 (Dimmy, 6 Oct): NEO preview on branch neo-style - NEO theme + switch, background picture, NEO web pages | A600-lab1-JC3248 (Mez, 5 Oct): LANGUAGE and THEME open a pick page in Settings - every choice as its own button (languages in their own name, themes in their own colour), tap one and you are back where you were; the current one is marked > < | was A600 (4 Oct 2026, pre-Kickstart release) = 5.9.41-lab15q-JC3248, renamed only (no code change) | lab15q: Polish screen text corrected by 8-Bitz (ROLKA, TERAZ GRA, WSZYSTKIE, ULUBIONE...); the reel bar's ALL/FAV/MOST word shrinks when it is too long for its button | lab15p: ESP-NOW mode - the GTi's own Wi-Fi is now GTi_Omega-XXXX, password gotekXXXX (was an OPEN, unnamed ESP_xxxxxx), and serves the GTi web page at 192.168.4.1; Settings shows the name + password | lab15o: Polish (LANG=PL) and Czech (LANG=CS) on the screen + NL/PL/CS in the web page's language list; the STANDALONE banner centres on the translated word | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j: tap the game text in the list (title + description) = the whole .nfo full-screen in the manual reader (scroll, SIZE, TOP, CLOSE) | lab15i: each dongle keeps its OWN save file (Game.sav.XXXX.adf, XXXX = last 4 hex of the dongle MAC) - two Amigas on the same game (cable + dongle, or two dongles) never mix their saves | lab15h: FIX the lab15e/f/g freeze on disk insert (the Gotek's read took the SD lock twice - SD_MMC.readRAW already goes through the locked driver); includes lab15b-g
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -229,6 +229,7 @@ static bool     g_neo=false;          // the NEO look is active (set by applyThe
 static bool     g_neo_on=true;        // CONFIG.TXT NEO=ON/OFF (default ON). OFF = the colour THEME
 static int      g_neo_depth=0;        // >0 while a NEO screen is drawing (NeoScope)
 static uint16_t g_txt_key=0;          // = COL_BG, set by applyTheme
+static uint32_t g_ui_gen=0;           // A600-neo2g: +1 per main-screen draw - a modal loop that serves the web sees it was drawn over
 static void gLog(const char*fmt,...);   // A600-neo1-JC3248: declared here (the NEO helpers log); defined further down
 
 static void gfx_fillScreen(uint16_t c){uint16_t s=swap16(c);for(int i=0;i<LCD_WIDTH*LCD_HEIGHT;i++)framebuffer[i]=s;}
@@ -2483,10 +2484,11 @@ static void neoBuildBg(){
   g_neo_bg_rot=g_rot;
   g_clip_x0=cx0;g_clip_y0=cy0;g_clip_x1=cx1;g_clip_y1=cy1;
 }
+static bool g_neo_bg_fail=false, g_neo_tint_fail=false;   // A600-neo2g: a failed allocation is tried once (no retry + SD log per draw)
 static void neoBgEnsure(){                              // called at the start of every NEO full-screen draw
-  if(!g_neo)return;
+  if(!g_neo||g_neo_bg_fail)return;
   if(!g_neo_bg){ g_neo_bg=(uint16_t*)ps_malloc((size_t)LCD_WIDTH*LCD_HEIGHT*2); g_neo_bg_rot=-1;
-    if(!g_neo_bg){ gLog("[neo] no PSRAM for the background - NEO falls back to a flat colour\n"); return; } }
+    if(!g_neo_bg){ g_neo_bg_fail=true; gLog("[neo] no PSRAM for the background - NEO falls back to a flat colour\n"); return; } }
   if(g_neo_bg_rot!=g_rot) neoBuildBg();
 }
 static void gfx_fillBg(int x,int y,int w,int h){        // like gfx_fillRect, but copies the background picture
@@ -2516,12 +2518,21 @@ static void clearBack(){ neoBgEnsure(); if(neoBgOk())memcpy(framebuffer,g_neo_bg
 #define NEO_RED_INK 0xFC92              // light red label
 static uint16_t* g_neo_tint=NULL; static int g_neo_tint_rot=-1;
 static void neoTintEnsure(){
-  if(!neoBgOk())return;
+  if(!neoBgOk()||g_neo_tint_fail)return;
   if(!g_neo_tint){ g_neo_tint=(uint16_t*)ps_malloc((size_t)LCD_WIDTH*LCD_HEIGHT*2); g_neo_tint_rot=-1;
-    if(!g_neo_tint){ gLog("[neo] no PSRAM for the key tint - keys fall back to a flat colour\n"); return; } }
+    if(!g_neo_tint){ g_neo_tint_fail=true; gLog("[neo] no PSRAM for the key tint - keys fall back to a flat colour\n"); return; } }
   if(g_neo_tint_rot==g_rot)return;
   for(size_t i=0;i<(size_t)LCD_WIDTH*LCD_HEIGHT;i++) g_neo_tint[i]=swap16(mix565(COL_PANEL,swap16(g_neo_bg[i]),NEO_TINT_W));
   g_neo_tint_rot=g_rot;
+}
+// A600-neo2g: allocate (not draw) both NEO pictures up front when NEO is on - called before the boot memory
+// budget (carMicroInit) is taken, so the 600 KB is not taken out of the runtime reserve later.
+static void neoReserve(){
+  if(!g_neo_on)return;
+  if(!g_neo_bg&&!g_neo_bg_fail){ g_neo_bg=(uint16_t*)ps_malloc((size_t)LCD_WIDTH*LCD_HEIGHT*2); g_neo_bg_rot=-1;
+    if(!g_neo_bg){ g_neo_bg_fail=true; gLog("[neo] no PSRAM for the background - NEO falls back to a flat colour\n"); } }
+  if(g_neo_bg&&!g_neo_tint&&!g_neo_tint_fail){ g_neo_tint=(uint16_t*)ps_malloc((size_t)LCD_WIDTH*LCD_HEIGHT*2); g_neo_tint_rot=-1;
+    if(!g_neo_tint){ g_neo_tint_fail=true; gLog("[neo] no PSRAM for the key tint - keys fall back to a flat colour\n"); } }
 }
 static void gfx_copyRect(const uint16_t* src,int x,int y,int w,int h){   // gfx_fillBg for any source picture
   int vx0=max(g_clip_x0,x),vy0=max(g_clip_y0,y),vx1=min(g_clip_x1,x+w),vy1=min(g_clip_y1,y+h);
@@ -3556,6 +3567,18 @@ static void drawCracktro(int style){
 // DRAW FUNCTIONS
 // ════════════════════════════════════════════════════════════════════════════
 // Greedy word-wrap: draws s at the current text size, up to maxLines lines, never below bottomY. Returns the new y.
+// A600-neo2g: .nfo text for drawWrapped. Line breaks stay only before/after a "Field: value" line (Developer:,
+// Year:, Publisher:); a description hard-wrapped at ~70 columns flows again. flat=true joins every line (reel).
+static bool nfoFieldLine(const String&l){ int c=l.indexOf(':'); return c>0&&c<16&&l.substring(0,c).indexOf('.')<0; }
+static String nfoFlow(const String&b,bool flat){
+  if(b.indexOf('\n')<0)return b;
+  String out=""; int pos=0; String prev=""; bool first=true;
+  while(pos<=(int)b.length()){ int nl=b.indexOf('\n',pos); if(nl<0)nl=b.length(); String l=b.substring(pos,nl); l.trim(); pos=nl+1;
+    if(!l.length())continue;
+    if(!first) out+=(!flat&&(nfoFieldLine(prev)||nfoFieldLine(l)))?"\n":" ";
+    out+=l; prev=l; first=false; }
+  return out;
+}
 static int drawWrapped(int x,int y,const String&s,int maxW,int lineH,int maxLines,int bottomY,uint16_t fg,uint16_t bg){
   gfx_setTextColor(fg,bg);String line="",word="";int gh=8*text_size,n=0;
   for(int i=0;i<=(int)s.length();i++){char c=i<(int)s.length()?s[i]:' ';
@@ -3733,13 +3756,13 @@ static void drawCoverPanel(){
     else cb=INS_Y-2;
     int ty=COVER_ART_Y+COVER_ART_H+4;gfx_setTextSize(1);
     ty=drawWrapped(4,ty,game.name,COVER_W-8,10,2,cb,COL_LIT,PB);
-    if(cachedNfoBlurb.length()>0){int te=drawWrapped(4,ty,cachedNfoBlurb,COVER_W-8,9,12,cb,COL_DIM,PB);
+    if(cachedNfoBlurb.length()>0){int te=drawWrapped(4,ty,nfoFlow(cachedNfoBlurb,false),COVER_W-8,9,12,cb,COL_DIM,PB);
       g_nfo_bx=COVER_X;g_nfo_by=COVER_ART_Y+COVER_ART_H+2;g_nfo_bw=COVER_W;g_nfo_bh=max(min(te+2,cb),g_nfo_by+20)-g_nfo_by;}   // lab15j: title + description = tap target
     if(game.disk_count>1)drawDiskGrid(game.disk_count);
   }else{
     int rx=COVER_ART_X+COVER_ART_W+8,rw=VW-rx-6;int ty=COVER_ART_Y;gfx_setTextSize(1);
     ty=drawWrapped(rx,ty,game.name,rw,10,3,COVER_ART_Y+COVER_ART_H,COL_LIT,PB);
-    if(cachedNfoBlurb.length()>0){drawWrapped(rx,ty+3,cachedNfoBlurb,rw,9,6,COVER_ART_Y+COVER_ART_H+2,COL_DIM,PB);
+    if(cachedNfoBlurb.length()>0){drawWrapped(rx,ty+3,nfoFlow(cachedNfoBlurb,false),rw,9,6,COVER_ART_Y+COVER_ART_H+2,COL_DIM,PB);
       g_nfo_bx=rx-4;g_nfo_by=COVER_ART_Y;g_nfo_bw=VW-g_nfo_bx;g_nfo_bh=COVER_ART_H+2;}   // lab15j: text beside the cover = tap target
     if(game.disk_count>1)drawDiskStepper(8,COVER_Y+COVER_H-70,VW-16,26,game.disk_count);   // full-width disk row above INSERT
     else{gfx_setTextSize(1);gfx_setTextColor(cachedHD?COL_ORANGE:COL_DIM,PB);gfx_setCursor(12,COVER_Y+COVER_H-58);gfx_print(cachedHD?"HD 1.76MB - needs A3000/A4000":g_mode==MODE_ADF?"Single disk  -  ADF 880KB":g_mode==MODE_DSK?"Single disk  -  DSK":"Single disk");}
@@ -3880,7 +3903,7 @@ static void drawInfoPanel(){
       bool on=(kc==COL_GREEN), off=(kc==COL_BAR), bad=(kc==(uint16_t)0x8000||kc==(uint16_t)0xE8C4);
       uint16_t edge=on?COL_GREEN:bad?(uint16_t)NEO_RED:off?mix565(COL_SEP,COL_PANEL,140):COL_SEP;
       neoKey(bx,by,colW,bh,10,edge); kfill=COL_BG; kink=on?COL_LIT:bad?(uint16_t)NEO_RED_INK:off?COL_DIM:COL_LIT;
-      if((on||off)&&g_ii[i2].act!=IA_NONE){ dot=true; dotOn=on; dotc=on?COL_GREEN:COL_DIM; }
+      if((on||off)&&g_ii[i2].act!=IA_NONE&&g_ii[i2].act!=IA_MODE&&g_ii[i2].act!=IA_DONGLE&&g_ii[i2].act<IA_PICKBACK){ dot=true; dotOn=on; dotc=on?COL_GREEN:COL_DIM; }   // neo2g: no dot on MODE / dongle / pick rows
     } else if(g_btn_pill){
       kfill=kc; kink=inkFor(kc);                 // inkFor (not the row's fg) so every theme stays readable
       gfx_fillRoundRect(bx,by,colW,bh,bh/2,kfill);
@@ -4432,6 +4455,7 @@ static void carRuntimeRelease(){
   for(int s=0;s<CAR_SLOTS;s++){ if(car_buf[s]){ free(car_buf[s]); car_buf[s]=NULL; } car_game[s]=0; car_stamp[s]=0; car_ok[s]=0; }
 }
 static void carMicroInit(){
+  neoReserve();   // A600-neo2g: NEO's 2 x 300 KB come out of PSRAM first, so the runtime reserve below stays whole
   carMicroFree();
   int n=(int)g_games.size(); if(!n)return;
   int dim=(n<=1000)?32:(n<=1800)?24:16;
@@ -4643,6 +4667,7 @@ static void drawCarousel(){
     g_rp_frames=g_rp_draw=g_rp_clear=g_rp_blit=g_rp_sav=g_rp_flush=0; g_rp_t0=millis();
   }
   if(!g_rp_t0)g_rp_t0=millis();
+  neoBgEnsure();   // A600-neo2g: a first build overwrites the whole framebuffer - do it before the status bar
   drawStatusBar();
   {uint32_t _c0=micros(); neoBgEnsure(); fillBack(0,STATUS_H,VW,VH-STATUS_H-BOTTOM_H); g_rp_clear+=micros()-_c0;}
   int n=carN();
@@ -4762,7 +4787,7 @@ static void drawCarousel(){
         gfx_setCursor(bx+(dbw-gfx_textWidth(dl))/2,dy+(dh-8)/2);gfx_print(dl);
       }
     } else if(carBlurb.length()){gfx_setTextSize(1);
-      drawWrapped(70,210,carBlurb,VW-140,10,2,232,COL_MID,COL_BG);}
+      drawWrapped(70,210,nfoFlow(carBlurb,true),VW-140,10,2,232,COL_MID,COL_BG);}
     // reel position "i/n" top-right of the stage
     gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
     String pn=String(carWrap(ci)+1)+"/"+String(n);
@@ -5033,8 +5058,8 @@ static void carTick(bool touch,uint16_t px,uint16_t py,uint32_t now){
   }
 }
 
-static void drawFullUI(){NeoScope _ns;clearBack();drawStatusBar();drawCoverPanel();drawActionStrip();drawModeBar();drawFileList();drawNowPlayingBar();drawAZBar();drawBottomBar();}
-static void drawListAndCover(){drawCoverPanel();drawActionStrip();drawFileList();drawNowPlayingBar();drawAZBar();}
+static void drawFullUI(){g_ui_gen++;NeoScope _ns;clearBack();drawStatusBar();drawCoverPanel();drawActionStrip();drawModeBar();drawFileList();drawNowPlayingBar();drawAZBar();drawBottomBar();}
+static void drawListAndCover(){g_ui_gen++;drawCoverPanel();drawActionStrip();drawFileList();drawNowPlayingBar();drawAZBar();}
 
 // ════════════════════════════════════════════════════════════════════════════
 // LOAD / UNLOAD
@@ -5470,9 +5495,11 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
 #define GTI_NEO_BENCH 1
 static void drawInfoBottomBar();
 static String neoBenchJson(){
+  if(!g_devmode) return String("{\"error\":\"DEVMODE is off\"}");   // A600-neo2g: a LAN client should not flash the screen
+  if(!g_neo_on) return String("{\"error\":\"turn NEO on first\"}");   // neo2g: the bench must not allocate NEO's 600 KB late
   if(g_car_active) return String("{\"error\":\"leave the reel first\"}");
   if(g_games.empty()) return String("{\"error\":\"no games in the list\"}");
-  const bool was=g_neo_on; const float sp=g_scrollPx; const bool info=g_info_showing;
+  const bool was=g_neo_on; const float sp=g_scrollPx; const bool info=g_info_showing; const int pg=g_info_page;
   uint32_t full[2],scr[2],sett[2],flush=0,build=0;
   for(int k=0;k<2;k++){ const bool neo=(k==0);
     g_neo_on=neo; applyTheme(g_theme_idx); g_info_showing=false;
@@ -5485,7 +5512,7 @@ static String neoBenchJson(){
     if(neo){ t=micros(); gfx_flush(); flush=micros()-t;
       g_neo_bg_rot=-1; g_neo_tint_rot=-1; t=micros(); neoBgEnsure(); neoTintEnsure(); build=micros()-t; }   // first build after boot / rotation
   }
-  g_neo_on=was; applyTheme(g_theme_idx); g_scrollPx=sp; g_info_showing=info;
+  g_neo_on=was; applyTheme(g_theme_idx); g_scrollPx=sp; g_info_showing=info; g_info_page=pg;
   if(info) drawInfoFull(); else { drawFullUI(); gfx_flush(); }
   char j[320]; snprintf(j,sizeof j,
     "{\"unit\":\"us\",\"neo\":{\"full\":%lu,\"scroll_frame\":%lu,\"settings\":%lu},\"flat\":{\"full\":%lu,\"scroll_frame\":%lu,\"settings\":%lu},\"flush\":%lu,\"neo_first_build\":%lu,\"games\":%u}",
@@ -6432,7 +6459,7 @@ static void doManual(const String& path,const char* title=nullptr){   // lab15j:
   while(true){
     int nbtn = secName.size()? 4 : 3;   // v2 buttons: SIZE, TOP, [SECTIONS], CLOSE
     int bw = VW/nbtn;
-    webPanelService();   // A600-neo2: keep the web page (and /api/screenshot) answering while the reader is open
+    { uint32_t g0=g_ui_gen; webPanelService(); if(g_ui_gen!=g0)dirty=true; }   // A600-neo2: keep the web page (and /api/screenshot) answering; neo2g: redraw if a web load/eject drew the list over the reader
     if(dirty||vel!=0){ dirty=false;
       NeoScope _ns;   // A600-neo2: NEO background, keys at the bottom
       clearBack();
@@ -6454,7 +6481,8 @@ static void doManual(const String& path,const char* title=nullptr){   // lab15j:
         if(g_neo){ bool red=(bg==(uint16_t)0x8000); neoKey(x+3,by+4,bw-6,botH-8,8,red?(uint16_t)NEO_RED:brd==COL_AMBER?COL_AMBER:COL_SEP); bg=COL_BG; if(red)ink=NEO_RED_INK; else ink=COL_LIT; }
         else { gfx_fillRoundRect(x+3,by+4,bw-6,botH-8,6,bg); gfx_drawRoundRect(x+3,by+4,bw-6,botH-8,6,brd); }
         gfx_setTextSize(1); gfx_setTextColor(ink,bg); gfx_setCursor(x+(bw-gfx_textWidth(lab))/2,by+(botH-8)/2); gfx_print(lab); };
-      btn(0,String(T(L_CFG_FONT))+": "+fontName(g_font),COL_BAR,COL_ACCENT,COL_LIT);
+      { String sl=String(T(L_CFG_FONT))+": "+fontName(g_font); gfx_setTextSize(1); if(gfx_textWidth(sl)>bw-12)sl=fontName(g_font);   // A600-neo2g: portrait keys are narrow
+      btn(0,sl,COL_BAR,COL_ACCENT,COL_LIT); }
       btn(1,T(L_TOP),COL_BAR,COL_ACCENT,COL_LIT);
       if(secName.size()) btn(2,T(L_SECTIONS),COL_BAR,COL_AMBER,COL_LIT);
       btn(nbtn-1,T(L_CLOSE),0x8000,COL_AMBER,TFT_WHITE);
