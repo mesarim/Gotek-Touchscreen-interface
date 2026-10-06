@@ -649,6 +649,15 @@ static void webPanelRegister() {
   webPanelHttp.on("/api/dav/rowmeta",HTTP_GET,  hDavRowmeta);
   webPanelHttp.on("/api/dav/nfo",    HTTP_GET,  hDavNfo);
   webPanelHttp.on("/api/dav/load",   HTTP_POST, hDavLoad);
+#if defined(GTI_WEB_SCREENSHOT)
+  webPanelHttp.on("/api/screenshot", HTTP_GET, [](){   // BMP of the current screen, streamed from the framebuffer
+    webPanelHttp.setContentLength(shotBmpSize());
+    webPanelHttp.sendHeader("Content-Disposition", "inline; filename=gti-screen.bmp");
+    webPanelHttp.sendHeader("Cache-Control", "no-store");
+    webPanelHttp.send(200, "image/bmp", "");
+    shotWriteBmp([](const uint8_t*b,size_t n){ webPanelHttp.sendContent((const char*)b, n); });
+  });
+#endif
 #if defined(GTI_WEB_SD_FILES)
   webPanelHttp.on("/api/sd/list",    HTTP_GET,  hSdList);
   webPanelHttp.on("/api/sd/get",     HTTP_GET,  hSdGet);

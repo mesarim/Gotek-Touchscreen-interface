@@ -242,6 +242,51 @@ static void gfx_fillRect(int x,int y,int w,int h,uint16_t color){
 }
 
 static void gfx_drawRect(int x,int y,int w,int h,uint16_t c){gfx_fillRect(x,y,w,1,c);gfx_fillRect(x,y+h-1,w,1,c);gfx_fillRect(x,y,1,h,c);gfx_fillRect(x+w-1,y,1,h,c);}
+
+// ── Screenshots (Dimmy, 6 Oct): BMP of the current view, streamed row by row from the framebuffer ──
+// GET /api/screenshot (web) returns it; a 2 s press on the status bar saves it to /SCREENSHOTS/SHOT_nnn.BMP.
+#include <functional>
+static inline uint16_t fb_getPixel(int vx,int vy){   // inverse of fb_setPixel: view -> panel layout
+  int px,py;
+  switch(g_rot){
+    case 1: px=vx; py=vy; break;
+    case 2: px=(LCD_WIDTH-1)-vy; py=vx; break;
+    case 3: px=(LCD_WIDTH-1)-vx; py=(LCD_HEIGHT-1)-vy; break;
+    default: px=vy; py=(LCD_HEIGHT-1)-vx; break;
+  }
+  if(!framebuffer||px<0||px>=LCD_WIDTH||py<0||py>=LCD_HEIGHT) return 0;
+  return swap16(framebuffer[py*LCD_WIDTH+px]);
+}
+static size_t shotBmpSize(){ return 54+(size_t)((gW*3+3)&~3)*gH; }
+// 24-bit bottom-up BMP of gW x gH. out() gets the header, then one padded row at a time.
+static void shotWriteBmp(const std::function<void(const uint8_t*,size_t)>&out){
+  const int w=gW,h=gH; const uint32_t row=(uint32_t)((w*3+3)&~3), img=row*h, file=54+img;
+  uint8_t hd[54]={'B','M'};
+  auto le32=[&](int o,uint32_t v){ hd[o]=v; hd[o+1]=v>>8; hd[o+2]=v>>16; hd[o+3]=v>>24; };
+  le32(2,file); le32(10,54); le32(14,40); le32(18,(uint32_t)w); le32(22,(uint32_t)h);
+  hd[26]=1; hd[28]=24; le32(34,img); le32(38,2835); le32(42,2835);
+  out(hd,54);
+  static uint8_t line[480*3+4];
+  for(int y=h-1;y>=0;y--){
+    memset(line,0,row);
+    for(int x=0;x<w;x++){ uint16_t c=fb_getPixel(x,y);
+      uint8_t r=(c>>11)&31,g=(c>>5)&63,b=c&31;
+      line[x*3]=(b<<3)|(b>>2); line[x*3+1]=(g<<2)|(g>>4); line[x*3+2]=(r<<3)|(r>>2); }
+    out(line,row);
+  }
+}
+// Saves to the next free /SCREENSHOTS/SHOT_nnn.BMP. Returns the path, or "" on failure.
+static String shotSaveSD(){
+  if(!SD_MMC.exists("/SCREENSHOTS")) SD_MMC.mkdir("/SCREENSHOTS");
+  char path[40]; int n=1;
+  for(;n<1000;n++){ snprintf(path,sizeof path,"/SCREENSHOTS/SHOT_%03d.BMP",n); if(!SD_MMC.exists(path)) break; }
+  if(n>=1000) return String("");
+  File f=SD_MMC.open(path,FILE_WRITE); if(!f) return String("");
+  bool ok=true; shotWriteBmp([&](const uint8_t*b,size_t len){ if(ok&&f.write(b,len)!=len) ok=false; });
+  f.close();
+  if(!ok){ SD_MMC.remove(path); return String(""); }
+  return String(path);
+}
 static void gfx_hline(int x,int y,int w,uint16_t c){gfx_fillRect(x,y,w,1,c);}
 static void gfx_vline(int x,int y,int h,uint16_t c){gfx_fillRect(x,y,1,h,c);}
 static void gfx_fillCircle(int cx,int cy,int r,uint16_t c){for(int y=-r;y<=r;y++){int w=(int)sqrtf(r*r-y*y);gfx_fillRect(cx-w,cy+y,2*w+1,1,c);}}
@@ -2164,6 +2209,7 @@ static char  g_active_letter='A';          // letter the index highlights / page
 static int g_marquee_off=0,g_marquee_sel=-1,g_marquee_dir=1;static uint32_t g_marquee_pause=0;   // bounce scroll of the selected over-long name
 // touch/drag/inertia
 static bool  g_touch_active=false,g_touch_moved=false,g_touch_inlist=false,g_inertia_on=false;
+static uint32_t g_touch_down_ms=0; static bool g_shot_fired=false;   // screenshot hold on the status bar
 static int   g_touch_x0=0,g_touch_y0=0,g_touch_lastY=0,g_touch_release=0; static float g_touch_px0=0,g_touch_vel=0,g_inertia_vel=0;
 static uint32_t g_touch_lastMs=0;
 #define DRAG_THRESH 12          // px of finger travel before a press becomes a scroll (tolerates a firm press)
@@ -5257,6 +5303,7 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
 // Merge step 2: the shared web interface + OTA, served over HOME_SSID when
 // WEBUI=ON. Placed here because it calls doLoadWebdav and the disk builders.
 #define GTI_WEB_SD_FILES 1   // 5.9.9: WiFi SD file-access endpoints (JC3.5 only for now)
+#define GTI_WEB_SCREENSHOT 1 // GET /api/screenshot = BMP of the current screen (shotWriteBmp)
 #include "../shared/web_panel.h"
 
 static void doUnload(){
@@ -7414,7 +7461,14 @@ void loop(){
       g_touch_active=true;g_touch_x0=px;g_touch_y0=py;g_touch_px0=g_scrollPx;
       g_touch_lastY=py;g_touch_lastMs=now;g_touch_moved=false;g_touch_vel=0;g_inertia_on=false;
       g_touch_inlist=(px>=LIST_X&&px<AZ_X&&py>=LIST_TOP&&py<LIST_BOTTOM&&!g_info_showing&&!g_games.empty());
+      g_touch_down_ms=now; g_shot_fired=false;
     } else {
+      // screenshot: hold the status bar for 2 s (no drag) -> /SCREENSHOTS/SHOT_nnn.BMP, a green frame confirms
+      if(!g_shot_fired&&!g_touch_moved&&g_touch_y0<STATUS_H&&now-g_touch_down_ms>=2000){
+        g_shot_fired=true; String sp=shotSaveSD(); gLog("[shot] %s\n", sp.length()?sp.c_str():"FAILED");
+        uint16_t fc=sp.length()?COL_GREEN:(uint16_t)0xF800; for(int k=0;k<4;k++)gfx_drawRect(k,k,VW-2*k,VH-2*k,fc); gfx_flush(); delay(250);
+        if(g_info_showing)drawInfoFull(); else {drawFullUI();gfx_flush();}
+      }
       // finger held / moving
       if(abs((int)px-g_touch_x0)>DRAG_THRESH||abs((int)py-g_touch_y0)>DRAG_THRESH)g_touch_moved=true;
       if(g_touch_inlist&&g_touch_moved){
@@ -7432,7 +7486,7 @@ void loop(){
     if(++g_touch_release<RELEASE_FRAMES) return;        // still-pressed as far as we're concerned
     g_touch_active=false;g_touch_release=0;
     if(g_touch_moved&&g_touch_inlist){ g_inertia_vel=-g_touch_vel*16.0f; g_inertia_on=fabsf(g_inertia_vel)>0.5f; }  // list drag -> coast
-    else { handleTap((uint16_t)g_touch_x0,(uint16_t)g_touch_y0); }  // anything else (incl. a firm/jittery button press) -> tap
+    else if(!g_shot_fired){ handleTap((uint16_t)g_touch_x0,(uint16_t)g_touch_y0); }  // anything else (not the screenshot hold) (incl. a firm/jittery button press) -> tap
     return;
   }
 
