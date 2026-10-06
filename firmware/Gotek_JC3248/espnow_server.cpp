@@ -633,9 +633,33 @@ static bool sendDiskCore(const uint8_t* mac, const char* ipc, uint32_t size, uin
   return ok;
 }
 
-// Home-WiFi transport: join the home router (STA/DHCP), resolve the dongle via mDNS
-// "gotek.local" (or use the cached ioIp), push the disk over TCP-3333, then restore
-// ESP-NOW/AP_STA exactly like sendDiskCore. ioIp receives the resolved IP to persist.
+// pf4c (#77): is ip our dongle? Since pf3/pf4 every screen answers gotekomega.local too and a dongle that
+// hears a screen steps aside to gotekomega-<mac>, so a name lookup alone can find a screen (or ourselves).
+// A Webby dongle answers GET /status with "fw":"Webby-..."; a screen answers 404. When we are paired and
+// the dongle still wears its mac-based name, that name must be OUR dongle's (a custom name cannot be checked).
+static bool homeIsDongle(const String& ip) {
+  if (ip.length() == 0 || ip == WiFi.localIP().toString()) return false;
+  WiFiClient c;
+  if (!c.connect(ip.c_str(), 80, 3000)) return false;   // Wi-Fi dongles can take a few seconds to answer the first request
+  c.print(String("GET /status HTTP/1.0\r\nHost: ") + ip + "\r\nConnection: close\r\n\r\n");
+  String body; uint32_t t0 = millis();
+  while ((c.connected() || c.available()) && millis() - t0 < 4000 && body.length() < 2048) {
+    while (c.available() && body.length() < 2048) body += (char)c.read();
+    delay(5);
+  }
+  c.stop();
+  if (body.indexOf("\"fw\":\"Webby") < 0) { Serial.printf("[HOME] %s is not a dongle - ignored\n", ip.c_str()); return false; }
+  if (g_espnow_paired && body.indexOf("\"devname\":\"gotekomega-") >= 0) {
+    char want[40]; snprintf(want, sizeof(want), "\"devname\":\"gotekomega-%02x%02x\"", _xiao_mac[4], _xiao_mac[5]);
+    if (body.indexOf(want) < 0) { Serial.printf("[HOME] %s is another dongle - ignored\n", ip.c_str()); return false; }
+  }
+  return true;
+}
+
+// Home-WiFi transport: join the home router (STA/DHCP), find OUR dongle, push the disk over TCP-3333, then
+// restore ESP-NOW/AP_STA exactly like sendDiskCore. pf4c (#77): lookup order is the paired dongle's own name
+// gotekomega-<mac>.local, then the cached ioIp, then gotekomega.local - each answer verified by homeIsDongle().
+// ioIp is only updated after a successful send to a verified dongle, so a wrong IP is never persisted.
 bool espnowSendDiskHome(const String& ssid, const String& pass, String& ioIp, uint32_t size) {
   if (ssid.length() == 0) { g_espnow_xiao_error = true; return false; }
   Serial.printf("[HOME] Joining '%s' to reach the dongle\n", ssid.c_str());
@@ -651,12 +675,19 @@ bool espnowSendDiskHome(const String& ssid, const String& pass, String& ioIp, ui
   bool ok = false;
   if (WiFi.status() == WL_CONNECTED) {
     Serial.printf("[HOME] Joined. IP %s\n", WiFi.localIP().toString().c_str());
-    String ip = ioIp;                                  // cached IP is the fallback
-    if (MDNS.begin("gti-remote")) {
-      IPAddress r = MDNS.queryHost("gotekomega", 2500);     // Webby advertises gotekomega.local in WiFi mode
-      if ((uint32_t)r != 0) { ip = r.toString(); ioIp = ip; Serial.printf("[HOME] gotek.local -> %s\n", ip.c_str()); }
-      MDNS.end();
+    String ip = "";                                    // pf4c (#77): only a verified dongle, never a screen
+    const bool md = MDNS.begin("gti-remote");
+    if (md && g_espnow_paired) {                       // 1. our paired dongle by its own name (it steps aside to this when a screen leads)
+      char h[24]; snprintf(h, sizeof(h), "gotekomega-%02x%02x", _xiao_mac[4], _xiao_mac[5]);
+      IPAddress r = MDNS.queryHost(h, 2500);
+      if ((uint32_t)r != 0 && homeIsDongle(r.toString())) { ip = r.toString(); Serial.printf("[HOME] %s.local -> %s\n", h, ip.c_str()); }
     }
+    if (ip.length() == 0 && homeIsDongle(ioIp)) { ip = ioIp; Serial.printf("[HOME] cached DONGLE_HOME_IP %s\n", ip.c_str()); }   // 2. the cache
+    if (ip.length() == 0 && md) {                      // 3. the shared name (a lone dongle wears it; a screen may too - verified)
+      IPAddress r = MDNS.queryHost("gotekomega", 2500);
+      if ((uint32_t)r != 0 && homeIsDongle(r.toString())) { ip = r.toString(); Serial.printf("[HOME] gotekomega.local -> %s\n", ip.c_str()); }
+    }
+    if (md) MDNS.end();
     if (ip.length() > 0 && !tcpClaim(ip.c_str())) {   // lab14s: take-over question, same as the ESP-NOW path
       Serial.println("[HOME] not sent - the user kept the other screen's disk");
     } else if (ip.length() > 0) {
@@ -679,8 +710,9 @@ bool espnowSendDiskHome(const String& ssid, const String& pass, String& ioIp, ui
         }
         client.stop();
         Serial.printf("[HOME] sent %lu bytes, ack=%s\n", (unsigned long)sent, ok?"OK":"ERR");
+        if (ok) ioIp = ip;                             // pf4c (#77): persist only after a good send to a verified dongle
       } else Serial.println("[HOME] TCP connect failed");
-    } else Serial.println("[HOME] dongle not found (mDNS gotek.local + no cached IP)");
+    } else Serial.println("[HOME] dongle not found (gotekomega-<mac>, cached IP and gotekomega.local gave no verified dongle)");
   } else Serial.println("[HOME] home WiFi join failed");
 
   // Restore ESP-NOW / AP_STA (same teardown as sendDiskCore)

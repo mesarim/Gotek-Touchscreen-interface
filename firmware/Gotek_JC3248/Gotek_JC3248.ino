@@ -59,9 +59,9 @@
 
 // -fleet so the bench can tell the two apart (both sit on the A600-lab1 base above).
 #if defined(GTI_FLEET)
-#define FW_VERSION "A600-lab1-pf4b-fleet-JC3248"
+#define FW_VERSION "A600-lab1-pf4c-fleet-JC3248"   // pf4c: #77 home-WiFi send finds OUR dongle (verified), persists DONGLE_HOME_IP only after a good send
 #else
-#define FW_VERSION "A600-lab1-pf4b-JC3248"
+#define FW_VERSION "A600-lab1-pf4c-JC3248"
 #endif
 #define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
 #define PF_MDNS_ALIAS "gotekomega"     // pf4: the shared name one screen ALSO answers to, next to its own GTi-XXXX.
@@ -5324,7 +5324,7 @@ static bool doLoadSelected(const String&adfPath){
       if(espnowSendDiskHome(g_home_ssid,g_home_pass,g_dongle_home_ip,copied)){
         g_sv_wl_path=loadPath;g_sv_wl_loadid=g_espnow_load_id;g_sv_wl_orig=adfPath;g_sv_wl_tag=wlTag;   // lab15i
       } else if(espnowClaimCancelled()) svToast("NOT SENT - dongle kept for the other screen");   // lab14s
-      if(g_dongle_home_ip!=prevIp&&g_dongle_home_ip.length())saveConfigKey("DONGLE_HOME_IP",g_dongle_home_ip);  // persist the resolved IP for next time
+      if(g_dongle_home_ip!=prevIp&&g_dongle_home_ip.length())saveConfigKey("DONGLE_HOME_IP",g_dongle_home_ip);  // persist the verified IP for next time (pf4c: only changes after a good send)
     } else if(espnowIsPaired()){                            // single paired dongle — unchanged
       espnowSendNotify(g_loaded_name,g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN",copied);
       if(espnowSendDisk(copied)){                           // v4.8.0: remember what we flung, keyed by the dongle's load_id
