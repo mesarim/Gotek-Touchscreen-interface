@@ -1,13 +1,13 @@
 # NEO everywhere: one calm look for GTi's web pages and screens
 
-Date: 6 Oct 2026. Author: Dimitri (with Claude). Status: draft for review by Dimitri, then Mez.
+Date: 6 Oct 2026. Author: Dimmy (with Claude). Status: draft for review by Dimmy, then Mez.
 
 ## Why
 
 GTi's web surfaces were each built on their own and none of them match: the panel's landing page
 (`/`), the shared web app (`/panel`), the SD file manager (`/files`) and the dongle's own page
 (`/classic`) each carry a different dark palette. Mez added the NEO look to the P4 screens
-(commits `959cd71`, `ec74c55`) and both Mez and Dimitri like it: calm, navy to purple, amber for
+(commits `959cd71`, `ec74c55`) and both Mez and Dimmy like it: calm, navy to purple, amber for
 what is selected, cyan for INSERT. This work makes NEO the one look of GTi, on the web and on the
 screens that do not have it yet.
 
@@ -34,7 +34,7 @@ step 1 in detail; steps 2 and 3 are fixed here only as direction.
 3. **Full NEO on the web:** palette plus the navy to purple gradient and the faint circuit traces,
    done in CSS with no image. System font, not a pixel font. (Option B of the visual comparison.)
 4. **On-screen NEO for JC3248/JC4827: colours and background first, layout later.** The P4's taller
-   bars and list/panel layout are a separate, later step, after Dimitri has seen colours plus
+   bars and list/panel layout are a separate, later step, after Dimmy has seen colours plus
    background on his JC3248. (Option C.)
 5. Step 1 changes looks only. No route moves until step 2.
 
@@ -111,7 +111,7 @@ Both sketches already use the same `Theme` struct and framebuffer drawing as the
 ## Testing
 
 - Compile JC3248, JC4827, Webby SuperMini, Webby S3-Zero and Webby XIAO; record sizes.
-- Flash Dimitri's JC3248 and a SuperMini (allowed per the working agreement); check on a phone:
+- Flash Dimmy's JC3248 and a SuperMini (allowed per the working agreement); check on a phone:
   `/`, `/panel` (Dashboard, Games, Config; no Themes tab), `/files`, the dongle's `/classic`.
 - On the JC3248 screen: NEO on and off from Settings and from CONFIG.TXT; the THEME row hides and
   returns; the gradient redraws after every full-screen refresh; no visible slowdown in list
