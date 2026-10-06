@@ -785,7 +785,7 @@ static void webPanelStop() {
 // lab15p: ESP-NOW mode - serve the same page on the GTi's own Wi-Fi (GTi_Omega-XXXX, 192.168.4.1).
 // The radio is already up (espnowBegin started the access point), so there is nothing to join and
 // no mDNS. Called by the sketch right after ESP-NOW starts.
-static void webPanelBeginAP() {
+__attribute__((unused)) static void webPanelBeginAP() {   // unused on boards whose radio never runs an AP (P4)
   if (!g_web_srv_started) { webPanelRegister(); webPanelHttp.begin(); g_web_srv_started = true; }
   g_web_ap = true; g_web_up = true; g_web_joining = false;
   webLog("[WEB] up on the GTi's own Wi-Fi at http://192.168.4.1/");

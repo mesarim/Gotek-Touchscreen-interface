@@ -54,7 +54,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "5.9.42-lab5-P4G7"   // lab5-P4G7 (kodak80, 4 Oct): MATRIX saver fills the whole width; top-left brand is the OMEGAWARE omega + GTi (was "GOTEK GTi"); SYNTHWAVE cracktro grid symmetric (was 6 lines left, 12 right) and scaled to the screen (columns were capped at 64 = 768 px of the 7"'s 1024; the 4.3" lost 32 px in landscape); gti.log now logs every disk insert / eject ([load] name, KB, mode, USB host yes/no; [eject]) and every USB host connect / disconnect ([usb]) - so "the laptop never saw it" can be read off the log | lab4-P4G7: every dongle join starts with a 0.3 s channel-6 scan (gti.log: joins without one always timed out after 12-15 s, joins straight after a scan took ~3.8 s) - a send or eject is ~15 s quicker | lab3-P4G7: wireless fixed on the P4 - the dongle's real Wi-Fi name (GotekOMEGA-XXXX) is remembered (CONFIG.TXT XIAO_SSID=) or looked up by a quick channel-6 scan before every join, two join tries; EJECT really ejects the dongle (it was a no-op on the P4) after pulling the game saves back; saves are also pulled before the next disk goes to the same dongle; the save pull used the old plain name and could never join a Webby 1.6.8+ dongle | lab2-P4G7: radio diagnosis - the C6 co-processor firmware version goes into gti.log at boot and on Settings > TEST TOOLS; every wireless step ([P4WIFI] scan RSSI, join time, bytes sent, dongle answer) goes into gti.log; the top-bar chip no longer says OFFLINE on the P4 (it cannot hear the dongle heartbeat - ESP-NOW receive is not available on the P4) | P4G7: Guition JC1060P470C 7" 1024x600 bring-up (4.3" P4 5.9.42-lab1 + JD9165 panel, GT911 touch, 4-bit SD; NEO look at 1024x600) | 5.9.42-lab1-P4 (4 Oct 2026) = 5.9.41-lab16f-P4, renamed only (no code change): the NEO look, first P4 lab release on the web flasher | lab16f-P4: PORTRAIT REEL RUNS UP AND DOWN - covers stacked vertically (next one below), swipe up/down, coast + snap as before; round up/down arrows on the right; tap above/below the centre cover steps one; title / DISK pills / dots in a fixed strip above the bottom buttons. Landscape unchanged | lab16e-P4: portrait reel centred - cover + title + disks + dots sit in the middle of the screen (was at the top with empty space under it); landscape unchanged | lab16d-P4: game panel cover is BIG (full panel width, picture centred), favourite = star badge in the cover's top-right corner (tap it), the .rtfm book button is back in its usual place on the cover's left edge (16b had moved it to a MANUAL pill), HD chip bottom-right; title + "n disks - ADF" under the cover, then the description and the DISK pills | lab16c-P4 (Mez's photos of 16b): NEO text at size 2+ is drawn bold (one pixel wider strokes) so dark text on the gold / cyan / green pills reads like the mock-up; reel covers drop the grey letterbox baked into the tile (picture cut out, frame hugs it, same cut on the micro-thumbs while it slides); long names wrap to two lines under the reel cover instead of being cut; in the game panel a long name moves under the cover, full width | lab16b-P4: NEO is the only look for now (THEME, BUTTONS and COMPACT are off the Settings list; CONFIG THEME= is ignored) and the screens follow the mock-ups: list on the LEFT in a rounded panel, A-Z strip, game panel on the RIGHT (cover, title, disks/format, FAV and MANUAL pills, description, DISK pills), bottom bar PREV / NEXT / INSERT / REEL / CONFIG; top bar 40 px with the firmware version under GOTEK GTi, tap the library name to switch library (or open categories); reel arrows; Settings = two columns of capsules + a row of action pills + BACK / PAGE / TEST TOOLS / NEXT; USER DISKS moved into Settings | lab16a-P4: NEW LOOK "NEO" (Settings > THEME > NEO, or THEME=NEO): navy-to-purple background with faint circuit lines; top bar GOTEK GTi + firmware version, library + game count, a CABLE/DONGLE state chip and a gear that opens Settings; reel: gold-framed glowing centre cover, title under it, DISK pills, page dots, bottom bar INSERT / < ALL > / LIST / ROLL; list: gold-framed selection, IN DRIVE tag, cyan INSERT; Settings: capsule rows with the value in a coloured chip, last tap outlined in gold. Other themes look and work as before | lab15q-P4 (from the 3.5" 15o + 15q): Polish (8-Bitz's text) and Czech on the screen (LANG=PL / CS, CZ accepted); the reel bar's ALL/FAV/MOST word shrinks when too long; STANDALONE banner centred on the translated word. (3.5" 15p, the GTi_Omega Wi-Fi, does not apply: the P4's C6 radio never runs an access point) | lab15n (P4 only): bigger disk buttons on the list page (86x34, text size 2; were the 3.5"'s 44x20) + bigger page button | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j (from the 3.5"): tap the game text in the list = the whole .nfo full-screen in the manual reader | P4 port-sync: the 3.5" 5.9.41-lab15i (lab14 walker, SD guard, never-format, compact library, safe saves + SD lock, per-dongle saves, one LIBRARY button, wireless offset 13, take-over check over TCP) + the P4 board layer (ST7701 DSI, GT911, C6 radio + self-update, 800x480 layout) | was 5.9.13-P4
+#define FW_VERSION "5.9.42-lab6-P4G7"   // lab6-P4G7 (Mez, 5 Oct): NEO is a switch again - CONFIG.TXT NEO=ON/OFF and Settings > NEO: ON/OFF (default ON). NEO=OFF brings back the classic layout with the colour THEME (NAVY ... OMEGA; THEME= works again), COMPACT and BUTTONS; the top and bottom bars follow the look (NEO 40/58 px, classic 28/54 px as before 16b); switching is live, no reboot | lab5-P4G7 (kodak80, 4 Oct): MATRIX saver fills the whole width; top-left brand is the OMEGAWARE omega + GTi (was "GOTEK GTi"); SYNTHWAVE cracktro grid symmetric (was 6 lines left, 12 right) and scaled to the screen (columns were capped at 64 = 768 px of the 7"'s 1024; the 4.3" lost 32 px in landscape); gti.log now logs every disk insert / eject ([load] name, KB, mode, USB host yes/no; [eject]) and every USB host connect / disconnect ([usb]) - so "the laptop never saw it" can be read off the log | lab4-P4G7: every dongle join starts with a 0.3 s channel-6 scan (gti.log: joins without one always timed out after 12-15 s, joins straight after a scan took ~3.8 s) - a send or eject is ~15 s quicker | lab3-P4G7: wireless fixed on the P4 - the dongle's real Wi-Fi name (GotekOMEGA-XXXX) is remembered (CONFIG.TXT XIAO_SSID=) or looked up by a quick channel-6 scan before every join, two join tries; EJECT really ejects the dongle (it was a no-op on the P4) after pulling the game saves back; saves are also pulled before the next disk goes to the same dongle; the save pull used the old plain name and could never join a Webby 1.6.8+ dongle | lab2-P4G7: radio diagnosis - the C6 co-processor firmware version goes into gti.log at boot and on Settings > TEST TOOLS; every wireless step ([P4WIFI] scan RSSI, join time, bytes sent, dongle answer) goes into gti.log; the top-bar chip no longer says OFFLINE on the P4 (it cannot hear the dongle heartbeat - ESP-NOW receive is not available on the P4) | P4G7: Guition JC1060P470C 7" 1024x600 bring-up (4.3" P4 5.9.42-lab1 + JD9165 panel, GT911 touch, 4-bit SD; NEO look at 1024x600) | 5.9.42-lab1-P4 (4 Oct 2026) = 5.9.41-lab16f-P4, renamed only (no code change): the NEO look, first P4 lab release on the web flasher | lab16f-P4: PORTRAIT REEL RUNS UP AND DOWN - covers stacked vertically (next one below), swipe up/down, coast + snap as before; round up/down arrows on the right; tap above/below the centre cover steps one; title / DISK pills / dots in a fixed strip above the bottom buttons. Landscape unchanged | lab16e-P4: portrait reel centred - cover + title + disks + dots sit in the middle of the screen (was at the top with empty space under it); landscape unchanged | lab16d-P4: game panel cover is BIG (full panel width, picture centred), favourite = star badge in the cover's top-right corner (tap it), the .rtfm book button is back in its usual place on the cover's left edge (16b had moved it to a MANUAL pill), HD chip bottom-right; title + "n disks - ADF" under the cover, then the description and the DISK pills | lab16c-P4 (Mez's photos of 16b): NEO text at size 2+ is drawn bold (one pixel wider strokes) so dark text on the gold / cyan / green pills reads like the mock-up; reel covers drop the grey letterbox baked into the tile (picture cut out, frame hugs it, same cut on the micro-thumbs while it slides); long names wrap to two lines under the reel cover instead of being cut; in the game panel a long name moves under the cover, full width | lab16b-P4: NEO is the only look for now (THEME, BUTTONS and COMPACT are off the Settings list; CONFIG THEME= is ignored) and the screens follow the mock-ups: list on the LEFT in a rounded panel, A-Z strip, game panel on the RIGHT (cover, title, disks/format, FAV and MANUAL pills, description, DISK pills), bottom bar PREV / NEXT / INSERT / REEL / CONFIG; top bar 40 px with the firmware version under GOTEK GTi, tap the library name to switch library (or open categories); reel arrows; Settings = two columns of capsules + a row of action pills + BACK / PAGE / TEST TOOLS / NEXT; USER DISKS moved into Settings | lab16a-P4: NEW LOOK "NEO" (Settings > THEME > NEO, or THEME=NEO): navy-to-purple background with faint circuit lines; top bar GOTEK GTi + firmware version, library + game count, a CABLE/DONGLE state chip and a gear that opens Settings; reel: gold-framed glowing centre cover, title under it, DISK pills, page dots, bottom bar INSERT / < ALL > / LIST / ROLL; list: gold-framed selection, IN DRIVE tag, cyan INSERT; Settings: capsule rows with the value in a coloured chip, last tap outlined in gold. Other themes look and work as before | lab15q-P4 (from the 3.5" 15o + 15q): Polish (8-Bitz's text) and Czech on the screen (LANG=PL / CS, CZ accepted); the reel bar's ALL/FAV/MOST word shrinks when too long; STANDALONE banner centred on the translated word. (3.5" 15p, the GTi_Omega Wi-Fi, does not apply: the P4's C6 radio never runs an access point) | lab15n (P4 only): bigger disk buttons on the list page (86x34, text size 2; were the 3.5"'s 44x20) + bigger page button | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j (from the 3.5"): tap the game text in the list = the whole .nfo full-screen in the manual reader | P4 port-sync: the 3.5" 5.9.41-lab15i (lab14 walker, SD guard, never-format, compact library, safe saves + SD lock, per-dongle saves, one LIBRARY button, wireless offset 13, take-over check over TCP) + the P4 board layer (ST7701 DSI, GT911, C6 radio + self-update, 800x480 layout) | was 5.9.13-P4
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -234,7 +234,8 @@ static inline void fb_setPixel(int vx,int vy,uint16_t color){
 static uint16_t text_fg=TFT_WHITE,text_bg=TFT_BLACK;
 // lab16a-P4 NEO look: while a NEO screen draws (g_neo_depth>0), text whose background is the theme
 // background (g_txt_key) is drawn WITHOUT its box, so it sits on the background picture.
-static bool     g_neo=false;          // THEME=NEO
+static bool     g_neo=false;          // the NEO look is active (set by applyTheme from g_neo_on)
+static bool     g_neo_on=true;        // lab4-P4: CONFIG.TXT NEO=ON/OFF (default ON). OFF = classic layout + the colour THEME
 static int      g_neo_depth=0;        // >0 while a NEO screen is drawing (NeoScope)
 static uint16_t g_txt_key=0;          // = COL_BG, set by applyTheme
 static int text_size=1,text_x=0,text_y=0;
@@ -559,7 +560,7 @@ static bool Touch_ReadFrame(){
   uint8_t buf[8]; bool ok=gtRd(0x8150,buf,8); gtWr8(0x814E,0);
   if(!ok){gTouchPts=0;return false;}
   int prx=buf[0]|(buf[1]<<8), pry=buf[2]|(buf[3]<<8);   // P4G7: GT911 raw = landscape panel coords (1024x600)
-  if(g_tlog_n<16){ g_tlog[g_tlog_n][0]=(int16_t)prx; g_tlog[g_tlog_n][1]=(int16_t)pry; g_tlog_n++; }   // bring-up: first 16 raw touches, logged from loop()
+  if(g_tlog_n<16){ g_tlog[g_tlog_n][0]=(int16_t)prx; g_tlog[g_tlog_n][1]=(int16_t)pry; g_tlog_n=g_tlog_n+1; }   // bring-up: first 16 raw touches, logged from loop()
   int _cx,_cy; if(!p4disp_touch_to_compose(prx,pry,&_cx,&_cy)){gTouchPts=0;return false;}
   uint16_t rx=(uint16_t)_cx, ry=(uint16_t)_cy;          // -> compose-buffer coords, then the P4's usual rotation mapping
   // Map physical touch -> virtual canvas per g_rot (inverse of fb_setPixel), so touch tracks the
@@ -2439,14 +2440,16 @@ static const int NUM_THEMES=8;static int g_theme_idx=0;   // +OMEGA (Dimmy); def
 static uint16_t COL_BG,COL_PANEL,COL_BAR,COL_SEL,COL_SEP,COL_DIM,COL_MID,COL_LIT;
 static uint16_t COL_GREEN,COL_ORANGE,COL_AMBER,COL_BLUE,COL_NOW,COL_ACCENT,COL_CIRC,COL_CIRC_TEXT;
 
-#define GTI_NEO_ONLY 1   // lab16b-P4: Mez - "just NEO for now". The other themes stay in the table, unused.
+// lab4-P4: NEO is a switch (g_neo_on, CONFIG.TXT NEO=), not one of the colour themes. g_theme_idx is always a
+// colour theme (0..NUM_THEMES-2) - the one NEO=OFF shows - and is kept while NEO is on. THEME=NEO / 7 (16a cards) -> 0.
 static void applyTheme(int idx){
-  if(GTI_NEO_ONLY)idx=NUM_THEMES-1;
-  g_theme_idx=idx%NUM_THEMES;const Theme&t=THEMES[g_theme_idx];
+  const int neoIdx=NUM_THEMES-1;                  // NEO is the last entry of THEMES[]
+  if(idx<0||idx>=neoIdx)idx=0;
+  g_theme_idx=idx;const Theme&t=THEMES[g_neo_on?neoIdx:idx];
   COL_BG=t.bg;COL_PANEL=t.panel;COL_BAR=t.bar;COL_SEL=t.sel;COL_SEP=t.sep;
   COL_DIM=t.dim;COL_MID=t.mid;COL_LIT=t.lit;COL_GREEN=t.green;COL_ORANGE=t.orange;
   COL_AMBER=t.amber;COL_BLUE=t.blue;COL_NOW=t.now;COL_ACCENT=t.accent;COL_CIRC=t.circ;COL_CIRC_TEXT=t.circ_text;
-  g_neo=(strcmp(t.name,"NEO")==0); g_txt_key=COL_BG;   // lab16a-P4
+  g_neo=g_neo_on; g_txt_key=COL_BG;   // lab16a-P4 (lab4-P4: from the NEO switch)
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2712,7 +2715,9 @@ R"CFG(# ============================================================
 #  VISUALS      theme, fonts, layout, on-screen look
 # ============================================================
 
-# Theme: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD 6=OMEGA
+# NEO: the NEO look (gold frames, navy-to-purple background, list left + game panel right). OFF = the classic layout + THEME
+NEO=ON
+# Theme: colours for the classic layout (NEO=OFF): 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD 6=OMEGA
 THEME=0
 
 # Font size: SMALL, NORMAL, LARGE
@@ -2945,7 +2950,8 @@ static void selfHealConfig(){
   if(!SD_MMC.exists("/CONFIG.TXT"))return;   // fresh cards already get the full template
   struct CfgKey{const char*key;const char*block;};
   static const CfgKey KEYS[]={
-    {"THEME",    "\n# Theme: lab16b-P4 uses NEO only (this line is ignored for now)\nTHEME=0\n"},
+    {"NEO",      "\n# NEO: the NEO look (gold frames, navy-to-purple background, list left + game panel right). OFF = the classic layout + THEME\nNEO=ON\n"},
+    {"THEME",    "\n# Theme: colours for the classic layout (NEO=OFF): 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD 6=OMEGA\nTHEME=0\n"},
     {"MODE",     "\n# Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW to dongle)\nMODE=STANDALONE\n"},
     {"CAROUSEL", "\n# CAROUSEL: default boot view. OFF=game list, ON=cover reel, LAST=restore last view.\nCAROUSEL=OFF\n"},
     {"LOOP",     "\n# Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s\nLOOP=0\n"},
@@ -3097,7 +3103,8 @@ static void loadConfig(){
   File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);if(!f)return;
   while(f.available()){String l=f.readStringUntil('\n');l.trim();if(l.startsWith("#"))continue;
     int eq=l.indexOf('=');if(eq<0)continue;String k=l.substring(0,eq),v=l.substring(eq+1);k.trim();v.trim();
-    if(k=="THEME"){int ti=-1;for(int i=0;i<NUM_THEMES;i++)if(v.equalsIgnoreCase(THEMES[i].name)){ti=i;break;}applyTheme(ti>=0?ti:((v.length()&&isDigit(v[0]))?v.toInt():0));}else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");else if(k=="CAROUSEL"){String cv=v;cv.toUpperCase();g_car_bootmode=(cv=="LAST")?2:((cv=="1"||cv=="ON"||cv=="TRUE")?1:0);}
+    if(k=="NEO"){String nv=v;nv.toUpperCase();g_neo_on=!(nv=="OFF"||nv=="0"||nv=="NO");applyTheme(g_theme_idx);}   // lab4-P4
+    else if(k=="THEME"){int ti=-1;for(int i=0;i<NUM_THEMES;i++)if(v.equalsIgnoreCase(THEMES[i].name)){ti=i;break;}applyTheme(ti>=0?ti:((v.length()&&isDigit(v[0]))?v.toInt():0));}else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");else if(k=="CAROUSEL"){String cv=v;cv.toUpperCase();g_car_bootmode=(cv=="LAST")?2:((cv=="1"||cv=="ON"||cv=="TRUE")?1:0);}
     else if(k=="TAPLOAD")g_tapload=(v=="ON"||v=="1");else if(k=="HOTSWAP")g_hotswap=(v=="ON"||v=="1");else if(k=="FORCESWAP")g_forceswap=(v=="ON"||v=="1");
     else if(k=="FONT"){int f=1;if(v=="SMALL")f=0;else if(v=="LARGE")f=2;applyFont(f);}
     else if(k=="LANG"){String lu=v;lu.toUpperCase();if(lu=="CZ")lu="CS";for(int i=0;i<LANG_N;i++)if(lu==LANG_NAMES[i]){g_lang=i;break;}}
@@ -3163,10 +3170,10 @@ static void loadConfig(){
 // ════════════════════════════════════════════════════════════════════════════
 #define VW gW
 #define VH gH
-#define STATUS_H   40   // lab16b-P4: NEO top bar (was 28)
+#define STATUS_H   (g_neo?40:28)   // lab16b-P4: NEO top bar 40 (lab4-P4: classic back to its own 28)
 #define MODE_BAR_H 24
 #define NOW_PLAY_H 30
-#define BOTTOM_H   58   // lab16b-P4: room for 44 px pills (was 54)
+#define BOTTOM_H   (g_neo?58:54)   // lab16b-P4: NEO room for 44 px pills (lab4-P4: classic back to its own 54)
 static int g_az_w=42;
 #define AZ_W       g_az_w   // lab16b-P4: NEO uses a slim 26 px strip
 // Layout is computed by relayout() for the current rotation + compact mode.
@@ -3724,14 +3731,6 @@ static void drawMagnifier(int cx,int cy,uint16_t col){
 // format / FAV / MANUAL to its right, the description under it (tap = the whole .nfo), DISK pills at the bottom.
 static int g_neo_fav_bx=0,g_neo_fav_by=0,g_neo_fav_bw=0,g_neo_fav_bh=0;   // FAV pill (tap = favourite on/off)
 static int g_nd_n=0,g_nd_x=0,g_nd_y=0,g_nd_pb=0,g_nd_h=0,g_nd_first=0,g_nd_more_x=-1;   // DISK pills: shown count, first pill x, pitch, first disk, ">" pill x
-static int neoWrapLines(const String&s,int maxW){   // lines drawWrapped() would need at the current text size
-  String line="",word=""; int n=0;
-  for(int i=0;i<=(int)s.length();i++){ char c=i<(int)s.length()?s[i]:' ';
-    if(c==' '||c=='\n'||i==(int)s.length()){ String cand=line.length()?line+" "+word:word;
-      if(gfx_textWidth(cand)>maxW&&line.length()){ n++; line=word; } else line=cand; word=""; }
-    else { word+=c; if(gfx_textWidth(word)>maxW)return 99; } }   // a word wider than the lane: caller drops a size
-  if(line.length())n++; return n;
-}
 static void neoInfoPanel(int gi,const String&blurb,bool hasSav,bool hd,const String&manual){
   auto&game=g_games[gi];
   const int X=COVER_X,Y=COVER_Y,W=COVER_W,H=COVER_H;
@@ -3905,7 +3904,7 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_USRDSK=40, IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_TESTPAGE, IA_TESTBACK };
+enum { IA_NEOUI=41, IA_USRDSK=40, IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_TESTPAGE, IA_TESTBACK };
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
 static InfoItem g_ii[32]; static int g_ii_n=0;
 struct InfoRect { int x,y,w,h; uint8_t act; };
@@ -3952,7 +3951,8 @@ static void drawInfoPanel(){
     if(g_home_ssid.length()) add(String("WIFI CHECK"), COL_BLUE, TFT_WHITE, IA_WIFICHECK);
   }
   add(String(T(L_CFG_FONT))+": "+fontName(g_font), COL_AMBER, TFT_BLACK, IA_FONT);
-  if(!g_neo)add(String(T(L_THEME))+": "+THEMES[g_theme_idx].name, COL_ACCENT, TFT_WHITE, IA_THEME);   // lab16b-P4: NEO only   // Vince test: moved off the bottom bar
+  add(String("NEO: ")+(g_neo_on?T(L_ON):T(L_OFF)), g_neo_on?COL_AMBER:COL_BAR, g_neo_on?TFT_BLACK:COL_LIT, IA_NEOUI);   // lab4-P4: the NEO switch, always shown (so NEO can be left)
+  if(!g_neo)add(String(T(L_THEME))+": "+THEMES[g_theme_idx].name, COL_ACCENT, TFT_WHITE, IA_THEME);   // lab16b-P4: colour themes are for the classic layout   // Vince test: moved off the bottom bar
   add(String(T(L_CFG_LANG))+": "+LANG_NAMES[g_lang], (uint16_t)0x79D6, TFT_WHITE, IA_LANG);
   add(String(T(L_CFG_ROTATE))+": "+(g_portrait?T(L_PORTRAIT):T(L_LANDSCAPE)), COL_BLUE, TFT_WHITE, IA_ROTATE);
   if(!g_neo)add(String(T(L_CFG_COMPACT))+": "+(g_compact?T(L_ON):T(L_OFF)), g_compact?COL_GREEN:COL_BAR, g_compact?TFT_BLACK:COL_LIT, IA_COMPACT);
@@ -4543,7 +4543,7 @@ static void buildThumbs(){ if(!g_covers_on){fwLocFree();return;}   // 5.9.32-lab
   // PLUS a gLog, which opens/appends/closes /gti.log on the SAME card the build
   // is reading covers from. Over a 30-minute build that was ~18,000 flushes and
   // ~18,000 file opens competing with the work. Now every 25 games, with an ETA.
-  uint32_t t0=millis(); int lastShown=-1; uint32_t lastDraw=0;
+  uint32_t t0=millis(); uint32_t lastDraw=0;
   for(int i=0;i<n;i++){
     auto&g=g_games[i];
     if(!g.jpg_path.length()){String jpg;if(findJPGFor(g_files[g.first_file_idx],jpg))g.jpg_path=jpg;else g.jpg_path="?";}
@@ -4572,7 +4572,7 @@ static void buildThumbs(){ if(!g_covers_on){fwLocFree();return;}   // 5.9.32-lab
     if((i%200)==0||i==n-1){ g_bc_n=(uint32_t)i; g_bc_psram=(uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM); }
     if((i%1000)==0||i==n-1)gLog("[thumbs] %d/%d %lums int=%u psram=%u\n",i+1,n,(unsigned long)(millis()-t0),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
     if(millis()-lastDraw>=1000||i==n-1){   // lab15f: redraw once a second (was every 25 games: 800 full-screen flushes, ~29 s, on a 20k card with no covers); log every 1000 (was 200)
-      lastShown=i; lastDraw=millis();
+      lastDraw=millis();
       gfx_fillScreen(0x1082);
       gfx_setTextSize(2);gfx_setTextColor(0xFC60,0x1082);
       {const char*s=T(L_BUILDING);int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH/2-50);gfx_print(s);}
@@ -4731,7 +4731,7 @@ static void carMicroSave(){ if(g_nocache)return;
 static void carMicroBuild(){
   int n=g_car_micro_n; if(!n||!car_micro_block)return;
   uint16_t*tmp=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2); if(!tmp)return;
-  uint32_t t0=millis(); int lastShown=-1; uint32_t lastDraw=0;   // 5.9.36-lab6: count-driven, was every 120ms; lab15f: once a second
+  uint32_t t0=millis(); uint32_t lastDraw=0;   // 5.9.36-lab6: count-driven, was every 120ms; lab15f: once a second
   gLog("[micro] build start: %d games | int=%u largest-int=%u psram=%u\n",n,(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
   uint32_t nTile=0,nDec=0,nNone=0;
   for(int i=0;i<n;i++){
@@ -4749,7 +4749,7 @@ static void carMicroBuild(){
     SD_UNLOCK();
     { uint32_t dt=millis()-tg; if(dt>2000) gLog("[micro] game %d took %lums (%s)\n",i,(unsigned long)dt,g_games[i].name.c_str()); }
     if(ok)carMicroFromTile(i,tmp);
-    if(millis()-lastDraw>=1000||i==n-1){ lastShown=i; lastDraw=millis();   // lab15f: was every 25 games (a ~36 ms full-screen flush each)
+    if(millis()-lastDraw>=1000||i==n-1){ lastDraw=millis();   // lab15f: was every 25 games (a ~36 ms full-screen flush each)
       gfx_fillScreen(0x1082);
       gfx_setTextSize(2);gfx_setTextColor(0xFC60,0x1082);
       {const char*s="Preparing covers";int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH/2-40);gfx_print(s);}
@@ -7468,7 +7468,7 @@ static void c6SelfUpdate(){
   bool haveVer = (esp_hosted_get_coprocessor_fwversion(&v)==ESP_OK);
   // Skip only if the C6 is already at 2.12.13 or newer; anything lower is offered the update.
   auto c6AtLeast=[&](int a,int b,int c){ if(v.major1!=a)return v.major1>a; if(v.minor1!=b)return v.minor1>b; return v.patch1>=c; };
-  if(haveVer) snprintf(g_c6_ver,sizeof g_c6_ver,"C6 v%d.%d.%d",v.major1,v.minor1,v.patch1); else snprintf(g_c6_ver,sizeof g_c6_ver,"C6 version unknown");
+  if(haveVer) snprintf(g_c6_ver,sizeof g_c6_ver,"C6 v%u.%u.%u",(unsigned)v.major1,(unsigned)v.minor1,(unsigned)v.patch1); else snprintf(g_c6_ver,sizeof g_c6_ver,"C6 version unknown");
   gLog("[c6] co-processor firmware %s (%s)\n", haveVer?g_c6_ver+3:"unknown - no answer", (haveVer&&c6AtLeast(2,12,13))?"OK, >= 2.12.13":"older than 2.12.13 - update offered if an image is present");   // lab2-P4G7
   if(haveVer && c6AtLeast(2,12,13)){ g_c6_ready=true; return; }   // 5.9.12: radio always-on; leave STA up so espnowBegin never re-inits the hosted radio (that OFF->STA re-init crashed)
 
@@ -7495,7 +7495,7 @@ static void c6SelfUpdate(){
     gfx_flush();
   };
 
-  char sub[72]; snprintf(sub,sizeof sub,"C6 is v%d.%d.%d  ->  update to 2.12.13  (enables WiFi)", v.major1, v.minor1, v.patch1);
+  char sub[72]; snprintf(sub,sizeof sub,"C6 is v%u.%u.%u  ->  update to 2.12.13  (enables WiFi)", (unsigned)v.major1, (unsigned)v.minor1, (unsigned)v.patch1);
   gfx_fillScreen(COL_BG);
   gfx_setTextSize(2); gfx_setTextColor(COL_AMBER,COL_BG);
   { const char*t="WiFi CO-PROCESSOR UPDATE"; gfx_setCursor((VW-gfx_textWidth(t))/2,VH/2-70); gfx_print(t); }
@@ -7924,7 +7924,8 @@ static void infoAction(uint8_t act){
   switch(act){
     case IA_MODE: { int m=!g_wireless_mode?0:(g_link_home?2:1); m=(m+1)%3; g_wireless_mode=(m!=0); g_link_home=(m==2); saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE"); saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW"); applyRadioMode(); drawInfoFull(); } break;   // 5.9.19: live switch, no reboot, no splash
     case IA_FONT: applyFont((g_font+1)%3);saveConfigKey("FONT",fontKey(g_font));drawInfoFull();break;
-    case IA_THEME: applyTheme((g_theme_idx+1)%NUM_THEMES);saveConfigKey("THEME",String(g_theme_idx));drawInfoFull();break;   // Vince test: theme cycling lives in CONFIG now
+    case IA_NEOUI: g_neo_on=!g_neo_on;applyTheme(g_theme_idx);relayout();saveConfigKey("NEO",g_neo_on?"ON":"OFF");{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}g_info_page=0;drawInfoFull();break;   // lab4-P4: live switch, no reboot
+    case IA_THEME: applyTheme((g_theme_idx+1)%(NUM_THEMES-1));saveConfigKey("THEME",String(g_theme_idx));drawInfoFull();break;   // Vince test: theme cycling lives in CONFIG now
     case IA_LANG: g_lang=(g_lang+1)%LANG_N;saveConfigKey("LANG",LANG_NAMES[g_lang]);drawInfoFull();break;
     case IA_ROTATE: g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_COMPACT: g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;

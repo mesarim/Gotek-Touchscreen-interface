@@ -256,13 +256,21 @@
     "appOffset": 65536,
     "builds": [
       {
+        "v": "5.9.42-lab4-P4",
+        "ch": "lab",
+        "date": "2026-10-05",
+        "full": "firmware/p4-beta/manifest-5.9.42-lab4.json",
+        "app": "firmware/p4-beta/GTi-P4-5.9.42-lab4-update.bin",
+        "note": "LAB - NEO look with a switch: Settings > NEO ON/OFF (CONFIG.TXT NEO=) brings back the classic layout and colour themes. Also: matrix saver fills the width, symmetric synthwave cracktro, the omega GTi brand, disk loads / ejects / USB host logged in gti.log, faster and steadier dongle joins, EJECT really ejects the dongle and pulls the saves back. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). After flashing, power it off and on once before saving games.",
+        "latest": true
+      },
+      {
         "v": "5.9.42-lab1-P4",
         "ch": "lab",
         "date": "2026-10-03",
         "full": "firmware/p4-beta/manifest-5.9.42-lab1.json",
         "app": "firmware/p4-beta/GTi-P4-5.9.42-lab1-update.bin",
-        "note": "LAB - the new NEO look: list + game panel, big covers, up/down reel in portrait; cable + wireless tested. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (the IDE says \"Before v3.00\"). After flashing, power it off and on once before saving games.",
-        "latest": true
+        "note": "LAB - the new NEO look: list + game panel, big covers, up/down reel in portrait; cable + wireless tested. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (the IDE says \"Before v3.00\"). After flashing, power it off and on once before saving games."
       },
       {
         "v": "5.9.11-P4",
@@ -307,13 +315,21 @@
     "appOffset": 65536,
     "builds": [
       {
+        "v": "5.9.42-lab6-P4G7",
+        "ch": "lab",
+        "date": "2026-10-05",
+        "full": "firmware/p4g7-lab/manifest-5.9.42-lab6.json",
+        "app": "firmware/p4g7-lab/GTi-P4G7-5.9.42-lab6-update.bin",
+        "note": "LAB - NEO look with a switch: Settings > NEO ON/OFF (CONFIG.TXT NEO=) brings back the classic layout and colour themes. Also: matrix saver fills the whole 1024 px, symmetric synthwave cracktro, the omega GTi brand, disk loads / ejects / USB host logged in gti.log. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). The Gotek / PC goes on the HIGH-SPEED USB-C (next to the Ethernet jack) - the other port is for flashing only.",
+        "latest": true
+      },
+      {
         "v": "5.9.42-lab4-P4G7",
         "ch": "lab",
         "date": "2026-10-03",
         "full": "firmware/p4g7-lab/manifest-5.9.42-lab4.json",
         "app": "firmware/p4g7-lab/GTi-P4G7-5.9.42-lab4-update.bin",
-        "note": "LAB - first 7\" P4 build: the NEO look at 1024x600, cable + wireless tested (send, eject, save pull back). Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). The Gotek / PC goes on the HIGH-SPEED USB-C (next to the Ethernet jack).",
-        "latest": true
+        "note": "LAB - first 7\" P4 build: the NEO look at 1024x600, cable + wireless tested (send, eject, save pull back). Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). The Gotek / PC goes on the HIGH-SPEED USB-C (next to the Ethernet jack)."
       }
     ]
   },

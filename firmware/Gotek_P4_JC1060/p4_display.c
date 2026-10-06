@@ -161,7 +161,7 @@ bool p4disp_init(void)
     s_vsync = xSemaphoreCreateBinary();
     esp_lcd_dpi_panel_event_callbacks_t cbs;
     memset(&cbs, 0, sizeof cbs);
-    cbs.on_refresh_done = dpi_refresh_done;
+    cbs.on_frame_buf_complete = dpi_refresh_done;   // same callback slot (a union with the deprecated on_refresh_done)
     esp_lcd_dpi_panel_register_event_callbacks(s_panel, &cbs, NULL);
 
     memset(s_fb[1], 0, (size_t)P4DISP_PANEL_W * P4DISP_PANEL_H * 2);

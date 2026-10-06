@@ -278,7 +278,7 @@ String espnowScanInUseBy(int){ return ""; }        // "in use by" comes in the E
 // MODE switching: the hosted radio must NOT be switched off and on again (5.9.12 crash) - forget the link only.
 void   espnowStop(){ WiFi.disconnect(false, true); }
 
-static bool readFullP(WiFiClient& c, uint8_t* buf, uint32_t len, uint32_t timeoutMs) {   // lab3-P4G7 (= readFull below)
+static bool readFullP(WiFiClient& c, uint8_t* buf, uint32_t len, uint32_t timeoutMs) {   // lab3-P4G7 (the only reader; the old unused readFull is gone)
   uint32_t got=0, t0=millis();
   while (got<len && millis()-t0<timeoutMs) {
     if (!c.connected() && !c.available()) return false;
@@ -508,16 +508,6 @@ void espnowForgetActive(const uint8_t* mac){
 }
 
 // ── Save writeback fetch — AP-direct join + escape 0x01 GET_SAVE (WiFi part of the JC path) ──
-static bool readFull(WiFiClient& c, uint8_t* buf, uint32_t len, uint32_t timeoutMs) {
-  uint32_t got=0, t0=millis();
-  while (got<len && millis()-t0<timeoutMs) {
-    if (!c.connected() && !c.available()) return false;
-    int avail=c.available(); if(avail<=0){ delay(1); continue; }
-    int rd=c.read(buf+got, min((uint32_t)avail, len-got));
-    if(rd>0){ got+=rd; t0=millis(); }
-  }
-  return got==len;
-}
 bool espnowFetchSave(SavePersistCb persist) {
   // lab3-P4G7: same join as a send (it used the plain "GotekOMEGA" name, which every Webby 1.6.8+ dongle refuses)
   if (!g_espnow_paired || !persist) return false;
