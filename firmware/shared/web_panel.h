@@ -657,6 +657,11 @@ static void webPanelRegister() {
     webPanelHttp.send(200, "image/bmp", "");
     shotWriteBmp([](const uint8_t*b,size_t n){ webPanelHttp.sendContent((const char*)b, n); });
   });
+  webPanelHttp.on("/api/touchdbg", HTTP_GET, [](){   // shot2: the last finger press (why a screenshot hold did or did not fire)
+    char j[160]; snprintf(j, sizeof j, "{\"n\":%lu,\"x\":%d,\"y\":%d,\"ms\":%lu,\"drift\":%d,\"fired\":%s,\"zone\":%d}",
+      (unsigned long)g_tdbg.n, g_tdbg.x, g_tdbg.y, (unsigned long)g_tdbg.ms, g_tdbg.drift, g_tdbg.fired?"true":"false", SHOT_ZONE_H);
+    webPanelHttp.send(200, "application/json", j);
+  });
 #endif
 #if defined(GTI_WEB_SD_FILES)
   webPanelHttp.on("/api/sd/list",    HTTP_GET,  hSdList);
