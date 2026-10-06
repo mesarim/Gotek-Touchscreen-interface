@@ -210,7 +210,8 @@ static void hConfigPost() {
     // pf4: the form always posts this field, prefilled with the name in use. Posting our own
     // GTi-XXXX back unchanged is not a choice to name the screen, so it must not pin it (that
     // would quietly take the screen out of the gotekomega.local election).
-    if (v.length() && (g_mdns_named || v != pfDefaultHost())) { g_mdns_name = v; g_mdns_named = true; saveConfigKey("MDNS_NAME", v); g_pfMdnsDirty = true; }
+    // pf4b: nor is the shared name a hostname to pin.
+    if (v.length() && (g_mdns_named || v != pfDefaultHost()) && !v.equalsIgnoreCase(PF_MDNS_ALIAS)) { g_mdns_name = v; g_mdns_named = true; saveConfigKey("MDNS_NAME", v); g_pfMdnsDirty = true; }
   }
 #endif
   static const char *passThrough[] = {

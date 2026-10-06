@@ -59,9 +59,9 @@
 
 // -fleet so the bench can tell the two apart (both sit on the A600-lab1 base above).
 #if defined(GTI_FLEET)
-#define FW_VERSION "A600-lab1-pf4-fleet-JC3248"
+#define FW_VERSION "A600-lab1-pf4b-fleet-JC3248"
 #else
-#define FW_VERSION "A600-lab1-pf4-JC3248"
+#define FW_VERSION "A600-lab1-pf4b-JC3248"
 #endif
 #define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
 #define PF_MDNS_ALIAS "gotekomega"     // pf4: the shared name one screen ALSO answers to, next to its own GTi-XXXX.
@@ -3113,7 +3113,7 @@ static void loadConfig(){
     else if(k=="LASTUSED"){String lv=v;lv.toUpperCase();g_lastused=(lv=="ON"||lv=="1"||lv=="TRUE");}
     else if(k=="NESTING"){String nv=v;nv.toUpperCase();g_nesting=(nv=="ON"||nv=="1"||nv=="TRUE");}
     else if(k=="LINK"){String lv=v;lv.toUpperCase();g_link_home=(lv=="HOMEWIFI"||lv=="HOME"||lv=="WIFI");}
-    else if(k=="MDNS_NAME"){if(v.length()){g_mdns_name=v;g_mdns_named=true;}}   // the name this screen answers to at <name>.local
+    else if(k=="MDNS_NAME"){if(v.length()&&!v.equalsIgnoreCase(PF_MDNS_ALIAS)){g_mdns_name=v;g_mdns_named=true;}}   // the name this screen answers to at <name>.local. pf4b: MDNS_NAME=gotekomega is what the old web form wrote back on every save - read it as "not named", so such a screen still gets GTi-XXXX and still answers gotekomega.local
     else if(k=="HOME_SSID"||k=="WIFI_CLIENT_SSID"){if(v.length())g_home_ssid=v;}   // WIFI_CLIENT_SSID: the OMEGAWARE tree stores the same credential under this name; empty never erases a value another key already set
     else if(k=="HOME_PASS"||k=="WIFI_CLIENT_PASS"){if(v.length())g_home_pass=v;}
     else if(k=="DAV"||k=="DAV_ENABLED"){String dv=v;dv.toUpperCase();g_dav_on=(dv=="ON"||dv=="1");}   // DAV_ENABLED: the OMEGAWARE tree writes this name for the same switch — cards travel between firmwares, so accept both
