@@ -2218,6 +2218,10 @@ static int g_marquee_off=0,g_marquee_sel=-1,g_marquee_dir=1;static uint32_t g_ma
 // touch/drag/inertia
 static bool  g_touch_active=false,g_touch_moved=false,g_touch_inlist=false,g_inertia_on=false;
 static uint32_t g_touch_down_ms=0; static bool g_shot_fired=false;   // screenshot hold on the status bar
+#define SHOT_ZONE_H 40           // shot2: hold zone = status bar + a margin (the 20 px bar alone was too thin to hit)
+#define SHOT_DRIFT  24           // shot2: a resting finger may wander this far and still count as a hold
+static int g_shot_drift=0;       // max finger travel during the current press
+static struct { int x,y,drift; uint32_t ms; bool fired; uint32_t n; } g_tdbg={0,0,0,0,false,0};   // shot2: last press, for /api/touchdbg
 static int   g_touch_x0=0,g_touch_y0=0,g_touch_lastY=0,g_touch_release=0; static float g_touch_px0=0,g_touch_vel=0,g_inertia_vel=0;
 static uint32_t g_touch_lastMs=0;
 #define DRAG_THRESH 12          // px of finger travel before a press becomes a scroll (tolerates a firm press)
@@ -7550,10 +7554,11 @@ void loop(){
       g_touch_active=true;g_touch_x0=px;g_touch_y0=py;g_touch_px0=g_scrollPx;
       g_touch_lastY=py;g_touch_lastMs=now;g_touch_moved=false;g_touch_vel=0;g_inertia_on=false;
       g_touch_inlist=(px>=LIST_X&&px<AZ_X&&py>=LIST_TOP&&py<LIST_BOTTOM&&!g_info_showing&&!g_games.empty());
-      g_touch_down_ms=now; g_shot_fired=false;
+      g_touch_down_ms=now; g_shot_fired=false; g_shot_drift=0;
     } else {
       // screenshot: hold the status bar for 2 s (no drag) -> /SCREENSHOTS/SHOT_nnn.BMP, a green frame confirms
-      if(!g_shot_fired&&!g_touch_moved&&g_touch_y0<STATUS_H&&now-g_touch_down_ms>=2000){
+      { int d=max(abs((int)px-g_touch_x0),abs((int)py-g_touch_y0)); if(d>g_shot_drift)g_shot_drift=d; }
+      if(!g_shot_fired&&g_shot_drift<=SHOT_DRIFT&&g_touch_y0<SHOT_ZONE_H&&now-g_touch_down_ms>=2000){
         g_shot_fired=true; String sp=shotSaveSD(); gLog("[shot] %s\n", sp.length()?sp.c_str():"FAILED");
         uint16_t fc=sp.length()?COL_GREEN:(uint16_t)0xF800; for(int k=0;k<4;k++)gfx_drawRect(k,k,VW-2*k,VH-2*k,fc); gfx_flush(); delay(250);
         if(g_info_showing)drawInfoFull(); else {drawFullUI();gfx_flush();}
@@ -7574,6 +7579,7 @@ void loop(){
   if(g_touch_active){
     if(++g_touch_release<RELEASE_FRAMES) return;        // still-pressed as far as we're concerned
     g_touch_active=false;g_touch_release=0;
+    g_tdbg.x=g_touch_x0; g_tdbg.y=g_touch_y0; g_tdbg.drift=g_shot_drift; g_tdbg.ms=now-g_touch_down_ms; g_tdbg.fired=g_shot_fired; g_tdbg.n++;
     if(g_touch_moved&&g_touch_inlist){ g_inertia_vel=-g_touch_vel*16.0f; g_inertia_on=fabsf(g_inertia_vel)>0.5f; }  // list drag -> coast
     else if(!g_shot_fired){ handleTap((uint16_t)g_touch_x0,(uint16_t)g_touch_y0); }  // anything else (not the screenshot hold) (incl. a firm/jittery button press) -> tap
     return;
