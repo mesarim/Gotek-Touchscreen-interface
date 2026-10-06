@@ -223,6 +223,12 @@ static inline void fb_setPixel(int vx,int vy,uint16_t color){
 static uint16_t text_fg=TFT_WHITE,text_bg=TFT_BLACK;
 static int text_size=1,text_x=0,text_y=0;
 static int g_clip_y0=0,g_clip_y1=gH,g_clip_x0=0,g_clip_x1=gW;   // clip window (vertical=scroll, horizontal=marquee)
+// A600-neo1-JC3248 (port of Mez's lab16a-P4 NEO): while a NEO screen draws (g_neo_depth>0), text whose
+// background is the theme background (g_txt_key) is drawn WITHOUT its box, so it sits on the background picture.
+static bool     g_neo=false;          // the NEO look is active (set by applyTheme from g_neo_on)
+static bool     g_neo_on=true;        // CONFIG.TXT NEO=ON/OFF (default ON). OFF = the colour THEME
+static int      g_neo_depth=0;        // >0 while a NEO screen is drawing (NeoScope)
+static uint16_t g_txt_key=0;          // = COL_BG, set by applyTheme
 
 static void gfx_fillScreen(uint16_t c){uint16_t s=swap16(c);for(int i=0;i<LCD_WIDTH*LCD_HEIGHT;i++)framebuffer[i]=s;}
 static void gfx_drawPixel(int x,int y,uint16_t c){if(x>=g_clip_x0&&x<g_clip_x1&&y>=g_clip_y0&&y<g_clip_y1)fb_setPixel(x,y,c);}
@@ -2412,16 +2418,24 @@ static const Theme THEMES[]={
   {"SYNTH", 0x1001,0x2003,0x3005,0x5008,0x2003,0x600C,0x900F,0xC09F,0x4BE0,0xFC1F,0xE81F,0xA01F,0x2003,0x8010,0x5008,0xE81F},
   {"GOLD",  0x1000,0x1800,0x2000,0x4200,0x1800,0x5240,0x7440,0xC5A0,0x0560,0xFCA0,0xFCC0,0xFCA0,0x1800,0x3200,0x3200,0xFCC0},
   {"OMEGA", 0x18C5,0x18E6,0x10A5,0x3A2E,0x2968,0x52CE,0x94B4,0xC63A,0x3ED0,0xFC67,0xFE2B,0x46FC,0x1126,0x4557,0x2148,TFT_WHITE},
+  // A600-neo1-JC3248: NEO from Mez's P4 (lab16a-P4): navy bg, dark-navy panels, gold (amber) = selected / call to action, cyan (blue) = INSERT, slate (accent) = buttons
+  // NEO colours are not final (Mez): retune them here, and the background in NEO_GRAD_* / NEO_TRACE_RGB below.
+  {"NEO",   0x0884,0x10C6,0x0863,0x3962,0x42D1,0x9517,0x7C14,0xEF9F,0x568F,0xF466,0xF586,0x7E9E,0x1225,0x3A4C,0x298A,TFT_WHITE},
 };
-static const int NUM_THEMES=7;static int g_theme_idx=0;   // +OMEGA (Dimmy); default stays 0=NAVY
+static const int NUM_THEMES=8;static int g_theme_idx=0;   // +OMEGA (Dimmy); default stays 0=NAVY
 static uint16_t COL_BG,COL_PANEL,COL_BAR,COL_SEL,COL_SEP,COL_DIM,COL_MID,COL_LIT;
 static uint16_t COL_GREEN,COL_ORANGE,COL_AMBER,COL_BLUE,COL_NOW,COL_ACCENT,COL_CIRC,COL_CIRC_TEXT;
 
+// A600-neo1-JC3248 (as lab4-P4): NEO is a switch (g_neo_on, CONFIG.TXT NEO=), not one of the colour themes.
+// g_theme_idx is always a colour theme (0..NUM_THEMES-2) - the one NEO=OFF shows - and is kept while NEO is on.
 static void applyTheme(int idx){
-  g_theme_idx=idx%NUM_THEMES;const Theme&t=THEMES[g_theme_idx];
+  const int neoIdx=NUM_THEMES-1;                  // NEO is the last entry of THEMES[]
+  if(idx<0||idx>=neoIdx)idx=0;
+  g_theme_idx=idx;const Theme&t=THEMES[g_neo_on?neoIdx:idx];
   COL_BG=t.bg;COL_PANEL=t.panel;COL_BAR=t.bar;COL_SEL=t.sel;COL_SEP=t.sep;
   COL_DIM=t.dim;COL_MID=t.mid;COL_LIT=t.lit;COL_GREEN=t.green;COL_ORANGE=t.orange;
   COL_AMBER=t.amber;COL_BLUE=t.blue;COL_NOW=t.now;COL_ACCENT=t.accent;COL_CIRC=t.circ;COL_CIRC_TEXT=t.circ_text;
+  g_neo=g_neo_on; g_txt_key=COL_BG;
 }
 
 static void saveConfigKey(const String&key,const String&val){
@@ -2601,7 +2615,9 @@ R"CFG(# ============================================================
 #  VISUALS      theme, fonts, layout, on-screen look
 # ============================================================
 
-# Theme: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD 6=OMEGA
+# NEO: the NEO look (navy-to-purple background, NEO colours). OFF = the colour THEME below
+NEO=ON
+# Theme: colours when NEO=OFF: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD 6=OMEGA
 THEME=0
 
 # Font size: SMALL, NORMAL, LARGE
@@ -2834,7 +2850,8 @@ static void selfHealConfig(){
   if(!SD_MMC.exists("/CONFIG.TXT"))return;   // fresh cards already get the full template
   struct CfgKey{const char*key;const char*block;};
   static const CfgKey KEYS[]={
-    {"THEME",    "\n# Theme: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD 6=OMEGA\nTHEME=0\n"},
+    {"NEO",      "\n# NEO: the NEO look (navy-to-purple background, NEO colours). OFF = the colour THEME below\nNEO=ON\n"},
+    {"THEME",    "\n# Theme: colours when NEO=OFF: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD 6=OMEGA\nTHEME=0\n"},
     {"MODE",     "\n# Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW to dongle)\nMODE=STANDALONE\n"},
     {"CAROUSEL", "\n# CAROUSEL: default boot view. OFF=game list, ON=cover reel, LAST=restore last view.\nCAROUSEL=OFF\n"},
     {"LOOP",     "\n# Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s\nLOOP=0\n"},
@@ -2973,7 +2990,8 @@ static void loadConfig(){
   File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);if(!f)return;
   while(f.available()){String l=f.readStringUntil('\n');l.trim();if(l.startsWith("#"))continue;
     int eq=l.indexOf('=');if(eq<0)continue;String k=l.substring(0,eq),v=l.substring(eq+1);k.trim();v.trim();
-    if(k=="THEME"){int ti=-1;for(int i=0;i<NUM_THEMES;i++)if(v.equalsIgnoreCase(THEMES[i].name)){ti=i;break;}applyTheme(ti>=0?ti:((v.length()&&isDigit(v[0]))?v.toInt():0));}else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");else if(k=="CAROUSEL"){String cv=v;cv.toUpperCase();g_car_bootmode=(cv=="LAST")?2:((cv=="1"||cv=="ON"||cv=="TRUE")?1:0);}
+    if(k=="NEO"){String nv=v;nv.toUpperCase();g_neo_on=!(nv=="OFF"||nv=="0"||nv=="NO");applyTheme(g_theme_idx);}   // A600-neo1-JC3248
+    else if(k=="THEME"){int ti=-1;for(int i=0;i<NUM_THEMES;i++)if(v.equalsIgnoreCase(THEMES[i].name)){ti=i;break;}applyTheme(ti>=0?ti:((v.length()&&isDigit(v[0]))?v.toInt():0));}else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");else if(k=="CAROUSEL"){String cv=v;cv.toUpperCase();g_car_bootmode=(cv=="LAST")?2:((cv=="1"||cv=="ON"||cv=="TRUE")?1:0);}
     else if(k=="TAPLOAD")g_tapload=(v=="ON"||v=="1");else if(k=="HOTSWAP")g_hotswap=(v=="ON"||v=="1");else if(k=="FORCESWAP")g_forceswap=(v=="ON"||v=="1");
     else if(k=="FONT"){int f=1;if(v=="SMALL")f=0;else if(v=="LARGE")f=2;applyFont(f);}
     else if(k=="LANG"){String lu=v;lu.toUpperCase();if(lu=="CZ")lu="CS";for(int i=0;i<LANG_N;i++)if(lu==LANG_NAMES[i]){g_lang=i;break;}}
@@ -3593,7 +3611,7 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_TESTPAGE, IA_TESTBACK };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_TESTPAGE, IA_TESTBACK, IA_NEOUI };
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
 static InfoItem g_ii[32]; static int g_ii_n=0;
 struct InfoRect { int x,y,w,h; uint8_t act; };
@@ -3632,7 +3650,7 @@ static void drawInfoPanel(){
     add(String("< ")+T(L_SETTINGS), COL_ACCENT, TFT_WHITE, IA_PICKBACK);
     if(g_info_pick==1) for(int i=0;i<LANG_N;i++){ bool cur=(i==g_lang);
       add(String(cur?"> ":"")+LANG_FULL[i]+" ("+LANG_NAMES[i]+")"+(cur?" <":""), cur?COL_GREEN:(uint16_t)0x79D6, cur?TFT_BLACK:TFT_WHITE, (uint8_t)(IA_PICK0+i)); }
-    if(g_info_pick==2) for(int i=0;i<NUM_THEMES;i++){ bool cur=(i==g_theme_idx);
+    if(g_info_pick==2) for(int i=0;i<NUM_THEMES-1;i++){ bool cur=(i==g_theme_idx);
       add(String(cur?"> ":"")+THEMES[i].name+(cur?" <":""), THEMES[i].accent, TFT_WHITE, (uint8_t)(IA_PICK0+i)); }   // each theme in its own colour
   } else {
   // 5.9.12: single 3-way MODE — STANDALONE (radio off) / ESP-NOW (blind dongles, no router) / WiFi (home router).
@@ -3653,7 +3671,8 @@ static void drawInfoPanel(){
     if(g_home_ssid.length()) add(String("WIFI CHECK"), COL_BLUE, TFT_WHITE, IA_WIFICHECK);
   }
   add(String(T(L_CFG_FONT))+": "+fontName(g_font), COL_AMBER, TFT_BLACK, IA_FONT);
-  add(String(T(L_THEME))+": "+THEMES[g_theme_idx].name, COL_ACCENT, TFT_WHITE, IA_THEME);   // Vince test: moved off the bottom bar
+  add(String("NEO: ")+(g_neo_on?T(L_ON):T(L_OFF)), g_neo_on?COL_AMBER:COL_BAR, g_neo_on?TFT_BLACK:COL_LIT, IA_NEOUI);   // A600-neo1-JC3248: the NEO switch, always shown
+  if(!g_neo)add(String(T(L_THEME))+": "+THEMES[g_theme_idx].name, COL_ACCENT, TFT_WHITE, IA_THEME);   // Vince test: moved off the bottom bar   // colour themes are for NEO=OFF
   add(String(T(L_CFG_LANG))+": "+LANG_NAMES[g_lang], (uint16_t)0x79D6, TFT_WHITE, IA_LANG);
   add(String(T(L_CFG_ROTATE))+": "+(g_portrait?T(L_PORTRAIT):T(L_LANDSCAPE)), COL_BLUE, TFT_WHITE, IA_ROTATE);
   add(String(T(L_CFG_COMPACT))+": "+(g_compact?T(L_ON):T(L_OFF)), g_compact?COL_GREEN:COL_BAR, g_compact?TFT_BLACK:COL_LIT, IA_COMPACT);
@@ -7224,12 +7243,13 @@ static void infoAction(uint8_t act){
   if(act==IA_PICKBACK||act>=IA_PICK0){   // pick page: set the choice (or not), then back to the Settings page we came from
     int i=act-IA_PICK0;
     if(act>=IA_PICK0&&g_info_pick==1&&i<LANG_N){ g_lang=i; saveConfigKey("LANG",LANG_NAMES[g_lang]); }
-    if(act>=IA_PICK0&&g_info_pick==2&&i<NUM_THEMES){ applyTheme(i); saveConfigKey("THEME",String(g_theme_idx)); }
+    if(act>=IA_PICK0&&g_info_pick==2&&i<NUM_THEMES-1){ applyTheme(i); saveConfigKey("THEME",String(g_theme_idx)); }
     g_info_pick=0; g_info_page=g_info_pick_ret; drawInfoFull(); return;
   }
   switch(act){
     case IA_MODE: { int m=!g_wireless_mode?0:(g_link_home?2:1); m=(m+1)%3; g_wireless_mode=(m!=0); g_link_home=(m==2); saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE"); saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW"); applyRadioMode(); drawInfoFull(); } break;   // 5.9.19: live switch, no reboot, no splash
     case IA_FONT: applyFont((g_font+1)%3);saveConfigKey("FONT",fontKey(g_font));drawInfoFull();break;
+    case IA_NEOUI: g_neo_on=!g_neo_on;applyTheme(g_theme_idx);saveConfigKey("NEO",g_neo_on?"ON":"OFF");drawInfoFull();break;   // A600-neo1-JC3248: live switch, no reboot
     case IA_THEME: g_info_pick=2;g_info_pick_ret=g_info_page;g_info_page=0;drawInfoFull();break;   // pick page (was: cycle to the next theme)   // Vince test: theme cycling lives in CONFIG now
     case IA_LANG: g_info_pick=1;g_info_pick_ret=g_info_page;g_info_page=0;drawInfoFull();break;   // pick page (was: cycle to the next language)
     case IA_ROTATE: g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
