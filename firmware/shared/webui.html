@@ -196,6 +196,14 @@ a.fleet-chip:hover{border-color:var(--cyan);transform:translateY(-1px)}
 .fleet-chip .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:0 0 auto}
 .fleet-chip.master .dot{background:var(--cyan);box-shadow:0 0 8px var(--cyan)}
 .fleet-chip .sub{font-size:11px;color:var(--muted);font-weight:400}
+/* ===== NEO (GTi): the screen's navy-to-purple background with faint traces ===== */
+body.neo{background:
+  repeating-linear-gradient(90deg,rgba(90,120,200,.10) 0 1px,transparent 1px 46px),
+  repeating-linear-gradient(0deg,rgba(90,120,200,.08) 0 1px,transparent 1px 38px),
+  linear-gradient(160deg,#0A1026 0%,#181a45 55%,#241640 100%) fixed}
+body.neo .topbar{background:rgba(8,12,25,.85)}
+body.neo .card{background:rgba(16,24,49,.82)}
+body.neo .disk-btn:not(.loaded){background:#7BD2F7;color:#080C19}
 </style>
 </head>
 <body class="no-sd no-display">
@@ -925,7 +933,9 @@ async function loadDashboard() {
   const libraryCard = document.getElementById('games-library-card');
   const themesTab   = document.getElementById('tab-themes');
   if (libraryCard) libraryCard.style.display = hasSD ? '' : 'none';
-  if (themesTab)   themesTab.style.display   = '';   // OMEGA: built-in presets need no card
+  // Absent means "shown" (OMEGAWARE and older firmware do not send it); GTi sends false because its web style is fixed (NEO).
+  const hasThemes = (d.has_themes === undefined) ? true : !!d.has_themes;
+  if (themesTab)   themesTab.style.display   = hasThemes ? '' : 'none';   // OMEGA: built-in presets need no card
   // Absent means no, unlike has_sd: a device that never advertised OTA does
   // not have the endpoint, and offering the button would only produce a 404.
   const otaCard = document.getElementById('ota-card');
@@ -942,6 +952,7 @@ async function loadDashboard() {
 
   // Wear the panel's theme from the first paint. This is the boot request, and
   // it already reports the active theme, so parity costs one style fetch.
+  document.body.classList.toggle('neo', d.theme === 'NEO');   // NEO background picture + cyan Insert
   syncThemeStyle(d.theme);
 
   const grid = document.getElementById('stats-grid');
@@ -1987,6 +1998,8 @@ const TE_PRESETS = {
   MIDNIGHT:    { fill:'#222630', light:'#485062', dark:'#0c0e14', text:'#dee4f0', accent:'#5aaaff', bevel:'flat',   bevelW:1, radius:4, scale:2 },
   PHOSPHOR:    { fill:'#08180c', light:'#28c85a', dark:'#040c06', text:'#50ff82', accent:'#50ff82', bevel:'flat',   bevelW:1, radius:0, scale:2 },
   OMEGA_DARK:  { fill:'#181c31', light:'#3b4570', dark:'#0b0e22', text:'#e9ecf5', accent:'#3fe0e8', bevel:'flat',   bevelW:1, radius:10, scale:2 },
+  // GTi's fixed web style (from the NEO screen theme). Colours are not final: retune here and in the body.neo block.
+  NEO:         { fill:'#101831', light:'#42598C', dark:'#080C19', text:'#EFF3FF', accent:'#F7B231', bevel:'flat',   bevelW:1, radius:10, scale:2 },
 };
 
 // Themes read back off the SD card, so your own saved themes can be reopened
