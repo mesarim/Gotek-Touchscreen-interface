@@ -93,9 +93,17 @@ Both sketches already use the same `Theme` struct and framebuffer drawing as the
 - Add `NEO=ON|OFF` to CONFIG.TXT (default ON, as on the P4) and a "NEO: ON/OFF" row on the
   Settings screen, switched live. When NEO is on, the THEME row is hidden, as on the P4. Every
   setting is reachable in both CONFIG.TXT and Settings (working rule).
-- Draw the gradient and traces where `drawFullUI()` now calls `gfx_fillScreen(COL_BG)`. Compute
-  it per line into the framebuffer instead of keeping a full background buffer in PSRAM; fall
-  back to the flat `bg` colour if that turns out too slow.
+- Draw the gradient and traces where `drawFullUI()` now calls `gfx_fillScreen(COL_BG)`.
+  *As built (A600-neo1):* the background is drawn once per rotation into a 300 KB PSRAM
+  picture (as on the P4) and copied back with `fillBack()`/`clearBack()`; no PSRAM falls back to
+  the flat `bg` colour. Computing it per line was dropped: the copy is cheaper than redrawing.
+- *Added after the first device screenshots (A600-neo2, Dimmy):* NEO keys. Panels, list rows and
+  buttons are the panel colour laid see-through over the background (a second 300 KB PSRAM
+  picture, the "tint"), with a 1 px edge whose colour carries the role: blue-grey normal, amber
+  main action / selected, green on / active, muted red eject / reset. INSERT is a solid amber
+  key. Settings show on/off as edge colour plus a dot. Applies only while NEO is on.
+- *Also added (A600-neo2d):* the last English screen words translated, the game count shown
+  once (mode bar), `.nfo` line breaks kept in the cover text.
 - Layout stays as it is.
 - Before editing `Gotek_JC3248.ino`, announce the area on the session relay (working rule).
 
@@ -115,7 +123,9 @@ Both sketches already use the same `Theme` struct and framebuffer drawing as the
   `/`, `/panel` (Dashboard, Games, Config; no Themes tab), `/files`, the dongle's `/classic`.
 - On the JC3248 screen: NEO on and off from Settings and from CONFIG.TXT; the THEME row hides and
   returns; the gradient redraws after every full-screen refresh; no visible slowdown in list
-  scrolling.
+  scrolling. *Measured (A600-neo2f, `GET /api/neobench`, JC3248, 57 games):* scroll frame NEO
+  15.7 ms vs flat 14.6 ms, full screen 53.7 vs 45.3 ms, Settings 50.1 vs 35.7 ms, display flush
+  35 ms either way, first background + tint build 188 ms once per boot / rotation.
 - OMEGAWARE: the updated `webui.html` still shows its own themes and Themes tab.
 - P4 builds are Mez's bench; step 1 does not change P4 code.
 
