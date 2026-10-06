@@ -49,7 +49,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-neo2e-shot2-JC3248"  // A600-neo2-JC3248 (Dimmy, 6 Oct): NEO keys - one see-through button/panel look on every screen (list rows, cover panel, settings, bottom bars, carousel, text reader); INSERT amber, EJECT muted red, on/off as an edge + dot; the reader keeps the web page answering | A600-neo1-JC3248 (Dimmy, 6 Oct): NEO preview on branch neo-style - NEO theme + switch, background picture, NEO web pages | A600-lab1-JC3248 (Mez, 5 Oct): LANGUAGE and THEME open a pick page in Settings - every choice as its own button (languages in their own name, themes in their own colour), tap one and you are back where you were; the current one is marked > < | was A600 (4 Oct 2026, pre-Kickstart release) = 5.9.41-lab15q-JC3248, renamed only (no code change) | lab15q: Polish screen text corrected by 8-Bitz (ROLKA, TERAZ GRA, WSZYSTKIE, ULUBIONE...); the reel bar's ALL/FAV/MOST word shrinks when it is too long for its button | lab15p: ESP-NOW mode - the GTi's own Wi-Fi is now GTi_Omega-XXXX, password gotekXXXX (was an OPEN, unnamed ESP_xxxxxx), and serves the GTi web page at 192.168.4.1; Settings shows the name + password | lab15o: Polish (LANG=PL) and Czech (LANG=CS) on the screen + NL/PL/CS in the web page's language list; the STANDALONE banner centres on the translated word | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j: tap the game text in the list (title + description) = the whole .nfo full-screen in the manual reader (scroll, SIZE, TOP, CLOSE) | lab15i: each dongle keeps its OWN save file (Game.sav.XXXX.adf, XXXX = last 4 hex of the dongle MAC) - two Amigas on the same game (cable + dongle, or two dongles) never mix their saves | lab15h: FIX the lab15e/f/g freeze on disk insert (the Gotek's read took the SD lock twice - SD_MMC.readRAW already goes through the locked driver); includes lab15b-g
+#define FW_VERSION "A600-neo2f-shot2-JC3248"  // A600-neo2-JC3248 (Dimmy, 6 Oct): NEO keys - one see-through button/panel look on every screen (list rows, cover panel, settings, bottom bars, carousel, text reader); INSERT amber, EJECT muted red, on/off as an edge + dot; the reader keeps the web page answering | A600-neo1-JC3248 (Dimmy, 6 Oct): NEO preview on branch neo-style - NEO theme + switch, background picture, NEO web pages | A600-lab1-JC3248 (Mez, 5 Oct): LANGUAGE and THEME open a pick page in Settings - every choice as its own button (languages in their own name, themes in their own colour), tap one and you are back where you were; the current one is marked > < | was A600 (4 Oct 2026, pre-Kickstart release) = 5.9.41-lab15q-JC3248, renamed only (no code change) | lab15q: Polish screen text corrected by 8-Bitz (ROLKA, TERAZ GRA, WSZYSTKIE, ULUBIONE...); the reel bar's ALL/FAV/MOST word shrinks when it is too long for its button | lab15p: ESP-NOW mode - the GTi's own Wi-Fi is now GTi_Omega-XXXX, password gotekXXXX (was an OPEN, unnamed ESP_xxxxxx), and serves the GTi web page at 192.168.4.1; Settings shows the name + password | lab15o: Polish (LANG=PL) and Czech (LANG=CS) on the screen + NL/PL/CS in the web page's language list; the STANDALONE banner centres on the translated word | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j: tap the game text in the list (title + description) = the whole .nfo full-screen in the manual reader (scroll, SIZE, TOP, CLOSE) | lab15i: each dongle keeps its OWN save file (Game.sav.XXXX.adf, XXXX = last 4 hex of the dongle MAC) - two Amigas on the same game (cable + dongle, or two dongles) never mix their saves | lab15h: FIX the lab15e/f/g freeze on disk insert (the Gotek's read took the SD lock twice - SD_MMC.readRAW already goes through the locked driver); includes lab15b-g
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -2589,13 +2589,24 @@ static inline int neoInset(int r,int j,int h){   // rounded-corner inset of row 
   if(r<=0)return 0; int dy=(j<r)?(r-j):((j>=h-r)?(j-(h-r)+1):0); if(dy<=0)return 0;
   return r-(int)sqrtf((float)(r*r-dy*dy));
 }
-static void neoPanel(int x,int y,int w,int h,int r){   // the see-through panel fill (no edge)
+// The see-through panel fill (no edge). back=true also paints the cut-off corners with the background picture,
+// so the caller does not have to clear the area under the panel first (A600-neo2f: halves the PSRAM copying).
+// The corners are copied as strips that are contiguous in the panel's memory: columns in landscape (rot 0/2),
+// rows in portrait (rot 1/3) - a strip the other way round is one 2-byte memcpy per pixel.
+static void neoPanel(int x,int y,int w,int h,int r,bool back=false){
   if(r*2>h)r=h/2; if(r*2>w)r=w/2;
   neoTintEnsure();
-  if(!neoBgOk()||!g_neo_tint||g_neo_tint_rot!=g_rot){ if(r>0)gfx_fillRoundRect(x,y,w,h,r,COL_PANEL); else gfx_fillRect(x,y,w,h,COL_PANEL); return; }
+  if(!neoBgOk()||!g_neo_tint||g_neo_tint_rot!=g_rot){ if(back)fillBack(x,y,w,h); if(r>0)gfx_fillRoundRect(x,y,w,h,r,COL_PANEL); else gfx_fillRect(x,y,w,h,COL_PANEL); return; }
   if(r<=0){ gfx_copyRect(g_neo_tint,x,y,w,h); return; }
-  for(int j=0;j<r;j++){ int in=neoInset(r,j,h); gfx_copyRect(g_neo_tint,x+in,y+j,w-2*in,1); gfx_copyRect(g_neo_tint,x+in,y+h-1-j,w-2*in,1); }
-  gfx_copyRect(g_neo_tint,x,y+r,w,h-2*r);
+  const bool cols=(g_rot==0||g_rot==2);
+  for(int j=0;j<r;j++){ int in=neoInset(r,j,cols?w:h);
+    if(cols){ for(int k=0;k<2;k++){ int cx=k?x+w-1-j:x+j;
+        if(back&&in>0){ gfx_copyRect(g_neo_bg,cx,y,1,in); gfx_copyRect(g_neo_bg,cx,y+h-in,1,in); }
+        gfx_copyRect(g_neo_tint,cx,y+in,1,h-2*in); } }
+    else    { for(int k=0;k<2;k++){ int cy=k?y+h-1-j:y+j;
+        if(back&&in>0){ gfx_copyRect(g_neo_bg,x,cy,in,1); gfx_copyRect(g_neo_bg,x+w-in,cy,in,1); }
+        gfx_copyRect(g_neo_tint,x+in,cy,w-2*in,1); } } }
+  if(cols) gfx_copyRect(g_neo_tint,x+r,y,w-2*r,h); else gfx_copyRect(g_neo_tint,x,y+r,w,h-2*r);
 }
 static void neoRing(int x,int y,int w,int h,int r,uint16_t c){   // rounded outline WITH its corners (gfx_drawRoundRect leaves them open)
   if(r*2>h)r=h/2; if(r*2>w)r=w/2;
@@ -3964,16 +3975,22 @@ static void drawModeBar(){
 }
 
 static void drawFileList(){
-  NeoScope _ns;fillBack(LIST_X,LIST_TOP,LIST_W,LIST_BOTTOM-LIST_TOP);   // A600-neo1-JC3248
+  NeoScope _ns;
+  const bool neoRows=neoBgOk()&&!g_games.empty();   // A600-neo2f: rows paint their own background (no double copy)
+  if(neoRows){ fillBack(LIST_X,LIST_TOP,2,LIST_BOTTOM-LIST_TOP); fillBack(LIST_X+LIST_W-2,LIST_TOP,2,LIST_BOTTOM-LIST_TOP); }
+  else fillBack(LIST_X,LIST_TOP,LIST_W,LIST_BOTTOM-LIST_TOP);   // A600-neo1-JC3248
   if(g_games.empty()){gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_BG);gfx_setCursor(LIST_X+8,LIST_TOP+16);gfx_print(g_mode==MODE_ADF?"No .ADF files":g_mode==MODE_DSK?"No .DSK files":"No /GENERIC files");return;}
   if(g_scrollPx<0)g_scrollPx=0;int mp=maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;
   int first=(int)(g_scrollPx/LIST_ITEM_H),off=(int)(g_scrollPx-(float)first*LIST_ITEM_H);
   g_scroll=first;                                  // keep integer scroll in sync (thumb, etc.)
   g_clip_y0=LIST_TOP;g_clip_y1=LIST_BOTTOM;         // clip partial rows to the list window
+  int yEnd=LIST_TOP-off;                            // A600-neo2f: bottom of the last row drawn
   for(int vi=0;vi<=ITEMS_VIS+1;vi++){int gi=first+vi;if(gi>=(int)g_games.size())break;
     auto&game=g_games[gi];bool sel=gi==g_sel,ld=g_loaded&&g_loaded_game_idx==gi;
     int y=LIST_TOP-off+vi*LIST_ITEM_H;if(y>=LIST_BOTTOM)break;
-    if(g_neo){ neoPanel(LIST_X+2,y+2,LIST_W-4,LIST_ITEM_H-4,6);   // A600-neo2: see-through rows with a gap, selected = amber edge
+    yEnd=y+LIST_ITEM_H;
+    if(neoRows){ fillBack(LIST_X+2,y,LIST_W-4,2); fillBack(LIST_X+2,y+LIST_ITEM_H-2,LIST_W-4,2); }   // the gaps between rows
+    if(g_neo){ neoPanel(LIST_X+2,y+2,LIST_W-4,LIST_ITEM_H-4,6,neoRows);   // A600-neo2: see-through rows with a gap, selected = amber edge
       if(sel){ neoRing(LIST_X+2,y+2,LIST_W-4,LIST_ITEM_H-4,6,COL_AMBER); neoRing(LIST_X+3,y+3,LIST_W-6,LIST_ITEM_H-6,5,COL_AMBER); } }
     else if(sel){gfx_fillRoundRect(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,4,COL_SEL);gfx_drawRoundRect(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,4,COL_AMBER);}
     else gfx_fillRoundRect(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,3,COL_PANEL);
@@ -3999,6 +4016,7 @@ static void drawFileList(){
     if(game.disk_count>1){gfx_setTextSize(1);gfx_fillRoundRect(LIST_X+LIST_W-38,cy-6,34,12,4,COL_ACCENT);gfx_setTextColor(g_neo?COL_LIT:TFT_WHITE,COL_ACCENT);gfx_setCursor(LIST_X+LIST_W-34,cy-4);gfx_print(String(game.disk_count)+"DSK");}
   }
   g_clip_y0=0;g_clip_y1=gH;
+  if(neoRows&&yEnd<LIST_BOTTOM)fillBack(LIST_X+2,yEnd,LIST_W-4,LIST_BOTTOM-yEnd);   // A600-neo2f: below the last row
 }
 
 static void drawNowPlayingBar(){
