@@ -14,17 +14,30 @@
 #define PKT_XIAO_STATUS  0x17  // dongle → Waveshare: load-state heartbeat {loaded,load_id,image_size} (v5.7.x)
 #define PKT_LOCK         0x18  // Waveshare → dongle: enroll me as sole owner + LOCK (Webby security)
 #define PKT_UNLOCK       0x19  // Waveshare → dongle: clear owners + UNLOCK (open to any GTi)
+#define PKT_SHARE        0x1A  // lab14s: owner GTi → dongle: accept ONE more screen as owner for 2 minutes (Webby 1.6.6+)
 
 // Shared ramdisk — defined in main .ino
 extern uint8_t* g_disk;
 #define ESPNOW_SECTOR_SIZE  512
-#define ESPNOW_DATA_LBA     11
+#define ESPNOW_DATA_LBA     13   // lab14r: first data sector of the GTi RAM disk. Was 11 - left behind when 5.9.35 grew the FAT
+                                   // from 6 to 8 sectors, so every wireless send started 1 KB early (shifted ADF -> Amiga back at
+                                   // the Kickstart screen). The .ino static_asserts it equals DISK_DATA_LBA so it cannot drift again.
 
 // XIAO WiFi AP settings (fixed)
 #define DONGLE_AP_SSID   "GotekOMEGA"
 #define DONGLE_AP_PASS   "gotek1234"
 #define DONGLE_AP_IP     "192.168.4.1"
 #define DONGLE_TCP_PORT  3333
+
+// lab15p: the GTi's OWN Wi-Fi in ESP-NOW mode. The radio has always run as access point + station there
+// (WIFI_AP_STA), but nobody named the access point, so the ESP32 put up its default: an OPEN network
+// called ESP_xxxxxx. Now it is GTi_Omega-XXXX with password gotekXXXX (XXXX = last 2 bytes of the
+// GTi's softAP MAC, in hex - the same 4 characters in both), and the GTi's web page is served on it
+// at 192.168.4.1. STANDALONE (radio off) and WiFi mode (joins the home router) never start it.
+#define GTI_AP_PREFIX    "GTi_Omega-"
+#define GTI_AP_PASS_PRE  "gotek"
+const char* espnowApName();   // "GTi_Omega-XXXX"
+const char* espnowApPass();   // "gotekXXXX"
 
 // State flags
 extern volatile bool g_espnow_paired;
@@ -76,6 +89,15 @@ void   espnowSendUnpair(const uint8_t* mac);       // tell a dongle to forget th
 void   espnowSendLock(const uint8_t* mac);         // Webby: lock this dongle to this GTi (unicast)
 void   espnowSendUnlock(const uint8_t* mac);       // Webby: unlock this dongle -> open to any GTi (unicast)
 void   espnowForgetActive(const uint8_t* mac);     // clear local pairing if mac is the active dongle
+void   espnowSendShare(const uint8_t* mac);        // lab14s: let one more screen pair with this dongle (2 min, Webby 1.6.6+)
+String espnowScanInUseBy(int i);                  // lab14s: name of ANOTHER screen that has a disk in this dongle ("" = free / us / unknown)
+// lab14s: two screens, one dongle. Before a disk is sent the GTi "claims" the dongle; if another screen has a
+// disk in it the dongle says so, and this callback asks the user (dirty = that screen's saves not handed back yet).
+// Return true = take over. The .ino supplies it; with none set the send just goes ahead (old behaviour).
+typedef bool (*ClaimAskCb)(bool dirty, const char* who);
+void   espnowSetClaimAsk(ClaimAskCb cb);
+void   espnowSetScreenName(const String& name);    // lab14s: CONFIG.TXT GTINAME= (shown on other screens as "in use by")
+bool   espnowClaimCancelled();                     // lab14s: last send was stopped because the user said no to a take-over
 
 // Transfer — sends via WiFi TCP, uses ESP-NOW only for DONE/ERROR reply
 bool   espnowSendNotify(const String& name, const String& mode, uint32_t size);

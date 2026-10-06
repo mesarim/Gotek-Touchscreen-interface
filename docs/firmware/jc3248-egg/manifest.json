@@ -1,0 +1,16 @@
+{
+  "name": "Gotek Touchscreen Interface — JC3248 (5.9.41 Easter Egg Edition)",
+  "version": "5.9.41-EE",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "GTi-JC35-5.9.41-EasterEgg.merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}

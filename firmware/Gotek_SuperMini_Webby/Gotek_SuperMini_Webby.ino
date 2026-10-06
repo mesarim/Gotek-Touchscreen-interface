@@ -47,7 +47,23 @@
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
 
-#define FW_VERSION     "Webby-1.6.3"
+// 1.6.8: ONE source, TWO builds - the SuperMini and the Waveshare S3-Zero differ only in their status light.
+//   0 = SuperMini  : two plain LEDs, red GPIO1 + blue GPIO2. GPIO21 is never touched.   (THIS sketch)
+//   1 = S3-Zero    : one WS2812 colour LED on GPIO21. GPIO1/GPIO2 are left alone.        (../Gotek_Zero_Webby)
+// Leave this at 0. The Zero build is its own sketch folder, Gotek_Zero_Webby, GENERATED from this file by
+// its make_zero.py (only this line differs) - so each board compiles in its own folder and the two merged
+// .bin files never overwrite each other. Edit here, then regenerate the Zero sketch.
+// The version string says which one it is (Webby-1.6.8-supermini / Webby-1.6.8-zero), on the OLED, the web
+// page and /api - so a dongle always tells you which image it runs.
+#ifndef WEBBY_ZERO
+#define WEBBY_ZERO     0
+#endif
+#if WEBBY_ZERO
+#define WEBBY_BOARD    "zero"
+#else
+#define WEBBY_BOARD    "supermini"
+#endif
+#define FW_VERSION     "Webby-1.6.10-" WEBBY_BOARD   // 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
 #define ESPNOW_CHANNEL 6
 //  Board profile 
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -55,11 +71,11 @@
 // The SuperMini is just the cheapest board that packages those three. To port to
 // another S3, override these pins for that board (an unused GPIO is fine  the
 // LEDs are optional status, not required). Defaults = SuperMini.
-// --- Status LEDs (driven unconditionally  no board detection) ------------
-// We light BOTH kinds of status LED on every render, so ONE firmware image
-// works on every board with no build switch: two discrete LEDs (SuperMini:
-// red=GPIO1, blue=GPIO2) AND a WS2812 RGB (Zero: GPIO21). A board simply
-// ignores the output it doesn't have  toggling an unused GPIO is harmless.
+// --- Status LEDs -----------------------------------------------------------
+// 1.6.8: chosen by WEBBY_ZERO (top of the file). SuperMini build = two discrete LEDs (red GPIO1,
+// blue GPIO2) only; S3-Zero build = the WS2812 on GPIO21 only. (Before 1.6.8 one image drove both, and
+// the WS2812 output was switched off for everyone in 1.6.2 because it starved the SuperMini's ESP-NOW -
+// so the Zero had no status light at all.)
 #ifndef LED_RED
 #define LED_RED        1      // SuperMini red
 #endif
@@ -76,7 +92,7 @@
 #define LED_NP_BRIGHT  28     // 0..255, keep low
 #endif
 #ifndef LED_NP_ENABLE
-#define LED_NP_ENABLE  0     // 1.6.2: WS2812/RMT OFF by default - driving the pixel starved the ESP-NOW radio on the SuperMini (pairing died). Discrete red/blue LEDs unaffected. Set 1 only where you accept the wireless risk.
+#define LED_NP_ENABLE  WEBBY_ZERO     // 1.6.8: on in the Zero build only | 1.6.2: WS2812/RMT OFF by default - driving the pixel starved the ESP-NOW radio on the SuperMini (pairing died). Discrete red/blue LEDs unaffected. Set 1 only where you accept the wireless risk.
 #endif
 #ifndef BOOT_PIN
 #define BOOT_PIN       0
@@ -98,6 +114,7 @@
 #define PKT_XIAO_DIRTY  0x15
 #define PKT_XIAO_STATUS 0x17
 #define PKT_UNPAIR      0x16
+#define PKT_SHARE       0x1A   // 1.6.6: an owner screen lets ONE more screen pair (pairing open 2 min)
 
 #define SAVE_PROTO_VER  1
 #define SAVE_SETTLE_MS  3000
@@ -108,6 +125,7 @@
 #define CMD_GET_STATUS  0x02
 #define CMD_EJECT       0x03
 #define CMD_EJECT_FORCE 0x04
+#define CMD_CLAIM       0x0A   // 1.6.7: was 0x07 = ENROLL in the fleet wire contract (#24). 1.6.6: a screen claims the dongle before sending a disk (mac[6], flags bit0=take over, len, name)
 #define CMD_SET_NAME    0x06   // #24: set the pretty display name for the NEXT flung disk (g_loaded_name only; FAT12 stays DISK.ADF)
 //  FLEET: UDP discovery beacon (shared port: dongle, app, JC, browser-master) 
 #define GTI_DISCO_PORT   51703
@@ -183,8 +201,12 @@ static void ledRender() {
   // Only touch the hardware when something changed (covers both outputs).
   uint32_t sig=((uint32_t)R<<16)|((uint32_t)G<<8)|B|((uint32_t)(dred?1:0)<<25)|((uint32_t)(dblue?1:0)<<24);
   static uint32_t last=0xFFFFFFFFu; if(sig==last) return; last=sig;
+#if !WEBBY_ZERO
   digitalWrite(LED_RED,  dred ? HIGH : LOW);
   digitalWrite(LED_BLUE, dblue? HIGH : LOW);
+#else
+  (void)dred; (void)dblue;
+#endif
 #if LED_NP_ENABLE
 #if LED_NP_SWAP_RG
   neopixelWrite(LED_NP_PIN, G, R, B);   // R/G swapped for this Zero's pixel
@@ -199,7 +221,9 @@ static inline void setLeds(bool red, bool blue){ g_led_red = red; g_led_blue = b
 static inline void ledActivity(uint16_t ms=350){ g_led_act_until = millis() + ms; ledRender(); }
 static inline void ledTick(){ ledRender(); }   // call each loop so time-based states refresh
 static void ledInit(){
+#if !WEBBY_ZERO
   pinMode(LED_RED, OUTPUT); pinMode(LED_BLUE, OUTPUT);   // WS2812 needs no pinMode
+#endif
   ledRender();
 }
 static void oledStatus(const String& l0, const String& l1, const String& l2, const String& l3) {
@@ -289,6 +313,15 @@ static void build_volume(const char* outName, uint32_t fsz){ build_volume_ex(out
 // #24: the pretty display name for the NEXT flung disk (set-next-name escape),
 // consumed once when the disk lands. FAT12 root name stays constant (DISK.ADF).
 static String g_next_name = "";
+// 1.6.6: which screen put the current disk in (set by CMD_CLAIM just before a fling; all zero = unknown:
+// an older screen, the web page, or nothing loaded). Other screens see it in the pairing reply ("in use by").
+static uint8_t g_loader_mac[6]  = {0};
+static char    g_loader_name[25] = {0};
+static uint8_t g_claim_mac[6]   = {0};
+static char    g_claim_name[25] = {0};
+static bool    g_claim_pending  = false;
+static uint32_t g_claim_ms      = 0;      // a claim only counts for the fling that follows it (20 s)
+static void loaderClear(){ memset(g_loader_mac,0,6); g_loader_name[0]=0; }
 
 // #24: a valid, legal 8.3 FAT name from any display string (upper alnum only,
 // <=8 chars) + a constant .ADF  the FAT name is cosmetic (nothing reads it),
@@ -340,15 +373,16 @@ static uint32_t g_enroll_until = 0;
 
 // ESP-NOW receive queue
 #define RX_PKT_SIZE 250
-struct RxPkt { uint8_t data[RX_PKT_SIZE]; int len; };
+struct RxPkt { uint8_t data[RX_PKT_SIZE]; int len; uint8_t src[6]; };   // 1.6.4 (#24): src = the REAL sender MAC (radio header), not the payload claim
 static QueueHandle_t _rxQueue = nullptr;
-static void queuePacket(const uint8_t* data, int len) {
+static void queuePacket(const uint8_t* data, int len, const uint8_t* src) {
   if (!_rxQueue) return;
   RxPkt pkt; int n = min(len, RX_PKT_SIZE);
   memcpy(pkt.data, data, n); pkt.len = n;
+  if (src) memcpy(pkt.src, src, 6); else memset(pkt.src, 0, 6);   // 1.6.4: sender from the radio header
   xQueueSendFromISR(_rxQueue, &pkt, nullptr);
 }
-static void handleESPNOW(const uint8_t* data, int len);
+static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src);
 
 class XiaoPeer : public ESP_NOW_Peer {
 public:
@@ -357,7 +391,7 @@ public:
   ~XiaoPeer() { remove(); }
   bool add_peer() { return add(); }
   bool send_pkt(const uint8_t* d, size_t l) { return send(d, l); }
-  void onReceive(const uint8_t* d, size_t l, bool b) override { queuePacket(d, (int)l); }
+  void onReceive(const uint8_t* d, size_t l, bool b) override { queuePacket(d, (int)l, addr()); }   // 1.6.4: sender = this peer
   void onSent(bool) override {}
 };
 static XiaoPeer* _bcastPeer = nullptr;
@@ -390,16 +424,29 @@ static void wipeOwners(){
   oledStatus("Gotek OMEGA " FW_VERSION,"** WIPED **","All owners cleared","Hold BOOT to pair");
 }
 
-static void handleESPNOW(const uint8_t* data, int len) {
+static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
   if (len < 1) return;
   uint8_t type = data[0];
+  // 1.6.4 (#24): owner decisions use the REAL sender (src, from the radio header),
+  // never p->mac (a payload field anyone can fill in). The panel sends from its STA
+  // interface and puts WiFi.macAddress() in p->mac, so for a genuine GTi the two are
+  // equal and existing pairings carry over unchanged.
+  static const uint8_t ZERO6[6] = {0,0,0,0,0,0};
+  const bool haveSrc = src && memcmp(src, ZERO6, 6) != 0;
   if (type == PKT_PAIR_HELLO) {
-    const PktHello* p = (const PktHello*)data;
+    PktHello hp = {}; memcpy(&hp, data, min((size_t)len, sizeof(hp)));   // copy, then overwrite the claimed MAC with the real one
+    if (haveSrc) memcpy(hp.mac, src, 6);
+    const PktHello* p = &hp;
     // WEBBY note: Webby ships unlocked, so with no enrolled owners any GTi may pair
     // (g_enroll_open is forced true at boot in ESPNOW mode when _owner_count==0).
     bool known = isOwner(p->mac);
     if (!known) {
-      if (!g_enroll_open) return;
+      // 1.6.5: an UNCLAIMED dongle (no owners) is always open - same rule as EJECT below (JFW).
+      // Before, the door shut when the first GTi paired and was never reopened when that GTi
+      // unpaired (deleted the dongle), and shut 6 minutes after power-on even with no owner, so
+      // the dongle went silent to every scan until it was power-cycled or BOOT was held 5 s.
+      // Once an owner exists the door is closed as before: a SECOND screen still needs BOOT 5 s.
+      if (!g_enroll_open && _owner_count > 0) return;
       if (!addOwner(p->mac)) { oledStatus("Gotek OMEGA " FW_VERSION,"OWNERS FULL","Hold BOOT 15s","to wipe & re-pair"); return; }
       saveOwners();
       if (_owner_count>0) g_enroll_open = false;   // once a real owner exists, close the door
@@ -410,13 +457,28 @@ static void handleESPNOW(const uint8_t* data, int len) {
     if (!_wavePeer->add_peer()) { delete _wavePeer; _wavePeer = nullptr; }
     PktHello reply = {}; reply.type = PKT_PAIR_REPLY;
     WiFi.softAPmacAddress(reply.mac); strncpy(reply.ip, AP_IP, 15); reply.pad[0] = SAVE_PROTO_VER;
+    // 1.6.6: who has a disk in me (pad[7] marker 0xA5, [8] loaded, [9..14] screen MAC, [15] len, [16..39] name).
+    // pad[1..6] stay free for the parked HD-capability fields.
+    reply.pad[7] = 0xA5; reply.pad[8] = g_disk_loaded ? 1 : 0; memcpy(reply.pad+9, g_loader_mac, 6);
+    { uint8_t L = (uint8_t)strlen(g_loader_name); if (L > 24) L = 24; reply.pad[15] = L; memcpy(reply.pad+16, g_loader_name, L); }
     XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
     if (dst) dst->send_pkt((uint8_t*)&reply, sizeof(reply));
     oledStatus("Gotek OMEGA " FW_VERSION, known?"Reconnected":"Owner added", macToStr(_wave_mac), String(_owner_count)+" owner(s)");
     return;
   }
+  if (type == PKT_SHARE) {
+    // 1.6.6: only an existing owner can open the door, and only for one more screen (the door closes again
+    // as soon as that screen pairs - see PAIR_HELLO) or after 2 minutes.
+    if (haveSrc && isOwner(src)) {
+      g_enroll_open = true; g_enroll_until = millis() + 2UL*60UL*1000UL;
+      oledStatus("Gotek OMEGA " FW_VERSION, "Sharing", "2 min to pair", "one more screen");
+    }
+    return;
+  }
   if (type == PKT_UNPAIR) {
-    const PktHello* p = (const PktHello*)data;
+    PktHello up = {}; memcpy(&up, data, min((size_t)len, sizeof(up)));
+    if (haveSrc) memcpy(up.mac, src, 6);   // 1.6.4: a screen can only unpair ITSELF
+    const PktHello* p = &up;
     if (removeOwner(p->mac)) {
       saveOwners();
       if (memcmp(_wave_mac, p->mac, 6)==0) {
@@ -424,18 +486,24 @@ static void handleESPNOW(const uint8_t* data, int len) {
         if (_owner_count) memcpy(_wave_mac, _owners[0], 6); else memset(_wave_mac,0,6);
       }
       _paired = (_owner_count>0);
+      // 1.6.5: the last owner deleted this dongle -> back to "looking for a new owner", exactly like a
+      // fresh dongle at power-on (pairing open, pairing blink). The rule in PAIR_HELLO keeps it open
+      // for as long as it has no owner, so it never goes silent to a scan.
+      if (_owner_count == 0) { g_enroll_open = true; g_enroll_until = millis() + 6UL*60UL*1000UL; }
       oledStatus("Gotek OMEGA " FW_VERSION, "Unpaired", String(_owner_count)+" owner(s)", "");
     }
     return;
   }
   if (type == PKT_DISK_EJECT) {
+    // 1.6.4 (#24): an unclaimed dongle stays open (JFW); once an owner exists, only an owner may eject.
+    if (_owner_count > 0 && !(haveSrc && isOwner(src))) return;
     if (g_disk_loaded) { hardDetach(); g_disk_loaded=false; }
-    dirtyReset(); ledBlue(false);
+    dirtyReset(); ledBlue(false); loaderClear();
     oledStatus("Gotek OMEGA " FW_VERSION, "Ejected", "", "Ready");
     return;
   }
 }
-static void onNewPeer(const esp_now_recv_info_t* info, const uint8_t* data, int len, void* arg) { queuePacket(data, len); }
+static void onNewPeer(const esp_now_recv_info_t* info, const uint8_t* data, int len, void* arg) { queuePacket(data, len, info ? info->src_addr : nullptr); }   // 1.6.4: keep src_addr
 
 // Owner config load (base)
 static void loadConfig() {
@@ -534,7 +602,7 @@ static inline void wrLE16(uint8_t*p,uint16_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v
 static void doEject(WiFiClient& client, bool force){
   if (!force && g_dirty_count > 0) { client.write((uint8_t)0x02); client.flush(); return; }
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
-  dirtyReset(); g_loaded_name=""; ledBlue(false);
+  dirtyReset(); g_loaded_name=""; ledBlue(false); loaderClear();
   oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (app)", "", "Ready");
   client.write((uint8_t)0x01); client.flush();
 }
@@ -587,6 +655,29 @@ static void handleTCPClient(WiFiClient& client) {
     else if (cmd == CMD_GET_STATUS)  doGetStatus(client);
     else if (cmd == CMD_EJECT)       doEject(client,false);
     else if (cmd == CMD_EJECT_FORCE) doEject(client,true);
+    else if (cmd == CMD_CLAIM) {      // 1.6.6: mac[6] + flags + len + name. Reply 0x01 go ahead / 0x03 in use / 0x02 unsaved saves
+      uint8_t in[8]; int got=0; uint32_t tb=millis();
+      while(got<8 && millis()-tb<2000){ if(!client.connected())break; int c=client.read(); if(c<0){delay(1);continue;} in[got++]=(uint8_t)c; }
+      if (got<8) { client.write((uint8_t)0x00); return; }
+      int len = in[7] > 24 ? 24 : in[7]; char nb[25]; int ng=0; tb=millis();
+      while(ng<in[7] && millis()-tb<2000){ if(!client.connected())break; int c=client.read(); if(c<0){delay(1);continue;} if(ng<len)nb[ng]=(char)c; ng++; }
+      nb[ng<len?ng:len]=0;
+      static const uint8_t Z6[6]={0,0,0,0,0,0};
+      bool force   = (in[6] & 1) != 0;
+      bool other   = g_disk_loaded && memcmp(g_loader_mac, in, 6) != 0;
+      bool unknown = memcmp(g_loader_mac, Z6, 6) == 0;
+      // Refuse (unless forced) when another screen's disk is in, or anyone's unsaved saves are waiting.
+      uint8_t verdict = 0x01;
+      if (other && !force) { if (g_dirty_count > 0) verdict = 0x02; else if (!unknown) verdict = 0x03; }
+      if (verdict != 0x01) {
+        const char* who = g_loader_name[0] ? g_loader_name : "another screen";
+        uint8_t wl = (uint8_t)strlen(who); if (wl > 24) wl = 24;
+        client.write(verdict); client.write(wl); client.write((const uint8_t*)who, wl);
+        return;
+      }
+      memcpy(g_claim_mac, in, 6); memcpy(g_claim_name, nb, 25); g_claim_pending = true; g_claim_ms = millis();
+      client.write((uint8_t)0x01);
+    }
     else if (cmd == CMD_SET_NAME) {   // #24: 1-byte length + name bytes -> g_next_name
       uint32_t tn=millis(); while(client.available()<1 && millis()-tn<2000){ if(!client.connected())break; delay(1); }
       int len = client.available()>=1 ? client.read() : 0;
@@ -604,6 +695,10 @@ static void handleTCPClient(WiFiClient& client) {
   // filename+ext via CMD_SET_NAME immediately before the fling; absent that
   // (older panel), fall back to the historic DISK.ADF.
   String fatName = g_next_name.length() ? to83keepext(g_next_name) : String("DISK.ADF");
+  // 1.6.4 (#24): if a disk is already attached, detach FIRST - otherwise the host stays
+  // mounted on a volume we are rewriting underneath it for the whole transfer.
+  // (The browser-upload path already did this; the TCP path now matches.)
+  if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   build_volume(fatName.c_str(), size);
   uint8_t* dst = g_disk + DATA_LBA * SECTOR_SIZE;
   uint32_t received = 0; const size_t BUF = 4096;
@@ -625,6 +720,17 @@ static void handleTCPClient(WiFiClient& client) {
     g_next_name = "";   // consume it  the next fling must set its own name
     uint8_t ack[5]; ack[0]=0x01; wrLE32(ack+1,g_load_id); client.write(ack,5); client.flush(); delay(100); client.stop();
     if (g_disk_loaded) hardDetach(); hardAttach(); g_disk_loaded = true; g_next_status_ms = 0; ledBlue(true); ledActivity();
+    // 1.6.6: remember which screen sent it; if that screen is an owner, its save reports go to it from now on
+    if (g_claim_pending && millis() - g_claim_ms < 20000) {
+      memcpy(g_loader_mac, g_claim_mac, 6); memcpy(g_loader_name, g_claim_name, 25); g_claim_pending = false;
+      if (isOwner(g_loader_mac) && memcmp(_wave_mac, g_loader_mac, 6) != 0) {
+        memcpy(_wave_mac, g_loader_mac, 6); _paired = true;
+        if (_wavePeer) { delete _wavePeer; _wavePeer = nullptr; }
+        _wavePeer = new XiaoPeer(_wave_mac, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
+        if (!_wavePeer->add_peer()) { delete _wavePeer; _wavePeer = nullptr; }
+      }
+    } else loaderClear();   // an older screen (no claim): unknown
+    g_claim_pending = false;
     oledStatus("LOADED!", "", "USB: attached", "Gotek ready");
     sendSimple(PKT_XIAO_DONE);
   } else {
@@ -648,6 +754,7 @@ static String   g_up_name = "";
 static String jsonEsc(const String& s){
   String o; for(size_t i=0;i<s.length();i++){ char c=s[i]; if(c=='"'||c=='\\'){o+='\\';o+=c;} else if(c>=32) o+=c; } return o;
 }
+static char g_ap_name[24] = "GotekOMEGA";   // 1.6.9: the real AP name, shown on the page
 static String statusJson(){
   String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
   String s = "{";
@@ -663,6 +770,8 @@ static String statusJson(){
   s += ",\"heap\":"; s += String((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));   // HD test
   s += ",\"psram\":"; s += String((unsigned)ESP.getFreePsram());
   s += ",\"disk\":"; s += String((unsigned)((uint32_t)TOTAL_SECTORS*SECTOR_SIZE));
+  s += ",\"max\":"; s += String((unsigned)MAX_FILE_BYTES);   // 1.6.9: biggest image the page may send
+  s += ",\"ap\":\""; s += jsonEsc(String(g_ap_name)); s += "\"";   // 1.6.9: real AP name for the page
   s += "}";
   return s;
 }
@@ -670,6 +779,7 @@ static String statusJson(){
 // Finalize a browser upload: lay metadata over the streamed data, re-insert.
 static void webFinishLoad(){
   uint32_t size = g_up_recv;
+  loaderClear(); strcpy(g_loader_name, "web page");   // 1.6.6: loaded from the browser, not a screen
   build_volume_ex(to83keepext(g_up_name).c_str(), size, false);   // #24/1.6.3: 8.3-mangle keeping the real extension so FF detects DSK/ADF/etc; full name kept in g_loaded_name (below)
   g_image_size = size; g_load_id++; dirtyReset();
   if (g_disk_loaded) hardDetach();
@@ -694,7 +804,7 @@ static void handleUpload(){
   }
 }
 static void handleUploadDone(){
-  if (g_up_overflow) { server.send(413,"application/json","{\"ok\":false,\"err\":\"image too big for the 1MB ramdisk (DD only)\"}"); return; }
+  if (g_up_overflow) { server.send(413,"application/json","{\"ok\":false,\"err\":\"image too big - this dongle holds up to 1.75 MB\"}"); return; }
   if (g_up_recv == 0) { server.send(400,"application/json","{\"ok\":false,\"err\":\"empty upload\"}"); return; }
   g_loaded_name = g_up_name;
   webFinishLoad();
@@ -702,7 +812,7 @@ static void handleUploadDone(){
 }
 static void handleEjectWeb(){
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
-  dirtyReset(); g_loaded_name=""; ledBlue(false);
+  dirtyReset(); g_loaded_name=""; ledBlue(false); loaderClear();
   oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (web)", "", "Ready");
   server.send(200,"application/json", statusJson());
 }
@@ -750,11 +860,11 @@ static const char PAGE_HTML[] PROGMEM = R"HTML(<!doctype html><html lang="en"><h
 :root{--bg:#0f1016;--panel:#181a24;--panel2:#1f2230;--line:#2b2f42;--ink:#e9ecf5;--dim:#8b93ad;--amber:#ffca57;--cyan:#3fe0e8;--green:#54d67e;--red:#ff6b6b}
 *{box-sizing:border-box}html,body{margin:0}body{background:radial-gradient(120% 80% at 50% -10%,#1a1d2b,var(--bg) 60%);color:var(--ink);min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;padding:env(safe-area-inset-top) 0 0}
 .wrap{max-width:460px;margin:0 auto;padding:18px 16px 40px}
-header{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+header{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
 .badge{width:38px;height:38px;border-radius:9px;background:linear-gradient(150deg,#2a2e42,#12131b);border:1px solid var(--line);display:grid;place-items:center;flex:none}
 .badge b{font-weight:800;font-size:15px;color:var(--amber)}
 .title h1{margin:0;font-size:15px;letter-spacing:.4px}.title span{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:1.4px}
-.conn{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--dim);background:var(--panel);border:1px solid var(--line);padding:6px 10px;border-radius:20px}
+.conn{margin-left:auto;display:flex;flex-wrap:wrap;align-items:center;gap:7px;font-size:11.5px;color:var(--dim);background:var(--panel);border:1px solid var(--line);padding:6px 10px;border-radius:20px}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}.dot.ap{background:var(--amber);box-shadow:0 0 8px var(--amber)}
 .tabs{display:flex;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:4px;margin-bottom:16px}
 .tabs button{flex:1;border:0;background:transparent;color:var(--dim);font:inherit;font-weight:600;font-size:13px;padding:9px;border-radius:9px;cursor:pointer}
@@ -782,7 +892,9 @@ input[type=file]{display:none}
 .hint{font-size:12px;color:var(--dim);margin-top:12px;line-height:1.5}.note{font-size:11.5px;color:var(--dim);text-align:center;margin-top:6px}
 .toast{position:fixed;left:50%;bottom:22px;transform:translate(-50%,20px);opacity:0;pointer-events:none;background:#0c1a12;border:1px solid #2f6b45;color:#c9f5d8;padding:11px 16px;border-radius:11px;font-size:13.5px;font-weight:600;transition:.25s;max-width:90%}
 .toast.show{opacity:1;transform:translate(-50%,0)}.toast.err{background:#1e0f12;border-color:#6b3030;color:#ffd3d3}
-footer{text-align:center;color:#5b6076;font-size:11px;margin-top:22px}.hidden{display:none}
+footer{text-align:center;color:#5b6076;font-size:11px;margin-top:22px}
+@media(max-width:600px){.conn{margin-left:0;width:100%;justify-content:space-between}}
+.links a{display:block;padding:11px 12px;margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);color:var(--ink);text-decoration:none;font-weight:700;font-size:14px}.links a small{display:block;font-weight:400;color:var(--dim);font-size:12px;margin-top:2px}.hidden{display:none}
 </style></head><body><div class="wrap">
 <header><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASwAAABKCAYAAAABp2mGAAADwUlEQVR42u3dTW7kIBAG0L7/tbKY/VxoshopUtJp3C6oKniflEXGio3BfoPxD49HYD7+/P038vNYlNHy7P6ze72efHw8iqRSWaY2OrCABSxgtey5AEu9AqsfWBUBXdrIwAIWsIDV6iAFFrCAVR+skoh2bQxYAQtY6104EisHJLAcHz3BSitX94aBFbCAlWPD0VgBC1jA6gXW0rLt0jiwAhawcn04Fqt3KgBWwAIWsNo0EqyABaz8ti+PVdb6726vWn1l7dcpUY+Nweo2vgQsJxqw+tyI26IwwAIWsIC1tDCVtw0sJ5p6rDNctAVWwAIWsIDVbiANWE40YO2LVWgdVmm46AoA1vz/XJ6V6dW/f1322zZG9rnycb/DYw2lylupkoDVC6yryyLXk/E1jxPBKlfm7p81BlZOe/203jvPykWBCSxgla4gYOX3sKJfn7pyKQqsXljdLjewgHW3d/X/92fbu3LZ9xOEV3t6wKqN1a2yAwtYM9psBJPRHtUocMDKPQ+BBawWbbbisu3Z+oFV6xycXn5gAWvGXcJ3BuVf/Z1LQmABC1ghY1ivLt+uDKpn9AaBFVcnU/fBYw3AisRrpJf1KBJgAWv5nYnuYHUfdxztRb37yMPI/lcFq9sH/Nqce12vnbPB2rln8M4Y1oqelVdzgOXlZ2AdmR3e26u83Wn74vMywAIWsFp9QLPjdPLAAhawam+zXC/r5E8kO9GABayGYGXMGQgsYAFrzy9WLL+jkbV+YAELWAeBFYlKx4lUnWg9j5Fd9mP1GPLKcpXvZXWcqh5YwALWnLJN3bddGgdYwAJW3r4ffWlorAdYwOq370eiZXAaWMDq87pQGlgVGtXdNGABq9cL2cei5fY/sIAFrBaN63klYAGr1sPa7dBafSsUWMACFrDSZozu9G1qYAHr5Ieot0QroiJ2PrGBBSxgFQPraiFOOrF33i9gAWsbtERERERERERERERERERERERERERERERKxtPUIjIdl1Forkw/p4ZFJA2sK/Nlql0RSQPr7vJ3yjVj/6IveeEs0gysWV+4nbFvMyedcESJFABrdGLP6PJUAgtSIg3A+m357LkDotcT/VlkR5BIAbC+js9kTnQSCVb0d9wdPSKFwKowjdzM3tXdr4w6ekSagbWil1f1chBcIo3AWrH9u+ucjRWwRAqAtaJnET3G9AymGXcHHTkijcBa1bObsd7I+hGRZLBW9C4yZ2PWuxLZBKyry+9scwSZzN6VHpZIcbSuLLuLVXRvJvrBVoPtIpKCsZr4nk+4r8q1YijKBgAAAABJRU5ErkJggg==" alt="OMEGAWARE" style="height:34px;margin-right:4px"><div class="title"><h1>GOTEK&nbsp;OMEGA</h1><span>Webby dongle</span></div>
 <div class="conn"><span id="langbar" style="display:inline-flex;gap:2px;margin-right:8px"></span><span class="dot" id="condot"></span><span id="conntxt">...</span></div></header>
@@ -794,12 +906,12 @@ footer{text-align:center;color:#5b6076;font-size:11px;margin-top:22px}.hidden{di
    <path d="M7 5 H40 L46 11 V45 A2 2 0 0 1 44 47 H9 A2 2 0 0 1 7 45 V5 Z" fill="#262e4a" stroke="#3b4570" stroke-width="1"/>
    <rect x="14" y="5" width="22" height="13" rx="1" fill="#b9c1da"/><rect x="29" y="7" width="5" height="9" rx="1" fill="#2a3150"/>
    <rect x="11" y="25" width="30" height="19" rx="2" fill="#eef1fb"/><rect x="14" y="30" width="22" height="2.4" rx="1" fill="#aeb7d6"/><rect x="14" y="35" width="15" height="2.4" rx="1" fill="#c3ccec"/></svg></div>
-  <div class="meta" style="min-width:0"><div class="name" id="dname" data-i18n="no_disk">-- no disk --</div><div class="sub" id="dsub" data-i18n="load_ins">Load an ADF to insert it</div></div>
+  <div class="meta" style="min-width:0"><div class="name" id="dname">-- no disk --</div><div class="sub" id="dsub">Load a disk image to insert it</div></div>
   <button class="btn ghost eject" id="ejectBtn" onclick="ejectDisk()" disabled data-i18n="eject">Eject</button></div></div>
  <div class="card"><h2 data-i18n="load_img">Load image</h2>
-  <label class="drop" id="drop" for="file"><div class="plus">+</div><div class="big" data-i18n="tap_choose">Tap to choose an ADF</div><div class="small"><span data-i18n="drag_hint">or drag a file here</span> &middot; .adf .adz .img</div></label>
-  <input type="file" id="file" accept=".adf,.adz,.img" onchange="picked(this.files[0])">
-  <div class="prog" id="prog"><i id="bar"></i></div><div class="note" data-i18n="dd_note">DD image up to ~880&nbsp;KB &middot; one disk at a time</div></div>
+  <label class="drop" id="drop" for="file"><div class="plus">+</div><div class="big" data-i18n="tap_choose">Tap to choose a disk image</div><div class="small"><span data-i18n="drag_hint">or drag a file here</span> &middot; ADF DSK HFE ST IMG &hellip;</div></label>
+  <input type="file" id="file" onchange="picked(this.files[0])">
+  <div class="prog" id="prog"><i id="bar"></i></div><div class="note" data-i18n="dd_note">Up to 1.75 MB (an Amiga HD disk) &middot; one disk at a time</div></div>
 </section>
 <section id="vWifi" class="hidden">
  <div class="card"><h2 data-i18n="home_wifi">Home Wi-Fi</h2>
@@ -812,43 +924,52 @@ footer{text-align:center;color:#5b6076;font-size:11px;margin-top:22px}.hidden{di
   <button class="btn amber wide" style="margin-top:16px" onclick="joinWifi()" data-i18n="save_join">Save &amp; Join</button>
   <div class="hint" data-i18n="wifi_hint">Saves and reboots onto your home Wi-Fi. Then open <b>gotekomega.local</b> for the screen or fleet leader, or reach this dongle directly at its own <b>name.local</b> (shown after saving).</div></div>
  <div class="card"><h2 data-i18n="espnow_t">ESP-NOW / GTi mode</h2>
-  <div class="hint" style="margin-top:0">Switch back to the dongle's own access point + ESP-NOW so a GTi screen can drive it. Reconnect to the <b>GotekOMEGA</b> Wi-Fi afterwards to return here.</div>
+  <div class="hint" style="margin-top:0"><span data-i18n="ap_back1">Switch back to the dongle's own access point + ESP-NOW so a GTi screen can drive it. Reconnect to the</span> <b class="apname">GotekOMEGA</b> <span data-i18n="ap_back2">Wi-Fi afterwards to return here.</span></div>
   <button class="btn ghost wide" style="margin-top:14px" onclick="toEspnow()" data-i18n="espnow_b">Disconnect Wi-Fi &rarr; ESP-NOW</button></div>
 </section>
-<footer>Webby-0.1 &middot; OMEGAWARE</footer></div>
+<div class="card links"><h2 data-i18n="more_t">More</h2>
+ <a href="/app"><span data-i18n="full_ui">Full web interface</span><small data-i18n="full_ui_s">Themes, firmware update, fleet</small></a>
+ <a href="https://mesarim.github.io/Gotek-Touchscreen-interface/" target="_blank" rel="noopener"><span data-i18n="flasher">GTi web flasher</span><small data-i18n="flasher_s">Firmware for every board - needs internet</small></a>
+ <a href="https://mesarim.github.io/Gotek-Touchscreen-interface/help.html" target="_blank" rel="noopener"><span data-i18n="help">Help &amp; guide</span><small data-i18n="help_s">Setup, pairing, saves - needs internet</small></a></div>
+<footer>)HTML" FW_VERSION R"HTML( &middot; OMEGAWARE</footer></div>
 <div class="toast" id="toast"></div>
-<script>var I18N={"this_dongle":{"en":"This dongle","fr":"Ce dongle","it":"Questo dongle","es":"Este dongle","de":"Dieser Dongle","nl":"Deze dongle"},"screen_fleet":{"en":"Screen / fleet","fr":"Ecran / flotte","it":"Schermo / flotta","es":"Pantalla / flota","de":"Bildschirm / Fleet","nl":"Scherm / fleet"},"dev_name":{"en":"Device name","fr":"Nom appareil","it":"Nome dispositivo","es":"Nombre del dispositivo","de":"Geraetename","nl":"Apparaatnaam"},"dev_name_ph":{"en":"e.g. amiga-desk","fr":"ex. amiga-bureau","it":"es. amiga-scrivania","es":"ej. amiga-mesa","de":"z.B. amiga-tisch","nl":"bijv. amiga-bureau"},"disk":{"en":"Disk","fr":"Disque","it":"Disco","es":"Disco","de":"Diskette","nl":"Disk"},"wifi":{"en":"Wi-Fi","fr":"Wi-Fi","it":"Wi-Fi","es":"Wi-Fi","de":"WLAN","nl":"Wi-Fi"},"in_drive":{"en":"In the drive","fr":"Dans le lecteur","it":"Nel drive","es":"En la unidad","de":"Im Laufwerk","nl":"In het station"},"no_disk":{"en":"-- no disk --","fr":"-- aucun disque --","it":"-- nessun disco --","es":"-- sin disco --","de":"-- keine Diskette --","nl":"-- geen disk --"},"load_ins":{"en":"Load an ADF to insert it","fr":"Chargez un ADF pour linserer","it":"Carica un ADF per inserirlo","es":"Carga un ADF para insertarlo","de":"ADF laden zum Einlegen","nl":"Laad een ADF om hem te plaatsen"},"eject":{"en":"Eject","fr":"Ejecter","it":"Espelli","es":"Expulsar","de":"Auswerfen","nl":"Uitwerpen"},"load_img":{"en":"Load image","fr":"Charger une image","it":"Carica immagine","es":"Cargar imagen","de":"Abbild laden","nl":"Image laden"},"tap_choose":{"en":"Tap to choose an ADF","fr":"Touchez pour choisir un ADF","it":"Tocca per scegliere un ADF","es":"Toca para elegir un ADF","de":"Zum Auswahlen eines ADF tippen","nl":"Tik om een ADF te kiezen"},"drag_hint":{"en":"or drag a file here","fr":"ou glissez un fichier ici","it":"o trascina un file qui","es":"o arrastra un archivo aqui","de":"oder Datei hierher ziehen","nl":"of sleep hier een bestand"},"dd_note":{"en":"DD image up to ~880 KB, one disk at a time","fr":"Image DD jusqua ~880 Ko, un disque a la fois","it":"Immagine DD fino a ~880 KB, un disco alla volta","es":"Imagen DD hasta ~880 KB, un disco a la vez","de":"DD-Abbild bis ~880 KB, eine Diskette","nl":"DD-image tot ~880 KB, een disk tegelijk"},"home_wifi":{"en":"Home Wi-Fi","fr":"Wi-Fi domestique","it":"Wi-Fi di casa","es":"Wi-Fi de casa","de":"Heim-WLAN","nl":"Thuis-Wi-Fi"},"net_ssid":{"en":"Network (SSID)","fr":"Reseau (SSID)","it":"Rete (SSID)","es":"Red (SSID)","de":"Netzwerk (SSID)","nl":"Netwerk (SSID)"},"ssid_ph":{"en":"your home wifi name","fr":"nom de votre wifi","it":"nome del tuo wifi","es":"nombre de tu wifi","de":"Name deines WLAN","nl":"naam van je wifi"},"scan_btn":{"en":"Scan for networks","fr":"Rechercher des reseaux","it":"Cerca reti","es":"Buscar redes","de":"Netzwerke suchen","nl":"Netwerken zoeken"},"password":{"en":"Password","fr":"Mot de passe","it":"Password","es":"Contrasena","de":"Passwort","nl":"Wachtwoord"},"save_join":{"en":"Save & Join","fr":"Enregistrer & rejoindre","it":"Salva & connetti","es":"Guardar y unir","de":"Speichern & verbinden","nl":"Opslaan & verbinden"},"wifi_hint":{"en":"Saves and reboots onto your home Wi-Fi. Then open gotekomega.local for the screen or fleet leader, or reach this dongle directly at its own name.local (shown after saving).","fr":"Enregistre et redemarre sur votre Wi-Fi. Ouvrez ensuite gotekomega.local pour lecran ou le chef de flotte, ou ce dongle a sa propre adresse nom.local (affichee apres lenregistrement).","it":"Salva e riavvia sul tuo Wi-Fi. Poi apri gotekomega.local per lo schermo o il capo flotta, oppure raggiungi questo dongle al suo indirizzo nome.local (mostrato dopo il salvataggio).","es":"Guarda y reinicia en tu Wi-Fi. Luego abre gotekomega.local para la pantalla o el lider, o accede a este dongle en su propia direccion nombre.local (mostrada tras guardar).","de":"Speichert und startet ins Heim-WLAN neu. Dann gotekomega.local fuer den Bildschirm oder Fleet-Leader oeffnen, oder diesen Dongle direkt unter seinem eigenen name.local erreichen (nach dem Speichern angezeigt).","nl":"Slaat op en herstart op je Wi-Fi. Open daarna gotekomega.local voor het scherm of de fleet-leider, of bereik deze dongle direct op zijn eigen naam.local (getoond na opslaan)."},"espnow_t":{"en":"ESP-NOW / GTi mode","fr":"Mode ESP-NOW / GTi","it":"Modalita ESP-NOW / GTi","es":"Modo ESP-NOW / GTi","de":"ESP-NOW / GTi-Modus","nl":"ESP-NOW / GTi-modus"},"espnow_h":{"en":"Switch back to the dongles own access point + ESP-NOW so a GTi screen can drive it. Reconnect to the GotekOMEGA Wi-Fi afterwards to return here.","fr":"Revenir au point dacces du dongle + ESP-NOW pour quun ecran GTi le pilote. Reconnectez-vous ensuite au Wi-Fi GotekOMEGA.","it":"Torna allaccess point del dongle + ESP-NOW cosi uno schermo GTi puo guidarlo. Poi riconnettiti al Wi-Fi GotekOMEGA.","es":"Vuelve al punto de acceso del dongle + ESP-NOW para que una pantalla GTi lo controle. Luego reconecta al Wi-Fi GotekOMEGA.","de":"Zurueck zum eigenen Access Point + ESP-NOW, damit ein GTi-Bildschirm steuern kann. Danach mit dem GotekOMEGA-WLAN verbinden.","nl":"Terug naar de eigen access point + ESP-NOW zodat een GTi-scherm hem aanstuurt. Verbind daarna weer met het GotekOMEGA-Wi-Fi."},"espnow_b":{"en":"Disconnect Wi-Fi  ESP-NOW","fr":"Deconnecter Wi-Fi  ESP-NOW","it":"Disconnetti Wi-Fi  ESP-NOW","es":"Desconectar Wi-Fi  ESP-NOW","de":"WLAN trennen  ESP-NOW","nl":"Wi-Fi loskoppelen  ESP-NOW"},"scanning":{"en":"Scanning...","fr":"Recherche...","it":"Ricerca...","es":"Buscando...","de":"Suche...","nl":"Zoeken..."},"no_nets":{"en":"No networks found","fr":"Aucun reseau trouve","it":"Nessuna rete trovata","es":"No se hallaron redes","de":"Keine Netzwerke gefunden","nl":"Geen netwerken gevonden"},"scan_fail":{"en":"Scan failed, try again","fr":"Echec du scan, reessayez","it":"Scansione fallita, riprova","es":"Fallo el escaneo, reintenta","de":"Suche fehlgeschlagen, erneut","nl":"Scan mislukt, opnieuw"},"save_fail":{"en":"SAVE FAILED - not stored","fr":"ECHEC - non enregistre","it":"SALVATAGGIO FALLITO","es":"ERROR - no guardado","de":"SPEICHERN FEHLGESCHLAGEN","nl":"OPSLAAN MISLUKT"},"cant_conn":{"en":"Could not connect to","fr":"Impossible de se connecter a","it":"Impossibile connettersi a","es":"No se pudo conectar a","de":"Keine Verbindung zu","nl":"Kon niet verbinden met"},"wrong_pw":{"en":"Wrong password? Check it and try again.","fr":"Mauvais mot de passe ? Verifiez et reessayez.","it":"Password errata? Controlla e riprova.","es":"Contrasena incorrecta? Revisa y reintenta.","de":"Falsches Passwort? Pruefen und erneut.","nl":"Verkeerd wachtwoord? Check en probeer opnieuw."},"saved_join":{"en":"Saved, joining","fr":"Enregistre, connexion a","it":"Salvato, connessione a","es":"Guardado, uniendo a","de":"Gespeichert, verbinde mit","nl":"Opgeslagen, verbindt met"},"enter_net":{"en":"enter a network","fr":"saisissez un reseau","it":"inserisci una rete","es":"ingresa una red","de":"Netzwerk eingeben","nl":"voer een netwerk in"},"saving":{"en":"Saving...","fr":"Enregistrement...","it":"Salvataggio...","es":"Guardando...","de":"Speichern...","nl":"Opslaan..."}};var LANG=(localStorage.getItem("lang")||(navigator.language||"en")).slice(0,2).toLowerCase();if(!I18N.disk[LANG])LANG="en";function tt(k){var e=I18N[k];return e&&e[LANG]?e[LANG]:(e?e.en:k);}function applyI18n(){document.querySelectorAll("[data-i18n]").forEach(function(el){el.textContent=tt(el.getAttribute("data-i18n"));});document.querySelectorAll("[data-i18n-ph]").forEach(function(el){el.setAttribute("placeholder",tt(el.getAttribute("data-i18n-ph")));});}function setLang(l){LANG=l;try{localStorage.setItem("lang",l);}catch(e){}applyI18n();buildLangBar();}function buildLangBar(){var b=document.getElementById("langbar");if(!b)return;b.innerHTML="";["en","fr","it","es","de","nl"].forEach(function(l){var a=document.createElement("span");a.textContent=l.toUpperCase();a.style.cssText="cursor:pointer;padding:2px 5px;font-size:11px;border-radius:4px;"+(l===LANG?"background:#3b4570;color:#fff":"color:#8b93ad");a.onclick=function(){setLang(l);};b.appendChild(a);});}document.addEventListener("DOMContentLoaded",function(){applyI18n();buildLangBar();});
+<script>var I18N={"this_dongle":{"en":"This dongle","fr":"Ce dongle","it":"Questo dongle","es":"Este dongle","de":"Dieser Dongle","nl":"Deze dongle"},"screen_fleet":{"en":"Screen / fleet","fr":"Ecran / flotte","it":"Schermo / flotta","es":"Pantalla / flota","de":"Bildschirm / Fleet","nl":"Scherm / fleet"},"dev_name":{"en":"Device name","fr":"Nom appareil","it":"Nome dispositivo","es":"Nombre del dispositivo","de":"Geraetename","nl":"Apparaatnaam"},"dev_name_ph":{"en":"e.g. amiga-desk","fr":"ex. amiga-bureau","it":"es. amiga-scrivania","es":"ej. amiga-mesa","de":"z.B. amiga-tisch","nl":"bijv. amiga-bureau"},"disk":{"en":"Disk","fr":"Disque","it":"Disco","es":"Disco","de":"Diskette","nl":"Disk"},"wifi":{"en":"Wi-Fi","fr":"Wi-Fi","it":"Wi-Fi","es":"Wi-Fi","de":"WLAN","nl":"Wi-Fi"},"in_drive":{"en":"In the drive","fr":"Dans le lecteur","it":"Nel drive","es":"En la unidad","de":"Im Laufwerk","nl":"In het station"},"no_disk":{"en":"-- no disk --","fr":"-- aucun disque --","it":"-- nessun disco --","es":"-- sin disco --","de":"-- keine Diskette --","nl":"-- geen disk --"},"load_ins":{"en":"Load an ADF to insert it","fr":"Chargez un ADF pour l’inserer","it":"Carica un ADF per inserirlo","es":"Carga un ADF para insertarlo","de":"ADF laden zum Einlegen","nl":"Laad een ADF om hem te plaatsen"},"eject":{"en":"Eject","fr":"Ejecter","it":"Espelli","es":"Expulsar","de":"Auswerfen","nl":"Uitwerpen"},"load_img":{"en":"Load image","fr":"Charger une image","it":"Carica immagine","es":"Cargar imagen","de":"Abbild laden","nl":"Image laden"},"tap_choose":{"en":"Tap to choose an ADF","fr":"Touchez pour choisir un ADF","it":"Tocca per scegliere un ADF","es":"Toca para elegir un ADF","de":"Zum Auswahlen eines ADF tippen","nl":"Tik om een ADF te kiezen"},"drag_hint":{"en":"or drag a file here","fr":"ou glissez un fichier ici","it":"o trascina un file qui","es":"o arrastra un archivo aqui","de":"oder Datei hierher ziehen","nl":"of sleep hier een bestand"},"dd_note":{"en":"DD image up to ~880 KB, one disk at a time","fr":"Image DD jusqu’a ~880 Ko, un disque a la fois","it":"Immagine DD fino a ~880 KB, un disco alla volta","es":"Imagen DD hasta ~880 KB, un disco a la vez","de":"DD-Abbild bis ~880 KB, eine Diskette","nl":"DD-image tot ~880 KB, een disk tegelijk"},"home_wifi":{"en":"Home Wi-Fi","fr":"Wi-Fi domestique","it":"Wi-Fi di casa","es":"Wi-Fi de casa","de":"Heim-WLAN","nl":"Thuis-Wi-Fi"},"net_ssid":{"en":"Network (SSID)","fr":"Reseau (SSID)","it":"Rete (SSID)","es":"Red (SSID)","de":"Netzwerk (SSID)","nl":"Netwerk (SSID)"},"ssid_ph":{"en":"your home wifi name","fr":"nom de votre wifi","it":"nome del tuo wifi","es":"nombre de tu wifi","de":"Name deines WLAN","nl":"naam van je wifi"},"scan_btn":{"en":"Scan for networks","fr":"Rechercher des reseaux","it":"Cerca reti","es":"Buscar redes","de":"Netzwerke suchen","nl":"Netwerken zoeken"},"password":{"en":"Password","fr":"Mot de passe","it":"Password","es":"Contrasena","de":"Passwort","nl":"Wachtwoord"},"save_join":{"en":"Save & Join","fr":"Enregistrer & rejoindre","it":"Salva & connetti","es":"Guardar y unir","de":"Speichern & verbinden","nl":"Opslaan & verbinden"},"wifi_hint":{"en":"Saves and reboots onto your home Wi-Fi. Then open gotekomega.local for the screen or fleet leader, or reach this dongle directly at its own name.local (shown after saving).","fr":"Enregistre et redemarre sur votre Wi-Fi. Ouvrez ensuite gotekomega.local pour l’ecran ou le chef de flotte, ou ce dongle a sa propre adresse nom.local (affichee apres l’enregistrement).","it":"Salva e riavvia sul tuo Wi-Fi. Poi apri gotekomega.local per lo schermo o il capo flotta, oppure raggiungi questo dongle al suo indirizzo nome.local (mostrato dopo il salvataggio).","es":"Guarda y reinicia en tu Wi-Fi. Luego abre gotekomega.local para la pantalla o el lider, o accede a este dongle en su propia direccion nombre.local (mostrada tras guardar).","de":"Speichert und startet ins Heim-WLAN neu. Dann gotekomega.local fuer den Bildschirm oder Fleet-Leader oeffnen, oder diesen Dongle direkt unter seinem eigenen name.local erreichen (nach dem Speichern angezeigt).","nl":"Slaat op en herstart op je Wi-Fi. Open daarna gotekomega.local voor het scherm of de fleet-leider, of bereik deze dongle direct op zijn eigen naam.local (getoond na opslaan)."},"espnow_t":{"en":"ESP-NOW / GTi mode","fr":"Mode ESP-NOW / GTi","it":"Modalita ESP-NOW / GTi","es":"Modo ESP-NOW / GTi","de":"ESP-NOW / GTi-Modus","nl":"ESP-NOW / GTi-modus"},"espnow_h":{"en":"Switch back to the dongle’s own access point + ESP-NOW so a GTi screen can drive it. Reconnect to the GotekOMEGA Wi-Fi afterwards to return here.","fr":"Revenir au point d’acces du dongle + ESP-NOW pour qu’un ecran GTi le pilote. Reconnectez-vous ensuite au Wi-Fi GotekOMEGA.","it":"Torna all’access point del dongle + ESP-NOW cosi uno schermo GTi puo guidarlo. Poi riconnettiti al Wi-Fi GotekOMEGA.","es":"Vuelve al punto de acceso del dongle + ESP-NOW para que una pantalla GTi lo controle. Luego reconecta al Wi-Fi GotekOMEGA.","de":"Zurueck zum eigenen Access Point + ESP-NOW, damit ein GTi-Bildschirm steuern kann. Danach mit dem GotekOMEGA-WLAN verbinden.","nl":"Terug naar de eigen access point + ESP-NOW zodat een GTi-scherm hem aanstuurt. Verbind daarna weer met het GotekOMEGA-Wi-Fi."},"espnow_b":{"en":"Disconnect Wi-Fi → ESP-NOW","fr":"Deconnecter Wi-Fi → ESP-NOW","it":"Disconnetti Wi-Fi → ESP-NOW","es":"Desconectar Wi-Fi → ESP-NOW","de":"WLAN trennen → ESP-NOW","nl":"Wi-Fi loskoppelen → ESP-NOW"},"scanning":{"en":"Scanning...","fr":"Recherche...","it":"Ricerca...","es":"Buscando...","de":"Suche...","nl":"Zoeken..."},"no_nets":{"en":"No networks found","fr":"Aucun reseau trouve","it":"Nessuna rete trovata","es":"No se hallaron redes","de":"Keine Netzwerke gefunden","nl":"Geen netwerken gevonden"},"scan_fail":{"en":"Scan failed, try again","fr":"Echec du scan, reessayez","it":"Scansione fallita, riprova","es":"Fallo el escaneo, reintenta","de":"Suche fehlgeschlagen, erneut","nl":"Scan mislukt, opnieuw"},"save_fail":{"en":"SAVE FAILED - not stored","fr":"ECHEC - non enregistre","it":"SALVATAGGIO FALLITO","es":"ERROR - no guardado","de":"SPEICHERN FEHLGESCHLAGEN","nl":"OPSLAAN MISLUKT"},"cant_conn":{"en":"Could not connect to","fr":"Impossible de se connecter a","it":"Impossibile connettersi a","es":"No se pudo conectar a","de":"Keine Verbindung zu","nl":"Kon niet verbinden met"},"wrong_pw":{"en":"Wrong password? Check it and try again.","fr":"Mauvais mot de passe ? Verifiez et reessayez.","it":"Password errata? Controlla e riprova.","es":"Contrasena incorrecta? Revisa y reintenta.","de":"Falsches Passwort? Pruefen und erneut.","nl":"Verkeerd wachtwoord? Check en probeer opnieuw."},"saved_join":{"en":"Saved, joining","fr":"Enregistre, connexion a","it":"Salvato, connessione a","es":"Guardado, uniendo a","de":"Gespeichert, verbinde mit","nl":"Opgeslagen, verbindt met"},"enter_net":{"en":"enter a network","fr":"saisissez un reseau","it":"inserisci una rete","es":"ingresa una red","de":"Netzwerk eingeben","nl":"voer een netwerk in"},"saving":{"en":"Saving...","fr":"Enregistrement...","it":"Salvataggio...","es":"Guardando...","de":"Speichern...","nl":"Opslaan..."}};var LANG=(localStorage.getItem("lang")||(navigator.language||"en")).slice(0,2).toLowerCase();if(!I18N.disk[LANG])LANG="en";// 1.6.9: new and corrected strings (override the table above)
+I18N["tap_choose"]={"en": "Tap to choose a disk image", "fr": "Touchez pour choisir une image disque", "it": "Tocca per scegliere un'immagine disco", "es": "Toca para elegir una imagen de disco", "de": "Tippen, um ein Disk-Image zu wählen", "nl": "Tik om een disk-image te kiezen"};I18N["dd_note"]={"en": "Up to 1.75 MB (an Amiga HD disk) · one disk at a time", "fr": "Jusqu’à 1,75 Mo (disque HD Amiga) · un disque à la fois", "it": "Fino a 1,75 MB (disco HD Amiga) · un disco alla volta", "es": "Hasta 1,75 MB (disco HD de Amiga) · un disco a la vez", "de": "Bis 1,75 MB (Amiga-HD-Diskette) · eine Diskette auf einmal", "nl": "Tot 1,75 MB (Amiga HD-disk) · één disk tegelijk"};I18N["load_ins"]={"en": "Load a disk image to insert it", "fr": "Chargez une image disque pour l’insérer", "it": "Carica un'immagine disco per inserirla", "es": "Carga una imagen de disco para insertarla", "de": "Disk-Image laden zum Einlegen", "nl": "Laad een disk-image om hem te plaatsen"};I18N["inserted"]={"en": "Inserted", "fr": "Inséré", "it": "Inserito", "es": "Insertado", "de": "Eingelegt", "nl": "Geplaatst"};I18N["not_img"]={"en": "Not a disk image - unpack .adz / .zip on a computer first", "fr": "Ce n’est pas une image disque – décompressez d’abord .adz / .zip sur un ordinateur", "it": "Non è un'immagine disco - decomprimi prima .adz / .zip su un computer", "es": "No es una imagen de disco: descomprime primero .adz / .zip en un ordenador", "de": "Kein Disk-Image – .adz / .zip zuerst am Computer entpacken", "nl": "Geen disk-image – pak .adz / .zip eerst uit op een computer"};I18N["too_big"]={"en": "Too big - this dongle holds up to 1.75 MB", "fr": "Trop grand – ce dongle accepte jusqu’à 1,75 Mo", "it": "Troppo grande - questo dongle accetta fino a 1,75 MB", "es": "Demasiado grande: este dongle admite hasta 1,75 MB", "de": "Zu groß – dieser Dongle fasst bis 1,75 MB", "nl": "Te groot – deze dongle past tot 1,75 MB"};I18N["ejected"]={"en": "Ejected", "fr": "Éjecté", "it": "Espulso", "es": "Expulsado", "de": "Ausgeworfen", "nl": "Uitgeworpen"};I18N["up_fail"]={"en": "Upload failed", "fr": "Échec de l’envoi", "it": "Caricamento non riuscito", "es": "Error al subir", "de": "Hochladen fehlgeschlagen", "nl": "Uploaden mislukt"};I18N["switching"]={"en": "Switching...", "fr": "Changement...", "it": "Cambio...", "es": "Cambiando...", "de": "Wechsle...", "nl": "Wisselen..."};I18N["more_t"]={"en": "More", "fr": "Plus", "it": "Altro", "es": "Más", "de": "Mehr", "nl": "Meer"};I18N["full_ui"]={"en": "Full web interface", "fr": "Interface web complète", "it": "Interfaccia web completa", "es": "Interfaz web completa", "de": "Vollständige Weboberfläche", "nl": "Volledige webinterface"};I18N["full_ui_s"]={"en": "Themes, firmware update, fleet", "fr": "Thèmes, mise à jour du firmware, flotte", "it": "Temi, aggiornamento firmware, flotta", "es": "Temas, actualización de firmware, flota", "de": "Themes, Firmware-Update, Fleet", "nl": "Thema's, firmware-update, fleet"};I18N["flasher"]={"en": "GTi web flasher", "fr": "Flasheur web GTi", "it": "Flasher web GTi", "es": "Flasheador web GTi", "de": "GTi-Web-Flasher", "nl": "GTi-webflasher"};I18N["flasher_s"]={"en": "Firmware for every board - needs internet", "fr": "Firmware pour chaque carte – nécessite Internet", "it": "Firmware per ogni scheda - serve Internet", "es": "Firmware para cada placa: necesita Internet", "de": "Firmware für jedes Board – braucht Internet", "nl": "Firmware voor elk bord – internet nodig"};I18N["help"]={"en": "Help & guide", "fr": "Aide & guide", "it": "Aiuto e guida", "es": "Ayuda y guía", "de": "Hilfe & Anleitung", "nl": "Hulp & handleiding"};I18N["help_s"]={"en": "Setup, pairing, saves - needs internet", "fr": "Installation, appairage, sauvegardes – nécessite Internet", "it": "Configurazione, abbinamento, salvataggi - serve Internet", "es": "Configuración, emparejamiento, partidas guardadas: necesita Internet", "de": "Einrichtung, Kopplung, Spielstände – braucht Internet", "nl": "Instellen, koppelen, saves – internet nodig"};I18N["ap_back1"]={"en": "Switch back to the dongle's own access point + ESP-NOW so a GTi screen can drive it. Reconnect to the", "fr": "Revenez au point d’accès du dongle + ESP-NOW pour qu’un écran GTi puisse le piloter. Reconnectez-vous ensuite au Wi-Fi", "it": "Torna al punto di accesso del dongle + ESP-NOW così uno schermo GTi può comandarlo. Poi riconnettiti al Wi-Fi", "es": "Vuelve al punto de acceso del dongle + ESP-NOW para que una pantalla GTi pueda controlarlo. Después vuelve a conectarte al Wi-Fi", "de": "Zurück zum eigenen Access Point des Dongles + ESP-NOW, damit ein GTi-Bildschirm ihn steuern kann. Danach wieder mit dem WLAN", "nl": "Terug naar het eigen access point van de dongle + ESP-NOW, zodat een GTi-scherm hem kan bedienen. Maak daarna opnieuw verbinding met de wifi"};I18N["ap_back2"]={"en": "Wi-Fi afterwards to return here.", "fr": "pour revenir ici.", "it": "per tornare qui.", "es": "para volver aquí.", "de": "verbinden, um hierher zurückzukehren.", "nl": "om hier terug te komen."};I18N["back_t"]={"en": "Back to ESP-NOW / AP mode", "fr": "Retour au mode ESP-NOW / AP", "it": "Ritorno alla modalità ESP-NOW / AP", "es": "Volviendo al modo ESP-NOW / AP", "de": "Zurück zum ESP-NOW-/AP-Modus", "nl": "Terug naar ESP-NOW / AP-modus"};I18N["back_p"]={"en": "Rebooting. Reconnect to this Wi-Fi (password gotek1234) and open 192.168.4.1 to return here:", "fr": "Redémarrage. Reconnectez-vous à ce Wi-Fi (mot de passe gotek1234) et ouvrez 192.168.4.1 pour revenir ici :", "it": "Riavvio. Riconnettiti a questo Wi-Fi (password gotek1234) e apri 192.168.4.1 per tornare qui:", "es": "Reiniciando. Vuelve a conectarte a este Wi-Fi (contraseña gotek1234) y abre 192.168.4.1 para volver aquí:", "de": "Neustart. Wieder mit diesem WLAN verbinden (Passwort gotek1234) und 192.168.4.1 öffnen, um hierher zurückzukehren:", "nl": "Herstarten. Maak opnieuw verbinding met deze wifi (wachtwoord gotek1234) en open 192.168.4.1 om hier terug te komen:"};
+// 1.6.10: Polish (PL) and Czech (CS) - a browser set to either gets it automatically. PL text by 8-Bitz (#support, 2 Oct); CS draft by Claude, a Czech speaker to check.
+var I18N_PL={"this_dongle": "Ten dongle", "screen_fleet": "Ekran / flota", "dev_name": "Nazwa urządzenia", "dev_name_ph": "np. amiga-desk", "disk": "Dysk", "wifi": "Wi-Fi", "in_drive": "W napędzie", "no_disk": "-- brak dysku --", "load_ins": "Wczytaj obraz dysku, aby go włożyć", "eject": "Wysuń", "load_img": "Wczytaj obraz", "tap_choose": "Dotknij, aby wybrać obraz dysku", "drag_hint": "lub przeciągnij tu plik", "dd_note": "Do 1,75 MB (dysk HD Amigi) · jeden dysk naraz", "home_wifi": "Domowe Wi-Fi", "net_ssid": "Sieć (SSID)", "ssid_ph": "nazwa Twojej sieci Wi-Fi", "scan_btn": "Szukaj sieci", "password": "Hasło", "save_join": "Zapisz i połącz", "wifi_hint": "Zapisuje i uruchamia się ponownie w Twojej sieci Wi-Fi. Potem otwórz gotekomega.local, aby dostać się do ekranu lub lidera floty, albo wejdź na ten dongle pod jego adresem nazwa.local (pokazanym po zapisaniu).", "espnow_t": "Tryb ESP-NOW / GTi", "espnow_h": "Wróć do własnego punktu dostępu dongla + ESP-NOW, aby ekran GTi mógł nim sterować. Potem połącz się ponownie z Wi-Fi GotekOMEGA, aby tu wrócić.", "espnow_b": "Rozłącz Wi-Fi → ESP-NOW", "scanning": "Szukam...", "no_nets": "Nie znaleziono sieci", "scan_fail": "Skanowanie nieudane, spróbuj ponownie", "save_fail": "ZAPIS NIEUDANY – nie zapisano", "cant_conn": "Nie można połączyć z", "wrong_pw": "Złe hasło? Sprawdź i spróbuj ponownie.", "saved_join": "Zapisano, łączę się z", "enter_net": "wpisz sieć", "saving": "Zapisuję...", "inserted": "Włożono", "not_img": "To nie jest obraz dysku – najpierw rozpakuj .adz / .zip na komputerze", "too_big": "Za duży – ten dongle mieści do 1,75 MB", "ejected": "Wysunięto", "up_fail": "Wysyłanie nieudane", "switching": "Przełączam...", "more_t": "Więcej", "full_ui": "Pełny interfejs WWW", "full_ui_s": "Motywy, aktualizacja firmware'u, flota", "flasher": "Flasher WWW GTi", "flasher_s": "Firmware dla każdej płytki – wymaga internetu", "help": "Pomoc i instrukcja", "help_s": "Konfiguracja, parowanie, zapisy – wymaga internetu", "ap_back1": "Wróć do własnego punktu dostępu dongla + ESP-NOW, aby ekran GTi mógł nim sterować. Potem połącz się ponownie z Wi-Fi", "ap_back2": "i wróć tutaj.", "back_t": "Powrót do trybu ESP-NOW / AP", "back_p": "Restart. Połącz się ponownie z tym Wi-Fi (hasło gotek1234) i otwórz 192.168.4.1, aby tu wrócić:"};for(var k in I18N_PL){if(I18N[k])I18N[k].pl=I18N_PL[k];}var I18N_CS={"this_dongle": "Tento dongle", "screen_fleet": "Obrazovka / flotila", "dev_name": "Název zařízení", "dev_name_ph": "např. amiga-stůl", "disk": "Disk", "wifi": "Wi-Fi", "in_drive": "V mechanice", "no_disk": "-- žádný disk --", "load_ins": "Nahrajte obraz disku a vložte ho", "eject": "Vysunout", "load_img": "Nahrát obraz", "tap_choose": "Klepnutím vyberte obraz disku", "drag_hint": "nebo sem přetáhněte soubor", "dd_note": "Až 1,75 MB (disk HD Amigy) · jeden disk najednou", "home_wifi": "Domácí Wi-Fi", "net_ssid": "Síť (SSID)", "ssid_ph": "název vaší Wi-Fi", "scan_btn": "Hledat sítě", "password": "Heslo", "save_join": "Uložit a připojit", "wifi_hint": "Uloží nastavení a restartuje se do vaší domácí Wi-Fi. Pak otevřete gotekomega.local pro obrazovku nebo vedoucí zařízení flotily, nebo se k tomuto donglu připojte přímo na jeho vlastní adrese název.local (zobrazí se po uložení).", "espnow_t": "Režim ESP-NOW / GTi", "espnow_h": "Přepněte zpět na vlastní přístupový bod donglu + ESP-NOW, aby ho mohla ovládat obrazovka GTi. Pak se znovu připojte k Wi-Fi GotekOMEGA, abyste se sem vrátili.", "espnow_b": "Odpojit Wi-Fi → ESP-NOW", "scanning": "Hledám...", "no_nets": "Nenalezeny žádné sítě", "scan_fail": "Hledání selhalo, zkuste to znovu", "save_fail": "ULOŽENÍ SELHALO - neuloženo", "cant_conn": "Nelze se připojit k", "wrong_pw": "Špatné heslo? Zkontrolujte ho a zkuste to znovu.", "saved_join": "Uloženo, připojuji k", "enter_net": "zadejte síť", "saving": "Ukládám...", "inserted": "Vloženo", "not_img": "Není to obraz disku - nejdřív rozbalte .adz / .zip v počítači", "too_big": "Příliš velký - tento dongle pojme až 1,75 MB", "ejected": "Vysunuto", "up_fail": "Nahrávání selhalo", "switching": "Přepínám...", "more_t": "Více", "full_ui": "Plné webové rozhraní", "full_ui_s": "Motivy, aktualizace firmwaru, flotila", "flasher": "Webový flasher GTi", "flasher_s": "Firmware pro každou desku - vyžaduje internet", "help": "Nápověda a průvodce", "help_s": "Nastavení, párování, uložené hry - vyžaduje internet", "ap_back1": "Přepněte zpět na vlastní přístupový bod donglu + ESP-NOW, aby ho mohla ovládat obrazovka GTi. Pak se znovu připojte k Wi-Fi", "ap_back2": "a vraťte se sem.", "back_t": "Zpět do režimu ESP-NOW / AP", "back_p": "Restartuji. Znovu se připojte k této Wi-Fi (heslo gotek1234) a otevřete 192.168.4.1, abyste se sem vrátili:"};for(var k in I18N_CS){if(I18N[k])I18N[k].cs=I18N_CS[k];}LANG=(localStorage.getItem("lang")||(navigator.language||"en")).slice(0,2).toLowerCase();if(!I18N.disk[LANG])LANG="en";
+function tt(k){var e=I18N[k];return e&&e[LANG]?e[LANG]:(e?e.en:k);}function applyI18n(){document.querySelectorAll("[data-i18n]").forEach(function(el){el.textContent=tt(el.getAttribute("data-i18n"));});document.querySelectorAll("[data-i18n-ph]").forEach(function(el){el.setAttribute("placeholder",tt(el.getAttribute("data-i18n-ph")));});}function setLang(l){LANG=l;try{localStorage.setItem("lang",l);}catch(e){}applyI18n();buildLangBar();if(window.__s)paint(window.__s);}function buildLangBar(){var b=document.getElementById("langbar");if(!b)return;b.innerHTML="";["en","fr","it","es","de","nl","pl","cs"].forEach(function(l){var a=document.createElement("span");a.textContent=l.toUpperCase();a.style.cssText="cursor:pointer;padding:2px 5px;font-size:11px;border-radius:4px;"+(l===LANG?"background:#3b4570;color:#fff":"color:#8b93ad");a.onclick=function(){setLang(l);};b.appendChild(a);});}document.addEventListener("DOMContentLoaded",function(){applyI18n();buildLangBar();});
 function fmt(b){return b>=1048576?(b/1048576).toFixed(2)+' MB':Math.round(b/1024)+' KB';}
 function san(s){var o='',last='';for(var i=0;i<s.length&&o.length<24;i++){var c=s.charAt(i).toLowerCase();if(c>='a'&&c<='z'||c>='0'&&c<='9'){o+=c;last=c;}else if(o.length&&last!=='-'){o+='-';last='-';}}return o.replace(/-+$/,'');}
 function toast(m,e){var t=document.getElementById('toast');t.textContent=m;t.classList.toggle('err',!!e);t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(function(){t.classList.remove('show')},2600);}
 function view(v){document.getElementById('vDisk').classList.toggle('hidden',v!=='disk');document.getElementById('vWifi').classList.toggle('hidden',v!=='wifi');document.getElementById('tabDisk').classList.toggle('on',v==='disk');document.getElementById('tabWifi').classList.toggle('on',v==='wifi');}
 function paint(s){
+ window.__s=s; if(s.max)window.__max=s.max; if(s.ap){window.__ap=s.ap;document.querySelectorAll('.apname').forEach(function(e){e.textContent=s.ap;});}
  var pill=document.getElementById('conntxt'),dot=document.getElementById('condot');
  if(s.mode==='wifi'){pill.textContent=s.ip||'gotekomega.local';dot.classList.remove('ap');}else{pill.textContent='ESP-NOW / AP';dot.classList.add('ap');}
  var ab=document.getElementById('addrbox');
  if(ab){if(s.mode==='wifi'){document.getElementById('addrSelf').textContent=(s.devname||'gotekomega')+'.local';ab.classList.remove('hidden');}else{ab.classList.add('hidden');}}
  var f=document.getElementById('floppy');
- if(s.loaded){f.classList.remove('empty');document.getElementById('dname').textContent=s.name||'disk';var d=document.getElementById('dsub');d.textContent='Inserted &middot; '+fmt(s.size);d.classList.add('live');document.getElementById('ejectBtn').disabled=false;}
- else{f.classList.add('empty');document.getElementById('dname').textContent='-- no disk --';var d=document.getElementById('dsub');d.textContent='Load an ADF to insert it';d.classList.remove('live');document.getElementById('ejectBtn').disabled=true;}
+ if(s.loaded){f.classList.remove('empty');document.getElementById('dname').textContent=s.name||'disk';var d=document.getElementById('dsub');d.textContent=tt('inserted')+' \u00b7 '+fmt(s.size);d.classList.add('live');document.getElementById('ejectBtn').disabled=false;}
+ else{f.classList.add('empty');document.getElementById('dname').textContent=tt('no_disk');var d=document.getElementById('dsub');d.textContent=tt('load_ins');d.classList.remove('live');document.getElementById('ejectBtn').disabled=true;}
 }
 function poll(){fetch('/status').then(function(r){return r.json()}).then(paint).catch(function(){});}
 function picked(f){
  if(!f)return;
- if(!/\.(adf|adz|img)$/i.test(f.name)){toast('Not an ADF (.adf .adz .img)',1);return;}
- if(f.size>1048576){toast('HD image too big - DD only (~880 KB)',1);return;}
+ if(/\.(adz|zip|gz|dms|lha|lzh|rar|7z|jpe?g|png|gif|txt|nfo|rtfm|pdf)$/i.test(f.name)){toast(tt('not_img'),1);return;}   // 1.6.9: any disk image FlashFloppy reads (ADF DSK HFE ST IMG ...)
+ if(f.size>(window.__max||1829376)){toast(tt('too_big'),1);return;}
  var fd=new FormData();fd.append('f',f,f.name);
  var x=new XMLHttpRequest();x.open('POST','/upload');
  var prog=document.getElementById('prog'),bar=document.getElementById('bar');prog.style.display='block';bar.style.width='0';
  x.upload.onprogress=function(e){if(e.lengthComputable)bar.style.width=(e.loaded/e.total*100)+'%';};
- x.onload=function(){prog.style.display='none';if(x.status>=200&&x.status<300){toast('Inserted &#10003;');poll();}else{try{toast(JSON.parse(x.responseText).err||'Upload failed',1)}catch(_){toast('Upload failed',1)}}};
- x.onerror=function(){prog.style.display='none';toast('Upload failed',1);};
+ x.onload=function(){prog.style.display='none';if(x.status>=200&&x.status<300){toast(tt('inserted')+' \u2713');poll();}else{try{toast(JSON.parse(x.responseText).err||tt('up_fail'),1)}catch(_){toast(tt('up_fail'),1)}}};
+ x.onerror=function(){prog.style.display='none';toast(tt('up_fail'),1);};
  x.send(fd);
 }
-function ejectDisk(){fetch('/eject',{method:'POST'}).then(function(r){return r.json()}).then(function(s){toast('Ejected');paint(s);});}
-function scanWifi(){var L=document.getElementById('scanlist');L.textContent=tt('scanning');fetch('/scan').then(function(r){return r.json();}).then(function(d){L.innerHTML='';if(!d.networks||!d.networks.length){L.textContent=tt('no_nets');return;}d.networks.sort(function(a,b){return b.rssi-a.rssi;});d.networks.forEach(function(n){var row=document.createElement('div');row.style.cssText='padding:9px 11px;border:1px solid #2b2f42;border-radius:9px;margin-bottom:6px;cursor:pointer;display:flex;justify-content:space-between;gap:10px';var q=n.rssi>-50?'':n.rssi>-65?'':n.rssi>-75?'':'';var a=document.createElement('span');a.textContent=(n.ssid||'')+(n.enc?' ':'');var b=document.createElement('span');b.style.cssText='color:#8b93ad;font-family:monospace';b.textContent=q+' '+n.rssi;row.appendChild(a);row.appendChild(b);row.addEventListener('click',function(){document.getElementById('ssid').value=n.ssid||'';L.innerHTML='';});L.appendChild(row);});}).catch(function(){L.textContent=tt('scan_fail');});}
+function ejectDisk(){fetch('/eject',{method:'POST'}).then(function(r){return r.json()}).then(function(s){toast(tt('ejected'));paint(s);});}
+function scanWifi(){var L=document.getElementById('scanlist');L.textContent=tt('scanning');fetch('/scan').then(function(r){return r.json();}).then(function(d){L.innerHTML='';if(!d.networks||!d.networks.length){L.textContent=tt('no_nets');return;}d.networks.sort(function(a,b){return b.rssi-a.rssi;});d.networks.forEach(function(n){var row=document.createElement('div');row.style.cssText='padding:9px 11px;border:1px solid #2b2f42;border-radius:9px;margin-bottom:6px;cursor:pointer;display:flex;justify-content:space-between;gap:10px';var q=n.rssi>-50?'████':n.rssi>-65?'███░':n.rssi>-75?'██░░':'█░░░';var a=document.createElement('span');a.textContent=(n.ssid||'')+(n.enc?' 🔒':'');var b=document.createElement('span');b.style.cssText='color:#8b93ad;font-family:monospace';b.textContent=q+' '+n.rssi;row.appendChild(a);row.appendChild(b);row.addEventListener('click',function(){document.getElementById('ssid').value=n.ssid||'';L.innerHTML='';});L.appendChild(row);});}).catch(function(){L.textContent=tt('scan_fail');});}
 (function(){fetch('/status').then(function(r){return r.json();}).then(function(d){if(d&&d.devname){window.__dn=d.devname;}if(d&&d.devname&&d.devname.indexOf('gotekomega-')!==0){var dn=document.getElementById('devname');if(dn&&!dn.value)dn.value=d.devname;}if(d&&d.join_failed&&d.ssid){var m=document.getElementById('joinmsg');if(m){var w=document.createElement('div');w.style.cssText='background:#2a1416;border:1px solid #6b2b2b;color:#ffb3b3;border-radius:9px;padding:10px 12px;margin-bottom:10px;font-size:13px';w.textContent=tt('cant_conn')+' '+String.fromCharCode(34)+d.ssid+String.fromCharCode(34)+'. '+tt('wrong_pw');m.appendChild(w);}var si=document.getElementById('ssid');if(si&&!si.value)si.value=d.ssid;}}).catch(function(){});})();
 function joinWifi(){var s=document.getElementById('ssid').value.trim();if(!s){toast(tt('enter_net'),1);return;}var b=new URLSearchParams();b.append('ssid',s);b.append('pass',document.getElementById('pass').value);var dn=document.getElementById('devname');var nm=dn?dn.value.trim():'';b.append('name',nm);toast(tt('saving'));fetch('/savewifi',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b.toString()}).then(function(r){return r.json();}).then(function(d){if(!d.saved){toast(tt('save_fail'),1);return;}var own=(nm?san(nm):'')||window.__dn||'gotekomega';document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2>'+tt('saved_join')+' '+s+'</h2><p style="color:#8b93ad">Reconnect your device to your home Wi-Fi. This dongle is at <b>'+own+'.local</b>. The screen / fleet leader stays at <b>gotekomega.local</b>.</p></div>';});}
-function toEspnow(){toast('Switching...');fetch('/espnow',{method:'POST'}).then(function(){document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2>Back to ESP-NOW / AP mode</h2><p style="color:#8b93ad">Rebooting. Reconnect to the <b>GotekOMEGA</b> Wi-Fi (password gotek1234) and open <b>192.168.4.1</b> to return here.</p></div>';});}
+function toEspnow(){toast(tt('switching'));fetch('/espnow',{method:'POST'}).then(function(){var ap=window.__ap||'GotekOMEGA';document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2></h2><p style="color:#8b93ad"></p><p style="font-weight:700"></p></div>';var d=document.body.firstChild;d.children[0].textContent=tt('back_t');d.children[1].textContent=tt('back_p');d.children[2].textContent=ap;});}
 var drop=document.getElementById('drop');
 ['dragenter','dragover'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.add('hot');});});
 ['dragleave','drop'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.remove('hot');});});
@@ -928,7 +1049,7 @@ static void apiDiskStatus(){
 }
 static void apiDiskUnload(){
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
-  dirtyReset(); g_loaded_name=""; ledBlue(false);
+  dirtyReset(); g_loaded_name=""; ledBlue(false); loaderClear();
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiGamesUploadDone(){
@@ -965,9 +1086,13 @@ static void apiConfigSave(){
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiReboot(){ server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
+static const char* const THEME_NAMES[] = { "AMIGA_WB2","AMIGA_WB13","PAPER_WHITE","MIDNIGHT","PHOSPHOR","OMEGA_DARK" };   // 1.6.4: one list for /list and /activate
+static bool themeKnown(const String& n){ for (auto t : THEME_NAMES) if (n == t) return true; return false; }
 static void apiThemesList(){
   String j = "{\"active\":\""; j += g_active_theme;
-  j += "\",\"themes\":[\"AMIGA_WB2\",\"AMIGA_WB13\",\"PAPER_WHITE\",\"MIDNIGHT\",\"PHOSPHOR\",\"OMEGA_DARK\"]}";
+  j += "\",\"themes\":[";
+  for (size_t i = 0; i < sizeof(THEME_NAMES)/sizeof(THEME_NAMES[0]); i++) { if (i) j += ","; j += "\""; j += THEME_NAMES[i]; j += "\""; }
+  j += "]}";
   server.send(200,"application/json", j);
 }
 
@@ -983,7 +1108,7 @@ static void handleWebUI(){
 static void handleRoot(){ server.send_P(200, "text/html", PAGE_HTML); }
 
 //  FLEET: per-device identity from the STA MAC 
-static String discoId(){ uint8_t m[6]; WiFi.macAddress(m);
+static String discoId(){ uint8_t m[6] = {0}; esp_read_mac(m, ESP_MAC_WIFI_STA);   // 1.6.8: same value as WiFi.macAddress(), but valid before the radio starts
   char b[13]; snprintf(b,sizeof(b),"%02X%02X%02X%02X%02X%02X",m[0],m[1],m[2],m[3],m[4],m[5]); return String(b); }
 // #name: sanitizeName + discoName are defined up top (before statusJson) so
 // there is no forward-reference  that avoided arduino's prototype generator
@@ -998,7 +1123,7 @@ static void sendAliveBeacon(){
   j += ",\"id\":\"";    j += discoId();      j += "\"";
   j += ",\"name\":\"";  j += discoName();    j += "\"";
   j += ",\"ip\":\"";    j += ip.toString();  j += "\"";
-  j += ",\"board\":\"supermini\"";
+  j += ",\"board\":\"" WEBBY_BOARD "\"";   // 1.6.8: "supermini" or "zero"
   j += ",\"fw\":\"";    j += FW_VERSION;     j += "\"";
   j += ",\"hd\":true";
   j += ",\"port\":80";
@@ -1076,6 +1201,7 @@ static void startWebServer(){
   // PANEL: Dimmy's SPA is the front door; the old simple page stays at /classic.
   server.on("/", HTTP_GET, handleWebUI);
   server.on("/classic", HTTP_GET, handleRoot);
+  server.on("/app", HTTP_GET, [](){ server.sendHeader("Content-Encoding","gzip"); server.send_P(200, "text/html", (PGM_P)webui_gz, webui_gz_len); });   // 1.6.9: the full shared interface in any mode (linked from the setup page)
   // legacy simple endpoints (kept  the /classic page and any old clients use them)
   server.on("/status", HTTP_GET, [](){ server.send(200,"application/json", statusJson()); });
   server.on("/upload", HTTP_POST, handleUploadDone, handleUpload);
@@ -1100,11 +1226,14 @@ static void startWebServer(){
   // API misses -> clean 404 JSON (SPA tolerates it); everything else -> captive portal to /
   server.onNotFound([](){
     String u = server.uri();
-    // theme gallery activate: /api/themes/<name>/activate  (remember the choice)
+    // theme gallery activate: /api/themes/<name>/activate  - 1.6.4 (#24): POST only + whitelist
+    // (was: any method, any name -> LittleFS write on a GET)
     if (u.startsWith("/api/themes/") && u.endsWith("/activate")) {
+      if (server.method() != HTTP_POST) { server.send(405,"application/json","{\"error\":\"POST only\"}"); return; }
       int a = 12; int b = u.lastIndexOf("/activate");   // 12 = strlen("/api/themes/")
-      if (b > a) g_active_theme = u.substring(a, b);
-      saveTheme(g_active_theme);   // PANEL: remember across reboots
+      String nm = (b > a) ? u.substring(a, b) : String("");
+      if (!themeKnown(nm)) { server.send(400,"application/json","{\"error\":\"unknown theme\"}"); return; }
+      g_active_theme = nm; saveTheme(g_active_theme);   // PANEL: remember across reboots
       server.send(200,"application/json","{\"status\":\"ok\"}"); return;
     }
     if (u.startsWith("/api/")) { server.send(404,"application/json","{\"error\":\"not found\"}"); return; }
@@ -1182,8 +1311,13 @@ static void startEspnowApMode(){
   WiFi.mode(WIFI_AP_STA);
   // Unique AP name per device: two dongles in one room both broadcasting
   // "GotekOMEGA" is impossible to tell apart (you configure the wrong one).
-  uint8_t apm[6]; WiFi.macAddress(apm);
+  // 1.6.8: WiFi.macAddress() asks the station interface, which only exists once the radio's
+  // start event has run - straight after WiFi.mode() it doesn't yet, the call fails and apm stayed
+  // zero, so EVERY dongle was "GotekOMEGA-0000". esp_read_mac() reads the chip's own number and needs
+  // no radio. SoftAP MAC = the BSSID the dongle broadcasts = its identity (Wire Protocol Registry).
+  uint8_t apm[6] = {0}; esp_read_mac(apm, ESP_MAC_WIFI_SOFTAP);
   char apid[24]; snprintf(apid, sizeof(apid), "%s-%02X%02X", AP_SSID, apm[4], apm[5]);
+  strncpy(g_ap_name, apid, sizeof(g_ap_name)-1);
   char apline[32]; snprintf(apline, sizeof(apline), "AP: %s", apid);
   WiFi.softAP(apid, AP_PASS, ESPNOW_CHANNEL);
   delay(300);
@@ -1211,7 +1345,7 @@ static void startEspnowApMode(){
     strncpy(hello.ip, AP_IP, 15); hello.pad[0] = SAVE_PROTO_VER;
     if (_bcastPeer) _bcastPeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     if (_wavePeer)  _wavePeer->send_pkt((uint8_t*)&hello, sizeof(hello));
-    RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len);
+    RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len, pkt.src);
     WiFiClient c = _tcpServer.accept(); if (c) handleTCPClient(c);
     server.handleClient(); dnsServer.processNextRequest();
     delay(120);
@@ -1286,7 +1420,7 @@ void loop() {
   if (g_dns_up) dnsServer.processNextRequest();
 
   // ESP-NOW control queue (only meaningful in AP/ESP-NOW mode; harmless otherwise)
-  RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len);
+  RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len, pkt.src);
 
   // TCP app transfers (begun in both modes)
   WiFiClient client = _tcpServer.accept();

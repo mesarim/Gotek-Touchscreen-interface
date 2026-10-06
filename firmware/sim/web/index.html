@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GTi Simulator</title>
+<meta name="description" content="The real GTi A600 firmware for the 3.5-inch screen, running in your browser: every screen, every setting. Try it with the demo games or your own folder.">
+<style>
+:root{--bg:#0b1020;--bg2:#121a33;--panel:#141d38;--line:#2a3766;--txt:#e8ecf8;--dim:#93a0c4;--gold:#f7b236;--cyan:#78d2f5;--green:#50d278;--red:#ff5a5a;--violet:#b48cff}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+a{color:var(--cyan)}
+header{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid var(--line);background:linear-gradient(90deg,#0d1430,#1a1238)}
+header .brand{font-weight:800;letter-spacing:.04em;font-size:20px}
+header .brand .om{color:var(--gold)}
+header .sub{color:var(--dim);font-size:13px}
+header nav{margin-left:auto;display:flex;gap:14px;font-size:14px}
+main{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:20px;padding:20px;max-width:1500px;margin:0 auto}
+@media (max-width:1000px){main{grid-template-columns:1fr}}
+.device{display:flex;flex-direction:column;align-items:center;gap:12px}
+.case{background:linear-gradient(160deg,#2a2d36,#15171d);border-radius:22px;padding:22px 26px;box-shadow:0 20px 60px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.08);position:relative;max-width:100%}
+.case .label{position:absolute;left:26px;bottom:6px;font-size:10px;letter-spacing:.2em;color:#6d7385}
+.case .usb{position:absolute;right:-10px;top:50%;width:12px;height:34px;transform:translateY(-50%);background:#555b68;border-radius:3px}
+.screenwrap{position:relative;background:#000;border-radius:6px;overflow:hidden;line-height:0}
+canvas#scr{display:block;image-rendering:pixelated;touch-action:none;cursor:pointer;max-width:calc(100vw - 100px)}
+#dim{position:absolute;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .2s}
+.devbar{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+button,.btn{background:var(--bg2);color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:7px 12px;font:inherit;font-size:14px;cursor:pointer}
+button:hover,.btn:hover{border-color:var(--cyan)}
+button.primary{background:var(--gold);color:#1a1200;border-color:var(--gold);font-weight:700}
+button.on{border-color:var(--green);color:var(--green)}
+button:disabled{opacity:.45;cursor:default}
+.side{display:flex;flex-direction:column;gap:14px;min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.card h3{margin:0 0 8px;font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);display:flex;align-items:center;gap:8px}
+.card h3 .led{width:9px;height:9px;border-radius:50%;background:#333;display:inline-block}
+.card h3 .led.g,.led.g{background:var(--green);box-shadow:0 0 8px var(--green)} .card h3 .led.a,.led.a{background:var(--gold);box-shadow:0 0 8px var(--gold)} .card h3 .led.r,.led.r{background:var(--red)}
+.gotek{display:flex;align-items:center;gap:12px;background:#0a0c12;border-radius:10px;padding:10px 12px;margin:6px 0 10px}
+.seg{font:700 26px/1 "Courier New",monospace;color:#ff3b3b;text-shadow:0 0 6px #ff3b3b;background:#120404;padding:4px 8px;border-radius:4px;letter-spacing:.08em;min-width:74px;text-align:center}
+.gotek .what{font-size:13px;color:var(--dim);min-width:0;overflow:hidden;text-overflow:ellipsis}
+.gotek .what b{color:var(--txt)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.dongle{border-top:1px solid var(--line);padding:9px 0 4px;display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center}
+.dongle:first-of-type{border-top:0}
+.dongle .nm{font-weight:700}
+.dongle .st{font-size:12.5px;color:var(--dim);grid-column:1/3}
+.small{font-size:12.5px;color:var(--dim)}
+pre#log{background:#05070d;color:#9fe39f;font:11.5px/1.35 ui-monospace,Consolas,monospace;height:220px;overflow:auto;margin:0;padding:8px;border-radius:8px;white-space:pre-wrap;word-break:break-all}
+.files{max-height:220px;overflow:auto;font:12.5px/1.6 ui-monospace,Consolas,monospace}
+.files div{display:flex;justify-content:space-between;gap:8px;cursor:pointer;padding:0 4px;border-radius:4px}
+.files div:hover{background:#1d2850}
+.files .d{color:var(--cyan)}
+#start{position:fixed;inset:0;background:rgba(5,8,18,.92);display:flex;align-items:center;justify-content:center;z-index:10;padding:16px}
+#start .box{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:26px;max-width:620px;width:100%}
+#start h2{margin:0 0 6px;font-size:24px}
+#start p{color:var(--dim);margin:6px 0 14px}
+.choice{display:grid;gap:10px}
+.choice button{text-align:left;padding:12px 14px;display:block;width:100%}
+.choice button b{display:block;font-size:16px;margin-bottom:2px}
+.choice button span{color:var(--dim);font-size:13px}
+#prog{height:6px;background:#1d2850;border-radius:3px;overflow:hidden;margin-top:12px;display:none}
+#prog i{display:block;height:100%;width:0;background:var(--gold)}
+.hint{font-size:12.5px;color:var(--dim);text-align:center;max-width:720px}
+details summary{cursor:pointer;color:var(--dim)}
+@media (max-width:700px){header{flex-wrap:wrap;padding:10px 14px} header .sub{display:none} header nav{margin-left:0;width:100%} main{padding:12px} .case{padding:12px 14px}}
+footer{color:var(--dim);font-size:12.5px;padding:10px 20px 30px;max-width:1500px;margin:0 auto}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="om">Ω</span> GTi <span style="font-weight:500;color:var(--dim)">simulator</span></div>
+  <div class="sub">The real <b id="fwv">A600</b> firmware for the 3.5″ screen, running in your browser</div>
+  <nav><a href="../">Web flasher</a><a href="https://github.com/mesarim/Gotek-Touchscreen-interface">GitHub</a><a href="https://discord.gg/7gY4PKUnnf">Discord</a></nav>
+</header>
+
+<main>
+  <section class="device">
+    <div class="case" id="case">
+      <div class="screenwrap"><canvas id="scr" width="480" height="320"></canvas><div id="dim"></div></div>
+      <div class="usb" title="USB-C"></div>
+      <div class="label">GUITION JC3248W535 · ESP32-S3</div>
+    </div>
+    <div class="devbar">
+      <button id="bReset" title="The board's RESET button">Reset</button>
+      <button id="bPower" title="Unplug and plug the power back in">Power cycle</button>
+      <button id="bTurn" title="Turn the screen for portrait (Settings > ROTATE)">Turn device</button>
+      <button id="bZoom" title="Bigger or smaller">Zoom</button>
+      <button id="bCard">Change SD card…</button>
+    </div>
+    <div class="hint">Tap and drag on the screen with your mouse or finger. This is the actual firmware: the boot intro, the library scan, the cover reel, Settings, the search keyboard, the manual reader, the screensavers and SD ACCESS all run exactly as on the board. Nothing leaves your browser.</div>
+  </section>
+
+  <aside class="side">
+    <div class="card">
+      <h3><span class="led" id="usbLed"></span> <span id="ghead">Gotek on the USB cable</span></h3>
+      <div class="gotek"><div class="seg" id="seg">---</div><div class="what" id="gwhat">no disk</div></div>
+      <div class="row">
+        <button id="bCable" class="on">Cable plugged in</button>
+        <button id="bGSave" disabled title="The Amiga writes to the disk, as a game save would">Amiga saves a game</button>
+        <button id="bEject" hidden>Eject on the PC</button>
+      </div>
+      <p class="small" id="gnote">In STANDALONE mode the GTi is the USB stick the Gotek reads. Insert a game and it shows up here.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="led" id="radioLed"></span> Wireless dongles</h3>
+      <div id="dongles" class="small">Switch the GTi to WIRELESS mode (Settings &gt; MODE), then scan for dongles.</div>
+    </div>
+
+    <div class="card">
+      <h3>SD card</h3>
+      <div class="small" id="cardInfo">–</div>
+      <div class="files" id="files"></div>
+      <div class="row" style="margin-top:8px"><button id="bRefresh">Refresh</button><span class="small">Click a file to download it (CONFIG.TXT, gti.log, saves…)</span></div>
+    </div>
+
+    <div class="card">
+      <details id="logBox"><summary>Serial console</summary><pre id="log"></pre></details>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <p>GTi by Mez &amp; Dimmy / OMEGAWARE. The simulator compiles the unchanged firmware source to WebAssembly; the SD card, the USB cable and the dongle radio are simulated. Wi-Fi features (web page, WebDAV, home Wi-Fi) need a real network and report "not available". <span id="credits"></span></p>
+</footer>
+
+<div id="start">
+  <div class="box">
+    <h2><span style="color:var(--gold)">Ω</span> GTi simulator</h2>
+    <p>Pick an SD card for the GTi. Your own folder stays on your computer: the simulator reads the files in your browser and never uploads anything.</p>
+    <div class="choice">
+      <button id="cDemo"><b>Demo library</b><span id="demoDesc">Freely distributable Amiga games, with their covers and descriptions.</span></button>
+      <button id="cFolder"><b>Your own folder…</b><span>Your GTi SD card, or any folder of ADF / DSK / HFE files with covers (.jpg/.png) and .nfo files.</span></button>
+      <button id="cBlank"><b>Blank card</b><span>See what the GTi does with an empty card on first boot.</span></button>
+    </div>
+    <input type="file" id="folder" webkitdirectory directory multiple hidden>
+    <div id="prog"><i></i></div>
+    <p class="small" id="startMsg"></p>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const worker = new Worker('gti_worker.js');
+const cv = $('scr'), ctx = cv.getContext('2d');
+const panel = document.createElement('canvas'); panel.width = 320; panel.height = 480;
+const pctx = panel.getContext('2d'); const pimg = pctx.createImageData(320, 480);
+let turned = false, zoom = 2, booted = false, lastFrame = null;
+function fit() {
+  const W = turned ? 320 : 480, H = turned ? 480 : 320;
+  cv.width = W; cv.height = H;
+  const maxW = Math.max(240, Math.min(window.innerWidth - (window.innerWidth > 1000 ? 520 : 80), 1400));
+  let z = zoom; while (z > 1 && W * z > maxW) z -= 0.5;
+  cv.style.width = (W * z) + 'px'; cv.style.height = (H * z) + 'px';
+  draw();
+}
+function draw() {
+  if (!lastFrame) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height); return; }
+  pimg.data.set(lastFrame); pctx.putImageData(pimg, 0, 0);
+  ctx.save();
+  if (turned) { ctx.drawImage(panel, 0, 0); }                 // portrait: the panel as it is
+  else { ctx.translate(480, 0); ctx.rotate(Math.PI / 2); ctx.drawImage(panel, 0, 0); }   // landscape case: panel turned 90°
+  ctx.restore();
+}
+// screen point -> AXS15231B panel pixel (the firmware does its own ROTATE on top)
+function toPanel(e) {
+  const r = cv.getBoundingClientRect();
+  const X = (e.clientX - r.left) * cv.width / r.width, Y = (e.clientY - r.top) * cv.height / r.height;
+  let px, py;
+  if (turned) { px = X; py = Y; } else { px = Y; py = 479 - X; }
+  return { x: Math.max(0, Math.min(319, Math.round(px))), y: Math.max(0, Math.min(479, Math.round(py))) };
+}
+let down = false;
+cv.addEventListener('pointerdown', e => { if (!booted) return; down = true; cv.setPointerCapture(e.pointerId); const p = toPanel(e); worker.postMessage({ t: 'touch', down: true, x: p.x, y: p.y }); });
+cv.addEventListener('pointermove', e => { if (!down) return; const p = toPanel(e); worker.postMessage({ t: 'touch', down: true, x: p.x, y: p.y }); });
+const up = () => { if (!down) return; down = false; worker.postMessage({ t: 'touch', down: false }); };
+cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+
+// ── worker messages ──
+const logEl = $('log'); let logText = '';
+const pending = new Map(); let reqId = 1;
+function ask(msg) { return new Promise(res => { const id = reqId++; pending.set(id, res); worker.postMessage(Object.assign({ id }, msg)); }); }
+worker.onmessage = ev => {
+  const m = ev.data;
+  if (m.t === 'frame') { lastFrame = m.f; draw(); }
+  else if (m.t === 'log') { const v = /=== BOOT (\S+) ===/.exec(m.s); if (v) $('fwv').textContent = v[1]; logText = (logText + m.s).slice(-60000); if ($('logBox').open) { logEl.textContent = logText; logEl.scrollTop = logEl.scrollHeight; } }
+  else if (m.t === 'bl') { $('dim').style.opacity = Math.max(0, Math.min(0.92, 1 - m.d / 200)).toFixed(2); }
+  else if (m.t === 'status') showStatus(m);
+  else if (m.t === 'ev') onEvent(m);
+  else if (m.t === 'msc' || m.t === 'cardread') { const r = pending.get(m.id); pending.delete(m.id); r && r(m); }
+  else if (m.t === 'crash') { console.error(m.s); logText += '\n[SIM] the firmware stopped: ' + m.s + '\n'; $('startMsg').textContent = 'The simulator stopped - see the serial console.'; }
+  else if (m.t === 'ready') readyResolve();
+  else if (m.t === 'cardok') { $('cardInfo').textContent = m.files ? `${m.gb} GB card · ${m.files} files` : 'no card'; }
+};
+$('logBox').addEventListener('toggle', () => { logEl.textContent = logText; logEl.scrollTop = logEl.scrollHeight; });
+let readyResolve; const ready = new Promise(r => readyResolve = r);
+worker.postMessage({ t: 'init', wasm: 'gti.wasm' });
+
+// ── Gotek / USB ──
+let usbOn = true, mscBlocks = 0, mediaShown = '';
+$('bCable').onclick = () => { usbOn = !usbOn; worker.postMessage({ t: 'usb', on: usbOn }); $('bCable').textContent = usbOn ? 'Cable plugged in' : 'Cable unplugged'; $('bCable').classList.toggle('on', usbOn); };
+function onEvent(m) { if (m.k >= 10 && m.k < 20) setTimeout(refreshGotek, 300); if (m.k >= 30) worker.postMessage({ t: 'status' }); }
+setInterval(() => worker.postMessage({ t: 'status' }), 1000);
+let lastMsc = -1, gotekFile = null;
+function showStatus(m) {
+  if (m.msc !== lastMsc || m.blocks !== mscBlocks) { lastMsc = m.msc; mscBlocks = m.blocks; refreshGotek(); }
+  if (m.card) $('cardInfo').textContent = `${m.card.gb} GB card · ${m.card.overlay} sectors written by the GTi`;
+  showDongles(m.dongles);
+}
+async function readFat12Root() {          // the volume the GTi presents: find the image file in its root
+  const b = (await ask({ t: 'msc', op: 'read', lba: 0, n: 1 })).d; if (!b || b[510] !== 0x55) return null;
+  const bps = b[11] | b[12] << 8, spc = b[13], rsv = b[14] | b[15] << 8, nf = b[16], rootN = b[17] | b[18] << 8, spf = b[22] | b[23] << 8;
+  const rootLba = rsv + nf * spf, rootSec = Math.ceil(rootN * 32 / bps), dataLba = rootLba + rootSec;
+  const r = (await ask({ t: 'msc', op: 'read', lba: rootLba, n: Math.min(rootSec, 8) })).d; if (!r) return null;
+  for (let o = 0; o < r.length; o += 32) {
+    if (r[o] === 0) break; if (r[o] === 0xE5 || r[o + 11] === 0x0F || (r[o + 11] & 0x18)) continue;
+    const nm = String.fromCharCode(...r.subarray(o, o + 8)).trim(), ext = String.fromCharCode(...r.subarray(o + 8, o + 11)).trim();
+    const clus = r[o + 26] | r[o + 27] << 8, size = (r[o + 28] | r[o + 29] << 8 | r[o + 30] << 16 | r[o + 31] << 24) >>> 0;
+    return { name: ext ? nm + '.' + ext : nm, size, lba: dataLba + (clus - 2) * spc };
+  }
+  return null;
+}
+let pcRead = false;
+async function refreshGotek() {
+  const st = lastMsc < 0 ? 0 : lastMsc, media = !!(st & 4), conn = !!(st & 2), live = media && conn && usbOn;
+  const pc = mscBlocks > 200000;                 // SD ACCESS: the whole card is on the cable, a PC is the host
+  $('usbLed').className = 'led ' + (live ? 'g' : (st & 1 ? 'a' : ''));
+  $('ghead').textContent = pc ? 'PC on the USB cable' : 'Gotek on the USB cable';
+  $('bGSave').hidden = pc; $('bEject').hidden = !pc;
+  gotekFile = null;
+  if (pc) {
+    $('seg').textContent = live ? 'PC' : '---';
+    $('gwhat').innerHTML = live ? `<b>GTi LIBRARY</b> drive · ${(mscBlocks * 512 / 1e9).toFixed(1)} GB<br>the card, as your computer would see it` : 'cable unplugged';
+    if (live && !pcRead) { pcRead = true; for (let l = 0; l < 64; l += 8) await ask({ t: 'msc', op: 'read', lba: l, n: 8 }); }   // the "PC" mounts the drive
+    $('gnote').textContent = 'SD ACCESS: on a real GTi your computer now sees the card. Here the SD card panel below is that view. Eject from the PC (button) and the GTi restarts.';
+    return;
+  }
+  pcRead = false;
+  if (live) gotekFile = await readFat12Root();
+  if (gotekFile) {
+    $('seg').textContent = '001'; $('gwhat').innerHTML = `<b>${gotekFile.name}</b> · ${(gotekFile.size / 1024).toFixed(0)} KB<br>the Amiga can boot it now`;
+  } else { $('seg').textContent = live ? 'A--' : '---'; $('gwhat').textContent = !usbOn ? 'cable unplugged' : media ? 'disk present (reading…)' : 'no disk'; }
+  $('bGSave').disabled = !gotekFile;
+}
+$('bEject').onclick = () => worker.postMessage({ t: 'msceject' });
+$('bGSave').onclick = async () => {        // the Amiga writes three sectors into the image (like a save game)
+  if (!gotekFile) return;
+  const at = gotekFile.lba + Math.floor(gotekFile.size / 512 * 0.75);
+  const d = new Uint8Array(3 * 512); const t = new TextEncoder().encode('GTi simulator - a saved game written by the Amiga at ' + new Date().toLocaleTimeString() + '. ');
+  for (let i = 0; i < d.length; i++) d[i] = t[i % t.length];
+  await ask({ t: 'msc', op: 'write', lba: at, d });
+  $('gnote').textContent = 'The Amiga wrote 3 sectors. A few seconds later the GTi copies the change into Game.sav.adf on the card (watch the save badge).';
+};
+
+// ── dongles ──
+function showDongles(j) {
+  if (!j) return;
+  $('radioLed').className = 'led ' + (j.radio ? (j.paired ? 'g' : 'a') : '');
+  const el = $('dongles');
+  if (!j.radio) { el.innerHTML = 'The radio is off: the GTi is in STANDALONE mode. Settings &gt; MODE switches to WIRELESS (ESP-NOW).'; return; }
+  el.innerHTML = j.d.map((d, i) => {
+    const tag = d.mac.slice(-5).replace(':', '');
+    const act = j.active === i ? ' <span style="color:var(--green)">· paired</span>' : '';
+    const st = !d.on ? 'switched off' : d.loaded ? `has <b style="color:var(--txt)">${d.name}</b> (${(d.size / 1024).toFixed(0)} KB)${d.dirty ? ` · ${d.dirty} unsaved sectors` : ''}` : 'empty, waiting';
+    return `<div class="dongle"><div><span class="nm">GotekOMEGA-${tag}</span> <span class="small">${d.hd ? 'XIAO · HD' : 'SuperMini'}</span>${act}</div>
+      <div class="row"><button data-i="${i}" data-op="power" class="${d.on ? 'on' : ''}">${d.on ? 'On' : 'Off'}</button><button data-i="${i}" data-op="save" ${d.loaded ? '' : 'disabled'}>Amiga saves</button></div>
+      <div class="st">${st}</div></div>`;
+  }).join('');
+}
+$('dongles').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const i = +b.dataset.i;
+  if (b.dataset.op === 'power') worker.postMessage({ t: 'dongle', op: 'power', i, on: !b.classList.contains('on') });
+  else worker.postMessage({ t: 'dongle', op: 'save', i });
+});
+
+// ── the SD card (read back what the GTi wrote) ──
+async function cardSectors(s, n) { return (await ask({ t: 'cardread', s, n })).d; }
+let fat = null;
+async function mountFat() {
+  const mbr = await cardSectors(0, 1); if (!mbr) return null;
+  const P = mbr[454] | mbr[455] << 8 | mbr[456] << 16 | mbr[457] << 24;
+  const b = await cardSectors(P, 1);
+  const spc = b[13], rsv = b[14] | b[15] << 8, nf = b[16], fsz = (b[36] | b[37] << 8 | b[38] << 16 | b[39] << 24) >>> 0, rootc = (b[44] | b[45] << 8 | b[46] << 16 | b[47] << 24) >>> 0;
+  return { P, spc, fat: P + rsv, data: P + rsv + nf * fsz, rootc };
+}
+async function nextClus(c) { const s = fat.fat + Math.floor(c / 128); const d = await cardSectors(s, 1); const o = (c % 128) * 4; return (d[o] | d[o + 1] << 8 | d[o + 2] << 16 | d[o + 3] << 24) & 0x0FFFFFFF; }
+async function readChain(c, maxBytes) {
+  const parts = []; let got = 0;
+  while (c >= 2 && c < 0x0FFFFFF8 && got < maxBytes) { parts.push(await cardSectors(fat.data + (c - 2) * fat.spc, fat.spc)); got += fat.spc * 512; c = await nextClus(c); }
+  const out = new Uint8Array(got); let o = 0; for (const p of parts) { out.set(p, o); o += p.length; } return out;
+}
+async function listDir(c) {
+  const d = await readChain(c, 512 * 1024); const ents = []; let lfn = [];
+  for (let o = 0; o < d.length; o += 32) {
+    if (d[o] === 0) break; if (d[o] === 0xE5) { lfn = []; continue; }
+    if (d[o + 11] === 0x0F) { const pos = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30]; let s = ''; for (const p of pos) { const v = d[o + p] | d[o + p + 1] << 8; if (v === 0 || v === 0xFFFF) break; s += String.fromCharCode(v); } lfn.unshift(s); continue; }
+    if (d[o + 11] & 0x08) { lfn = []; continue; }
+    const sfn = String.fromCharCode(...d.subarray(o, o + 8)).trim() + (d[o + 8] !== 32 ? '.' + String.fromCharCode(...d.subarray(o + 8, o + 11)).trim() : '');
+    const name = lfn.length ? lfn.join('') : sfn; lfn = [];
+    if (name === '.' || name === '..') continue;
+    ents.push({ name, dir: !!(d[o + 11] & 0x10), clus: (d[o + 26] | d[o + 27] << 8 | d[o + 20] << 16 | d[o + 21] << 24) >>> 0, size: (d[o + 28] | d[o + 29] << 8 | d[o + 30] << 16 | d[o + 31] << 24) >>> 0 });
+  }
+  return ents.sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name));
+}
+let cwd = [];
+async function showFiles() {
+  fat = fat || await mountFat(); if (!fat) { $('files').textContent = 'no card'; return; }
+  const c = cwd.length ? cwd[cwd.length - 1].clus : fat.rootc;
+  const ents = await listDir(c);
+  const el = $('files'); el.innerHTML = '';
+  const add = (label, right, cls, fn) => { const r = document.createElement('div'); r.innerHTML = `<span class="${cls || ''}">${label}</span><span class="small">${right}</span>`; r.onclick = fn; el.appendChild(r); };
+  add('/' + cwd.map(d => d.name).join('/'), '', 'small', null);
+  if (cwd.length) add('..', '', 'd', () => { cwd.pop(); showFiles(); });
+  for (const e of ents.slice(0, 400)) {
+    if (e.dir) add(e.name + '/', '', 'd', () => { cwd.push(e); showFiles(); });
+    else add(e.name, e.size < 10240 ? e.size + ' B' : (e.size / 1024).toFixed(0) + ' KB', '', async () => {
+      const data = (await readChain(e.clus, e.size)).slice(0, e.size);
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([data])); a.download = e.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    });
+  }
+}
+$('bRefresh').onclick = () => { fat = null; showFiles(); };
+
+// ── power, card ──
+function power() { booted = true; worker.postMessage({ t: 'power' }); worker.postMessage({ t: 'usb', on: usbOn }); setTimeout(() => { fat = null; showFiles(); }, 6000); }
+$('bPower').onclick = () => power();
+$('bReset').onclick = () => power();
+$('bTurn').onclick = () => { turned = !turned; fit(); };
+$('bZoom').onclick = () => { zoom = zoom >= 3 ? 1 : zoom + 0.5; fit(); };
+$('bCard').onclick = () => { $('start').style.display = 'flex'; };
+window.addEventListener('resize', fit);
+async function startWith(files, label) {
+  await ready;
+  worker.postMessage({ t: 'card', files, label });
+  $('start').style.display = 'none'; cwd = []; fat = null;
+  power();
+}
+$('cBlank').onclick = () => startWith([], 'GTI');
+$('cFolder').onclick = () => $('folder').click();
+$('folder').onchange = () => {
+  const list = Array.from($('folder').files); if (!list.length) return;
+  // the folder you pick is the card's root when it looks like one (ADF/, DSK/, GEN/ or CONFIG.TXT inside); otherwise it goes in /ADF
+  const rel = f => f.webkitRelativePath.split('/').slice(1).join('/');
+  const tops = new Set(list.map(f => rel(f).split('/')[0].toUpperCase()));
+  const isRoot = ['ADF', 'DSK', 'GEN', 'CONFIG.TXT', 'HFE'].some(t => tops.has(t));
+  const files = list.filter(f => !rel(f).split('/').some(p => p.startsWith('.') && p.length > 1 && p !== '.thumbs'))
+    .map(f => ({ path: (isRoot ? '' : 'ADF/') + rel(f), size: f.size, mtime: f.lastModified, src: f }));
+  startWith(files, 'MYCARD');
+};
+$('cDemo').onclick = async () => {
+  $('prog').style.display = 'block'; $('startMsg').textContent = 'Fetching the demo library…';
+  try {
+    const man = await (await fetch('library/manifest.json')).json();
+    let done = 0; const total = man.files.reduce((a, f) => a + f.size, 0);
+    const files = [];
+    for (const f of man.files) {
+      const b = await (await fetch('library/' + f.url)).blob();
+      files.push({ path: f.path, size: b.size, mtime: Date.parse(f.date || '2026-10-04'), src: b });
+      done += f.size; $('prog').firstElementChild.style.width = (100 * done / total).toFixed(0) + '%';
+    }
+    if (man.credits) $('credits').innerHTML = man.credits;
+    startWith(files, 'GTI DEMO');
+  } catch (e) { $('startMsg').textContent = 'The demo library could not be loaded (' + e + '). Try your own folder or a blank card.'; }
+};
+fit();
+</script>
+</body>
+</html>

@@ -1,0 +1,317 @@
+{
+ "files": [
+  {
+   "path": "ADF/Nippon Safes Inc/Nippon Safes Inc (Disk 1 of 5).adf",
+   "url": "f000.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Nippon Safes Inc/Nippon Safes Inc (Disk 2 of 5).adf",
+   "url": "f001.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Nippon Safes Inc/Nippon Safes Inc (Disk 3 of 5).adf",
+   "url": "f002.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Nippon Safes Inc/Nippon Safes Inc (Disk 4 of 5).adf",
+   "url": "f003.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Nippon Safes Inc/Nippon Safes Inc (Disk 5 of 5).adf",
+   "url": "f004.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Nippon Safes Inc/Nippon Safes Inc.jpg",
+   "url": "f005.jpg",
+   "size": 51518,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Nippon Safes Inc/Nippon Safes Inc.nfo",
+   "url": "f006.nfo",
+   "size": 393,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Nippon Safes Inc/readme.txt",
+   "url": "f007.txt",
+   "size": 1321,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Enemy - Tempest of Violence/Enemy - Tempest of Violence (Disk 1 of 2).adf",
+   "url": "f008.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Enemy - Tempest of Violence/Enemy - Tempest of Violence (Disk 2 of 2).adf",
+   "url": "f009.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Enemy - Tempest of Violence/Enemy - Tempest of Violence.jpg",
+   "url": "f010.jpg",
+   "size": 23316,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Enemy - Tempest of Violence/Enemy - Tempest of Violence.nfo",
+   "url": "f011.nfo",
+   "size": 301,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Enemy 2 - Missing in Action/Enemy 2 - Missing in Action (Disk 1 of 2).adf",
+   "url": "f012.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Enemy 2 - Missing in Action/Enemy 2 - Missing in Action (Disk 2 of 2).adf",
+   "url": "f013.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Enemy 2 - Missing in Action/Enemy 2 - Missing in Action.jpg",
+   "url": "f014.jpg",
+   "size": 23070,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Enemy 2 - Missing in Action/Enemy 2 - Missing in Action.nfo",
+   "url": "f015.nfo",
+   "size": 256,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/MegaBall 4/MegaBall 4 (Disk 1 of 3).adf",
+   "url": "f016.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/MegaBall 4/MegaBall 4 (Disk 2 of 3).adf",
+   "url": "f017.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/MegaBall 4/MegaBall 4 (Disk 3 of 3).adf",
+   "url": "f018.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/MegaBall 4/MegaBall 4.jpg",
+   "url": "f019.jpg",
+   "size": 22378,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/MegaBall 4/MegaBall 4.nfo",
+   "url": "f020.nfo",
+   "size": 296,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/MegaBall 4/MegaBall 4.rtfm",
+   "url": "f021.rtfm",
+   "size": 509,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/MegaBall 4/megaball_readme.html",
+   "url": "f022.html",
+   "size": 1623,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/MegaBall 4/MegaBall4.readme",
+   "url": "f023.readme",
+   "size": 1459,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Gravity Force 2/Gravity Force 2.adf",
+   "url": "f024.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Gravity Force 2/Gravity Force 2.jpg",
+   "url": "f025.jpg",
+   "size": 21811,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Gravity Force 2/Gravity Force 2.nfo",
+   "url": "f026.nfo",
+   "size": 255,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Solid Gold/Solid Gold.adf",
+   "url": "f027.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Solid Gold/Solid Gold.jpg",
+   "url": "f028.jpg",
+   "size": 18522,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Solid Gold/Solid Gold.nfo",
+   "url": "f029.nfo",
+   "size": 320,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Solid Gold/SolidGold.readme",
+   "url": "f030.readme",
+   "size": 5378,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/L'Abbaye des Morts/L'Abbaye des Morts.adf",
+   "url": "f031.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/L'Abbaye des Morts/L'Abbaye des Morts.jpg",
+   "url": "f032.jpg",
+   "size": 30615,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/L'Abbaye des Morts/L'Abbaye des Morts.nfo",
+   "url": "f033.nfo",
+   "size": 347,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/L'Abbaye des Morts/L'Abbaye des Morts.rtfm",
+   "url": "f034.rtfm",
+   "size": 317,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/L'Abbaye des Morts/LAbbayeDesMorts.readme",
+   "url": "f035.readme",
+   "size": 1083,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Uwol - Quest for Money/Uwol - Quest for Money.adf",
+   "url": "f036.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Uwol - Quest for Money/Uwol - Quest for Money.jpg",
+   "url": "f037.jpg",
+   "size": 26658,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Uwol - Quest for Money/Uwol - Quest for Money.nfo",
+   "url": "f038.nfo",
+   "size": 250,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Uwol - Quest for Money/Uwol-Quest_for_money.readme",
+   "url": "f039.readme",
+   "size": 578,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Sir Ababol/Sir Ababol.adf",
+   "url": "f040.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Sir Ababol/Sir Ababol.jpg",
+   "url": "f041.jpg",
+   "size": 22774,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Sir Ababol/Sir Ababol.nfo",
+   "url": "f042.nfo",
+   "size": 255,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/Sir Ababol/SirAbabol.readme",
+   "url": "f043.readme",
+   "size": 640,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/cyberTRON/cyberTRON.adf",
+   "url": "f044.adf",
+   "size": 901120,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/cyberTRON/cyberTRON.jpg",
+   "url": "f045.jpg",
+   "size": 19582,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/cyberTRON/cyberTRON.nfo",
+   "url": "f046.nfo",
+   "size": 216,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "ADF/cyberTRON/cyberTRON.readme",
+   "url": "f047.readme",
+   "size": 617,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "CONFIG.TXT",
+   "url": "f048.txt",
+   "size": 39,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "screensaver/GTi_QR_1_flash_it.png",
+   "url": "f049.png",
+   "size": 13330,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "screensaver/GTi_QR_2_source.png",
+   "url": "f050.png",
+   "size": 16470,
+   "date": "2026-10-04"
+  },
+  {
+   "path": "screensaver/GTi_QR_3_join_us.png",
+   "url": "f051.png",
+   "size": 14057,
+   "date": "2026-10-04"
+  }
+ ],
+ "credits": "Demo games: <b>Nippon Safes Inc.</b> \u00a9 Dynabyte Software, free distribution licence (readme.txt), via <a href=\"https://www.scummvm.org/games/\">ScummVM</a>; <b>Enemy: Tempest of Violence</b> and <b>Enemy 2</b> \u00a9 Andr\u00e9 W\u00fcthrich / <a href=\"https://www.auralis.ch/cms-anachronia-en/\">Anachronia</a>, freeware (non-commercial); <b>MegaBall 4</b> \u00a9 Ed &amp; Al Mackey, Apache 2.0; <b>Gravity Force 2</b> \u00a9 Jens Andersson &amp; Jan Kronquist, <a href=\"https://www.lysator.liu.se/~jensa/gf2/\">CC BY-SA</a>; <b>Solid Gold</b> by Night Owl Design, freeware / public domain; <b>L'Abbaye des Morts</b> by <a href=\"https://www.locomalito.com/abbaye_des_morts.php\">Locomalito &amp; Gryzor87</a> (CC BY, cover art by Gryzor87); Amiga port by jeegfro, GPL - <a href=\"https://aminet.net/package/game/actio/LAbbayeDesMorts\">Aminet</a>; <b>Uwol</b> and <b>Sir Ababol</b> by <a href=\"https://www.mojontwins.com/\">The Mojon Twins</a> (CC BY-NC-SA 3.0, cover art from mojontwins.com); Amiga ports by IceVAN / Purples Studios and Tom &amp; Birra; <b>cyberTRON</b> \u00a9 Gustaf Stechmann, freeware. All are freely distributable; their licences and readmes are on the card next to the disks."
+}

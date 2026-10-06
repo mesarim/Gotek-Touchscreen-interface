@@ -33,6 +33,9 @@ static WebServer webPanelHttp(80);
 static bool   g_web_up          = false;   // server up and serving
 static bool   g_web_joining     = false;   // WiFi join in progress; service() finishes bring-up
 static bool   g_web_srv_started = false;   // routes registered + begin() done (once)
+static bool   g_web_ap          = false;   // lab15p: serving on the GTi's own Wi-Fi (ESP-NOW mode), not the home router
+static bool   g_web_mdns        = false;   // lab15p: MDNS.begin() succeeded (only in home-WiFi mode)
+static bool   g_webPendingUnload = false;  // lab15p: eject queued for loop() (ESP-NOW mode)
 static String g_webPendingDav   = "";      // queued remote path; loop() executes
 static String g_webPendingName  = "";
 static String g_webDavLoaded    = "";      // remote path of the mounted image, if any
@@ -119,7 +122,7 @@ static void hSysInfo() {
   j += "\"game_count\":0,\"file_count\":0,";
   j += "\"loaded_game\":\"" + wpJsonEscape(g_loaded ? g_loaded_name : String("none")) + "\",";
   j += "\"mode\":\"" + String(g_mode == MODE_ADF ? "ADF" : g_mode == MODE_DSK ? "DSK" : "GEN") + "\",";
-  j += "\"theme\":\"GTI\",";
+  j += "\"theme\":\"OMEGA_DARK\",";   // 5.9.39: name a preset the shared SPA knows, so it paints OMEGAWARE dark blue from the first request (was "GTI" = unknown = Workbench grey)
   j += "\"wifi_clients\":0,";
   j += "\"wifi_ip\":\"" + WiFi.localIP().toString() + "\",";
   j += "\"internet\":" + String(sta ? "true" : "false") + ",";
@@ -139,13 +142,15 @@ static void hConfigGet() {
   String j = "{";
   j += "\"WIFI_CLIENT_ENABLED\":\"1\",";
   j += "\"WIFI_CLIENT_SSID\":\"" + wpJsonEscape(g_home_ssid) + "\",";
-  j += "\"WIFI_CLIENT_PASS\":\"" + wpJsonEscape(g_home_pass) + "\",";
+  j += "\"WIFI_CLIENT_PASS\":\"\",";                                       // 5.9.39 (#24): never echo secrets to the LAN; the form shows blank = unchanged
+  j += "\"HAS_WIFI_PASS\":\"" + String(g_home_pass.length() ? "1" : "0") + "\",";
   j += "\"DAV_ENABLED\":\"" + String(g_dav_on ? "1" : "0") + "\",";
   j += "\"DAV_HOST\":\"" + wpJsonEscape(g_dav_host) + "\",";
   j += "\"DAV_PORT\":\"" + String(g_dav_port) + "\",";
   j += "\"DAV_HTTPS\":\"" + String(g_dav_https ? "1" : "0") + "\",";
   j += "\"DAV_USER\":\"" + wpJsonEscape(g_dav_user) + "\",";
-  j += "\"DAV_PASS\":\"" + wpJsonEscape(g_dav_pass) + "\",";
+  j += "\"DAV_PASS\":\"\",";                                               // 5.9.39 (#24): masked, see above
+  j += "\"HAS_DAV_PASS\":\"" + String(g_dav_pass.length() ? "1" : "0") + "\",";
   j += "\"DAV_PATH\":\"" + wpJsonEscape(g_dav_path) + "\",";
   j += "\"CAROUSEL\":\"" + String(g_car_bootmode == 2 ? "LAST" : g_car_bootmode == 1 ? "ON" : "OFF") + "\",";
   j += "\"SCREENSAVER\":\"" + String(g_ss_enabled ? "ON" : "OFF") + "\",";
@@ -164,7 +169,7 @@ static void hConfigGet() {
   j += "\"NESTING\":\"" + String(g_nesting ? "ON" : "OFF") + "\",";
   j += "\"HIVEMIND\":\"" + String(g_hivemind ? "ON" : "OFF") + "\",";
   j += "\"CAP\":\"" + String(g_dongle_cap) + "\",";
-  j += "\"CRACKTRO\":\"" + String(g_cracktro) + "\",";
+  j += "\"CRACKTRO\":\"" + (g_cracktro < 0 ? String("OFF") : String(g_cracktro)) + "\",";   // 5.9.41: OFF is a real value (-1); the page has a dropdown for it now
   j += "\"LOOP\":\"" + String(g_loop_cracktro ? "1" : "0") + "\"";
   j += "}";
   webPanelHttp.send(200, "application/json", j);
@@ -178,7 +183,10 @@ static void hConfigPost() {
     { "DAV_PATH", "DAV_PATH", &g_dav_path },
   };
   for (auto &f : sv) {
-    if (webPanelHttp.hasArg(f.form)) { *f.dst = webPanelHttp.arg(f.form); saveConfigKey(f.cfg, *f.dst); }
+    if (!webPanelHttp.hasArg(f.form)) continue;
+    const String v = webPanelHttp.arg(f.form);
+    if (f.dst == &g_dav_pass && v.length() == 0) continue;   // 5.9.39: GET masks the password, so a blank re-submit means "keep it"
+    *f.dst = v; saveConfigKey(f.cfg, *f.dst);
   }
   if (webPanelHttp.hasArg("DAV_PORT")) {
     const int p = webPanelHttp.arg("DAV_PORT").toInt();
@@ -222,6 +230,9 @@ static void hDiskStatus() {
 }
 
 static void hDiskUnload() {
+  // lab15p: on the GTi's own Wi-Fi an eject can fetch the dongle's saves, which takes the radio off to
+  // join the dongle - in the middle of this reply. So answer first and eject from loop() right after.
+  if (g_web_ap) { g_webPendingUnload = true; webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}"); return; }
   doUnload();
   g_webDavLoaded = "";
   webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}");
@@ -234,7 +245,9 @@ static void hReboot() {
 
 static void hWifiStatus() {
   const bool sta = (WiFi.status() == WL_CONNECTED);
-  String jj = "{\"ap_active\":false,\"ap_ip\":\"\",\"ap_clients\":0";
+  String jj = g_web_ap   // lab15p: report the GTi's own Wi-Fi when that is what we serve on
+    ? "{\"ap_active\":true,\"ap_ip\":\"" + WiFi.softAPIP().toString() + "\",\"ap_clients\":" + String((unsigned)WiFi.softAPgetStationNum())
+    : String("{\"ap_active\":false,\"ap_ip\":\"\",\"ap_clients\":0");
   jj += ",\"sta_connected\":" + String(sta ? "true" : "false");
   jj += ",\"sta_ip\":\"" + (sta ? WiFi.localIP().toString() : String("")) + "\"";
   jj += ",\"sta_ssid\":\"" + wpJsonEscape(g_home_ssid) + "\"}";
@@ -643,6 +656,10 @@ static void webPanelRegister() {
   webPanelHttp.on("/api/sd/delete",  HTTP_POST, hSdDelete);
   webPanelHttp.on("/api/sd/mkdir",   HTTP_POST, hSdMkdir);
   webPanelHttp.on("/files",          HTTP_GET,  hFiles);
+  // 5.9.39: the shared SPA polls /api/fleet every 15 s (loadFleet) and toasts any non-200 as
+  // "Error: Not available on this device". The panel has no fleet roster (that is the GTI_FLEET
+  // build), so answer with an empty roster and the SPA simply hides the bar.
+  webPanelHttp.on("/api/fleet",      HTTP_GET,  []() { webPanelHttp.send(200, "application/json", "{\"devices\":[]}"); });
 #endif
   webPanelHttp.onNotFound([]() { webPanelHttp.send(404, "application/json", "{\"error\":\"Not available on this device\"}"); });
 }
@@ -668,8 +685,17 @@ static void webPanelBegin() {
 // Every loop(): finish the join, then service one client + one queued DAV load.
 // 5.9.17: stop serving + free the listener so a live MODE switch re-inits cleanly.
 static void webPanelStop() {
-  if (g_web_srv_started) { webPanelHttp.stop(); MDNS.end(); }
-  g_web_up = false; g_web_joining = false; g_web_srv_started = false;
+  if (g_web_srv_started) { webPanelHttp.stop(); if (g_web_mdns) MDNS.end(); }
+  g_web_up = false; g_web_joining = false; g_web_srv_started = false; g_web_ap = false; g_web_mdns = false; g_webPendingUnload = false;
+}
+
+// lab15p: ESP-NOW mode - serve the same page on the GTi's own Wi-Fi (GTi_Omega-XXXX, 192.168.4.1).
+// The radio is already up (espnowBegin started the access point), so there is nothing to join and
+// no mDNS. Called by the sketch right after ESP-NOW starts.
+__attribute__((unused)) static void webPanelBeginAP() {   // unused on boards whose radio never runs an AP (P4)
+  if (!g_web_srv_started) { webPanelRegister(); webPanelHttp.begin(); g_web_srv_started = true; }
+  g_web_ap = true; g_web_up = true; g_web_joining = false;
+  webLog("[WEB] up on the GTi's own Wi-Fi at http://192.168.4.1/");
 }
 
 static void webPanelService() {
@@ -677,7 +703,7 @@ static void webPanelService() {
     if (WiFi.status() == WL_CONNECTED) {
       davApplyConfig();
       if (!g_web_srv_started) {                     // register + begin exactly once
-        if (MDNS.begin("GTi")) MDNS.addService("http", "tcp", 80);
+        if (MDNS.begin("GTi")) { MDNS.addService("http", "tcp", 80); g_web_mdns = true; }
         webPanelRegister();
         webPanelHttp.begin();
         g_web_srv_started = true;
@@ -689,6 +715,7 @@ static void webPanelService() {
   }
   if (!g_web_up) return;
   webPanelHttp.handleClient();
+  if (g_webPendingUnload) { g_webPendingUnload = false; doUnload(); g_webDavLoaded = ""; }   // lab15p
   if (g_webPendingDav.length() > 0) {
     const String remote = g_webPendingDav;
     const String name   = g_webPendingName;

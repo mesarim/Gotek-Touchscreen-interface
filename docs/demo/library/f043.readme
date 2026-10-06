@@ -1,0 +1,23 @@
+Short:        Amiga port of Mojon Twins 8 bits game
+Author:       Tom & Birra
+Uploader:     amigawave gmail com
+Type:         game/jump
+Version:      1.1
+Architecture: m68k-amigaos => 1.2
+Distribution: Aminet
+
+For all Amiga computers with 512Kb.
+
+It's a new free Amiga game release in 2018. This game port start as an
+internal exercise learning how to make a direct port form C sources to Amiga
+Blitz Basic.
+ 
+Sir Ababol is an original game designed by Mojon Twins for 8 bits computers
+and NES. http://www.mojontwins.com/juegos_mojonos/sir-ababol/
+
+Code Birra and Tom.
+Music by Zoltar.
+
+Goblins 2018.
+
+Update 1.1, add fire button for jump.

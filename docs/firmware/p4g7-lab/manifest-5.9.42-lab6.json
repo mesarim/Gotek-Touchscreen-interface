@@ -1,0 +1,16 @@
+{
+  "name": "Gotek Touchscreen Interface — Guition JC1060 7\" P4 LAB (5.9.42-lab6-P4G7, NEO look + classic switch)",
+  "version": "5.9.42-lab6-P4G7",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-P4",
+      "parts": [
+        {
+          "path": "Gotek_P4_JC1060-5.9.42-lab6-c6.merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}

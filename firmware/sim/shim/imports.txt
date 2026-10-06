@@ -1,0 +1,15 @@
+js_now_ms
+js_epoch_ms
+js_sleep
+js_log
+js_present
+js_touch
+js_disk_sectors
+js_disk_read
+js_disk_write
+js_disk_present
+js_restart
+js_event
+js_usb_host
+js_random
+js_backlight

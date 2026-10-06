@@ -1,0 +1,23 @@
+Short:        a tron lightcycles game for 2-4 players
+Author:       gus0650@yahoo.com (Gustaf Stechmann)
+Uploader:     gus0650 yahoo com (Gustaf Stechmann)
+Type:         game/2play
+Version:      1.0
+Architecture: m68k-amigaos
+Distribution: Aminet
+
+Welcome to cyberTRON!
+
+I wrote this game in 1992 using BlitzBasic 2, with the idea 
+to promote the sales of my home-made 4 player adapter.
+
+(The adapter is currently out of stock ;-)
+
+This game is freeware.
+
+The game was developed on a PAL Amiga but should detect NTSC 
+and resize the playfield accordingly. This is however 
+not fully tested.
+
+Hope you enjoy it!
+--Gus
