@@ -127,7 +127,7 @@ screen. Plug in USB serial to see the reason, e.g.
 
 **Built-in names win, so some filenames are unreachable.** These names are reserved and
 always select the built-in, even if a file of that name exists:
-`OFF`, `NONE`, `CUSTOM`, `OMEGA`, `OMEGAWARE`, `DENISE`, `WRANGLER`, `RETRONAUT`, and
+`OFF`, `NONE`, `CUSTOM`, `OMEGA`, `OMEGAWARE`, the names of the built-in styles, and
 anything starting with a digit. So `/cracktro/omega.gti` can never be picked with
 `CRACKTRO=omega` - that gets you the built-in OMEGAWARE theme. Name your own files
 something else, or select them with `CRACKTRO=CUSTOM`.
