@@ -1086,7 +1086,7 @@ static void apiConfigSave(){
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiReboot(){ server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
-static const char* const THEME_NAMES[] = { "AMIGA_WB2","AMIGA_WB13","PAPER_WHITE","MIDNIGHT","PHOSPHOR","OMEGA_DARK" };   // 1.6.4: one list for /list and /activate
+static const char* const THEME_NAMES[] = { "NEO","AMIGA_WB2","AMIGA_WB13","PAPER_WHITE","MIDNIGHT","PHOSPHOR","OMEGA_DARK" };   // 1.6.4: one list for /list and /activate | 1.6.11: + NEO (the GTi look; needs the shared webui.h with the NEO preset)
 static bool themeKnown(const String& n){ for (auto t : THEME_NAMES) if (n == t) return true; return false; }
 static void apiThemesList(){
   String j = "{\"active\":\""; j += g_active_theme;
