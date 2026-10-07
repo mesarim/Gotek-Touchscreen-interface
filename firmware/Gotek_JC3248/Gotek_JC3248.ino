@@ -50,7 +50,8 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-// BASE: "A600-theme1-JC3248"  // A600-theme1-JC3248 (Dimmy+Mez, 7 Oct): one THEME section - Settings has one THEME row; its page holds NEO ON/OFF, the classic themes and your own themes from /GTI/THEMES (made in the web page's Themes tab + Theme Editor, which the panel now serves); a card from before NEO keeps its own theme | A600-neo2g-JC3248 // A600-neo2-JC3248 (Dimmy, 6 Oct): NEO keys - one see-through button/panel look on every screen (list rows, cover panel, settings, bottom bars, carousel, text reader); INSERT amber, EJECT muted red, on/off as an edge + dot; the reader keeps the web page answering | A600-neo1-JC3248 (Dimmy, 6 Oct): NEO preview on branch neo-style - NEO theme + switch, background picture, NEO web pages | A600-lab1-JC3248 (Mez, 5 Oct): LANGUAGE and THEME open a pick page in Settings - every choice as its own button (languages in their own name, themes in their own colour), tap one and you are back where you were; the current one is marked > < | was A600 (4 Oct 2026, pre-Kickstart release) = 5.9.41-lab15q-JC3248, renamed only (no code change) | lab15q: Polish screen text corrected by 8-Bitz (ROLKA, TERAZ GRA, WSZYSTKIE, ULUBIONE...); the reel bar's ALL/FAV/MOST word shrinks when it is too long for its button | lab15p: ESP-NOW mode - the GTi's own Wi-Fi is now GTi_Omega-XXXX, password gotekXXXX (was an OPEN, unnamed ESP_xxxxxx), and serves the GTi web page at 192.168.4.1; Settings shows the name + password | lab15o: Polish (LANG=PL) and Czech (LANG=CS) on the screen + NL/PL/CS in the web page's language list; the STANDALONE banner centres on the translated word | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j: tap the game text in the list (title + description) = the whole .nfo full-screen in the manual reader (scroll, SIZE, TOP, CLOSE) | lab15i: each dongle keeps its OWN save file (Game.sav.XXXX.adf, XXXX = last 4 hex of the dongle MAC) - two Amigas on the same game (cable + dongle, or two dongles) never mix their saves | lab15h: FIX the lab15e/f/g freeze on disk insert (the Gotek's read took the SD lock twice - SD_MMC.readRAW already goes through the locked driver); includes lab15b-g
+#define FW_VERSION "A600-lab2-JC3248"   // A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
 // user should never meet the word, so this is compile-time only and deliberately NOT
@@ -58,12 +59,6 @@
 // The wire contract is unchanged either way, so the two builds interoperate.
 //#define GTI_FLEET 1
 
-// -fleet so the bench can tell the two apart (both sit on the A600-lab1 base above).
-#if defined(GTI_FLEET)
-#define FW_VERSION "A600-lab2-fleet-JC3248"   // A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
-#else
-#define FW_VERSION "A600-lab2-JC3248"
-#endif
 #define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
 #define PF_MDNS_ALIAS "gotekomega"     // pf4: the shared name one screen ALSO answers to, next to its own GTi-XXXX.
                                        // Must match what the dongles cede (their portal points users here).
