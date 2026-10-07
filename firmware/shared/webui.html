@@ -189,6 +189,11 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--cyan);bo
 .modal h3{color:var(--cyan);border-bottom:1px solid var(--line)}
 .toast{border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4)}
 .fleet-bar{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;overflow-x:auto;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+.np-bar[hidden]{display:none}
+.np-bar{display:flex;gap:10px;align-items:center;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+.np-bar .np-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;flex:0 0 auto}
+.np-bar .np-name{flex:1;min-width:0;font-weight:700;color:var(--cyan);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.np-bar .btn{padding:4px 12px;font-size:12px;flex:0 0 auto}
 .fleet-bar .fleet-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-right:2px;flex:0 0 auto}
 .fleet-chip{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border:1px solid var(--line);border-radius:999px;background:var(--field);color:var(--text);font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer;text-decoration:none;flex:0 0 auto;transition:all .12s}
 a.fleet-chip:hover{border-color:var(--cyan);transform:translateY(-1px)}
@@ -214,6 +219,13 @@ body.neo .disk-btn:not(.loaded){background:#7BD2F7;color:#080C19}
 </div>
 
 <div class="fleet-bar" id="fleet-bar" hidden></div>
+
+<!-- The disk in the drive, on every tab (filled by npPoll). -->
+<div class="np-bar" id="np-bar" hidden>
+  <span class="np-label">In the drive</span>
+  <span class="np-name" id="np-bar-name"></span>
+  <button class="btn" id="np-bar-eject" onclick="npBarEject()">Eject</button>
+</div>
 
 <div class="tabs" id="tab-bar">
   <div class="tab active" data-view="dashboard">Dashboard</div>
@@ -709,6 +721,13 @@ body.neo .disk-btn:not(.loaded){background:#7BD2F7;color:#080C19}
          style="background:#000;padding:0;border:2px inset var(--line);border-top:0;
                 border-radius:0 0 2px 2px;font-family:monospace;font-size:13px"></div>
 
+    <!-- GTi screen preview: only on a GTi panel ("screen":"gti" in /api/system/info). -->
+    <div id="te-gti-wrap" style="display:none;margin-top:12px">
+      <label>On the GTi screen (480&times;320)</label>
+      <canvas id="te-gti" width="480" height="320"
+              style="width:100%;max-width:480px;image-rendering:pixelated;border:2px inset var(--line);border-radius:2px"></canvas>
+    </div>
+
     <div class="net-row" style="margin-top:12px">
       <button class="btn btn-primary" id="te-save">Save theme to device</button>
       <button class="btn" id="te-apply" title="Save, then make it the active theme">Save &amp; activate</button>
@@ -933,13 +952,23 @@ async function loadDashboard() {
   const libraryCard = document.getElementById('games-library-card');
   const themesTab   = document.getElementById('tab-themes');
   if (libraryCard) libraryCard.style.display = hasSD ? '' : 'none';
-  // Absent means "shown" (OMEGAWARE and older firmware do not send it); GTi sends false because its web style is fixed (NEO).
+  // Absent means "shown" (OMEGAWARE and older firmware do not send it). GTi panels with the theme section send true.
   const hasThemes = (d.has_themes === undefined) ? true : !!d.has_themes;
   if (themesTab)   themesTab.style.display   = hasThemes ? '' : 'none';   // OMEGA: built-in presets need no card
   // Absent means no, unlike has_sd: a device that never advertised OTA does
   // not have the endpoint, and offering the button would only produce a 404.
   const otaCard = document.getElementById('ota-card');
   if (otaCard) otaCard.style.display = d.has_ota ? '' : 'none';
+
+  // GTi panel (A600-theme1): it stores themes itself although it reports has_sd:false
+  // (its file manager is /files), and it shows a preview of its own screen. Absent = OMEGAWARE as before.
+  teStore = !!d.theme_store;
+  teGtiScreen = d.screen === 'gti';
+  if (teStore) document.querySelectorAll('#view-themes .needs-sd').forEach(el => el.classList.remove('needs-sd'));
+  if (teGtiScreen) {
+    const w = document.getElementById('te-gti-wrap'); if (w) w.style.display = '';
+    const p = document.getElementById('te-preview'); if (p) p.style.display = 'none';   // the GTi screen has no button pictures
+  }
 
   const hasDisplay = (d.has_display === undefined) ? true : !!d.has_display;
   document.body.classList.toggle('no-sd', !hasSD);
@@ -1952,7 +1981,7 @@ async function syncThemeStyle(name) {
   // A built-in preset needs no card: apply it first so a card-less dongle
   // still wears its default theme (e.g. OMEGA_DARK) from the first paint.
   if (TE_PRESETS[name] && !teSaved[name]) { applyThemeStyle(TE_PRESETS[name]); }
-  if (document.body.classList.contains('no-sd')) return;   // no card: no stored (SD) styles to fetch
+  if (document.body.classList.contains('no-sd') && !(teStore && !TE_PRESETS[name])) return;   // no card: no stored (SD) styles to fetch (a GTi panel stores its own)
   try {
     const st = await apiQuiet(`/api/themes/${encodeURIComponent(name)}/style`);
     teSaved[name] = teNormalizeStyle(st);
@@ -1973,6 +2002,7 @@ async function loadThemes() {
 
 async function activateTheme(name) {
   await api(`/api/themes/${encodeURIComponent(name)}/activate`, { method: 'POST' });
+  document.body.classList.toggle('neo', name === 'NEO');   // GTi: NEO is one of the themes
   toast('Theme changed to ' + name);
   syncThemeStyle(name);   // follow the panel without needing a reload
   loadThemes();
@@ -2009,6 +2039,8 @@ let teSaved = {};
 // theme resolves to the saved one.
 let teThemeNames = [];
 
+var teStore = false;     // GTi panel: themes are stored on the panel although has_sd is false
+var teGtiScreen = false; // GTi panel: show the screen preview
 let teFont = null;      // Uint8Array, 95 glyphs x 6 columns
 let teGeom = null;      // [{n,w,h,label,glyph}]
 
@@ -2214,6 +2246,61 @@ function teRenderPreview() {
     host.appendChild(cv);
   }
   teRenderRows(st);
+  if (teGtiScreen) teRenderGti(st);
+}
+
+// The GTi screen's 16 colours from a style: the same table as themeFromStyle() in the
+// GTi sketch (spec 2026-10-07-gti-theme-section-design.md) - change both together.
+// Every colour is passed through RGB565 so the preview shows what the panel can show.
+function teGtiRoles(st) {
+  const rgb = h => teHexToRgb(h);
+  const mix = (a, b, pct) => a.map((x, i) => x + Math.trunc((b[i] - x) * pct / 100));
+  const q = c => { const r = c[0] >> 3, g = c[1] >> 2, b = c[2] >> 3;
+    return `rgb(${Math.trunc(r * 255 / 31)},${Math.trunc(g * 255 / 63)},${Math.trunc(b * 255 / 31)})`; };
+  const fill = rgb(st.fill), light = rgb(st.light), dark = rgb(st.dark), text = rgb(st.text), acc = rgb(st.accent);
+  return {
+    bg: q(dark), bar: q(mix(dark, [0,0,0], 25)), panel: q(fill), sel: q(mix(fill, acc, 30)), sep: q(light),
+    dim: q(mix(text, fill, 45)), mid: q(mix(text, fill, 25)), lit: q(text), amber: q(acc),
+    accent: q(mix(fill, light, 35)), circ: q(mix(fill, light, 20)), now: q(mix(dark, acc, 20)),
+    green: 'rgb(41,173,90)', orange: 'rgb(255,140,0)', blue: 'rgb(74,138,255)',   // NAVY's, fixed (state colours)
+  };
+}
+
+// A mock of the GTi main screen (status bar, list, game panel, bottom keys) in a style's colours.
+function teRenderGti(st) {
+  const cv = document.getElementById('te-gti');
+  if (!cv) return;
+  const c = cv.getContext('2d'), R = teGtiRoles(st);
+  const box = (x, y, w, h, fill, edge, r) => {
+    c.beginPath(); c.roundRect ? c.roundRect(x + .5, y + .5, w - 1, h - 1, r || 0) : c.rect(x + .5, y + .5, w - 1, h - 1);
+    if (fill) { c.fillStyle = fill; c.fill(); }
+    if (edge) { c.strokeStyle = edge; c.lineWidth = 1; c.stroke(); }
+  };
+  const txt = (s, x, y, col, size, align) => {
+    c.fillStyle = col; c.font = `${size || 12}px monospace`; c.textAlign = align || 'left'; c.textBaseline = 'middle'; c.fillText(s, x, y);
+  };
+  c.fillStyle = R.bg; c.fillRect(0, 0, 480, 320);
+  c.fillStyle = R.bar; c.fillRect(0, 0, 480, 24);
+  txt('GOTEK GTi', 8, 12, R.lit, 12); txt('STANDALONE', 472, 12, R.dim, 11, 'right');
+  c.fillStyle = R.bar; c.fillRect(0, 24, 480, 20);
+  txt('LIBRARY: ADF  57 games', 8, 34, R.mid, 11);
+  const games = ['Another World', 'Lotus Turbo Challenge 2', 'Shadow of the Beast', 'Speedball 2', 'Turrican II'];
+  games.forEach((g, i) => {
+    const y = 48 + i * 40, sel = i === 1;
+    box(4, y, 276, 36, sel ? R.sel : R.panel, sel ? R.amber : R.sep, 6);
+    c.beginPath(); c.arc(24, y + 18, 11, 0, Math.PI * 2); c.fillStyle = R.circ; c.fill();
+    txt(g[0], 24, y + 18, R.lit, 12, 'center');
+    txt(g, 42, y + 13, sel ? R.amber : R.lit, 12);
+    txt('2 disks', 42, y + 27, R.dim, 10);
+  });
+  box(286, 48, 190, 196, R.panel, R.sep, 8);
+  box(296, 58, 170, 96, R.circ, null, 4); txt('cover', 381, 106, R.dim, 11, 'center');
+  txt('Lotus Turbo', 296, 168, R.lit, 13); txt('Challenge 2', 296, 184, R.lit, 13);
+  txt('Gremlin, 1991', 296, 204, R.dim, 11); txt('2 disks - ADF', 296, 222, R.mid, 11);
+  c.fillStyle = R.bar; c.fillRect(0, 266, 480, 54);
+  const keys = [['<', R.panel, R.sep, R.lit], ['>', R.panel, R.sep, R.lit], ['REEL', R.panel, R.sep, R.lit],
+                ['INSERT', R.amber, R.amber, R.bg], ['SETTINGS', R.panel, R.sep, R.lit]];
+  keys.forEach(([k, f, e, t], i) => { const x = 6 + i * 94; box(x, 274, 86, 38, f, e, 8); txt(k, x + 43, 293, t, 12, 'center'); });
 }
 
 // Two game rows the way both the panel and this page draw them: no row fill,
@@ -2245,14 +2332,16 @@ async function teInit() {
   document.getElementById('te-apply').addEventListener('click', () => teSave(true));
 
   try {
-    const [f, g] = await Promise.all([api('/api/themes/font'), api('/api/themes/geometry')]);
+    const [f, g] = await Promise.all([apiQuiet('/api/themes/font'), apiQuiet('/api/themes/geometry')]);   // quiet: a dongle has no screen font/geometry
     const bin = atob(f.data);
     teFont = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) teFont[i] = bin.charCodeAt(i);
     teGeom = g.buttons;
   } catch (e) {
-    document.getElementById('te-preview').textContent =
-      'Could not read font/geometry from the device.';
+    // No screen to design for (a Webby dongle has no font/geometry endpoints): the
+    // editor has nothing to render, so it is hidden instead of showing an error.
+    const card = document.getElementById('te-name') && document.getElementById('te-name').closest('.card');
+    if (card) card.style.display = 'none';
     return;
   }
   teApplyPreset('AMIGA_WB2');
@@ -2344,6 +2433,7 @@ async function teSave(activate) {
     status.textContent = '';
     if (activate) {
       await api(`/api/themes/${encodeURIComponent(name)}/activate`, { method: 'POST' });
+      document.body.classList.remove('neo');   // GTi: a saved theme is never NEO
       applyThemeStyle(st);          // this page follows the panel immediately
       toast(`Theme "${name}" saved and activated`);
     } else {
@@ -2979,7 +3069,7 @@ let npLoadedDisk = 0;
 
 async function npRefresh() {
   try {
-    const s = await api('/api/disk/status');
+    const s = await apiQuiet('/api/disk/status');
     npLoadedDisk = s.disk_num || 0;
     return s;
   } catch (e) { return null; }
@@ -2987,8 +3077,9 @@ async function npRefresh() {
 
 async function npPoll() {
   try {
-    const s = await api('/api/disk/status');
+    const s = await apiQuiet('/api/disk/status');   // quiet: a missed tick is not an error
     npLoadedDisk = s.disk_num || 0;
+    npShowBar(s);
     const sig = (s.source || '') + '|' + (s.name || '') + '|' + (s.np_path || '');
     if (sig !== npLastSignature) {
       npLastSignature = sig;
@@ -3001,6 +3092,19 @@ async function npPoll() {
   } catch (e) { /* device busy or rebooting — try again next tick */ }
 }
 
+function npShowBar(s) {
+  const bar = document.getElementById('np-bar');
+  if (!bar) return;
+  const name = s && s.loaded ? (s.game || s.name || s.file || '') : '';
+  bar.hidden = !name;
+  if (name) document.getElementById('np-bar-name').textContent =
+    name + (s.disk_total > 1 ? '  (disk ' + s.disk_num + '/' + s.disk_total + ')' : '');
+}
+async function npBarEject() {
+  try { await api('/api/disk/unload', { method: 'POST' }); toast('Ejected'); } catch (e) {}
+  npPoll();
+}
+
 function npStartPolling() {
   if (npPollTimer) return;
   // 4 s: fast enough that inserting a disk on the panel shows up while you are
@@ -3008,7 +3112,7 @@ function npStartPolling() {
   // that was freezing the device in the first place.
   npPollTimer = setInterval(npPoll, 4000);
 }
-document.addEventListener('DOMContentLoaded', npStartPolling);
+document.addEventListener('DOMContentLoaded', () => { npStartPolling(); npPoll(); });
 
 // Bumped on every open. An in-flight listing compares against the value it
 // captured and abandons its results if another game has been opened since —
@@ -3446,7 +3550,7 @@ async function loadFleet(){
   const bar = document.getElementById('fleet-bar');
   if (!bar) return;
   let d;
-  try { d = await api('/api/fleet'); } catch(e){ bar.hidden = true; return; }
+  try { d = await apiQuiet('/api/fleet'); } catch(e){ bar.hidden = true; return; }   // quiet: polled every 15 s
   const devs = (d && d.devices) ? d.devices.filter(x=>x && x.id) : [];
   if (devs.length < 1) { bar.hidden = true; return; }
   const masterId = devs.map(x=>x.id).sort()[0];   // lowest MAC = master (matches firmware election)

@@ -126,7 +126,11 @@ static void hSysInfo() {
   j += "\"game_count\":0,\"file_count\":0,";
   j += "\"loaded_game\":\"" + wpJsonEscape(g_loaded ? g_loaded_name : String("none")) + "\",";
   j += "\"mode\":\"" + String(g_mode == MODE_ADF ? "ADF" : g_mode == MODE_DSK ? "DSK" : "GEN") + "\",";
+#if defined(GTI_THEMES)
+  j += "\"theme\":\"" + wpJsonEscape(themeName()) + "\",\"screen\":\"gti\",\"theme_store\":true,";   // A600-theme1: the screen's real theme; the Theme Editor may save to this panel
+#else
   j += "\"theme\":\"NEO\",";   // A600-neo1: GTi's fixed web style (NEO preset in the shared webui.html), was OMEGA_DARK. Earlier note:   // 5.9.39: name a preset the shared SPA knows, so it paints OMEGAWARE dark blue from the first request (was "GTI" = unknown = Workbench grey)
+#endif
   j += "\"wifi_clients\":0,";
   j += "\"wifi_ip\":\"" + WiFi.localIP().toString() + "\",";
   j += "\"internet\":" + String(sta ? "true" : "false") + ",";
@@ -135,7 +139,11 @@ static void hSysInfo() {
   j += "\"ftp_enabled\":false,";
   j += "\"dav_enabled\":" + String(g_dav_on ? "true" : "false") + ",";
   j += "\"log_enabled\":false,";
+#if defined(GTI_THEMES)
+  j += "\"has_sd\":false,\"has_display\":true,\"has_ota\":true,\"has_themes\":true,";
+#else
   j += "\"has_sd\":false,\"has_display\":true,\"has_ota\":true,\"has_themes\":false,";
+#endif
   j += "\"max_image_bytes\":" + String((uint32_t)MAX_FILE_BYTES) + ",";
   j += "\"supports_hd\":true";
   j += "}";
@@ -633,6 +641,45 @@ static void hSdMkdir() {
 static void hFiles() { webPanelHttp.send_P(200, "text/html", FILES_PAGE); }
 #endif  // GTI_WEB_SD_FILES
 
+#if defined(GTI_THEMES)
+// ── A600-theme1: the shared web app's Themes tab + Theme Editor (spec 2026-10-07-gti-theme-section) ──
+// The sketch provides themeListJson / themeStyleJson / themeSaveStyle / themeActivate / g_theme_redraw.
+// The GTi screen draws its own keys, so geometry is empty and the editor uploads no button pictures.
+#include <base64.h>
+static void hThemesList()     { webPanelHttp.send(200, "application/json", themeListJson()); }
+static void hThemesGeometry() { webPanelHttp.send(200, "application/json", "{\"buttons\":[]}"); }
+static void hThemesFont()     { webPanelHttp.send(200, "application/json", "{\"data\":\"" + base64::encode((const uint8_t*)font6x8, sizeof(font6x8)) + "\"}"); }
+// /api/themes/<NAME>/style (GET, POST) and /api/themes/<NAME>/activate (POST); false = not a theme URL
+static bool hThemesNamed() {
+  const String u = webPanelHttp.uri();
+  if (!u.startsWith("/api/themes/")) return false;
+  const int sl = u.indexOf('/', 12);
+  if (sl < 0) return false;
+  String name = u.substring(12, sl); name.toUpperCase();
+  const String what = u.substring(sl + 1);
+  const bool post = (webPanelHttp.method() == HTTP_POST);
+  if (what == "style" && !post) {
+    String j;
+    if (themeStyleJson(name, j)) webPanelHttp.send(200, "application/json", j);
+    else webPanelHttp.send(404, "application/json", "{\"error\":\"no such theme\"}");
+    return true;
+  }
+  if (what == "style" && post) {
+    String err;
+    if (themeSaveStyle(name, webPanelHttp.arg("plain"), err)) webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}");
+    else webPanelHttp.send(400, "application/json", "{\"error\":\"" + wpJsonEscape(err) + "\"}");
+    return true;
+  }
+  if (what == "activate" && post) {
+    if (themeActivate(name)) { g_theme_redraw = true; webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}"); }
+    else webPanelHttp.send(404, "application/json", "{\"error\":\"no such theme\"}");
+    return true;
+  }
+  if (what == "asset" && post) { webPanelHttp.send(200, "application/json", "{\"status\":\"ignored\"}"); return true; }   // no button pictures on this screen
+  return false;
+}
+#endif
+
 // ── Route table (registered once, after WiFi is up) ────────────────────────
 static void webPanelRegister() {
   webPanelHttp.on("/",               HTTP_GET,  hRoot);
@@ -668,6 +715,11 @@ static void webPanelRegister() {
     webPanelHttp.send(200, "application/json", j);
   });
 #endif
+#if defined(GTI_THEMES)
+  webPanelHttp.on("/api/themes/list",     HTTP_GET, hThemesList);
+  webPanelHttp.on("/api/themes/geometry", HTTP_GET, hThemesGeometry);
+  webPanelHttp.on("/api/themes/font",     HTTP_GET, hThemesFont);
+#endif
 #if defined(GTI_NEO_BENCH)
   webPanelHttp.on("/api/neobench", HTTP_GET, [](){ webPanelHttp.send(200, "application/json", neoBenchJson()); });   // A600-neo2e: NEO vs flat draw times
 #endif
@@ -683,7 +735,11 @@ static void webPanelRegister() {
   // build), so answer with an empty roster and the SPA simply hides the bar.
   webPanelHttp.on("/api/fleet",      HTTP_GET,  []() { webPanelHttp.send(200, "application/json", "{\"devices\":[]}"); });
 #endif
-  webPanelHttp.onNotFound([]() { webPanelHttp.send(404, "application/json", "{\"error\":\"Not available on this device\"}"); });
+  webPanelHttp.onNotFound([]() {
+#if defined(GTI_THEMES)
+    if (hThemesNamed()) return;   // A600-theme1: /api/themes/<NAME>/...
+#endif
+    webPanelHttp.send(404, "application/json", "{\"error\":\"Not available on this device\"}"); });
 }
 
 // ── Lifecycle, called from the sketch ──────────────────────────────────────
