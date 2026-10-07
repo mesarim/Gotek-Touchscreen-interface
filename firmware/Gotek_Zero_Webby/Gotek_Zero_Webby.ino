@@ -48,6 +48,7 @@
 #include <Update.h>   // OMEGAWARE: web OTA
 #include <WebServer.h>     // WEBBY: built-in (ESP32 core)  no external lib
 #include <ESPmDNS.h>       // WEBBY: gotekomega.local
+#include <mdns.h>          // 1.6.11: mdns_delegate_hostname_add - the leader keeps its own name too
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
@@ -68,7 +69,7 @@
 #else
 #define WEBBY_BOARD    "supermini"
 #endif
-#define FW_VERSION     "Webby-1.6.11-" WEBBY_BOARD   // 1.6.11: /status has "ap_mac" (the MAC a paired screen knows) | the phone's "sign in to network" window shows a short signpost (keep the network, then open 192.168.4.1 in the browser) instead of the app, which half-worked there - no disk upload, and it closed when you kept the network | 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
+#define FW_VERSION     "Webby-1.6.11-" WEBBY_BOARD   // 1.6.11: the fleet leader answers to gotekomega.local AND its own gotekomega-xxxx.local | /status has "ap_mac" (the MAC a paired screen knows) | the phone's "sign in to network" window shows a short signpost (keep the network, then open 192.168.4.1 in the browser) instead of the app, which half-worked there - no disk upload, and it closed when you kept the network | 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
 #define ESPNOW_CHANNEL 6
 //  Board profile 
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -1175,6 +1176,13 @@ static void pollDisco(){   // read sibling beacons off the discovery socket
     fleetUpsert(id, jf(s,"name"), jf(s,"ip"), jf(s,"fw"), jf(s,"hd")=="true", jf(s,"loaded")=="true", jf(s,"role")=="panel");
   }
 }
+// 1.6.11: the leader answers to gotekomega.local AND keeps its own gotekomega-<mac>.local (a delegated mDNS
+// host on the same IP), so a bookmark or a paired screen's lookup of the own name keeps working.
+static void mdnsKeepOwnName(){
+  if (WiFi.status() != WL_CONNECTED) return;
+  mdns_ip_addr_t a = {}; a.addr.type = ESP_IPADDR_TYPE_V4; a.addr.u_addr.ip4.addr = (uint32_t)WiFi.localIP(); a.next = nullptr;
+  if (mdns_delegate_hostname_add(discoName().c_str(), &a) == ESP_OK) Serial.printf("[FLEET] also %s.local\n", discoName().c_str());
+}
 static void doElection(){   // a screen always leads; otherwise the lowest MAC wears the gotekomega hat
   fleetPrune();
   String me=discoId(); bool master=true;
@@ -1185,6 +1193,7 @@ static void doElection(){   // a screen always leads; otherwise the lowest MAC w
     MDNS.end();
     if(master) MDNS.begin(MDNS_NAME); else MDNS.begin(discoName().c_str());
     MDNS.addService("http","tcp",80);
+    if(master) mdnsKeepOwnName();   // 1.6.11: both names on the leader
     Serial.printf("[FLEET] now %s -> %s.local\n", master?"MASTER":"slave", master?MDNS_NAME:discoName().c_str());
   }
 }
