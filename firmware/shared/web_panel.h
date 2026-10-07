@@ -62,56 +62,11 @@ static String wpArg(const char *k) { return webPanelHttp.hasArg(k) ? webPanelHtt
 
 // ── Page + JSON handlers ──────────────────────────────────────────────────
 
-// A600-neo1: one NEO look for the panel's own pages (landing, /files); same colours as the NEO preset in webui.html.
-// NEO colours are not final (Mez): retune them here only.
-#define WP_NEO_CSS ":root{--bg:#081021;--card:rgba(16,24,49,.82);--line:#42598C;--txt:#EFF3FF;--dim:#94A2BD;--accent:#F7B231;--ok:#52D27B;--ins:#7BD2F7;--btn:#3A4963;--btnh:#4a5a7a;--row:rgba(66,89,140,.35)}" \
-  "body{background:repeating-linear-gradient(90deg,rgba(90,120,200,.10) 0 1px,transparent 1px 46px),repeating-linear-gradient(0deg,rgba(90,120,200,.08) 0 1px,transparent 1px 38px),linear-gradient(160deg,#0A1026 0%,#181a45 55%,#241640 100%) fixed;color:var(--txt)}"
-static const char LANDING_PAGE[] = R"LAND(<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>GOTEK OMEGA</title>
-<style>
-)LAND" WP_NEO_CSS R"LAND(
-*{box-sizing:border-box}
-body{margin:0;font:15px system-ui,-apple-system,sans-serif}
-header{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:12px}
-h1{margin:0;font-size:20px;letter-spacing:.06em;color:var(--accent)}
-header .fw{color:var(--dim);font-size:12px}
-main{max-width:820px;margin:0 auto;padding:20px}
-a.files{display:flex;align-items:center;justify-content:center;gap:10px;background:var(--accent);color:#080C19;text-decoration:none;font-size:20px;font-weight:700;padding:22px;border-radius:14px;margin-bottom:22px;box-shadow:none}
-a.files:hover{filter:brightness(1.1)}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
-.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
-.tile .k{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
-.tile .v{font-size:18px;font-weight:600;margin-top:4px;word-break:break-word}
-.foot{margin-top:20px;text-align:center}
-.foot a{color:var(--dim);font-size:13px;text-decoration:none}.foot a:hover{color:var(--txt)}
-.ok{color:var(--ok)}
-</style></head><body>
-<header><h1>GOTEK&nbsp;OMEGA</h1><span class=fw id=fw></span></header>
-<main>
-<a class=files href="/files">&#128193;&nbsp; FILE ACCESS &mdash; browse the SD card</a>
-<div class=grid id=grid></div>
-<div class=foot><a href="/panel">Full control panel &rarr;</a></div>
-</main>
-<script>
-function tile(k,v,cls){return '<div class=tile><div class=k>'+k+'</div><div class="v '+(cls||'')+'">'+v+'</div></div>'}
-Promise.all([
-  fetch('/api/system/info').then(function(r){return r.json()}).catch(function(){return {}}),
-  fetch('/api/disk/status').then(function(r){return r.json()}).catch(function(){return {}})
-]).then(function(a){
-  var s=a[0]||{}, d=a[1]||{};
-  document.getElementById('fw').textContent=s.firmware||'';
-  var g='';
-  g+=tile('Loaded disk', (d.loaded ? (d.name||'yes') : 'none'));
-  g+=tile('Mode', s.mode||'-');
-  g+=tile('WiFi', s.internet_ssid||'-');
-  g+=tile('IP', s.wifi_ip||s.internet_ip||'-');
-  g+=tile('Free heap', s.heap_free ? Math.round(s.heap_free/1024)+' KB' : '-');
-  g+=tile('Free PSRAM', s.psram_free ? Math.round(s.psram_free/1024)+' KB' : '-');
-  g+=tile('Internet', s.internet ? 'online' : 'offline', s.internet?'ok':'');
-  document.getElementById('grid').innerHTML=g;
-});
-</script>
-</body></html>)LAND";
-static void hRoot() { webPanelHttp.send_P(200, "text/html", LANDING_PAGE); }
+// size-trim: the landing page (/) and the SD file page (/files) live in panel_landing.html and
+// panel_files.html (NEO look since A600-neo1; NEO colours are not final - retune them there);
+// make_webui_header.py stores them gzipped in panel_pages.h (as webui.h).
+#include "panel_pages.h"
+static void hRoot() { webPanelHttp.sendHeader("Content-Encoding", "gzip"); webPanelHttp.send_P(200, "text/html", (PGM_P)panel_landing_gz, panel_landing_gz_len); }
 static void hPanel() {
   webPanelHttp.sendHeader("Cache-Control", "no-cache");
   webPanelHttp.sendHeader("Content-Encoding", "gzip");
@@ -585,128 +540,6 @@ static void hSdDelete() {
   else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not delete\"}");
 }
 
-static const char FILES_PAGE[] = R"FILESPAGE(<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>GTi - SD Files</title>
-<style>
-)FILESPAGE" WP_NEO_CSS R"FILESPAGE(
-body{margin:0;font:15px system-ui,-apple-system,sans-serif}
-header{padding:14px 16px;background:rgba(8,12,25,.85);border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:10px}
-h1{font-size:16px;margin:0;font-weight:600}
-main{padding:16px;max-width:820px;margin:0 auto}
-.crumb{color:var(--dim);font-size:13px;margin:0 0 10px;word-break:break-all}
-.bar{min-height:34px;margin-bottom:4px}
-table{width:100%;border-collapse:collapse}
-td,th{padding:9px 8px;border-bottom:1px solid var(--row);text-align:left}
-th{color:var(--dim);font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
-.sel{width:26px}
-.dir .nm{cursor:pointer;color:var(--accent)}
-.sz{color:var(--dim);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
-.act{text-align:right;white-space:nowrap}
-button,a.btn,label.btn{font:13px system-ui;background:var(--btn);color:var(--txt);border:0;border-radius:6px;padding:6px 10px;cursor:pointer;text-decoration:none;display:inline-block}
-button:hover,a.btn:hover,label.btn:hover{background:var(--btnh)}
-.del{background:#3a2530;color:#ff9db0}
-.up{margin:16px 0;padding:18px;background:var(--card);border:1px dashed var(--line);border-radius:8px}
-.up.drag{border-color:var(--accent);background:rgba(247,178,49,.10)}
-.uf{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.msg{margin:10px 0 0;font-size:13px;color:var(--ok);min-height:18px}
-.err{color:#ff9db0}
-.busy{opacity:.5;pointer-events:none}
-</style></head><body>
-<header><h1>GTi - SD Card</h1><span id=fw style="color:var(--dim);font-size:12px"></span></header>
-<main>
-<p class=crumb id=crumb>/</p>
-<div class=bar><button id=delSel class=del hidden>Delete selected</button></div>
-<table><thead><tr><th class=sel><input type=checkbox id=all title="select all"></th><th>Name</th><th class=sz>Size</th><th class=act></th></tr></thead><tbody id=rows></tbody></table>
-<div class=up id=drop>
-  <form id=uf class=uf>
-    <input type=file id=fi multiple>
-    <button type=submit>Upload files</button>
-    <label class=btn>Upload folder<input type=file id=fd webkitdirectory style="display:none"></label>
-  </form>
-  <div class=msg id=msg>Pick files, pick a folder, or drag files/folders onto this box.</div>
-</div>
-</main>
-<script>
-var cur="/";
-function esc(s){return s.replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
-function human(n){if(n<1024)return n+" B";if(n<1048576)return (n/1024).toFixed(1)+" KB";return (n/1048576).toFixed(2)+" MB"}
-function parent(p){if(p=="/")return null;var q=p.replace(/\/$/,"");var i=q.lastIndexOf("/");return i<=0?"/":q.substring(0,i)}
-function join(d,n){return (d=="/"?"":d)+"/"+n}
-function msg(t,e){var m=document.getElementById('msg');m.textContent=t;m.className='msg'+(e?' err':'')}
-function checks(){return [].slice.call(document.querySelectorAll('.rowchk:checked'))}
-function updateBar(){var n=checks().length;var b=document.getElementById('delSel');b.hidden=(n===0);b.textContent='Delete selected ('+n+')';}
-function load(p){
-  cur=p;document.getElementById('crumb').textContent=p;document.getElementById('all').checked=false;
-  fetch('/api/sd/list?path='+encodeURIComponent(p)).then(function(r){return r.json()}).then(function(d){
-    var rows=document.getElementById('rows');rows.innerHTML='';updateBar();
-    if(d.error){msg(d.error,1);return}
-    var pp=parent(p);
-    if(pp!==null){var tr=document.createElement('tr');tr.className='dir';tr.innerHTML='<td></td><td class=nm>&#8617; ..</td><td></td><td></td>';tr.querySelector('.nm').onclick=function(){load(pp)};rows.appendChild(tr)}
-    (d.entries||[]).sort(function(a,b){return (b.dir-a.dir)||a.name.localeCompare(b.name)}).forEach(function(e){
-      var tr=document.createElement('tr');var full=join(p,e.name);
-      var chk='<td class=sel><input type=checkbox class=rowchk></td>';
-      if(e.dir){tr.className='dir';tr.innerHTML=chk+'<td class=nm>&#128193; '+esc(e.name)+'</td><td></td><td class=act><button class=del>Delete</button></td>';tr.querySelector('.nm').onclick=function(){load(full)};}
-      else{tr.innerHTML=chk+'<td class=nm>&#128196; '+esc(e.name)+'</td><td class=sz>'+human(e.size)+'</td><td class=act><a class=btn href="/api/sd/get?path='+encodeURIComponent(full)+'">Download</a> <button class=del>Delete</button></td>';}
-      tr.querySelector('.del').onclick=function(){delOne(full)};
-      var cb=tr.querySelector('.rowchk');cb.dataset.full=full;cb.onchange=updateBar;
-      rows.appendChild(tr);
-    });
-  }).catch(function(){msg('Could not read that folder',1)});
-}
-document.getElementById('all').onchange=function(){var c=this.checked;[].forEach.call(document.querySelectorAll('.rowchk'),function(cb){cb.checked=c});updateBar();};
-function delPath(full){var b=new URLSearchParams();b.append('path',full);return fetch('/api/sd/delete',{method:'POST',body:b}).then(function(r){return r.json()});}
-function delOne(full){if(!confirm('Delete '+full+'?'))return;delPath(full).then(function(d){if(d.error){msg(d.error,1)}else{msg('Deleted '+full);load(cur)}});}
-document.getElementById('delSel').onclick=function(){
-  var list=checks().map(function(cb){return cb.dataset.full});
-  if(!list.length)return;if(!confirm('Delete '+list.length+' item(s)?'))return;
-  document.body.classList.add('busy');
-  (function next(i){
-    if(i>=list.length){document.body.classList.remove('busy');msg('Deleted '+list.length+' item(s)');load(cur);return;}
-    msg('Deleting '+(i+1)+'/'+list.length+' ...');
-    delPath(list[i]).then(function(){next(i+1)}).catch(function(){next(i+1)});
-  })(0);
-};
-function mkdirp(dir){var b=new URLSearchParams();b.append('path',dir);return fetch('/api/sd/mkdir',{method:'POST',body:b}).then(function(r){return r.json()});}
-function relOf(f){return f._rel||f.webkitRelativePath||f.name;}
-function uploadAll(files){
-  if(!files||!files.length){msg('Pick or drop files first',1);return;}
-  var arr=[].slice.call(files);document.body.classList.add('busy');var made={};
-  (function next(i){
-    if(i>=arr.length){document.body.classList.remove('busy');msg('Uploaded '+arr.length+' item(s)');document.getElementById('fi').value='';load(cur);return;}
-    var f=arr[i];var rel=relOf(f);var sl=rel.lastIndexOf('/');
-    var sub=(sl>=0)?rel.substring(0,sl):'';var name=(sl>=0)?rel.substring(sl+1):rel;
-    var dest=(cur+(sub?('/'+sub):'')).replace(/\/+/g,'/');
-    msg('Uploading '+(i+1)+'/'+arr.length+': '+rel+' ...');
-    var doUp=function(){
-      var fd=new FormData();fd.append('file',f,name);
-      fetch('/api/sd/upload?path='+encodeURIComponent(dest),{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(d){
-        if(d.error){document.body.classList.remove('busy');msg('Stopped at '+rel+': '+d.error,1);load(cur);return;}
-        next(i+1);
-      }).catch(function(){document.body.classList.remove('busy');msg('Upload failed at '+rel,1);load(cur);});
-    };
-    if(sub && !made[dest]){made[dest]=1;mkdirp(dest).then(function(d){if(d&&d.error){document.body.classList.remove('busy');msg('Could not make folder '+dest+': '+d.error,1);load(cur);}else doUp();}).catch(doUp);}
-    else doUp();
-  })(0);
-}
-document.getElementById('uf').onsubmit=function(ev){ev.preventDefault();uploadAll(document.getElementById('fi').files);};
-document.getElementById('fd').onchange=function(){if(this.files&&this.files.length)uploadAll(this.files);};
-function traverseEntry(entry,path,out){return new Promise(function(res){
-  if(entry.isFile){entry.file(function(f){f._rel=path+f.name;out.push(f);res();},function(){res();});}
-  else if(entry.isDirectory){var rd=entry.createReader();var all=[];(function rb(){rd.readEntries(function(e){if(!e.length){Promise.all(all.map(function(x){return traverseEntry(x,path+entry.name+'/',out);})).then(res);}else{all=all.concat(e);rb();}},function(){res();});})();}
-  else res();});}
-function filesFromDrop(dt){
-  var items=dt.items;
-  if(!items||!items.length||!items[0].webkitGetAsEntry){return Promise.resolve([].slice.call(dt.files));}
-  var out=[],ps=[];
-  for(var i=0;i<items.length;i++){var en=items[i].webkitGetAsEntry&&items[i].webkitGetAsEntry();if(en)ps.push(traverseEntry(en,'',out));}
-  return Promise.all(ps).then(function(){return out;});
-}
-var drop=document.getElementById('drop');
-['dragover','dragenter'].forEach(function(ev){drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.add('drag');});});
-['dragleave','dragend'].forEach(function(ev){drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.remove('drag');});});
-drop.addEventListener('drop',function(e){e.preventDefault();drop.classList.remove('drag');if(e.dataTransfer){msg('Reading dropped items...');filesFromDrop(e.dataTransfer).then(function(fs){uploadAll(fs);});}});
-fetch('/api/system/info').then(function(r){return r.json()}).then(function(d){document.getElementById('fw').textContent=d.firmware||''}).catch(function(){});
-load('/');
-</script></body></html>)FILESPAGE";
 
 static void hSdMkdir() {
   if (g_loaded) { webPanelHttp.send(409, "application/json", "{\"error\":\"Unload the mounted disk first\"}"); return; }
@@ -723,7 +556,7 @@ static void hSdMkdir() {
   else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not create folder\"}");
 }
 
-static void hFiles() { webPanelHttp.send_P(200, "text/html", FILES_PAGE); }
+static void hFiles() { webPanelHttp.sendHeader("Content-Encoding", "gzip"); webPanelHttp.send_P(200, "text/html", (PGM_P)panel_files_gz, panel_files_gz_len); }
 #endif  // GTI_WEB_SD_FILES
 
 #if defined(GTI_THEMES)
