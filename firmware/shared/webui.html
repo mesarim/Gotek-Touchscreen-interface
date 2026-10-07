@@ -2320,14 +2320,16 @@ async function teInit() {
   document.getElementById('te-apply').addEventListener('click', () => teSave(true));
 
   try {
-    const [f, g] = await Promise.all([api('/api/themes/font'), api('/api/themes/geometry')]);
+    const [f, g] = await Promise.all([apiQuiet('/api/themes/font'), apiQuiet('/api/themes/geometry')]);   // quiet: a dongle has no screen font/geometry
     const bin = atob(f.data);
     teFont = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) teFont[i] = bin.charCodeAt(i);
     teGeom = g.buttons;
   } catch (e) {
-    document.getElementById('te-preview').textContent =
-      'Could not read font/geometry from the device.';
+    // No screen to design for (a Webby dongle has no font/geometry endpoints): the
+    // editor has nothing to render, so it is hidden instead of showing an error.
+    const card = document.getElementById('te-name') && document.getElementById('te-name').closest('.card');
+    if (card) card.style.display = 'none';
     return;
   }
   teApplyPreset('AMIGA_WB2');
