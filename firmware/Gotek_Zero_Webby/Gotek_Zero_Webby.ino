@@ -68,7 +68,7 @@
 #else
 #define WEBBY_BOARD    "supermini"
 #endif
-#define FW_VERSION     "Webby-1.6.10-" WEBBY_BOARD   // 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
+#define FW_VERSION     "Webby-1.6.11-" WEBBY_BOARD   // 1.6.11: the phone's "sign in to network" window shows a short signpost (keep the network, then open 192.168.4.1 in the browser) instead of the app, which half-worked there - no disk upload, and it closed when you kept the network | 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
 #define ESPNOW_CHANNEL 6
 //  Board profile 
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -1202,9 +1202,54 @@ static void apiFleet(){
   server.send(200,"application/json", j);
 }
 
+// 1.6.11: the phone's own "sign in to network" window (captive portal) is a limited browser - no file
+// upload, and it closes as soon as you choose to keep the network. A request for any host other than
+// this dongle (the phone's internet check: generate_204, hotspot-detect, allawnos, msftconnecttest ...)
+// gets a signpost page instead of the app: keep the network, then open 192.168.4.1 in the real browser.
+static const char CAPTIVE_HTML[] PROGMEM = R"CAPHTML(<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gotek OMEGA</title><style>
+body{margin:0;background:#0b0e22;color:#e9ecf5;font-family:system-ui,sans-serif;display:flex;justify-content:center}
+.c{max-width:420px;margin:32px 16px;padding:22px;background:#181c31;border:1px solid #3b4570;border-radius:16px}
+h1{font-size:20px;margin:0 0 4px}.ap{color:#3fe0e8;font-weight:700}p{color:#9aa3c0;line-height:1.45}
+ol{padding-left:20px;line-height:1.6}li{margin:8px 0}
+.u{display:block;margin:14px 0 6px;padding:14px;border-radius:12px;background:#0b0e22;border:1px solid #3fe0e8;
+color:#3fe0e8;font-size:24px;font-weight:700;text-align:center;text-decoration:none;letter-spacing:.5px}
+.n{font-size:12px;color:#7d86a6;text-align:center}
+</style></head><body><div class="c">
+<h1 id="h">Connected</h1><div class="ap" id="ap">GotekOMEGA</div>
+<ol><li id="s1">Tap &#8942; / Menu and choose "Use this network as is" (or "Keep Wi-Fi").</li>
+<li id="s2">Open your normal browser and go to:</li></ol>
+<a class="u" href="http://192.168.4.1/" target="_blank" rel="noopener">192.168.4.1</a>
+<p class="n" id="n">This small sign-in window cannot upload disks. Everything works in the browser.</p>
+</div><script>
+var T={en:["Connected","Tap ⋮ / Menu and choose \"Use this network as is\" (or \"Keep Wi-Fi\").","Open your normal browser and go to:","This small sign-in window cannot upload disks. Everything works in the browser."],
+nl:["Verbonden","Tik op ⋮ / Menu en kies \"Netwerk gebruiken zoals het is\" (of \"Wi-Fi behouden\").","Open je gewone browser en ga naar:","Dit kleine inlogvenster kan geen disks uploaden. In de browser werkt alles."],
+de:["Verbunden","Tippe auf ⋮ / Menü und wähle \"Netzwerk unverändert nutzen\" (oder \"WLAN behalten\").","Öffne deinen normalen Browser und gehe zu:","Dieses kleine Anmeldefenster kann keine Disketten hochladen. Im Browser geht alles."],
+fr:["Connecté","Touchez ⋮ / Menu et choisissez \"Utiliser ce réseau tel quel\" (ou \"Garder le Wi-Fi\").","Ouvrez votre navigateur habituel et allez à :","Cette petite fenêtre de connexion ne peut pas envoyer de disques. Tout marche dans le navigateur."],
+it:["Connesso","Tocca ⋮ / Menu e scegli \"Usa questa rete così com'è\" (o \"Mantieni Wi-Fi\").","Apri il tuo browser e vai a:","Questa piccola finestra di accesso non può caricare dischi. Nel browser funziona tutto."],
+es:["Conectado","Toca ⋮ / Menú y elige \"Usar esta red tal cual\" (o \"Mantener Wi-Fi\").","Abre tu navegador normal y ve a:","Esta pequeña ventana de acceso no puede subir discos. En el navegador funciona todo."],
+pl:["Połączono","Dotknij ⋮ / Menu i wybierz \"Użyj tej sieci bez zmian\" (lub \"Zachowaj Wi-Fi\").","Otwórz zwykłą przeglądarkę i wejdź na:","To małe okno logowania nie wyśle dysków. W przeglądarce działa wszystko."],
+cs:["Připojeno","Klepněte na ⋮ / Menu a zvolte \"Použít síť tak, jak je\" (nebo \"Ponechat Wi-Fi\").","Otevřete běžný prohlížeč a přejděte na:","Toto malé přihlašovací okno neumí nahrát disky. V prohlížeči funguje vše."]};
+var L=(localStorage.getItem("lang")||navigator.language||"en").slice(0,2).toLowerCase();var t=T[L]||T.en;
+document.getElementById("h").textContent=t[0];document.getElementById("s1").textContent=t[1];
+document.getElementById("s2").textContent=t[2];document.getElementById("n").textContent=t[3];
+document.getElementById("ap").textContent="%AP%";
+</script></body></html>)CAPHTML";
+static bool isPortalProbe(){   // AP mode only; our own address and *.local names get the real pages
+  if (!g_dns_up) return false;
+  String h = server.hostHeader(); int c = h.indexOf(':'); if (c >= 0) h = h.substring(0, c);
+  h.toLowerCase();
+  return h.length() && h != "192.168.4.1" && !h.endsWith(".local");
+}
+static void sendCaptive(){
+  String pg = FPSTR(CAPTIVE_HTML); pg.replace("%AP%", g_ap_name);
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "text/html", pg);
+}
+
 static void startWebServer(){
   // PANEL: Dimmy's SPA is the front door; the old simple page stays at /classic.
-  server.on("/", HTTP_GET, handleWebUI);
+  server.on("/", HTTP_GET, [](){ if (isPortalProbe()) { sendCaptive(); return; } handleWebUI(); });   // 1.6.11: signpost in the phone's sign-in window
   server.on("/classic", HTTP_GET, handleRoot);
   server.on("/app", HTTP_GET, [](){ server.sendHeader("Content-Encoding","gzip"); server.send_P(200, "text/html", (PGM_P)webui_gz, webui_gz_len); });   // 1.6.9: the full shared interface in any mode (linked from the setup page)
   // legacy simple endpoints (kept  the /classic page and any old clients use them)
@@ -1242,6 +1287,7 @@ static void startWebServer(){
       server.send(200,"application/json","{\"status\":\"ok\"}"); return;
     }
     if (u.startsWith("/api/")) { server.send(404,"application/json","{\"error\":\"not found\"}"); return; }
+    if (isPortalProbe()) { sendCaptive(); return; }   // 1.6.11: the phone's internet check -> signpost page
     server.sendHeader("Location","/"); server.send(302,"text/plain","");   // captive portal
   });
   server.begin();
