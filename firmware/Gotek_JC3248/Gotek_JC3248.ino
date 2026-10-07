@@ -49,7 +49,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-neo2g-JC3248"  // A600-neo2-JC3248 (Dimmy, 6 Oct): NEO keys - one see-through button/panel look on every screen (list rows, cover panel, settings, bottom bars, carousel, text reader); INSERT amber, EJECT muted red, on/off as an edge + dot; the reader keeps the web page answering | A600-neo1-JC3248 (Dimmy, 6 Oct): NEO preview on branch neo-style - NEO theme + switch, background picture, NEO web pages | A600-lab1-JC3248 (Mez, 5 Oct): LANGUAGE and THEME open a pick page in Settings - every choice as its own button (languages in their own name, themes in their own colour), tap one and you are back where you were; the current one is marked > < | was A600 (4 Oct 2026, pre-Kickstart release) = 5.9.41-lab15q-JC3248, renamed only (no code change) | lab15q: Polish screen text corrected by 8-Bitz (ROLKA, TERAZ GRA, WSZYSTKIE, ULUBIONE...); the reel bar's ALL/FAV/MOST word shrinks when it is too long for its button | lab15p: ESP-NOW mode - the GTi's own Wi-Fi is now GTi_Omega-XXXX, password gotekXXXX (was an OPEN, unnamed ESP_xxxxxx), and serves the GTi web page at 192.168.4.1; Settings shows the name + password | lab15o: Polish (LANG=PL) and Czech (LANG=CS) on the screen + NL/PL/CS in the web page's language list; the STANDALONE banner centres on the translated word | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j: tap the game text in the list (title + description) = the whole .nfo full-screen in the manual reader (scroll, SIZE, TOP, CLOSE) | lab15i: each dongle keeps its OWN save file (Game.sav.XXXX.adf, XXXX = last 4 hex of the dongle MAC) - two Amigas on the same game (cable + dongle, or two dongles) never mix their saves | lab15h: FIX the lab15e/f/g freeze on disk insert (the Gotek's read took the SD lock twice - SD_MMC.readRAW already goes through the locked driver); includes lab15b-g
+#define FW_VERSION "A600-theme1-JC3248"  // A600-theme1-JC3248 (Dimmy+Mez, 7 Oct): one THEME section - Settings has one THEME row; its page holds NEO ON/OFF, the classic themes and your own themes from /GTI/THEMES (made in the web page's Themes tab + Theme Editor, which the panel now serves); a card from before NEO keeps its own theme | A600-neo2g-JC3248 // A600-neo2-JC3248 (Dimmy, 6 Oct): NEO keys - one see-through button/panel look on every screen (list rows, cover panel, settings, bottom bars, carousel, text reader); INSERT amber, EJECT muted red, on/off as an edge + dot; the reader keeps the web page answering | A600-neo1-JC3248 (Dimmy, 6 Oct): NEO preview on branch neo-style - NEO theme + switch, background picture, NEO web pages | A600-lab1-JC3248 (Mez, 5 Oct): LANGUAGE and THEME open a pick page in Settings - every choice as its own button (languages in their own name, themes in their own colour), tap one and you are back where you were; the current one is marked > < | was A600 (4 Oct 2026, pre-Kickstart release) = 5.9.41-lab15q-JC3248, renamed only (no code change) | lab15q: Polish screen text corrected by 8-Bitz (ROLKA, TERAZ GRA, WSZYSTKIE, ULUBIONE...); the reel bar's ALL/FAV/MOST word shrinks when it is too long for its button | lab15p: ESP-NOW mode - the GTi's own Wi-Fi is now GTi_Omega-XXXX, password gotekXXXX (was an OPEN, unnamed ESP_xxxxxx), and serves the GTi web page at 192.168.4.1; Settings shows the name + password | lab15o: Polish (LANG=PL) and Czech (LANG=CS) on the screen + NL/PL/CS in the web page's language list; the STANDALONE banner centres on the translated word | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j: tap the game text in the list (title + description) = the whole .nfo full-screen in the manual reader (scroll, SIZE, TOP, CLOSE) | lab15i: each dongle keeps its OWN save file (Game.sav.XXXX.adf, XXXX = last 4 hex of the dongle MAC) - two Amigas on the same game (cable + dongle, or two dongles) never mix their saves | lab15h: FIX the lab15e/f/g freeze on disk insert (the Gotek's read took the SD lock twice - SD_MMC.readRAW already goes through the locked driver); includes lab15b-g
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -2431,14 +2431,115 @@ static uint16_t COL_GREEN,COL_ORANGE,COL_AMBER,COL_BLUE,COL_NOW,COL_ACCENT,COL_C
 
 // A600-neo1-JC3248 (as lab4-P4): NEO is a switch (g_neo_on, CONFIG.TXT NEO=), not one of the colour themes.
 // g_theme_idx is always a colour theme (0..NUM_THEMES-2) - the one NEO=OFF shows - and is kept while NEO is on.
+// A600-theme1-JC3248: one custom theme slot, filled from /GTI/THEMES/<NAME>.json (the web Theme Editor's style).
+// g_theme_idx==CUSTOM_IDX selects it; 0..NUM_THEMES-2 are the classic themes.
+static const int CUSTOM_IDX=NUM_THEMES;
+static Theme g_custom={"CUSTOM",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+static String g_custom_name="";
+static volatile bool g_theme_redraw=false;   // a web theme change: loop() redraws the current screen
 static void applyTheme(int idx){
   const int neoIdx=NUM_THEMES-1;                  // NEO is the last entry of THEMES[]
-  if(idx<0||idx>=neoIdx)idx=0;
-  g_theme_idx=idx;const Theme&t=THEMES[g_neo_on?neoIdx:idx];
+  if(idx!=CUSTOM_IDX&&(idx<0||idx>=neoIdx))idx=0;
+  if(idx==CUSTOM_IDX&&!g_custom_name.length())idx=0;
+  g_theme_idx=idx;const Theme&t=g_neo_on?THEMES[neoIdx]:(idx==CUSTOM_IDX?g_custom:THEMES[idx]);
   COL_BG=t.bg;COL_PANEL=t.panel;COL_BAR=t.bar;COL_SEL=t.sel;COL_SEP=t.sep;
   COL_DIM=t.dim;COL_MID=t.mid;COL_LIT=t.lit;COL_GREEN=t.green;COL_ORANGE=t.orange;
   COL_AMBER=t.amber;COL_BLUE=t.blue;COL_NOW=t.now;COL_ACCENT=t.accent;COL_CIRC=t.circ;COL_CIRC_TEXT=t.circ_text;
   g_neo=g_neo_on; g_txt_key=COL_BG;
+}
+
+// ── A600-theme1-JC3248: custom themes (spec 2026-10-07-gti-theme-section-design.md) ──
+// A custom theme is the web Theme Editor's style JSON: fill, light, dark, text, accent (#RRGGBB) plus
+// bevel/bevelW/radius/scale (stored for the editor, not used by this screen). The 16 screen roles are
+// mixed from those five colours; green/orange/blue stay NAVY's (on / warning / INSERT keep their meaning).
+// The same table is in webui.html (teGtiRoles) for the editor's preview - change both together.
+static void saveConfigKey(const String&key,const String&val);
+static uint32_t c565to888(uint16_t c){ return (((uint32_t)((c>>11)&31)*255/31)<<16)|(((uint32_t)((c>>5)&63)*255/63)<<8)|((uint32_t)(c&31)*255/31); }
+static uint16_t c888to565(uint32_t c){ return (uint16_t)((((c>>16)&0xF8)<<8)|(((c>>8)&0xFC)<<3)|((c&0xFF)>>3)); }
+static uint32_t mix888(uint32_t a,uint32_t b,int pct){ uint32_t r=0; for(int sh=0;sh<24;sh+=8){ int x=(a>>sh)&255,y=(b>>sh)&255; r|=(uint32_t)(x+(y-x)*pct/100)<<sh; } return r; }
+static bool styleHex(const String&j,const char*key,uint32_t&out){   // "key":"#RRGGBB" - false leaves out untouched
+  int k=j.indexOf(String("\"")+key+"\""); if(k<0)return false;
+  int colon=j.indexOf(':',k); if(colon<0)return false;
+  int q=colon+1; while(q<(int)j.length()&&(j[q]==' '||j[q]=='"'))q++;
+  if(q>=(int)j.length()||j[q]!='#')return false;
+  for(int i=1;i<=6;i++){ if(q+i>=(int)j.length()||!isxdigit((unsigned char)j[q+i]))return false; }
+  out=strtoul(j.substring(q+1,q+7).c_str(),nullptr,16); return true;
+}
+static bool themeFromStyle(const String&j,struct Theme&t){   // false = not one usable colour in it
+  const Theme&n=THEMES[0];
+  uint32_t fill=c565to888(n.panel),light=c565to888(n.sep),dark=c565to888(n.bg),text=c565to888(n.lit),acc=c565to888(n.amber);
+  int got=0; got+=styleHex(j,"fill",fill); got+=styleHex(j,"light",light); got+=styleHex(j,"dark",dark); got+=styleHex(j,"text",text); got+=styleHex(j,"accent",acc);
+  if(!got)return false;
+  t.bg=c888to565(dark); t.bar=c888to565(mix888(dark,0,25)); t.panel=c888to565(fill); t.sel=c888to565(mix888(fill,acc,30));
+  t.sep=c888to565(light); t.dim=c888to565(mix888(text,fill,45)); t.mid=c888to565(mix888(text,fill,25)); t.lit=c888to565(text);
+  t.green=n.green; t.orange=n.orange; t.blue=n.blue; t.amber=c888to565(acc); t.now=c888to565(mix888(dark,acc,20));
+  t.accent=c888to565(mix888(fill,light,35)); t.circ=c888to565(mix888(fill,light,20)); t.circ_text=c888to565(text);
+  return true;
+}
+static int classicIdx(const String&name){ for(int i=0;i<NUM_THEMES-1;i++)if(name.equalsIgnoreCase(THEMES[i].name))return i; return -1; }
+static bool themeNameOk(const String&n){   // A-Z 0-9 _, 1..16, not starting with a digit (THEME=3 is a number)
+  if(n.length()<1||n.length()>16||isDigit(n[0]))return false;
+  for(unsigned i=0;i<n.length();i++){ char c=n[i]; if(!((c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'))return false; }
+  return true;
+}
+static bool themeReserved(const String&n){ return n=="NEO"||n=="CUSTOM"||classicIdx(n)>=0; }
+static String themePath(const String&n){ return String("/GTI/THEMES/")+n+".json"; }
+static bool readThemeFile(const String&n,String&j){
+  if(!themeNameOk(n)||themeReserved(n))return false;
+  File f=SD_MMC.open(themePath(n).c_str(),FILE_READ); if(!f)return false;
+  j=""; while(f.available()&&j.length()<2048)j+=(char)f.read(); f.close(); return true;
+}
+static bool loadCustomTheme(const String&name){   // fills g_custom; false = missing or no colours (caller falls back)
+  String n=name; n.toUpperCase(); String j; Theme t=g_custom;
+  if(!readThemeFile(n,j)||!themeFromStyle(j,t)){ gLog("[theme] custom theme %s: missing or unreadable - NAVY instead\n",n.c_str()); return false; }
+  g_custom=t; g_custom_name=n; return true;
+}
+static int listCustomThemes(String*out,int maxN){   // names in /GTI/THEMES/*.json, sorted, max maxN
+  int n=0; File d=SD_MMC.open("/GTI/THEMES"); if(!d||!d.isDirectory())return 0;
+  for(File f=d.openNextFile();f&&n<maxN;f=d.openNextFile()){
+    String fn=f.name(); int sl=fn.lastIndexOf('/'); if(sl>=0)fn=fn.substring(sl+1);
+    bool dir=f.isDirectory(); f.close(); if(dir)continue;
+    String up=fn; up.toUpperCase(); if(!up.endsWith(".JSON"))continue;
+    String nm=up.substring(0,up.length()-5); if(!themeNameOk(nm)||themeReserved(nm))continue;
+    int k=n; while(k>0&&out[k-1]>nm){ out[k]=out[k-1]; k--; } out[k]=nm; n++;
+  }
+  d.close(); return n;
+}
+static String themeName(){ return g_neo_on?String("NEO"):(g_theme_idx==CUSTOM_IDX?g_custom_name:String(THEMES[g_theme_idx].name)); }
+// Pick one theme by name, live, and remember it in CONFIG.TXT. NEO = the NEO switch on; any other = NEO off.
+static bool themeActivate(const String&name){
+  String n=name; n.toUpperCase();
+  if(n=="NEO"){ g_neo_on=true; applyTheme(g_theme_idx); saveConfigKey("NEO","ON"); return true; }
+  int ci=classicIdx(n);
+  if(ci<0&&!loadCustomTheme(n))return false;
+  g_neo_on=false; applyTheme(ci>=0?ci:CUSTOM_IDX);
+  saveConfigKey("THEME",ci>=0?String(THEMES[ci].name):n); saveConfigKey("NEO","OFF"); return true;
+}
+// The style JSON the web editor reads: a custom theme's own file, or one derived from a built-in theme.
+static bool themeStyleJson(const String&name,String&out){
+  String n=name; n.toUpperCase();
+  int ci=(n=="NEO")?NUM_THEMES-1:classicIdx(n);
+  if(ci<0)return readThemeFile(n,out);
+  const Theme&t=THEMES[ci]; char b[200];
+  snprintf(b,sizeof(b),"{\"fill\":\"#%06lX\",\"light\":\"#%06lX\",\"dark\":\"#%06lX\",\"text\":\"#%06lX\",\"accent\":\"#%06lX\",\"bevel\":\"flat\",\"bevelW\":1,\"radius\":6,\"scale\":2}",
+    (unsigned long)c565to888(t.panel),(unsigned long)c565to888(t.sep),(unsigned long)c565to888(t.bg),(unsigned long)c565to888(t.lit),(unsigned long)c565to888(t.amber));
+  out=b; return true;
+}
+static bool themeSaveStyle(const String&name,const String&body,String&err){
+  String n=name; n.toUpperCase();
+  if(!themeNameOk(n)){ err="name: A-Z, 0-9 and _ only, max 16, not starting with a digit"; return false; }
+  if(themeReserved(n)){ err="that name belongs to a built-in theme"; return false; }
+  Theme t; if(body.length()>2048||!themeFromStyle(body,t)){ err="no #RRGGBB colours in the style"; return false; }
+  if(!SD_MMC.exists("/GTI/THEMES"))SD_MMC.mkdir("/GTI/THEMES");
+  File f=SD_MMC.open(themePath(n).c_str(),FILE_WRITE); if(!f){ err="could not write the SD card"; return false; }
+  f.print(body); f.close();
+  if(!g_neo_on&&g_theme_idx==CUSTOM_IDX&&g_custom_name==n){ loadCustomTheme(n); applyTheme(CUSTOM_IDX); g_theme_redraw=true; }
+  return true;
+}
+static String themeListJson(){
+  String j="{\"themes\":[\"NEO\""; for(int i=0;i<NUM_THEMES-1;i++){ j+=",\""; j+=THEMES[i].name; j+="\""; }
+  String c[8]; int nc=listCustomThemes(c,8); for(int i=0;i<nc;i++){ j+=",\""+c[i]+"\""; }
+  j+="],\"active\":\""+themeName()+"\"}"; return j;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2774,7 +2875,8 @@ R"CFG(# ============================================================
 
 # NEO: the NEO look (navy-to-purple background, NEO colours). OFF = the colour THEME below
 NEO=ON
-# Theme: colours when NEO=OFF: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD 6=OMEGA
+# Theme: colours when NEO=OFF: NAVY EMBER MATRIX PAPER SYNTH GOLD OMEGA (or 0-6),
+#   or the name of your own theme in /GTI/THEMES (made in the web page's Themes tab)
 THEME=0
 
 # Font size: SMALL, NORMAL, LARGE
@@ -3008,7 +3110,7 @@ static void selfHealConfig(){
   struct CfgKey{const char*key;const char*block;};
   static const CfgKey KEYS[]={
     {"NEO",      "\n# NEO: the NEO look (navy-to-purple background, NEO colours). OFF = the colour THEME below\nNEO=ON\n"},
-    {"THEME",    "\n# Theme: colours when NEO=OFF: 0=NAVY 1=EMBER 2=MATRIX 3=PAPER 4=SYNTH 5=GOLD 6=OMEGA\nTHEME=0\n"},
+    {"THEME",    "\n# Theme: colours when NEO=OFF: NAVY EMBER MATRIX PAPER SYNTH GOLD OMEGA (or 0-6),\n#   or the name of your own theme in /GTI/THEMES (made in the web page's Themes tab)\nTHEME=0\n"},
     {"MODE",     "\n# Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW to dongle)\nMODE=STANDALONE\n"},
     {"CAROUSEL", "\n# CAROUSEL: default boot view. OFF=game list, ON=cover reel, LAST=restore last view.\nCAROUSEL=OFF\n"},
     {"LOOP",     "\n# Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s\nLOOP=0\n"},
@@ -3068,7 +3170,11 @@ static void selfHealConfig(){
     for(int i=0;i<NK;i++)if(k==KEYS[i].key)present[i]=true;}
   fr.close();
   String add=""; int missing=0;
-  for(int i=0;i<NK;i++)if(!present[i]){add+=KEYS[i].block;missing++;}
+  bool hasTheme=false; for(int i=0;i<NK;i++)if(present[i]&&!strcmp(KEYS[i].key,"THEME"))hasTheme=true;
+  for(int i=0;i<NK;i++)if(!present[i]){
+    String b=KEYS[i].block;
+    if(hasTheme&&!strcmp(KEYS[i].key,"NEO"))b.replace("NEO=ON","NEO=OFF");   // A600-theme1: a card from before NEO keeps its own theme (Mez)
+    add+=b;missing++;}
   if(!missing)return;
   File fw=SD_MMC.open("/CONFIG.TXT",FILE_APPEND);
   if(fw){fw.print(add);fw.close();}
@@ -3143,12 +3249,13 @@ static void sdGuardReport(bool always){
        g_sdg.last_bad[0],g_sdg.last_bad[1],g_sdg.last_bad[2],g_sdg.last_bad[3],g_sdg.last_bad[4],g_sdg.last_bad[5],g_sdg.last_bad[6],g_sdg.last_bad[7]);
 }
 static void loadConfig(){
-  applyTheme(0);
+  g_neo_on=true; applyTheme(0);
+  bool sawNeo=false, sawTheme=false;   // A600-theme1: a card with THEME= but no NEO= is from before NEO - keep its theme (Mez)
   File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);if(!f)return;
   while(f.available()){String l=f.readStringUntil('\n');l.trim();if(l.startsWith("#"))continue;
     int eq=l.indexOf('=');if(eq<0)continue;String k=l.substring(0,eq),v=l.substring(eq+1);k.trim();v.trim();
-    if(k=="NEO"){String nv=v;nv.toUpperCase();g_neo_on=!(nv=="OFF"||nv=="0"||nv=="NO");applyTheme(g_theme_idx);}   // A600-neo1-JC3248
-    else if(k=="THEME"){int ti=-1;for(int i=0;i<NUM_THEMES;i++)if(v.equalsIgnoreCase(THEMES[i].name)){ti=i;break;}applyTheme(ti>=0?ti:((v.length()&&isDigit(v[0]))?v.toInt():0));}else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");else if(k=="CAROUSEL"){String cv=v;cv.toUpperCase();g_car_bootmode=(cv=="LAST")?2:((cv=="1"||cv=="ON"||cv=="TRUE")?1:0);}
+    if(k=="NEO"){String nv=v;nv.toUpperCase();g_neo_on=!(nv=="OFF"||nv=="0"||nv=="NO");sawNeo=true;applyTheme(g_theme_idx);}   // A600-neo1-JC3248
+    else if(k=="THEME"){sawTheme=true;int ti=classicIdx(v);if(ti>=0)applyTheme(ti);else if(v.length()&&isDigit(v[0]))applyTheme(v.toInt());else if(v.equalsIgnoreCase("NEO")||!v.length())applyTheme(0);else applyTheme(loadCustomTheme(v)?CUSTOM_IDX:0);}else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");else if(k=="CAROUSEL"){String cv=v;cv.toUpperCase();g_car_bootmode=(cv=="LAST")?2:((cv=="1"||cv=="ON"||cv=="TRUE")?1:0);}
     else if(k=="TAPLOAD")g_tapload=(v=="ON"||v=="1");else if(k=="HOTSWAP")g_hotswap=(v=="ON"||v=="1");else if(k=="FORCESWAP")g_forceswap=(v=="ON"||v=="1");
     else if(k=="FONT"){int f=1;if(v=="SMALL")f=0;else if(v=="LARGE")f=2;applyFont(f);}
     else if(k=="LANG"){String lu=v;lu.toUpperCase();if(lu=="CZ")lu="CS";for(int i=0;i<LANG_N;i++)if(lu==LANG_NAMES[i]){g_lang=i;break;}}
@@ -3204,6 +3311,7 @@ static void loadConfig(){
     else if(k=="DAV_TEST"){g_dav_test=v;}
     else if(k=="WEBUI"){String wv=v;wv.toUpperCase();g_web_on=(wv=="ON"||wv=="1");}
     else if(k=="DONGLE_HOME_IP"){g_dongle_home_ip=v;}}
+  if(!sawNeo&&sawTheme){ g_neo_on=false; applyTheme(g_theme_idx); }   // A600-theme1: old card, own theme kept
   f.close();
   davApplyConfig();   // hand the DAV_* settings to the shared client (merge step 1)
 }
@@ -3799,6 +3907,7 @@ struct InfoRect { int x,y,w,h; uint8_t act; };
 static InfoRect g_ir[20]; static int g_ir_n=0;
 static int g_info_page=0, g_info_pages=1;
 static bool g_info_test=false;   // lab14k: true = Settings is showing its TEST TOOLS sub-page
+static String g_pick_custom[8]; static int g_pick_nc=0;   // A600-theme1: the custom themes on the THEME page
 static uint8_t g_info_pick=0;    // pick page: 0 = none, 1 = LANGUAGE, 2 = THEME (every choice as a button, tap one = back)
 static int g_info_pick_ret=0;    // the Settings page to return to after a pick
 #define IA_PICK0 200             // pick-page buttons: IA_PICK0 + choice index
@@ -3832,8 +3941,14 @@ static void drawInfoPanel(){
     add(String("< ")+T(L_SETTINGS), COL_ACCENT, TFT_WHITE, IA_PICKBACK);
     if(g_info_pick==1) for(int i=0;i<LANG_N;i++){ bool cur=(i==g_lang);
       add(String(cur?"> ":"")+LANG_FULL[i]+" ("+LANG_NAMES[i]+")"+(cur?" <":""), cur?COL_GREEN:(uint16_t)0x79D6, cur?TFT_BLACK:TFT_WHITE, (uint8_t)(IA_PICK0+i)); }
-    if(g_info_pick==2) for(int i=0;i<NUM_THEMES-1;i++){ bool cur=(i==g_theme_idx);
-      add(String(cur?"> ":"")+THEMES[i].name+(cur?" <":""), THEMES[i].accent, TFT_WHITE, (uint8_t)(IA_PICK0+i)); }   // each theme in its own colour
+    if(g_info_pick==2){   // A600-theme1: the THEME page - NEO on/off, then the classic themes, then the custom ones
+      add(String("NEO: ")+(g_neo_on?T(L_ON):T(L_OFF)), g_neo_on?COL_GREEN:COL_BAR, g_neo_on?TFT_BLACK:COL_LIT, IA_NEOUI);
+      for(int i=0;i<NUM_THEMES-1;i++){ bool cur=(!g_neo_on&&i==g_theme_idx);
+        add(String(cur?"> ":"")+THEMES[i].name+(cur?" <":""), THEMES[i].accent, TFT_WHITE, (uint8_t)(IA_PICK0+i)); }   // each theme in its own colour
+      g_pick_nc=listCustomThemes(g_pick_custom,8);
+      for(int i=0;i<g_pick_nc;i++){ bool cur=(!g_neo_on&&g_theme_idx==CUSTOM_IDX&&g_custom_name==g_pick_custom[i]);
+        Theme t=g_custom; String j; uint16_t col=COL_ACCENT; if(readThemeFile(g_pick_custom[i],j)&&themeFromStyle(j,t))col=t.accent;
+        add(String(cur?"> ":"")+g_pick_custom[i]+(cur?" <":""), col, TFT_WHITE, (uint8_t)(IA_PICK0+NUM_THEMES-1+i)); } }
   } else {
   // 5.9.12: single 3-way MODE — STANDALONE (radio off) / ESP-NOW (blind dongles, no router) / WiFi (home router).
   {const char* mlbl = !g_wireless_mode ? "STANDALONE" : (g_link_home ? "WiFi" : "ESP-NOW");
@@ -3853,8 +3968,7 @@ static void drawInfoPanel(){
     if(g_home_ssid.length()) add(String(T(L_WIFI_CHECK)), COL_BLUE, TFT_WHITE, IA_WIFICHECK);
   }
   add(String(T(L_CFG_FONT))+": "+fontName(g_font), COL_AMBER, TFT_BLACK, IA_FONT);
-  add(String("NEO: ")+(g_neo_on?T(L_ON):T(L_OFF)), g_neo_on?COL_AMBER:COL_BAR, g_neo_on?TFT_BLACK:COL_LIT, IA_NEOUI);   // A600-neo1-JC3248: the NEO switch, always shown
-  if(!g_neo)add(String(T(L_THEME))+": "+THEMES[g_theme_idx].name, COL_ACCENT, TFT_WHITE, IA_THEME);   // Vince test: moved off the bottom bar   // colour themes are for NEO=OFF
+  add(String(T(L_THEME))+": "+themeName(), COL_ACCENT, TFT_WHITE, IA_THEME);   // A600-theme1: one THEME row; NEO on/off + every theme live on its page (Mez)
   add(String(T(L_CFG_LANG))+": "+LANG_NAMES[g_lang], (uint16_t)0x79D6, TFT_WHITE, IA_LANG);
   add(String(T(L_CFG_ROTATE))+": "+(g_portrait?T(L_PORTRAIT):T(L_LANDSCAPE)), COL_BLUE, TFT_WHITE, IA_ROTATE);
   add(String(T(L_CFG_COMPACT))+": "+(g_compact?T(L_ON):T(L_OFF)), g_compact?COL_GREEN:COL_BAR, g_compact?TFT_BLACK:COL_LIT, IA_COMPACT);
@@ -5520,6 +5634,7 @@ static String neoBenchJson(){
     (unsigned long)flush,(unsigned long)build,(unsigned)g_games.size());
   return String(j);
 }
+#define GTI_THEMES   // A600-theme1: the web Themes tab + Theme Editor (web_panel.h /api/themes/*)
 #include "../shared/web_panel.h"
 
 static void doUnload(){
@@ -6459,7 +6574,7 @@ static void doManual(const String& path,const char* title=nullptr){   // lab15j:
   while(true){
     int nbtn = secName.size()? 4 : 3;   // v2 buttons: SIZE, TOP, [SECTIONS], CLOSE
     int bw = VW/nbtn;
-    { uint32_t g0=g_ui_gen; webPanelService(); if(g_ui_gen!=g0)dirty=true; }   // A600-neo2: keep the web page (and /api/screenshot) answering; neo2g: redraw if a web load/eject drew the list over the reader
+    { uint32_t g0=g_ui_gen; webPanelService(); if(g_ui_gen!=g0)dirty=true; if(g_theme_redraw){g_theme_redraw=false;dirty=true;} }   // A600-neo2: keep the web page (and /api/screenshot) answering; neo2g: redraw if a web load/eject drew the list over the reader
     if(dirty||vel!=0){ dirty=false;
       NeoScope _ns;   // A600-neo2: NEO background, keys at the bottom
       clearBack();
@@ -7493,7 +7608,8 @@ static void infoAction(uint8_t act){
   if(act==IA_PICKBACK||act>=IA_PICK0){   // pick page: set the choice (or not), then back to the Settings page we came from
     int i=act-IA_PICK0;
     if(act>=IA_PICK0&&g_info_pick==1&&i<LANG_N){ g_lang=i; saveConfigKey("LANG",LANG_NAMES[g_lang]); }
-    if(act>=IA_PICK0&&g_info_pick==2&&i<NUM_THEMES-1){ applyTheme(i); saveConfigKey("THEME",String(g_theme_idx)); }
+    if(act>=IA_PICK0&&g_info_pick==2&&i<NUM_THEMES-1) themeActivate(THEMES[i].name);   // A600-theme1: picking a theme = NEO off
+    if(act>=IA_PICK0&&g_info_pick==2&&i>=NUM_THEMES-1&&i-(NUM_THEMES-1)<g_pick_nc) themeActivate(g_pick_custom[i-(NUM_THEMES-1)]);
     g_info_pick=0; g_info_page=g_info_pick_ret; drawInfoFull(); return;
   }
   switch(act){
@@ -7644,8 +7760,12 @@ static void handleTap(uint16_t px,uint16_t py){
 // MAIN LOOP — touch state machine: tap vs drag-scroll with flick inertia
 // ════════════════════════════════════════════════════════════════════════════
 
+static void themeRedraw(){   // A600-theme1: after a theme change from the web page
+  if(g_car_active){drawCarousel();gfx_flush();} else if(g_info_showing){drawInfoFull();} else {drawFullUI();gfx_flush();}
+}
 void loop(){
   webPanelService();   // one web client + one queued DAV load per pass (merge step 2)
+  if(g_theme_redraw){ g_theme_redraw=false; themeRedraw(); }
   { static uint32_t _sgT=0; if(g_sdg.pending_report && millis()-_sgT>2000){ _sgT=millis(); sdGuardReport(false); } }   // lab14g
   if(g_espnow_link_just_established){g_espnow_link_just_established=false;
     gfx_fillRect(0,0,VW,STATUS_H,0x07E0);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,0x07E0);
