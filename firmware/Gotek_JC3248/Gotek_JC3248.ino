@@ -59,9 +59,9 @@
 
 // -fleet so the bench can tell the two apart (both sit on the A600-lab1 base above).
 #if defined(GTI_FLEET)
-#define FW_VERSION "A600-lab1-pf4c-fleet-JC3248"   // pf4c: #77 home-WiFi send finds OUR dongle (verified), persists DONGLE_HOME_IP only after a good send
+#define FW_VERSION "A600-lab1-pf4d-fleet-JC3248"   // pf4d: #77 the home-WiFi dongle check compares the full MAC when the dongle sends ap_mac (Webby 1.6.11+), else bytes 4-5 of its name as before | pf4c: #77 home-WiFi send finds OUR dongle (verified), persists DONGLE_HOME_IP only after a good send
 #else
-#define FW_VERSION "A600-lab1-pf4c-JC3248"
+#define FW_VERSION "A600-lab1-pf4d-JC3248"
 #endif
 #define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
 #define PF_MDNS_ALIAS "gotekomega"     // pf4: the shared name one screen ALSO answers to, next to its own GTi-XXXX.

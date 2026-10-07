@@ -637,6 +637,7 @@ static bool sendDiskCore(const uint8_t* mac, const char* ipc, uint32_t size, uin
 // hears a screen steps aside to gotekomega-<mac>, so a name lookup alone can find a screen (or ourselves).
 // A Webby dongle answers GET /status with "fw":"Webby-..."; a screen answers 404. When we are paired and
 // the dongle still wears its mac-based name, that name must be OUR dongle's (a custom name cannot be checked).
+// pf4d: Webby 1.6.11+ also sends "ap_mac" = the MAC we paired with, which is checked exactly instead.
 static bool homeIsDongle(const String& ip) {
   if (ip.length() == 0 || ip == WiFi.localIP().toString()) return false;
   WiFiClient c;
@@ -649,7 +650,10 @@ static bool homeIsDongle(const String& ip) {
   }
   c.stop();
   if (body.indexOf("\"fw\":\"Webby") < 0) { Serial.printf("[HOME] %s is not a dongle - ignored\n", ip.c_str()); return false; }
-  if (g_espnow_paired && body.indexOf("\"devname\":\"gotekomega-") >= 0) {
+  if (g_espnow_paired && body.indexOf("\"ap_mac\":\"") >= 0) {   // pf4d: Webby 1.6.11+ reports the MAC we paired with - exact, custom names too
+    char want[48]; snprintf(want, sizeof(want), "\"ap_mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\"", _xiao_mac[0], _xiao_mac[1], _xiao_mac[2], _xiao_mac[3], _xiao_mac[4], _xiao_mac[5]);
+    if (body.indexOf(want) < 0) { Serial.printf("[HOME] %s is another dongle (ap_mac) - ignored\n", ip.c_str()); return false; }
+  } else if (g_espnow_paired && body.indexOf("\"devname\":\"gotekomega-") >= 0) {   // older Webby: bytes 4-5 of the name (softAP and STA share them on the S3)
     char want[40]; snprintf(want, sizeof(want), "\"devname\":\"gotekomega-%02x%02x\"", _xiao_mac[4], _xiao_mac[5]);
     if (body.indexOf(want) < 0) { Serial.printf("[HOME] %s is another dongle - ignored\n", ip.c_str()); return false; }
   }
