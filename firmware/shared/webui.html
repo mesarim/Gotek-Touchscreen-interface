@@ -2419,6 +2419,7 @@ async function teSave(activate) {
     status.textContent = '';
     if (activate) {
       await api(`/api/themes/${encodeURIComponent(name)}/activate`, { method: 'POST' });
+      document.body.classList.remove('neo');   // GTi: a saved theme is never NEO
       applyThemeStyle(st);          // this page follows the panel immediately
       toast(`Theme "${name}" saved and activated`);
     } else {
