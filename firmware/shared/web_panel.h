@@ -20,7 +20,7 @@
 
 // Bumped on every change to this file or the embedded page, appended to the
 // reported firmware string so a device tells you WHICH web build it runs.
-#define GTI_WEB_REV "r16"
+#define GTI_WEB_REV "r17"
 
 #include <Update.h>
 #include <ESPmDNS.h>
@@ -60,16 +60,20 @@ static String wpArg(const char *k) { return webPanelHttp.hasArg(k) ? webPanelHtt
 
 // ── Page + JSON handlers ──────────────────────────────────────────────────
 
+// A600-neo1: one NEO look for the panel's own pages (landing, /files); same colours as the NEO preset in webui.html.
+// NEO colours are not final (Mez): retune them here only.
+#define WP_NEO_CSS ":root{--bg:#081021;--card:rgba(16,24,49,.82);--line:#42598C;--txt:#EFF3FF;--dim:#94A2BD;--accent:#F7B231;--ok:#52D27B;--ins:#7BD2F7;--btn:#3A4963;--btnh:#4a5a7a;--row:rgba(66,89,140,.35)}" \
+  "body{background:repeating-linear-gradient(90deg,rgba(90,120,200,.10) 0 1px,transparent 1px 46px),repeating-linear-gradient(0deg,rgba(90,120,200,.08) 0 1px,transparent 1px 38px),linear-gradient(160deg,#0A1026 0%,#181a45 55%,#241640 100%) fixed;color:var(--txt)}"
 static const char LANDING_PAGE[] = R"LAND(<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>GOTEK OMEGA</title>
 <style>
-:root{--bg:#0f1117;--card:#1a1e2b;--line:#272c3d;--txt:#e7e9ee;--dim:#8b93a7;--accent:#7fb0ff}
+)LAND" WP_NEO_CSS R"LAND(
 *{box-sizing:border-box}
-body{margin:0;font:15px system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--txt)}
+body{margin:0;font:15px system-ui,-apple-system,sans-serif}
 header{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:12px}
 h1{margin:0;font-size:20px;letter-spacing:.06em;color:var(--accent)}
 header .fw{color:var(--dim);font-size:12px}
 main{max-width:820px;margin:0 auto;padding:20px}
-a.files{display:flex;align-items:center;justify-content:center;gap:10px;background:linear-gradient(180deg,#2f4d8a,#243c6b);color:#fff;text-decoration:none;font-size:20px;font-weight:700;padding:22px;border-radius:14px;margin-bottom:22px;box-shadow:0 2px 0 #1b2a4d}
+a.files{display:flex;align-items:center;justify-content:center;gap:10px;background:var(--accent);color:#080C19;text-decoration:none;font-size:20px;font-weight:700;padding:22px;border-radius:14px;margin-bottom:22px;box-shadow:none}
 a.files:hover{filter:brightness(1.1)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
 .tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
@@ -77,7 +81,7 @@ a.files:hover{filter:brightness(1.1)}
 .tile .v{font-size:18px;font-weight:600;margin-top:4px;word-break:break-word}
 .foot{margin-top:20px;text-align:center}
 .foot a{color:var(--dim);font-size:13px;text-decoration:none}.foot a:hover{color:var(--txt)}
-.ok{color:#7ee0a0}
+.ok{color:var(--ok)}
 </style></head><body>
 <header><h1>GOTEK&nbsp;OMEGA</h1><span class=fw id=fw></span></header>
 <main>
@@ -122,7 +126,7 @@ static void hSysInfo() {
   j += "\"game_count\":0,\"file_count\":0,";
   j += "\"loaded_game\":\"" + wpJsonEscape(g_loaded ? g_loaded_name : String("none")) + "\",";
   j += "\"mode\":\"" + String(g_mode == MODE_ADF ? "ADF" : g_mode == MODE_DSK ? "DSK" : "GEN") + "\",";
-  j += "\"theme\":\"OMEGA_DARK\",";   // 5.9.39: name a preset the shared SPA knows, so it paints OMEGAWARE dark blue from the first request (was "GTI" = unknown = Workbench grey)
+  j += "\"theme\":\"NEO\",";   // A600-neo1: GTi's fixed web style (NEO preset in the shared webui.html), was OMEGA_DARK. Earlier note:   // 5.9.39: name a preset the shared SPA knows, so it paints OMEGAWARE dark blue from the first request (was "GTI" = unknown = Workbench grey)
   j += "\"wifi_clients\":0,";
   j += "\"wifi_ip\":\"" + WiFi.localIP().toString() + "\",";
   j += "\"internet\":" + String(sta ? "true" : "false") + ",";
@@ -131,7 +135,7 @@ static void hSysInfo() {
   j += "\"ftp_enabled\":false,";
   j += "\"dav_enabled\":" + String(g_dav_on ? "true" : "false") + ",";
   j += "\"log_enabled\":false,";
-  j += "\"has_sd\":false,\"has_display\":true,\"has_ota\":true,";
+  j += "\"has_sd\":false,\"has_display\":true,\"has_ota\":true,\"has_themes\":false,";
   j += "\"max_image_bytes\":" + String((uint32_t)MAX_FILE_BYTES) + ",";
   j += "\"supports_hd\":true";
   j += "}";
@@ -490,30 +494,31 @@ static void hSdDelete() {
 
 static const char FILES_PAGE[] = R"FILESPAGE(<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>GTi - SD Files</title>
 <style>
-body{margin:0;font:15px system-ui,-apple-system,sans-serif;background:#12141a;color:#e7e9ee}
-header{padding:14px 16px;background:#1b1e27;border-bottom:1px solid #2a2e3a;display:flex;align-items:baseline;gap:10px}
+)FILESPAGE" WP_NEO_CSS R"FILESPAGE(
+body{margin:0;font:15px system-ui,-apple-system,sans-serif}
+header{padding:14px 16px;background:rgba(8,12,25,.85);border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:10px}
 h1{font-size:16px;margin:0;font-weight:600}
 main{padding:16px;max-width:820px;margin:0 auto}
-.crumb{color:#8b93a7;font-size:13px;margin:0 0 10px;word-break:break-all}
+.crumb{color:var(--dim);font-size:13px;margin:0 0 10px;word-break:break-all}
 .bar{min-height:34px;margin-bottom:4px}
 table{width:100%;border-collapse:collapse}
-td,th{padding:9px 8px;border-bottom:1px solid #232732;text-align:left}
-th{color:#8b93a7;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+td,th{padding:9px 8px;border-bottom:1px solid var(--row);text-align:left}
+th{color:var(--dim);font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
 .sel{width:26px}
-.dir .nm{cursor:pointer;color:#7fb0ff}
-.sz{color:#8b93a7;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.dir .nm{cursor:pointer;color:var(--accent)}
+.sz{color:var(--dim);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .act{text-align:right;white-space:nowrap}
-button,a.btn,label.btn{font:13px system-ui;background:#2a2f3d;color:#e7e9ee;border:0;border-radius:6px;padding:6px 10px;cursor:pointer;text-decoration:none;display:inline-block}
-button:hover,a.btn:hover,label.btn:hover{background:#3a4152}
+button,a.btn,label.btn{font:13px system-ui;background:var(--btn);color:var(--txt);border:0;border-radius:6px;padding:6px 10px;cursor:pointer;text-decoration:none;display:inline-block}
+button:hover,a.btn:hover,label.btn:hover{background:var(--btnh)}
 .del{background:#3a2530;color:#ff9db0}
-.up{margin:16px 0;padding:18px;background:#1b1e27;border:1px dashed #2f3442;border-radius:8px}
-.up.drag{border-color:#7fb0ff;background:#1d2740}
+.up{margin:16px 0;padding:18px;background:var(--card);border:1px dashed var(--line);border-radius:8px}
+.up.drag{border-color:var(--accent);background:rgba(247,178,49,.10)}
 .uf{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.msg{margin:10px 0 0;font-size:13px;color:#9fd3a0;min-height:18px}
+.msg{margin:10px 0 0;font-size:13px;color:var(--ok);min-height:18px}
 .err{color:#ff9db0}
 .busy{opacity:.5;pointer-events:none}
 </style></head><body>
-<header><h1>GTi - SD Card</h1><span id=fw style="color:#8b93a7;font-size:12px"></span></header>
+<header><h1>GTi - SD Card</h1><span id=fw style="color:var(--dim);font-size:12px"></span></header>
 <main>
 <p class=crumb id=crumb>/</p>
 <div class=bar><button id=delSel class=del hidden>Delete selected</button></div>
@@ -649,6 +654,23 @@ static void webPanelRegister() {
   webPanelHttp.on("/api/dav/rowmeta",HTTP_GET,  hDavRowmeta);
   webPanelHttp.on("/api/dav/nfo",    HTTP_GET,  hDavNfo);
   webPanelHttp.on("/api/dav/load",   HTTP_POST, hDavLoad);
+#if defined(GTI_WEB_SCREENSHOT)
+  webPanelHttp.on("/api/screenshot", HTTP_GET, [](){   // BMP of the current screen, streamed from the framebuffer
+    webPanelHttp.setContentLength(shotBmpSize());
+    webPanelHttp.sendHeader("Content-Disposition", "inline; filename=gti-screen.bmp");
+    webPanelHttp.sendHeader("Cache-Control", "no-store");
+    webPanelHttp.send(200, "image/bmp", "");
+    shotWriteBmp([](const uint8_t*b,size_t n){ webPanelHttp.sendContent((const char*)b, n); });
+  });
+  webPanelHttp.on("/api/touchdbg", HTTP_GET, [](){   // shot2: the last finger press (why a screenshot hold did or did not fire)
+    char j[160]; snprintf(j, sizeof j, "{\"n\":%lu,\"x\":%d,\"y\":%d,\"ms\":%lu,\"drift\":%d,\"fired\":%s,\"zone\":%d}",
+      (unsigned long)g_tdbg.n, g_tdbg.x, g_tdbg.y, (unsigned long)g_tdbg.ms, g_tdbg.drift, g_tdbg.fired?"true":"false", SHOT_ZONE_H);
+    webPanelHttp.send(200, "application/json", j);
+  });
+#endif
+#if defined(GTI_NEO_BENCH)
+  webPanelHttp.on("/api/neobench", HTTP_GET, [](){ webPanelHttp.send(200, "application/json", neoBenchJson()); });   // A600-neo2e: NEO vs flat draw times
+#endif
 #if defined(GTI_WEB_SD_FILES)
   webPanelHttp.on("/api/sd/list",    HTTP_GET,  hSdList);
   webPanelHttp.on("/api/sd/get",     HTTP_GET,  hSdGet);
