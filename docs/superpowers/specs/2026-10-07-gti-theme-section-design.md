@@ -36,8 +36,13 @@ theme. OMEGAWARE already has a Themes tab with a Theme Editor in the shared web 
 - `CONFIG.TXT`: `NEO=` and `THEME=` keep their meaning, so every existing card works unchanged.
   `THEME=` accepts a classic name, a number 0..6, or a custom name. A custom name whose file is
   missing or broken falls back to NAVY and logs one line. The firmware writes names, not numbers.
-- Old cards without a `NEO=` key (from before NEO): still open with Mez; the firmware follows his
-  answer (either "NEO is on" or "THEME as written").
+- Old cards (Mez, #104: keep what is on the card): a CONFIG.TXT with a `THEME=` line but no
+  `NEO=` line comes from before NEO, so it opens with NEO off and its own theme (`THEME=0` stays
+  NAVY). The self-heal then appends the documented `NEO=` line with the value in use (`NEO=OFF`
+  there), so the user can see and change it. A card with neither line, or a new card from the
+  template, gets `NEO=ON`.
+- The special cracktros DENISE, WRANGLER and RETRONAUT stay undocumented (Mez, #104): nothing in
+  the theme section, the self-heal or the web UI lists them.
 
 ## Custom theme to screen colours
 
