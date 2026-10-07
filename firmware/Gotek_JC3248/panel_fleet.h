@@ -1,0 +1,642 @@
+// panel_fleet.h — the JC3248 as the fleet controller: hear Webby dongle
+// discovery beacons on the LAN, keep a roster, and fling the loaded disk to a
+// chosen dongle over TCP. Ported from the OMEGAWARE fleet.h and adapted to
+// this firmware's structures (g_disk / g_sv_img_size / g_loaded_name).
+//
+// Wire protocol is Webby's, unchanged (#20): UDP 51703 JSON "gti":1 beacons
+// (40 s stale), TCP 3333 = 4-byte BE size + raw bytes, ack 0x01 + 4-byte LE
+// load id; 0xFFFFFFFF escape → 1-byte command (0x03 eject).
+//
+// Non-blocking rule (Mez's, non-negotiable): the HTTP handler only QUEUES a
+// fling/command; loop() executes it. A transfer inside a handler serves
+// nothing for its whole duration, including the endpoint you would debug with.
+#pragma once
+#include <WiFi.h>
+#include <WiFiUdp.h>
+#include <ESPmDNS.h>   // #clubday: the fleet controller re-registers its own mDNS name after the panel-vs-panel election
+
+#define PF_DISCO_PORT 51703
+#define PF_TCP_PORT   3333
+#define PF_STALE_MS   40000UL
+#define PF_MAX_PEERS  16
+#ifndef PF_MDNS_ALIAS
+#define PF_MDNS_ALIAS "gotekomega"   // the shared name: one screen ALSO answers to it (see pfApplyAlias).
+#endif   // The dongles cede this exact name to a screen and their portal points users at it,
+         // so it has to match theirs. A screen's own hostname is GTi-XXXX (pfDefaultHost) -
+         // unique per screen, so screens never fight over it (Mez, 6 Oct 2026, option d).
+#define PF_CMD_EJECT   0x03
+#define PF_CMD_SETNAME 0x06   // #24: tell the dongle the pretty display name for the NEXT disk (its FAT12 root stays DISK.ADF)
+// Mainline, not fleet. Webby 1.6.6 remembers which screen put the disk in and asks
+// before another screen takes it over; 1.6.7 moved it here from 0x07 because that is
+// ENROLL in the fleet contract. Same word "claim", a different thing - see the Registry.
+#define PF_CMD_CLAIM   0x0A
+// A dongle claimed by a club screen answers 0x05 to anyone else. A default panel can
+// still receive that byte - it just has no concept of a claim, so it reports the refusal
+// as what it is to that user rather than naming a lock. Ignoring 0x05 is not an option:
+// the send loop would then report a broken cable (see the comment in pfSendDisk).
+#if defined(GTI_FLEET)
+#define PF_REFUSED_MSG "locked to another screen"
+#else
+#define PF_REFUSED_MSG "dongle refused the disk"
+#endif
+
+#if defined(GTI_FLEET)   // club opcodes: the default build never sends these
+#define PF_CMD_ENROLL  0x07   // #lock: enroll this panel's token as an owner (dongle's enroll window must be open)
+#define PF_CMD_AUTH    0x08   // #lock: token preamble before a disk fling, proving this panel is an enrolled owner
+#define PF_CMD_UNENROLL 0x09  // #lock: remove this panel's token from the dongle's owner list (unclaim/release)
+#define PF_TOKEN_LEN   16     // #lock: owner-token length (bytes)
+#endif
+
+struct PfPeer { String id, name, ip, board, fw, disk; uint16_t tcp; bool hd, loaded, lk, lkd, enr; uint32_t seen; };   // #lock: lk=lock-capable, lkd=currently locked, enr=enroll window open
+static PfPeer   g_pfPeers[PF_MAX_PEERS];
+static int      g_pfPeerN = 0;
+static WiFiUDP  g_pfUdp;
+static bool     g_pfUdpUp = false;
+
+// Queue set by the web handler, drained by loop().
+static String   g_pfSendIp;
+static uint16_t g_pfSendTcp = PF_TCP_PORT;
+static String   g_pfCmdIp;
+static uint8_t  g_pfCmd = 0;
+static bool     g_pfBusy = false;
+static String   g_pfLastTarget, g_pfLastResult;
+// Throughput of the last LAN fling, so we can compare home-WiFi vs ESP-NOW.
+static uint32_t g_pfLastKbps = 0, g_pfLastBytes = 0, g_pfLastMs = 0;
+// The dongle the on-screen INSERT/EJECT act on, chosen in the fleet picker.
+static String   g_pfTargetName;   // set by pfWorker when a fling picks a target; NOW PLAYING renders it
+#if defined(GTI_FLEET)   // this screen's owner token and the web claim queue
+// #lock: this panel's owner token (identity). Generated once, persisted as PANEL_TOKEN in CONFIG.TXT
+// by the sketch (loadConfig, which has SD helpers). pfSendDisk prepends it as AUTH to lock-capable dongles.
+static uint8_t  g_panel_token[PF_TOKEN_LEN] = {0};
+static bool     g_panel_token_ok = false;
+static String   g_pfEnrollIp;   // queued by the web handler; pfWorker sends CMD_ENROLL to this dongle
+// #lock: id of a dongle a WEB claim just enrolled. loop() persists DONGLE_<mac>.MINE for it
+// (the sketch owns the SD helpers), so the web path records ownership like the on-screen one.
+static String   g_pfUnenrollIp;  // queued by the web handler; pfWorker sends CMD_UNENROLL to this dongle
+static String   g_pfClaimedId;
+static String   g_pfReleasedId;   // #lock: loop() clears DONGLE_<mac>.MINE for it after a web UNCLAIM
+#endif
+#if defined(GTI_FLEET)   // which dongles this screen has claimed
+// #lock: ids (MACs) of dongles THIS screen owns (claimed). Loaded at boot from CONFIG.TXT
+// (DONGLE_<mac>.MINE=1) by the sketch; used to hide locked-not-mine dongles and to gate UNCLAIM.
+static String   g_mineIds[16];
+static int      g_mineN = 0;
+static bool pfIsMine(const String &id){ for(int i=0;i<g_mineN;i++) if(g_mineIds[i]==id) return true; return false; }
+static void pfAddMine(const String &id){ if(!id.length()||pfIsMine(id)) return; if(g_mineN<16) g_mineIds[g_mineN++]=id; }
+static void pfDelMine(const String &id){ for(int i=0;i<g_mineN;i++) if(g_mineIds[i]==id){ for(int j=i;j<g_mineN-1;j++) g_mineIds[j]=g_mineIds[j+1]; g_mineN--; return; } }
+#endif
+// #console: a locked dongle is only visible on a screen that owns it — EXCEPT while it is in
+// pairing mode (enr), so any screen can still claim a dongle whose BOOT was just tapped.
+static int  pfVisibleCount();   // defined below, next to the roster
+#if defined(GTI_FLEET)
+static bool pfPeerVisible(const PfPeer &p){ return p.enr || pfIsMine(p.id) || !p.lkd; }
+#else
+// No claims exist in this build, so nothing may be hidden from the person who
+// owns the hardware: every dongle we can hear is a dongle you can use.
+static bool pfPeerVisible(const PfPeer &p){ (void)p; return true; }
+#endif
+static int  pfVisibleCount(){ int n=0; for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])) n++; return n; }
+static int  pfPeerIdx(const String &id){ for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].id==id) return i; return -1; }   // rows are held by id: a prune must not shift one under your finger
+
+// ── Panel-vs-panel election (#clubday: many screens on one Wi-Fi, one gotekomega.local) ──
+// Every screen beacons role:panel with its MAC id and the mDNS name it currently holds.
+// Every screen keeps its own GTi-XXXX hostname; the election only decides which one ALSO
+// answers to the shared gotekomega.local: among screens on their default name, the LOWEST
+// MAC. A screen given a custom MDNS_NAME never contends. Deterministic, no mDNS probing.
+struct PfPanel { String id, mdns; uint32_t seen; };
+static PfPanel  g_pfPanels[PF_MAX_PEERS];
+static int      g_pfPanelN = 0;
+static String   g_pfMyId;              // this screen's MAC (uppercase hex) — same format as the beacon id
+static String   g_pfMdnsName;          // the mDNS name we WANT to be registered under (no ".local")
+static bool     g_pfMdnsHeld = false;  // ... and whether the responder REPORTS that name (see pfMdnsReadback)
+static char     g_pfMdnsActual[MDNS_NAME_BUF_LEN] = {0};   // what mdns_hostname_get() says we are really called
+static uint32_t g_pfMdnsCheck = 0;     // last readback (throttled; the conflict rename lands after probing)
+static uint32_t g_pfMdnsRetry = 0;     // last re-registration after losing the name
+static uint16_t g_pfMdnsLost  = 0;     // how often we had to take it back (diagnostic)
+#define PF_MDNS_RETRY_MS 20000UL       // > the window a booting dongle holds the leader name
+static bool     g_pfIsLeader = true;   // do we ALSO answer to the shared gotekomega.local?
+static bool     g_pfMdnsDirty = true;  // set when the elected name changes -> re-register (no reboot)
+static bool     g_pfAliasUp   = false; // we currently answer to PF_MDNS_ALIAS as a delegated hostname
+static uint32_t g_pfAliasIp   = 0;     // ... at this address
+static uint32_t g_pfAliasTry  = 0;     // last attempt to (re)register it
+
+static String pfMyMac() {
+  uint8_t m[6]; WiFi.macAddress(m);
+  char b[13]; snprintf(b, sizeof(b), "%02X%02X%02X%02X%02X%02X", m[0], m[1], m[2], m[3], m[4], m[5]);
+  return String(b);
+}
+static String pfMacSuffix() {   // last 2 bytes, UPPERCASE - the same as screenName()'s GTi-XXXX in espnow_server.cpp
+  uint8_t m[6]; WiFi.macAddress(m);
+  char b[8]; snprintf(b, sizeof(b), "%02X%02X", m[4], m[5]);
+  return String(b);
+}
+static String pfDefaultHost() { return String("GTi-") + pfMacSuffix(); }   // a screen's hostname unless MDNS_NAME says otherwise
+static String pfMdnsName() { return g_pfMdnsName.length() ? g_pfMdnsName : (g_mdns_named ? g_mdns_name : pfDefaultHost()); }
+// A screen on its default name, as its beacon tells it: GTi-XXXX, or the shared name itself
+// (a screen on older firmware still uses that as its hostname - it holds the alias, so it counts).
+static bool pfPanelOnDefault(const String &mdns) {
+  return mdns == PF_MDNS_ALIAS || (mdns.length() == 8 && mdns.startsWith("GTi-"));
+}
+
+static void pfPanelUpsert(const String &id, const String &mdns) {
+  if (!id.length()) return;
+  for (int i = 0; i < g_pfPanelN; i++)
+    if (g_pfPanels[i].id == id) { g_pfPanels[i].mdns = mdns; g_pfPanels[i].seen = millis(); return; }
+  if (g_pfPanelN < PF_MAX_PEERS) { g_pfPanels[g_pfPanelN].id = id; g_pfPanels[g_pfPanelN].mdns = mdns; g_pfPanels[g_pfPanelN].seen = millis(); g_pfPanelN++; }
+}
+static void pfPanelPrune() {
+  uint32_t now = millis(); int w = 0;
+  for (int i = 0; i < g_pfPanelN; i++)
+    if (now - g_pfPanels[i].seen < PF_STALE_MS) { if (w != i) g_pfPanels[w] = g_pfPanels[i]; w++; }
+  g_pfPanelN = w;
+}
+// Decide our effective mDNS name from the screens we can hear. Marks dirty on change.
+#if defined(GTI_FLEET)
+static void pfElect() {
+  if (!g_pfMyId.length()) g_pfMyId = pfMyMac();
+  pfPanelPrune();
+  // Test the fact that MDNS_NAME was set, not whether its value differs from the
+  // default: choosing the default name on purpose is still a choice.
+  String want = g_mdns_named ? g_mdns_name : pfDefaultHost();
+  bool lead = !g_mdns_named;                      // a named screen never contends for the shared name
+  for (int i = 0; lead && i < g_pfPanelN; i++)    // yield it to any live default screen with a lower MAC
+    if (pfPanelOnDefault(g_pfPanels[i].mdns) && g_pfPanels[i].id < g_pfMyId) lead = false;
+  g_pfIsLeader = lead;
+  if (want != g_pfMdnsName) { g_pfMdnsName = want; g_pfMdnsDirty = true; g_pfMdnsHeld = false; }
+}
+#else
+// No election in this build: one screen, one name. Same function name on purpose -
+// pfApplyMdns() is the only writer of the registration and it needs SOMEBODY to fill
+// g_pfMdnsName, or the screen silently answers to no mDNS name at all.
+static void pfElect() {
+  if (!g_pfMyId.length()) g_pfMyId = pfMyMac();
+  pfPanelPrune();                               // its only other caller is the fleet election;
+                                                // without this the panel count only ever grows
+  // Test that MDNS_NAME was SET, not what it says: choosing the default name on purpose
+  // is still a choice. Comparing values is the bug dd61f0b fixed - do not reintroduce it.
+  String want = g_mdns_named ? g_mdns_name : pfDefaultHost();
+  if (want != g_pfMdnsName) { g_pfMdnsName = want; g_pfMdnsDirty = true; }
+  // No election: a screen on its default name simply also answers to the shared name, so the
+  // dongle portal's gotekomega.local link keeps working. Two such screens on one LAN both
+  // offer it - as before this change, when it was their hostname - but their own GTi-XXXX
+  // names are unique, so each one stays reachable.
+  g_pfIsLeader = !g_mdns_named;
+}
+#endif
+// Ask the responder what hostname it actually holds. begin() returning true is NOT that
+// answer: it only means the responder accepted the request. If another device on the LAN
+// already answers to the name, the IDF responder renames itself AFTER probing — that is
+// where "gotekomega-2" came from on 22-09, a suffix our own code cannot produce. So this
+// has to run periodically, not once at begin().
+static void pfMdnsReadback() {
+  if (millis() - g_pfMdnsCheck < 2000) return;
+  g_pfMdnsCheck = millis();
+  char buf[MDNS_NAME_BUF_LEN] = {0};
+  if (mdns_hostname_get(buf) != ESP_OK) { g_pfMdnsActual[0] = 0; g_pfMdnsHeld = false; return; }
+  strlcpy(g_pfMdnsActual, buf, sizeof(g_pfMdnsActual));
+  g_pfMdnsHeld = g_pfMdnsName.length() && g_pfMdnsName == g_pfMdnsActual;
+  // Lost it. A dongle claims the leader name for the first seconds of its boot (its roster is
+  // still empty, so doElection makes it master) and cedes once it hears us - but by then the
+  // responder has already renamed US, and pfApplyMdns only fires when the WANTED name changes.
+  // So take it back, slower than that window, and only for a name we are entitled to.
+  // Our hostname is unique now (GTi-XXXX, or a name the user chose), so always take it back.
+  if (!g_pfMdnsHeld && g_pfMdnsName.length() && g_pfMdnsActual[0]) {
+    if (millis() - g_pfMdnsRetry >= PF_MDNS_RETRY_MS) {
+      g_pfMdnsRetry = millis(); g_pfMdnsDirty = true; g_pfMdnsLost++;
+    }
+  }
+}
+
+// Re-register mDNS when the elected name changed. Safe to call every pass — only acts when dirty.
+static void pfApplyMdns() {
+  if (!g_pfMdnsDirty || g_pfMdnsName.length() == 0) return;
+  MDNS.end();
+  g_pfAliasUp = false;                             // end() dropped the delegated shared name too
+  if (!MDNS.begin(g_pfMdnsName.c_str())) return;   // stay dirty: a failed begin() must be retried,
+                                                   // or the screen claims a name nothing answers to
+  MDNS.addService("http", "tcp", 80);
+  g_pfMdnsDirty = false;
+  g_pfMdnsCheck = 0;        // force a readback on the next pass instead of claiming success here
+}
+
+// The shared gotekomega.local, answered by the leader as a delegated hostname next to its own
+// GTi-XXXX. A delegated host carries its own address, so it is re-set when our IP changes.
+static void pfApplyAlias() {
+  const bool want = g_pfIsLeader && !g_pfMdnsDirty && g_pfMdnsName.length() && WiFi.status() == WL_CONNECTED;
+  if (!want) {
+    if (g_pfAliasUp) { mdns_delegate_hostname_remove(PF_MDNS_ALIAS); g_pfAliasUp = false; }
+    return;
+  }
+  const uint32_t ip = (uint32_t)WiFi.localIP();
+  if (g_pfAliasUp && ip == g_pfAliasIp) return;
+  if (millis() - g_pfAliasTry < 5000) return;      // the responder may still be starting: retry, do not hammer
+  g_pfAliasTry = millis();
+  mdns_ip_addr_t a = {};
+  a.addr.type = ESP_IPADDR_TYPE_V4; a.addr.u_addr.ip4.addr = ip; a.next = NULL;
+  const esp_err_t e = g_pfAliasUp ? mdns_delegate_hostname_set_address(PF_MDNS_ALIAS, &a)
+                                  : mdns_delegate_hostname_add(PF_MDNS_ALIAS, &a);
+  if (e != ESP_OK) return;
+  if (!g_pfAliasUp) mdns_service_add_for_host(NULL, "_http", "_tcp", PF_MDNS_ALIAS, 80, NULL, 0);
+  g_pfAliasUp = true; g_pfAliasIp = ip;
+}
+
+static String pfJesc(const String &s) {
+  String o; o.reserve(s.length() + 4);
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (c == '"' || c == '\\') { o += '\\'; o += c; }
+    else if ((uint8_t)c >= 0x20) o += c;
+  }
+  return o;
+}
+static String pfJf(const String &s, const char *key) {
+  String k = String("\"") + key + "\":";
+  int i = s.indexOf(k); if (i < 0) return "";
+  i += k.length(); if (i >= (int)s.length()) return "";
+  if (s[i] == '"') { int e = s.indexOf('"', i + 1); return e < 0 ? String("") : s.substring(i + 1, e); }
+  int e = i; while (e < (int)s.length() && s[e] != ',' && s[e] != '}') e++;
+  return s.substring(i, e);
+}
+
+static void pfPrune() {
+  uint32_t now = millis(); int w = 0;
+  for (int i = 0; i < g_pfPeerN; i++)
+    if (now - g_pfPeers[i].seen < PF_STALE_MS) { if (w != i) g_pfPeers[w] = g_pfPeers[i]; w++; }
+  g_pfPeerN = w;
+}
+static void pfUpsert(const String &j) {
+  const String id = pfJf(j, "id"); if (id.length() == 0) return;
+  PfPeer *p = nullptr;
+  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].id == id) { p = &g_pfPeers[i]; break; }
+  if (!p) { if (g_pfPeerN >= PF_MAX_PEERS) return; p = &g_pfPeers[g_pfPeerN++]; p->id = id; }
+  p->name = pfJf(j, "name"); p->ip = pfJf(j, "ip"); p->board = pfJf(j, "board");
+  p->fw = pfJf(j, "fw"); p->disk = pfJf(j, "disk");
+  const long t = pfJf(j, "tcp").toInt(); p->tcp = (t > 0 && t < 65536) ? (uint16_t)t : PF_TCP_PORT;
+  p->hd = pfJf(j, "hd") == "true"; p->loaded = pfJf(j, "loaded") == "true";
+#if defined(GTI_FLEET)   // a default screen neither reads nor acts on the lock keys
+  p->lk = pfJf(j, "lk") == "1"; p->lkd = pfJf(j, "lkd") == "1";   // #lock: lock-capable + currently-locked
+  p->enr = pfJf(j, "enr") == "1";                                 // #lock: enroll window open -> the screen offers to CLAIM
+#endif
+  p->seen = millis();
+}
+
+// #rule: announce this panel as the fleet LEADER on the shared discovery port, so
+// the dongles cede the undecorated name to it and stay <name>-<mac>.local. A screen,
+// when present, always leads. Rate-limited so it can be called every pass.
+static uint32_t g_pfBeaconNext = 0;
+static void pfSendBeacon() {
+  if (!g_pfUdpUp || WiFi.status() != WL_CONNECTED) return;
+  if (millis() < g_pfBeaconNext) return;
+  g_pfBeaconNext = millis() + 8000;
+  uint8_t m[6]; WiFi.macAddress(m);
+  char id[13]; snprintf(id, sizeof(id), "%02X%02X%02X%02X%02X%02X", m[0], m[1], m[2], m[3], m[4], m[5]);
+  String j = "{\"gti\":1,\"role\":\"panel\",\"id\":\"" + String(id) + "\",\"name\":\"" + pfJesc(String("GTi panel")) +
+             "\",\"mdns\":\"" + pfJesc(pfMdnsName()) + "\",\"ip\":\"" + WiFi.localIP().toString() + "\",\"loaded\":" + (g_loaded ? "true" : "false") + "}";
+  g_pfUdp.beginPacket(IPAddress(255, 255, 255, 255), PF_DISCO_PORT);
+  g_pfUdp.write((const uint8_t *)j.c_str(), j.length());
+  g_pfUdp.endPacket();
+}
+
+// Call every loop() pass. Opens the socket once STA WiFi is up; drops it and
+// the roster when the network goes away (or we are on ESP-NOW instead).
+static void pfService() {
+  if (WiFi.status() != WL_CONNECTED) {
+    if (g_pfUdpUp) { g_pfUdp.stop(); g_pfUdpUp = false; g_pfPeerN = 0; }
+    return;
+  }
+  if (!g_pfUdpUp) g_pfUdpUp = g_pfUdp.begin(PF_DISCO_PORT) != 0;
+  if (!g_pfUdpUp) return;
+  if (!g_pfMyId.length()) g_pfMyId = pfMyMac();   // needed to tell our own beacon apart from other screens
+  for (int guard = 0; guard < 8; guard++) {
+    const int sz = g_pfUdp.parsePacket(); if (sz <= 0) break;
+    char buf[600]; const int n = g_pfUdp.read((uint8_t *)buf, sizeof(buf) - 1); if (n <= 0) break;
+    buf[n] = 0; const String s(buf);
+    if (s.indexOf("\"gti\":1") < 0) continue;
+    if (s.indexOf("\"role\":\"panel\"") >= 0) {           // #clubday: another screen — track it for the leader election, keep it out of the dongle roster
+      const String pid = pfJf(s, "id");
+      if (pid.length() && pid != g_pfMyId) pfPanelUpsert(pid, pfJf(s, "mdns"));
+      continue;
+    }
+    // #standalone: a screen serving the web UI in STANDALONE still needs the election - two screens
+    // claiming <name>.local is exactly what it exists to stop - but it is NOT driving dongles, so it
+    // keeps no roster. Empty roster => pfVisibleCount()==0 => disks mount on our own USB port.
+    if (g_wireless_mode && g_link_home) pfUpsert(s);
+  }
+  pfElect();        // #clubday: our own name, and whether we also answer gotekomega.local (lowest default MAC)
+  pfApplyMdns();    // re-register if it changed — no reboot
+  pfApplyAlias();   // ... add or drop the shared name to match the election
+  pfMdnsReadback(); // ... and check what the responder ended up called, rather than assuming
+  pfSendBeacon();   // #rule: keep announcing ourselves (with the elected name) as a leader
+}
+
+// The roster the web fleet card reads. The panel lists itself first with what
+// IT has loaded, so "which device holds which disk" is answered in one view.
+static String pfRosterJson() {
+  pfPrune();
+  const bool busy = g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length();
+  String j = "{\"self\":\"panel\",\"name\":\"" + pfJesc(String("GTi panel")) + "\",";
+  j += "\"mdns\":\"" + pfJesc(pfMdnsName()) + "\",";                       // the name this screen WANTS after the election
+  j += "\"mdns_held\":" + String(g_pfMdnsHeld ? "true" : "false") + ",";   // ... true only when the responder REPORTS that same name
+  j += "\"mdns_actual\":\"" + pfJesc(String(g_pfMdnsActual)) + "\",";       // ... and what it reports, renamed-on-conflict included
+  j += "\"mdns_lost\":" + String(g_pfMdnsLost) + ",";                      // ... and how often we had to take the name back
+  j += "\"leader\":" + String(g_pfIsLeader ? "true" : "false") + ",";     // #clubday: true = also answers gotekomega.local
+  j += "\"alias_up\":" + String(g_pfAliasUp ? "true" : "false") + ",";   // ... and the responder accepted it
+  j += "\"panels\":" + String(g_pfPanelN + 1) + ",";                      // #clubday: screens seen on the net, incl. self
+  // The SPA shows the fleet card only in WIRELESS mode: STANDALONE means the
+  // panel is the local drive and has no dongles to control. Home WiFi + web are
+  // up in both modes, so this flag is purely a UI gate.
+  j += "\"wireless\":" + String(g_wireless_mode ? "true" : "false") + ",";
+  j += "\"loaded\":\"" + pfJesc(g_loaded ? g_loaded_name : String("")) + "\",";
+  j += "\"busy\":" + String(busy ? "true" : "false") + ",";
+  j += "\"last_target\":\"" + pfJesc(g_pfLastTarget) + "\",";
+  j += "\"last_result\":\"" + pfJesc(g_pfLastResult) + "\",";
+  j += "\"last_kbps\":" + String(g_pfLastKbps) + ",";
+  j += "\"last_bytes\":" + String(g_pfLastBytes) + ",";
+  j += "\"last_ms\":" + String(g_pfLastMs) + ",";
+  int pfVis=0; for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])) pfVis++;
+  j += "\"count\":" + String(pfVis) + ",\"devices\":[";
+  bool pfFirst=true;
+  for (int i = 0; i < g_pfPeerN; i++) {
+    const PfPeer &p = g_pfPeers[i];
+    if (!pfPeerVisible(p)) continue;   // #console: hide locked dongles this screen does not own
+    if (!pfFirst) j += ","; pfFirst=false;
+    j += "{\"id\":\"" + pfJesc(p.id) + "\",\"name\":\"" + pfJesc(p.name) +
+         "\",\"ip\":\"" + pfJesc(p.ip) + "\",\"board\":\"" + pfJesc(p.board) +
+         "\",\"fw\":\"" + pfJesc(p.fw) + "\",\"hd\":" + (p.hd ? "true" : "false") +
+         ",\"loaded\":" + (p.loaded ? "true" : "false") +
+         ",\"disk\":\"" + pfJesc(p.disk) + "\",\"tcp\":" + String(p.tcp) +
+#if defined(GTI_FLEET)   // the roster drops the lock columns
+         ",\"lk\":" + (p.lk ? "true" : "false") + ",\"lkd\":" + (p.lkd ? "true" : "false") +
+         ",\"mine\":" + (pfIsMine(p.id) ? "true" : "false") +
+#endif
+         ",\"age_s\":" + String((millis() - p.seen) / 1000) + "}";
+  }
+  j += "]}";
+  return j;
+}
+
+// #lock: send our token ONLY to a lock-capable dongle this screen actually owns. Beacons are
+// unauthenticated, so "lk":1 alone must never be enough to make us hand the token to a stranger.
+// #lock: locked, and not ours -> there is nothing to try. A dongle that refuses mid-stream
+// answers 0x05 and closes while we are still writing, which is a TCP RST - that discards the
+// byte, so the caller sees a dead connection and reports a cable fault. Answer from what the
+// beacon already told us instead, and do not hand our token to somebody else's dongle.
+#if defined(GTI_FLEET)   // lock-aware peer questions
+static bool pfPeerLockedElsewhere(const String &ip) {
+  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) return g_pfPeers[i].lkd && !pfIsMine(g_pfPeers[i].id);
+  return false;
+}
+static bool pfPeerWantsAuth(const String &ip) {
+  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) return g_pfPeers[i].lk && pfIsMine(g_pfPeers[i].id);
+  return false;
+}
+#endif
+// #lock: the TCP port this peer advertises (never assume 3333).
+static uint16_t pfPeerTcp(const String &ip) {
+  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) return g_pfPeers[i].tcp;
+  return PF_TCP_PORT;
+}
+#if defined(GTI_FLEET)   // the AUTH preamble
+// #lock: write the AUTH preamble. Returns false if the dongle refuses us immediately (0x05).
+static bool pfWriteAuth(WiFiClient &c, String &err) {
+  uint8_t a[5 + PF_TOKEN_LEN]; a[0]=a[1]=a[2]=a[3]=0xFF; a[4]=PF_CMD_AUTH; memcpy(a+5, g_panel_token, PF_TOKEN_LEN);
+  c.write(a, sizeof(a));
+  // The dongle answers ONLY on refusal, and it does so before we send anything else — so give it a
+  // short window. Without this the refusal arrives mid-payload and surfaces as "connection lost".
+  const uint32_t t0 = millis();
+  while (!c.available() && millis() - t0 < 400) { if (!c.connected()) break; delay(5); }
+  if (c.available()) { const int r = c.read(); err = (r == 0x05) ? PF_REFUSED_MSG : "refused"; return false; }
+  return true;
+}
+#endif
+
+// Tell the dongle which screen is about to send it a disk (Webby 1.6.6+).
+// Frame: mac[6], flags (bit0 = take over), one length byte, then the name.
+// Reply: 0x01 go ahead, or 0x02 unsaved saves / 0x03 in use - both followed by a
+// length byte and the name of the screen that holds it, so we can say who.
+// An older dongle does not know 0x0A and answers 0x00; that is not an error, it
+// just has no loader to remember. Never fatal: a refused claim stops the fling,
+// an unanswered one does not.
+static bool pfSendClaim(const String &ip, uint16_t port, bool takeover, String &err) {
+  WiFiClient c;
+  if (!c.connect(ip.c_str(), port, 5000)) { err = "connect failed"; return false; }
+  c.setNoDelay(true);
+  const uint8_t f[5] = { 0xFF, 0xFF, 0xFF, 0xFF, PF_CMD_CLAIM };
+  c.write(f, 5);
+  uint8_t mac[6]; WiFi.macAddress(mac);
+  c.write(mac, 6);
+  c.write((uint8_t)(takeover ? 1 : 0));
+  String nm = pfMdnsName(); if (nm.length() > 24) nm = nm.substring(0, 24);
+  c.write((uint8_t)nm.length());
+  if (nm.length()) c.write((const uint8_t *)nm.c_str(), nm.length());
+  const uint32_t t0 = millis();
+  while (c.available() < 1 && millis() - t0 < 3000) { if (!c.connected()) break; delay(5); }
+  const int a = c.available() >= 1 ? c.read() : -1;
+  if (a == 0x01 || a < 0 || a == 0x00) { c.stop(); return true; }   // go ahead, or a dongle that predates 0x0A
+  // refused: read the length-prefixed name of whoever holds it
+  String who;
+  const uint32_t t1 = millis();
+  while (c.available() < 1 && millis() - t1 < 1000) { if (!c.connected()) break; delay(5); }
+  int wl = c.available() >= 1 ? c.read() : 0;
+  for (int i = 0; i < wl && millis() - t1 < 2000; ) {
+    if (!c.connected() && !c.available()) break;
+    int ch = c.read();
+    if (ch < 0) { delay(1); continue; }
+    who += (char)ch; i++;
+  }
+  c.stop();
+  if (!who.length()) who = "another screen";
+  err = (a == 0x02) ? ("unsaved saves on " + who) : ("in use by " + who);
+  return false;
+}
+
+// Push the loaded disk to a dongle. BLOCKING — loop() only.
+static void pfNoteTarget(const String &ip) {   // NOW PLAYING shows where the disk went
+  g_pfTargetName = ip;
+  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip && g_pfPeers[i].name.length()) { g_pfTargetName = g_pfPeers[i].name; return; }
+}
+static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
+#if defined(GTI_FLEET)
+  if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
+#endif
+  // Mainline: say who is sending before sending. A refusal here is the dongle
+  // protecting somebody else's disk or unsaved saves, so it stops the fling.
+  if (!pfSendClaim(ip, port, false, err)) return false;
+  if (!g_loaded || g_img_bytes == 0) { err = "no disk loaded"; return false; }
+  const uint8_t *data = g_disk + DATA_LBA * 512;
+  const uint32_t size = g_img_bytes;
+  WiFiClient c;
+  if (!c.connect(ip.c_str(), port, 8000)) { err = "connect failed"; return false; }
+  c.setNoDelay(true);   // disable Nagle: with the dongle's delayed-ACK, Nagle stalls each window ~200ms and crawls the fling to ~35 KB/s
+#if defined(GTI_FLEET)
+  if (g_panel_token_ok && pfPeerWantsAuth(ip)) {   // #lock: prove ownership before the disk
+    if (!pfWriteAuth(c, err)) { c.stop(); return false; }
+  }
+#endif
+  const uint8_t hdr[4] = { (uint8_t)(size >> 24), (uint8_t)(size >> 16), (uint8_t)(size >> 8), (uint8_t)size };
+  const uint32_t tSend0 = millis();   // time the bulk transfer for the throughput report
+  c.write(hdr, 4);
+  uint32_t sent = 0, stall = millis();
+  const uint32_t deadline = millis() + 180000UL;   // hard ceiling: a crawling link must not hold the screen hostage for minutes
+  while (sent < size) {
+    // A refusal arrives mid-stream: the dongle answers 0x05 and hangs up while we are still
+    // writing. Read it, or the caller reports a broken cable when it was actually a locked dongle.
+    if (c.available()) { const int r = c.read(); c.stop();
+      err = (r == 0x05) ? PF_REFUSED_MSG : (r == 0x00) ? "dongle refused the disk" : ("refused (0x" + String(r, HEX) + ")");
+      return false; }
+    if (!c.connected()) {
+      if (c.available()) { const int r = c.read(); if (r == 0x05) { err = PF_REFUSED_MSG; c.stop(); return false; } }
+      err = "connection lost at " + String(sent) + "B"; c.stop(); return false; }
+    if ((int32_t)(millis() - deadline) > 0) { err = "too slow - " + String(sent*100/size) + "% in 3 min"; c.stop(); return false; }
+    uint32_t chunk = size - sent; if (chunk > 8192) chunk = 8192;
+    const size_t w = c.write(data + sent, chunk);
+    if (w == 0) { if (millis() - stall > 15000) { err = "send stalled"; c.stop(); return false; } delay(2); continue; }
+    sent += w; stall = millis();
+  }
+  pfNoteTarget(ip);
+  g_pfLastMs = millis() - tSend0; g_pfLastBytes = size;
+  g_pfLastKbps = g_pfLastMs ? (uint32_t)((uint64_t)size * 1000ULL / g_pfLastMs / 1024ULL) : 0;
+  const uint32_t t0 = millis();
+  while (c.available() < 1 && millis() - t0 < 10000) { if (!c.connected()) break; delay(5); }
+  const int a = c.available() >= 1 ? c.read() : -1;
+  c.stop();
+  if (a != 0x01) { err = (a==0x05) ? PF_REFUSED_MSG : (a < 0) ? "no ack" : "dongle refused"; return false; }   // #lock: 0x05 = the dongle rejected us (not an owner)
+  return true;
+}
+
+static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &err) {
+#if defined(GTI_FLEET)
+  if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
+#endif
+  WiFiClient c;
+  if (!c.connect(ip.c_str(), port, 5000)) { err = "connect failed"; return false; }
+  c.setNoDelay(true);
+#if defined(GTI_FLEET)
+  if (g_panel_token_ok && pfPeerWantsAuth(ip)) {   // #lock: commands are privileged too (eject/save/name)
+    if (!pfWriteAuth(c, err)) { c.stop(); return false; }
+  }
+#endif
+  const uint8_t f[5] = { 0xFF, 0xFF, 0xFF, 0xFF, cmd };
+  c.write(f, 5);
+  const uint32_t t0 = millis();
+  while (c.available() < 1 && millis() - t0 < 3000) { if (!c.connected()) break; delay(5); }
+  const int a = c.available() >= 1 ? c.read() : -1;
+  c.stop();
+  // Only 0x01 is success. The dongle answers 0x02 for "refused, unsaved data", 0x05 for "locked".
+  if (a == 0x01) return true;
+  err = (a < 0) ? "no reply" : (a == 0x02) ? "refused - unsaved data (use force)" : (a == 0x05) ? PF_REFUSED_MSG : "refused";
+  return false;
+}
+
+// #24: set-next-name — tell the dongle the pretty display name before the disk.
+// Best-effort: an old dongle ignores the unknown escape (one-sided safe), so a
+// failure here never blocks the fling.
+static bool pfSendName(const String &ip, uint16_t port, const String &name, String &err) {
+#if defined(GTI_FLEET)
+  if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
+#endif
+  WiFiClient c;
+  if (!c.connect(ip.c_str(), port, 4000)) { err = "connect failed"; return false; }
+  c.setNoDelay(true);
+#if defined(GTI_FLEET)
+  if (g_panel_token_ok && pfPeerWantsAuth(ip)) {   // #lock: SET_NAME is privileged too - without this a locked dongle
+    if (!pfWriteAuth(c, err)) { c.stop(); return false; }   // refuses the name and the fling lands as "DISK.ADF"
+  }
+#endif
+  String nm = name; if (nm.length() > 120) nm = nm.substring(0, 120);
+  const uint8_t hdr[6] = { 0xFF, 0xFF, 0xFF, 0xFF, PF_CMD_SETNAME, (uint8_t)nm.length() };
+  c.write(hdr, 6);
+  if (nm.length()) c.write((const uint8_t *)nm.c_str(), nm.length());
+  const uint32_t t0 = millis();
+  while (c.available() < 1 && millis() - t0 < 3000) { if (!c.connected()) break; delay(3); }
+  const int a = c.available() >= 1 ? c.read() : -1;
+  c.stop();
+  if (a != 0x01) { err = (a < 0) ? "no ack" : "not supported"; return false; }
+  return true;
+}
+
+#if defined(GTI_FLEET)   // claim
+// #lock: enroll this panel's token as an owner of the dongle at ip. The dongle's enroll
+// window must be open (short BOOT tap on the dongle). Short best-effort exchange.
+static bool pfSendEnroll(const String &ip, uint16_t port, String &err) {
+  if (!g_panel_token_ok) { err = "no panel token (SD missing?)"; return false; }   // #lock: never enrol an all-zero token
+  WiFiClient c;
+  if (!c.connect(ip.c_str(), port, 4000)) { err = "connect failed"; return false; }
+  c.setNoDelay(true);
+  uint8_t a[5 + PF_TOKEN_LEN]; a[0]=a[1]=a[2]=a[3]=0xFF; a[4]=PF_CMD_ENROLL; memcpy(a+5, g_panel_token, PF_TOKEN_LEN);
+  c.write(a, sizeof(a));
+  const uint32_t t0 = millis();
+  while (c.available() < 1 && millis()-t0 < 4000) { if(!c.connected()) break; delay(3); }
+  const int r = c.available() >= 1 ? c.read() : -1;
+  c.stop();
+  if (r == 0x01) return true;
+  err = (r==0x02) ? "open the dongle first (tap BOOT)" : (r==0x03) ? "dongle owners full" : (r<0) ? "no reply" : "refused";
+  return false;
+}
+#endif
+
+// #lock: release ownership — tell the dongle to drop THIS panel's token. Blocking, short.
+// UNENROLL sits below the dongle's AUTH gate, so on the shared LAN it needs the AUTH preamble on
+#if defined(GTI_FLEET)   // release
+// this same connection. Always sent, not via pfPeerWantsAuth(): RELEASE LOCKS aims at dongles we
+// no longer list as ours, and the UNENROLL frame carries the same token anyway.
+static bool pfSendUnenroll(const String &ip, uint16_t port, String &err) {
+  if (!g_panel_token_ok) { err = "no panel token (SD missing?)"; return false; }
+  WiFiClient c;
+  if (!c.connect(ip.c_str(), port, 4000)) { err = "connect failed"; return false; }
+  c.setNoDelay(true);
+  if (!pfWriteAuth(c, err)) { c.stop(); return false; }   // 0x05 = not one of its owners; 0x00 = no fleet layer
+  uint8_t a[5 + PF_TOKEN_LEN]; a[0]=a[1]=a[2]=a[3]=0xFF; a[4]=PF_CMD_UNENROLL; memcpy(a+5, g_panel_token, PF_TOKEN_LEN);
+  c.write(a, sizeof(a));
+  const uint32_t t0 = millis();
+  while (c.available() < 1 && millis()-t0 < 4000) { if(!c.connected()) break; delay(3); }
+  const int r = c.available() >= 1 ? c.read() : -1;
+  c.stop();
+  if (r == 0x01) return true;
+  err = (r<0) ? "no reply" : "refused"; return false;
+}
+#endif
+
+// Release the discovery socket + roster. Called from applyRadioMode() on a live MODE switch,
+// so the panel does not keep a UDP listener alive in a mode that has no LAN.
+static void pfStop() {
+  if (g_pfUdpUp) { g_pfUdp.stop(); g_pfUdpUp = false; }
+  g_pfPeerN = 0;                 // dongles go; they re-announce within a beacon period
+  // g_pfPanelN deliberately kept: pfElect() needs to still see the other screens, or this
+  // panel re-claims the leader name while the incumbent is still answering to it.
+  g_pfMdnsDirty = true;
+}
+
+// Drain one queued fling/command. Call from loop().
+static void pfWorker() {
+#if defined(GTI_FLEET)   // the web claim/release queue
+  if (g_pfEnrollIp.length()) {   // #lock: enroll this panel as an owner of the chosen dongle
+    const String ip = g_pfEnrollIp; g_pfEnrollIp = "";
+    g_pfBusy = true; String err;
+    const bool ok = pfSendEnroll(ip, pfPeerTcp(ip), err);
+    if (ok) { for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) { pfAddMine(g_pfPeers[i].id); g_pfClaimedId = g_pfPeers[i].id; break; } }
+    g_pfLastTarget = ip; g_pfLastResult = ok ? "enrolled" : err; g_pfBusy = false;
+  }
+  if (g_pfUnenrollIp.length()) {   // #lock: release our claim (the dongle drops OUR token only)
+    const String ip = g_pfUnenrollIp; g_pfUnenrollIp = "";
+    g_pfBusy = true; String err;
+    const bool ok = pfSendUnenroll(ip, pfPeerTcp(ip), err);
+    if (ok) for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) { pfDelMine(g_pfPeers[i].id); g_pfReleasedId = g_pfPeers[i].id; break; }
+    g_pfLastTarget = ip; g_pfLastResult = ok ? "released" : err; g_pfBusy = false;
+  }
+#endif
+  if (g_pfCmdIp.length()) {
+    const String ip = g_pfCmdIp; g_pfCmdIp = ""; const uint8_t cmd = g_pfCmd; g_pfCmd = 0;
+    g_pfBusy = true; String err;
+    const bool ok = pfSendCommand(ip, pfPeerTcp(ip), cmd, err);
+    g_pfLastTarget = ip; g_pfLastResult = ok ? "ok" : err; g_pfBusy = false;
+  }
+  if (g_pfSendIp.length()) {
+    const String ip = g_pfSendIp; g_pfSendIp = ""; const uint16_t tp = g_pfSendTcp;
+    g_pfBusy = true; String err;
+    const String nm = g_loaded_display.length() ? g_loaded_display : g_loaded_name;
+    if (nm.length()) { String nerr; pfSendName(ip, tp, nm, nerr); }   // #24: name-on-fling, best-effort — old dongles ignore the escape
+    const bool ok = pfSendDisk(ip, tp, err);
+    g_pfLastTarget = ip; g_pfLastResult = ok ? "ok" : err; g_pfBusy = false;
+  }
+}

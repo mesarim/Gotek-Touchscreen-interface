@@ -79,6 +79,36 @@ default, and explanation, ordered as the template orders them, with a note
 listing any `undocumented_keys` so they get a real explanation added to the
 firmware template (fixing the drift at its source, not papering over it).
 
+### A generated API reference
+Neither tree documents the endpoint surface at all, and that is the fact that
+hurts most when it is wrong, because it is what somebody builds a client
+against. Generate `docs/API-REFERENCE.md` with
+`scripts/render_api_reference.py` from the `endpoints` block the extractor
+emits: the HTTP route table per surface, the TCP escape opcodes, the UDP
+beacons and the protocol-facing constants.
+
+Three things make this reference different from the config one:
+
+- **It needs the includes, not just the `.ino`.** The dongles register their
+  routes in the sketch, but the panel's routes are *all* in
+  `shared/web_panel.h` and none are in the `.ino`. `sketch_sources()` follows
+  quoted `#include`s for exactly this reason.
+- **Name each surface's checkout explicitly.** Both worktrees hold every
+  sketch and the two branches disagree about the same sketch — one carries the
+  ported dongle, the other the ported panel. The renderer therefore takes
+  `--surface "Label=facts.json:Sketch"` per surface and stamps branch and
+  commit into the document. Do not let it guess.
+- **The refusals are derived, never remembered.** Which routes a claim closes
+  comes from the lock gate the handler body calls (`webDenyLocked` /
+  `webDenyLockedCfg` / `webWriteAllowed`), and mode refusals (`wpFleetOff`) get
+  their own column because they answer a different question. This is the
+  drift that already bit us: a route list given out by hand was wrong within
+  days of the lock landing.
+
+Drift signal: a route in the source that the table lacks, or a table row whose
+gate column disagrees with the handler. Both mean re-run the pair rather than
+editing the Markdown.
+
 ### OMEGAWARE side
 `README.md` (WiFi/credentials/config examples), and the shop flasher
 `retro-shop/public/tools/gotek-flasher/index.html` + `manifest-*.json`

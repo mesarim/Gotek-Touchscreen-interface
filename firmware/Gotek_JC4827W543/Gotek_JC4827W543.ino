@@ -1038,6 +1038,7 @@ static uint32_t g_sv_fseq=0;
 static inline bool svPending(){ return g_sv_wseq!=g_sv_fseq; }
 static void svDirtyReset(){memset(g_sv_dirty,0,sizeof(g_sv_dirty));g_sv_dirty_count=0;g_sv_last_write=0;g_sv_wseq=0;g_sv_fseq=0;}
 static uint32_t g_sv_img_size=0;                         // bytes of the mounted image (standalone tracking)
+static uint32_t g_img_bytes=0;                           // raw bytes of the mounted image (shared web panel writes it)
 
 // ── the read path (5.9.37) ──────────────────────────────────────────────────
 // Standalone mounts are ALIASED: the FAT12 metadata is in g_disk, the data area
@@ -2110,6 +2111,7 @@ static int g_sel=0,g_scroll=0,g_disk_sel=0,g_loaded_game_idx=-1,g_loaded_disk_id
 static int g_disk_page=0;  // current page of disk selector (6 disks/page)
 #define DISKS_PER_PAGE 6
 static String g_loaded_name="";static bool g_loaded=false;
+static String g_loaded_display="";   // pretty name for the mounted disk (shared web panel writes it)
 // ── Smooth list scroll + A-Z index state ──
 static float g_scrollPx=0;                 // pixel scroll offset (source of truth)
 static int   g_az_page=0;                  // 0 = #/A-M, 1 = N-Z
