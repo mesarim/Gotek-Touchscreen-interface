@@ -6832,7 +6832,7 @@ static void clockFromBuild(){
   if(time(nullptr)>1600000000) return;              // something already set a real time
   static const char M[]="JanFebMarAprMayJunJulAugSepOctNovDec";
   char mon[4]={0}; int d=1,y=2026,H=0,Mi=0,S=0;
-  sscanf(__DATE__,"%3s %d %d",mon,&d,&y); sscanf(__TIME__,"%d:%d:%d",&H,&Mi,&S);
+  { const char*D=__DATE__,*Tm=__TIME__; memcpy(mon,D,3); d=atoi(D+4); y=atoi(D+7); H=atoi(Tm); Mi=atoi(Tm+3); S=atoi(Tm+6); }   // size-trim: "Oct  7 2026" / "15:42:16" by hand - sscanf pulled in 8.7 KB of libc
   const char* p=strstr(M,mon); struct tm t={}; t.tm_year=y-1900; t.tm_mon=p?(int)((p-M)/3):0; t.tm_mday=d; t.tm_hour=H; t.tm_min=Mi; t.tm_sec=S;
   time_t e=mktime(&t); if(e<=0) return;
   struct timeval tv={e,0}; settimeofday(&tv,nullptr);
