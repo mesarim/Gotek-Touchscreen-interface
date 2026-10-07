@@ -189,6 +189,11 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--cyan);bo
 .modal h3{color:var(--cyan);border-bottom:1px solid var(--line)}
 .toast{border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4)}
 .fleet-bar{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;overflow-x:auto;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+.np-bar[hidden]{display:none}
+.np-bar{display:flex;gap:10px;align-items:center;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+.np-bar .np-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;flex:0 0 auto}
+.np-bar .np-name{flex:1;min-width:0;font-weight:700;color:var(--cyan);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.np-bar .btn{padding:4px 12px;font-size:12px;flex:0 0 auto}
 .fleet-bar .fleet-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-right:2px;flex:0 0 auto}
 .fleet-chip{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border:1px solid var(--line);border-radius:999px;background:var(--field);color:var(--text);font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer;text-decoration:none;flex:0 0 auto;transition:all .12s}
 a.fleet-chip:hover{border-color:var(--cyan);transform:translateY(-1px)}
@@ -214,6 +219,13 @@ body.neo .disk-btn:not(.loaded){background:#7BD2F7;color:#080C19}
 </div>
 
 <div class="fleet-bar" id="fleet-bar" hidden></div>
+
+<!-- The disk in the drive, on every tab (filled by npPoll). -->
+<div class="np-bar" id="np-bar" hidden>
+  <span class="np-label">In the drive</span>
+  <span class="np-name" id="np-bar-name"></span>
+  <button class="btn" id="np-bar-eject" onclick="npBarEject()">Eject</button>
+</div>
 
 <div class="tabs" id="tab-bar">
   <div class="tab active" data-view="dashboard">Dashboard</div>
@@ -3057,7 +3069,7 @@ let npLoadedDisk = 0;
 
 async function npRefresh() {
   try {
-    const s = await api('/api/disk/status');
+    const s = await apiQuiet('/api/disk/status');
     npLoadedDisk = s.disk_num || 0;
     return s;
   } catch (e) { return null; }
@@ -3065,8 +3077,9 @@ async function npRefresh() {
 
 async function npPoll() {
   try {
-    const s = await api('/api/disk/status');
+    const s = await apiQuiet('/api/disk/status');   // quiet: a missed tick is not an error
     npLoadedDisk = s.disk_num || 0;
+    npShowBar(s);
     const sig = (s.source || '') + '|' + (s.name || '') + '|' + (s.np_path || '');
     if (sig !== npLastSignature) {
       npLastSignature = sig;
@@ -3079,6 +3092,19 @@ async function npPoll() {
   } catch (e) { /* device busy or rebooting — try again next tick */ }
 }
 
+function npShowBar(s) {
+  const bar = document.getElementById('np-bar');
+  if (!bar) return;
+  const name = s && s.loaded ? (s.game || s.name || s.file || '') : '';
+  bar.hidden = !name;
+  if (name) document.getElementById('np-bar-name').textContent =
+    name + (s.disk_total > 1 ? '  (disk ' + s.disk_num + '/' + s.disk_total + ')' : '');
+}
+async function npBarEject() {
+  try { await api('/api/disk/unload', { method: 'POST' }); toast('Ejected'); } catch (e) {}
+  npPoll();
+}
+
 function npStartPolling() {
   if (npPollTimer) return;
   // 4 s: fast enough that inserting a disk on the panel shows up while you are
@@ -3086,7 +3112,7 @@ function npStartPolling() {
   // that was freezing the device in the first place.
   npPollTimer = setInterval(npPoll, 4000);
 }
-document.addEventListener('DOMContentLoaded', npStartPolling);
+document.addEventListener('DOMContentLoaded', () => { npStartPolling(); npPoll(); });
 
 // Bumped on every open. An in-flight listing compares against the value it
 // captured and abandons its results if another game has been opened since —
@@ -3524,7 +3550,7 @@ async function loadFleet(){
   const bar = document.getElementById('fleet-bar');
   if (!bar) return;
   let d;
-  try { d = await api('/api/fleet'); } catch(e){ bar.hidden = true; return; }
+  try { d = await apiQuiet('/api/fleet'); } catch(e){ bar.hidden = true; return; }   // quiet: polled every 15 s
   const devs = (d && d.devices) ? d.devices.filter(x=>x && x.id) : [];
   if (devs.length < 1) { bar.hidden = true; return; }
   const masterId = devs.map(x=>x.id).sort()[0];   // lowest MAC = master (matches firmware election)
