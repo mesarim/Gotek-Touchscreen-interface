@@ -3950,7 +3950,7 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_TESTPAGE, IA_TESTBACK, IA_NEOUI };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_TESTPAGE, IA_TESTBACK, IA_NEOUI, IA_CRKSTYLE };
 struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
 static InfoItem g_ii[32]; static int g_ii_n=0;
 struct InfoRect { int x,y,w,h; uint8_t act; };
@@ -3958,10 +3958,14 @@ static InfoRect g_ir[20]; static int g_ir_n=0;
 static int g_info_page=0, g_info_pages=1;
 static bool g_info_test=false;   // lab14k: true = Settings is showing its TEST TOOLS sub-page
 static String g_pick_custom[8]; static int g_pick_nc=0;   // A600-theme1: the custom themes on the THEME page
-static uint8_t g_info_pick=0;    // pick page: 0 = none, 1 = LANGUAGE, 2 = THEME (every choice as a button, tap one = back)
+static uint8_t g_info_pick=0;    // pick page: 0 = none, 1 = LANGUAGE, 2 = THEME, 3 = CRACKTRO style (every choice as a button, tap one = back)
 static int g_info_pick_ret=0;    // the Settings page to return to after a pick
 #define IA_PICK0 200             // pick-page buttons: IA_PICK0 + choice index
 #define IA_PICKBACK 199          // pick page: back to Settings without changing anything
+static const char* const CRK_PICK_NAME[]={"RANDOM","COPPER CLASSIC","STARFIELD","RAINBOW RASTER","PLASMA","BOING BALL","SYNTHWAVE","OMEGAWARE"};   // CRACKTRO= 0..7, index = style
+#define CRK_PICK_N 8
+static String crkStyleName(int st){ if(st>=0&&st<CRK_PICK_N)return CRK_PICK_NAME[st]; if(st==8)return "DENISE"; if(st==9)return "WRANGLER"; if(st==10)return "RETRONAUT"; return String(st); }
+static String crkConfigValue(int st){ return (st>=8&&st<=10)?crkStyleName(st):String(st); }   // what CONFIG.TXT CRACKTRO= reads back as this style (the hidden ones are name-only)
 static const char* const LANG_FULL[]={"ENGLISH","FRANCAIS","ITALIANO","ESPANOL","DEUTSCH","NEDERLANDS","POLSKI","CESTINA"};   // each language in its own name (same order as LANG_NAMES)
 static void drawInfoFull();   // paginated settings + INFO bottom bar + flush
 // v5.6.7: readable ink for a key's colour on the dim fill — dark key colours
@@ -3999,6 +4003,9 @@ static void drawInfoPanel(){
       for(int i=0;i<g_pick_nc;i++){ bool cur=(!g_neo_on&&g_theme_idx==CUSTOM_IDX&&g_custom_name==g_pick_custom[i]);
         Theme t=g_custom; String j; uint16_t col=COL_ACCENT; if(readThemeFile(g_pick_custom[i],j)&&themeFromStyle(j,t))col=t.accent;
         add(String(cur?"> ":"")+g_pick_custom[i]+(cur?" <":""), col, TFT_WHITE, (uint8_t)(IA_PICK0+NUM_THEMES-1+i)); } }
+    if(g_info_pick==3){ for(int i=0;i<CRK_PICK_N;i++){ bool cur=(i==g_cracktro);
+        add(String(cur?"> ":"")+CRK_PICK_NAME[i]+(cur?" <":""), cur?COL_GREEN:COL_BLUE, cur?TFT_BLACK:TFT_WHITE, (uint8_t)(IA_PICK0+i)); }
+      if(g_cracktro>=CRK_PICK_N) add(String("> ")+crkStyleName(g_cracktro)+" <", COL_GREEN, TFT_BLACK, (uint8_t)(IA_PICK0+CRK_PICK_N)); }   // a hidden style set in CONFIG.TXT: shown so it is not lost, tap keeps it
   } else {
   // 5.9.12: single 3-way MODE — STANDALONE (radio off) / ESP-NOW (blind dongles, no router) / WiFi (home router).
   {const char* mlbl = !g_wireless_mode ? "STANDALONE" : (g_link_home ? "WiFi" : "ESP-NOW");
@@ -4029,6 +4036,7 @@ static void drawInfoPanel(){
   if(g_ss_enabled) add(String(T(L_CFG_SAVER))+" FX: "+(g_ss_matrix?T(L_MATRIX):(g_ss_slides?T(L_SLIDES):T(L_BOUNCE))), COL_BLUE, TFT_WHITE, IA_SSMODE);   // 5.8.3 screensaver mode (only shown when ON)
   add(String(T(L_CFG_FAVSAVER))+": "+(g_ss_fav?T(L_ON):T(L_OFF)), g_ss_fav?COL_GREEN:COL_BAR, g_ss_fav?TFT_BLACK:COL_LIT, IA_SSFAV);   // 5.8.3 favourites into slideshow
   add(String("CRACKTRO")+": "+(g_cracktro>=0?T(L_ON):T(L_OFF)), g_cracktro>=0?COL_GREEN:COL_BAR, g_cracktro>=0?TFT_BLACK:COL_LIT, IA_CRACKTRO);   // boot intro on/off -> CONFIG.TXT CRACKTRO=
+  if(g_cracktro>=0) add(String("CRACKTRO STYLE")+": "+crkStyleName(g_cracktro), COL_BLUE, TFT_WHITE, IA_CRKSTYLE);   // opens the style pick page (only shown when ON, like SAVER FX)
   add(String(T(L_REEL_BORDER))+": "+(g_reelborder?T(L_ON):T(L_OFF)), g_reelborder?COL_GREEN:COL_BAR, g_reelborder?TFT_BLACK:COL_LIT, IA_REELBORDER);   // MasterTelly CR: frame around reel covers -> CONFIG.TXT REELBORDER=
   add(String(T(L_COVER_ART))+": "+(g_covers_on?T(L_ON):T(L_OFF)), g_covers_on?COL_GREEN:COL_BAR, g_covers_on?TFT_BLACK:COL_LIT, IA_COVERS);   // 5.9.32-lab2 -> CONFIG.TXT COVERS=
   add(String(T(L_LIST_TILE))+": "+(g_listtile?T(L_ON):T(L_OFF)), g_listtile?COL_GREEN:COL_BAR, g_listtile?TFT_BLACK:COL_LIT, IA_LISTTILE);   // 5.9.34-lab4 -> CONFIG.TXT LISTTILE=
@@ -4043,7 +4051,7 @@ static void drawInfoPanel(){
   }   // lab14k: end of the main Settings list
   int ix=0,iy=STATUS_H,iw=VW,ih=VH-STATUS_H-BOTTOM_H;
   fillBack(ix,iy,iw,ih);
-  gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,iy+5);gfx_print(g_info_test?String("SETTINGS > TEST TOOLS"):g_info_pick?String(T(L_SETTINGS))+" > "+(g_info_pick==1?T(L_CFG_LANG):T(L_THEME)):String(T(L_SETTINGS)));   // lab14k + pick page
+  gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,iy+5);gfx_print(g_info_test?String("SETTINGS > TEST TOOLS"):g_info_pick?String(T(L_SETTINGS))+" > "+(g_info_pick==1?T(L_CFG_LANG):g_info_pick==2?T(L_THEME):"CRACKTRO"):String(T(L_SETTINGS)));   // lab14k + pick page
   int headerH=18, footerH=14, pad=8, gap=6, colGap=8, bh=34, cols=(g_portrait?1:2);   // v5.5.5: 2 cols landscape (half-width), 1 col portrait (full-width, paginates)
   int areaTop=iy+headerH, areaH=ih-headerH-footerH;
   int colW=(iw-pad*2-colGap*(cols-1))/cols;
@@ -7661,6 +7669,7 @@ static void infoAction(uint8_t act){
     if(act>=IA_PICK0&&g_info_pick==1&&i<LANG_N){ g_lang=i; saveConfigKey("LANG",LANG_NAMES[g_lang]); }
     if(act>=IA_PICK0&&g_info_pick==2&&i<NUM_THEMES-1) themeActivate(THEMES[i].name);   // A600-theme1: picking a theme = NEO off
     if(act>=IA_PICK0&&g_info_pick==2&&i>=NUM_THEMES-1&&i-(NUM_THEMES-1)<g_pick_nc) themeActivate(g_pick_custom[i-(NUM_THEMES-1)]);
+    if(act>=IA_PICK0&&g_info_pick==3&&i<CRK_PICK_N){ g_cracktro=i; saveConfigKey("CRACKTRO",crkConfigValue(g_cracktro)); }   // i==CRK_PICK_N is the hidden style: unchanged
     g_info_pick=0; g_info_page=g_info_pick_ret; drawInfoFull(); return;
   }
   switch(act){
@@ -7668,6 +7677,7 @@ static void infoAction(uint8_t act){
     case IA_FONT: applyFont((g_font+1)%3);saveConfigKey("FONT",fontKey(g_font));drawInfoFull();break;
     case IA_NEOUI: g_neo_on=!g_neo_on;applyTheme(g_theme_idx);saveConfigKey("NEO",g_neo_on?"ON":"OFF");drawInfoFull();break;   // A600-neo1-JC3248: live switch, no reboot
     case IA_THEME: g_info_pick=2;g_info_pick_ret=g_info_page;g_info_page=0;drawInfoFull();break;   // pick page (was: cycle to the next theme)   // Vince test: theme cycling lives in CONFIG now
+    case IA_CRKSTYLE: g_info_pick=3;g_info_pick_ret=g_info_page;g_info_page=0;drawInfoFull();break;   // CRACKTRO style pick page
     case IA_LANG: g_info_pick=1;g_info_pick_ret=g_info_page;g_info_page=0;drawInfoFull();break;   // pick page (was: cycle to the next language)
     case IA_ROTATE: g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_COMPACT: g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
@@ -7687,8 +7697,7 @@ static void infoAction(uint8_t act){
     case IA_CRACKTRO:   // boot intro ON/OFF -> CONFIG.TXT CRACKTRO=; OFF is -1, ON restores the remembered style
       if(g_cracktro>=0){ g_cracktro_prev=g_cracktro; g_cracktro=-1; saveConfigKey("CRACKTRO","OFF"); }
       else { g_cracktro=g_cracktro_prev;
-             String cv; if(g_cracktro==8)cv="DENISE"; else if(g_cracktro==9)cv="WRANGLER"; else if(g_cracktro==10)cv="RETRONAUT"; else cv=String(g_cracktro);
-             saveConfigKey("CRACKTRO", cv); }
+             saveConfigKey("CRACKTRO", crkConfigValue(g_cracktro)); }
       drawInfoFull(); break;
     case IA_TESTPAGE: g_info_test=true;  g_info_page=0; drawInfoFull(); break;   // lab14k: open the TEST TOOLS sub-page
     case IA_TESTBACK: g_info_test=false; g_info_page=0; drawInfoFull(); break;   // lab14k: back to the main Settings list
