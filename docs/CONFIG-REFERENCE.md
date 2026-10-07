@@ -10,7 +10,7 @@ Drop these lines into `CONFIG.TXT` at the root of the SD card (one `KEY=value` p
 | `MODE` | `STANDALONE` | Transfer mode: STANDALONE (USB to Gotek) or WIRELESS (ESP-NOW to dongle) |
 | `CAROUSEL` | `OFF` | CAROUSEL: default boot view. OFF=game list, ON=cover reel, LAST=restore last view. |
 | `LOOP` | `0` | Loop cracktro splash: 1=loop until tapped, 0=auto-dismiss after 6s |
-| `CRACKTRO` | `0` | Boot cracktro style: 0=random each boot, or pick one: 1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER 4=PLASMA  5=BOING BALL  6=SYNTHWAVE  7=OMEGAWARE |
+| `CRACKTRO` | `0` | Boot cracktro style. `OFF`/`NONE` = no boot demo at all. `0` = random each boot, or pick one: 1=COPPER CLASSIC  2=STARFIELD  3=RAINBOW RASTER 4=PLASMA  5=BOING BALL  6=SYNTHWAVE  7=OMEGAWARE. `CUSTOM` = a random `.gti` from `/cracktro/`, or give a name for `/cracktro/<name>.gti`. See [Custom cracktros](#custom-cracktros). |
 | `FONT` | `NORMAL` | Font size: SMALL, NORMAL, LARGE |
 | `LANG` | `EN` | Language: EN, FR, IT, ES, DE, NL  (pull the SD and edit this line if you get stuck) |
 | `ROTATE` | `0` | Screen rotation in degrees: 0 or 180 = landscape, 90 or 270 = portrait. |
@@ -28,7 +28,7 @@ Drop these lines into `CONFIG.TXT` at the root of the SD card (one `KEY=value` p
 | `CATEGORIES` | `OFF` | CATEGORIES: OFF = flat library. ON = browse by category (a top-level folder with no disk images, only subfolders, is a category). |
 | `NESTING` | `OFF` | NESTING: OFF = one category level. ON = allow sub-categories (folders within category folders). |
 | `SCREENSAVER` | `ON` | SCREENSAVER: idle slideshow. ON = show it after a few minutes idle, OFF = never. |
-| `SSMODE` | `SLIDES` | SSMODE: SLIDES = full-screen photo slideshow (default), BOUNCE = bouncing logo, MATRIX = code rain. |
+| `SSMODE` | `SLIDES` | SSMODE: SLIDES = full-screen photo slideshow (default), BOUNCE = bouncing logo, MATRIX = code rain, CRACKTRO = run the cracktro as the screensaver (needs no `/screensaver` folder). |
 | `SSFX` | `SHUFFLE` | SSFX: transition between slides - SHUFFLE (random), FADE, DISSOLVE, SLIDE, or CUT. |
 | `SSTIME` | `6` | SSTIME: seconds each slide is shown (2-120). |
 | `SSFAV` | `ON` | SSFAV: ON = also slideshow favourited game covers; OFF = only /screensaver/ images. |
@@ -77,3 +77,62 @@ An **Advanced (commented)** block was also added to the fresh-card template docu
 
 _Themes present in `5.9.8-JC3248`: NAVY, EMBER, MATRIX, PAPER, SYNTH, GOLD, OMEGA._
 _Languages present: EN, FR, IT, ES, DE, NL._
+
+## Custom cracktros
+
+Put your own cracktros on the SD card as `/cracktro/<name>.gti` and select one with
+`CRACKTRO=<name>`, or let the panel pick a random one with `CRACKTRO=CUSTOM`.
+
+A `.gti` is a plain text file: a short list of **patterns**, each one a built-in effect
+plus your own title, subtitle, colour and optional 1bpp logo. The shape is borrowed from
+the 1991 RSI Demomaker, where a demo was also a handful of "patterns" bolted together.
+
+```ini
+GTICRACK 1
+NAME=Omegaware
+AUTHOR=Dimmy
+
+[PATTERN]
+FX=COPPER
+TIME=4000
+TITLE=OMEGAWARE
+SUB=* MEZ & DIMMY *
+COL=FFE000
+SCROLL=ON
+
+[SCROLL]
+TEXT=OMEGAWARE PRESENTS ... YOUR OWN CRACKTRO, LOADED FROM SD ...
+```
+
+| key | meaning |
+| --- | --- |
+| `GTICRACK 1` | Must be the first real line. Files without it are rejected. |
+| `NAME` / `AUTHOR` | Free text, for your own reference. |
+| `[PATTERN]` | One segment of the cracktro. Up to 4 per file, shown in order and then looped. |
+| `FX=` | `COPPER`, `STARFIELD`, `RASTER`, `PLASMA`, `BOING`, `SYNTH` or `LOGO`. |
+| `TIME=` | How long this pattern is shown, in milliseconds (default 4000). |
+| `TITLE=` / `SUB=` | Your own text. Leave one out and the effect keeps its built-in line. |
+| `COL=` | `RRGGBB` hex. The panel is RGB565, so very close shades may land on the same colour. |
+| `SCROLL=ON` | Show the scroller under this pattern. `OFF` hides it. |
+| `LOGO=n` | Draw `[LOGO n]` instead of `TITLE` (use with `FX=LOGO`). |
+| `[SCROLL] TEXT=` | The scrolling message, shared by every pattern in the file. |
+| `[LOGO n]` | `W=` and `H=`, then rows of hex: **1bpp, MSB-first, row-major**. |
+
+**Limits:** 32 KB per file, 4 patterns, 2 logos, logo max 128×48, scrolltext 512 characters.
+
+**If anything is wrong** — folder missing, file missing, bad first line, a logo over the
+limit — the panel quietly falls back to the built-in cracktro. It will never show a blank
+screen. Plug in USB serial to see the reason, e.g.
+`[gti] /cracktro/dimmy.gti: missing GTICRACK magic`.
+
+**Built-in names win, so some filenames are unreachable.** These names are reserved and
+always select the built-in, even if a file of that name exists:
+`OFF`, `NONE`, `CUSTOM`, `OMEGA`, `OMEGAWARE`, the names of the built-in styles, and
+anything starting with a digit. So `/cracktro/omega.gti` can never be picked with
+`CRACKTRO=omega` - that gets you the built-in OMEGAWARE theme. Name your own files
+something else, or select them with `CRACKTRO=CUSTOM`.
+
+Ready-made examples live in [`docs/examples/cracktro/`](examples/cracktro/).
+
+With `SSMODE=CRACKTRO` the same cracktro runs as the screensaver, looping until you touch
+the screen. That mode brings its own content, so it works with no `/screensaver` folder.

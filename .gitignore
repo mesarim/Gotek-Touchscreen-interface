@@ -8,3 +8,4 @@ build/
 # OS cruft
 .DS_Store
 Thumbs.db
+tools/test_cracktro_gti.exe
