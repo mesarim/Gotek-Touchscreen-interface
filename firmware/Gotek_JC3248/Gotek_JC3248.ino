@@ -6478,8 +6478,8 @@ static void doRescan(){
   g_info_showing=false;
   g_cover_flags_ready=false;   // v5.9.2: covers may have changed -> recompute reel-filter flags
   // Delete all cache files
-  SD_MMC.remove("/ADF/.index");SD_MMC.remove("/DSK/.index");
-  SD_MMC.remove("/ADF/.gamecache");SD_MMC.remove("/DSK/.gamecache");
+  SD_MMC.remove("/ADF/.index");SD_MMC.remove("/DSK/.index");SD_MMC.remove("/GENERIC/.index");   // S1: GENERIC too (was never rebuilt)
+  SD_MMC.remove("/ADF/.gamecache");SD_MMC.remove("/DSK/.gamecache");SD_MMC.remove("/GENERIC/.gamecache");
   // v5.7.2: re-read CONFIG.TXT so edits made on the card (theme, screensaver options,
   // categories, font, language, rotation, ...) take effect on a RESCAN without a reboot.
   // Runs before the library rebuild so CATEGORIES/NESTING changes apply. Transfer MODE is
