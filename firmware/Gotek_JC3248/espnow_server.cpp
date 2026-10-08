@@ -567,10 +567,8 @@ static bool sendDiskCore(const uint8_t* mac, const char* ipc, uint32_t size, uin
   WiFiClient client;
   if (!client.connect(ip.c_str(), DONGLE_TCP_PORT)) {
     Serial.println("[TCP] TCP connect failed");
-    WiFi.disconnect();
-    delay(100);
-    WiFi.mode(WIFI_AP_STA); gtiApUp();
-    WiFi.setChannel(ESPNOW_CHANNEL);
+    restoreEspNow();   // S4: this was the one exit that never restarted ESP-NOW after ESP_NOW.end() -> OFFLINE in 8 s
+    g_espnow_xiao_error = true;
     return false;
   }
   Serial.printf("[TCP] Connected to XIAO TCP server\n");
