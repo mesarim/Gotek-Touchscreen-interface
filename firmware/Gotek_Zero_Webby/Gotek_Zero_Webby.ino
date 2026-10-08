@@ -1078,7 +1078,7 @@ struct FleetPeer { String id, name, ip, fw; bool hd; bool loaded; bool isPanel; 
 static FleetPeer g_peers[16]; static int g_peer_n = 0;
 static bool      g_is_master = false;
 static uint32_t  g_next_elect_ms = 0;
-#define FLEET_STALE_MS 40000   // drop a peer unheard for >40 s (~3 missed beacons)
+#define FLEET_STALE_MS 62000   // 1.6.12: drop a peer unheard for >62 s (5 missed beacons; was 3 - a few lost broadcasts on a weak link made two leaders)
 
 static String jf(const String& s, const char* key){   // tiny "key":"val" / "key":val extractor
   String k = String("\"") + key + "\":";
@@ -1391,7 +1391,7 @@ void setup() {
       _tcpServer.begin();        // app can reach us over the LAN too
       _disco.begin(GTI_DISCO_PORT);   // FLEET: open discovery socket
       g_next_alive_ms = 0;            // FLEET: beacon on the next loop tick
-      g_next_elect_ms = millis() + 2000;   // FLEET: first election shortly after join
+      g_next_elect_ms = millis() + ALIVE_BEACON_MS + 3000;   // 1.6.12: first election only after a full beacon round - at +2 s the roster was always empty and every boot took gotekomega.local for 12 s
       setLeds(false, true);      // blue = connected/ready
       Serial.printf("[WIFI] joined %s  IP %s  host %s  (gotekomega.local)\n", g_ssid.c_str(), WiFi.localIP().toString().c_str(), discoName().c_str());
     }
