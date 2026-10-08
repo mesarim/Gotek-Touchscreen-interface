@@ -46,7 +46,7 @@
 #include <mdns.h>          // 1.6.11: mdns_delegate_hostname_add - the leader keeps its own name too
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
-#include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
+#include "../shared/webui.h"   // PANEL: the shared SPA, gzipped, straight from firmware/shared (1.6.12: no stale copy per dongle folder)
 
 // 1.6.8: ONE source, TWO builds - the SuperMini and the Waveshare S3-Zero differ only in their status light.
 //   0 = SuperMini  : two plain LEDs, red GPIO1 + blue GPIO2. GPIO21 is never touched.   (THIS sketch)
