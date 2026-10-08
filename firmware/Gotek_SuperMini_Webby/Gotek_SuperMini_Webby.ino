@@ -562,6 +562,8 @@ static String discoName(){
   char b[24]; snprintf(b,sizeof(b),"gotekomega-%02x%02x",m[4],m[5]); return String(b); }
 static int    g_webmode = 0;
 static bool   g_join_failed = false;   // resolved at boot: 0 = ESPNOW/AP, 1 = WIFI/STA
+static uint32_t g_join_retry_ms = 0;   // 1.6.12: when the boot join gave up
+#define WIFI_RETRY_MS 180000UL           // 1.6.12: retry the home join (by restart) this often while idle
 static String g_loaded_name = "";
 
 static void loadWifiCfg() {
@@ -1376,6 +1378,7 @@ void setup() {
     }
     ledRed(false);
     g_join_failed = (WiFi.status() != WL_CONNECTED);
+    g_join_retry_ms = millis();
     if (WiFi.status() == WL_CONNECTED) {
       g_webmode = 1;
       g_is_master = false;
@@ -1409,6 +1412,13 @@ void loop() {
   // TCP app transfers (begun in both modes)
   WiFiClient client = _tcpServer.accept();
   if (client) handleTCPClient(client);
+
+  // 1.6.12: a home join that failed at boot (router still coming up after a power cut) is
+  // retried with a clean restart every 3 min - only while nobody is using the dongle. Before:
+  // two 12 s tries, then the own AP for good, which looked like a lost configuration.
+  if (g_join_failed && g_webmode == 0 && !g_disk_loaded && g_dirty_count == 0 && WiFi.softAPgetStationNum() == 0 && (millis() - g_join_retry_ms) > WIFI_RETRY_MS) {
+    Serial.println("[WIFI] home join failed at boot - restarting to try again"); delay(50); ESP.restart();
+  }
 
   bool dirtyWaiting = (g_dirty_count > 0 && g_last_write_ms && (millis()-g_last_write_ms) > SAVE_SETTLE_MS);
   if (dirtyWaiting && millis() > g_next_beacon_ms) { sendDirtyBeacon(); g_next_beacon_ms = millis()+SAVE_BEACON_MS; }
