@@ -238,6 +238,23 @@ static void hWifiStatus() {
   webPanelHttp.send(200, "application/json", jj);
 }
 
+// P2: the page's Config tab scans via /api/wifi/scan and expects {networks:[{ssid,rssi,encrypted}]}.
+// Nobody served it, so the scan always showed "Scan failed". A blocking scan (~2 s) is fine here.
+static void hWifiScan() {
+  wifi_mode_t pm = WiFi.getMode();
+  if (!(pm & WIFI_MODE_STA)) WiFi.mode((wifi_mode_t)(pm | WIFI_MODE_STA));   // AP-only (GTi_Omega Wi-Fi): a scan needs STA
+  const int n = WiFi.scanNetworks(false, false, false, 200);
+  String jj = "{\"networks\":[";
+  for (int i = 0; i < n && i < 30; i++) {
+    if (i) jj += ",";
+    jj += "{\"ssid\":\"" + wpJsonEscape(WiFi.SSID(i)) + "\",\"rssi\":" + String(WiFi.RSSI(i));
+    jj += ",\"encrypted\":" + String(WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "false" : "true") + "}";
+  }
+  jj += "]}";
+  WiFi.scanDelete();
+  webPanelHttp.send(n < 0 ? 503 : 200, "application/json", n < 0 ? String("{\"error\":\"scan failed\",\"networks\":[]}") : jj);
+}
+
 // ── WebDAV (client) ────────────────────────────────────────────────────────
 
 static void hDavStatus() {
@@ -627,6 +644,7 @@ static void webPanelRegister() {
   webPanelHttp.on("/api/system/ota", HTTP_POST, otaDone, otaUpload);
   webPanelHttp.on("/api/games/upload", HTTP_POST, guDone, guUpload);
   webPanelHttp.on("/api/wifi/status",HTTP_GET,  hWifiStatus);
+  webPanelHttp.on("/api/wifi/scan",  HTTP_GET,  hWifiScan);    // P2
   webPanelHttp.on("/api/dav/status", HTTP_GET,  hDavStatus);
   webPanelHttp.on("/api/dav/connect",HTTP_POST, hDavConnect);
   webPanelHttp.on("/api/dav/list",   HTTP_GET,  hDavList);
