@@ -914,9 +914,22 @@ static uint32_t dirNextSector(uint32_t dirClus,uint32_t*clus,uint32_t*secInClus,
 // ── long-filename reconstruction ────────────────────────────────────────────
 // SD_MMC hands us long names, so matching on the 8.3 short name is not enough.
 // LFN entries precede their short entry in reverse order, 13 UTF-16 chars each.
-static void lfnChars(const uint8_t*e,char*out13){
+static void lfnChars(const uint8_t*e,uint16_t*out13){   // S3: keep the UTF-16 units (was: anything >127 became '?')
   static const int offs[13]={1,3,5,7,9,14,16,18,20,22,24,28,30};
-  for(int i=0;i<13;i++){ uint16_t w=rd16(e,offs[i]); out13[i]=(w==0||w==0xFFFF)?0:(w<128?(char)w:'?'); }
+  for(int i=0;i<13;i++){ uint16_t w=rd16(e,offs[i]); out13[i]=(w==0xFFFF)?0:w; }
+}
+// S3: UTF-16 (incl. surrogate pairs) -> UTF-8, the encoding g_files holds, so accented names match.
+static String lfnToUtf8(const uint16_t*s,int n){
+  String o;
+  for(int i=0;i<n;i++){
+    uint32_t c=s[i]; if(!c)break;
+    if(c>=0xD800&&c<0xDC00&&i+1<n&&s[i+1]>=0xDC00&&s[i+1]<0xE000){ c=0x10000+((c-0xD800)<<10)+(s[i+1]-0xDC00); i++; }
+    if(c<0x80) o+=(char)c;
+    else if(c<0x800){ o+=(char)(0xC0|(c>>6)); o+=(char)(0x80|(c&0x3F)); }
+    else if(c<0x10000){ o+=(char)(0xE0|(c>>12)); o+=(char)(0x80|((c>>6)&0x3F)); o+=(char)(0x80|(c&0x3F)); }
+    else { o+=(char)(0xF0|(c>>18)); o+=(char)(0x80|((c>>12)&0x3F)); o+=(char)(0x80|((c>>6)&0x3F)); o+=(char)(0x80|(c&0x3F)); }
+  }
+  return o;
 }
 
 // Find `want` inside the directory that starts at cluster `dirClus`
@@ -930,7 +943,7 @@ static bool dirFind(uint32_t dirClus,const String&want,
   if(!g_fs.ok)return false;
   if(dirClus==0&&g_fs.fat_type==32)return false;
   String w=want; w.toUpperCase();
-  char lfn[261]; int lfnLen=0; bool haveLfn=false;
+  uint16_t lfn[261]; int lfnLen=0; bool haveLfn=false;   // S3: UTF-16 units
   uint32_t c=dirClus, sic=0, rl=(dirClus?0:g_fs.root_secs), lba;
   {
     {
@@ -942,7 +955,7 @@ static bool dirFind(uint32_t dirClus,const String&want,
         if(e[0]==0x00)return false;                        // end of directory
         if(e[0]==0xE5){haveLfn=false;continue;}            // deleted
         if((e[11]&0x0F)==0x0F){                            // LFN fragment
-          int seq=e[0]&0x1F; char part[13]; lfnChars(e,part);
+          int seq=e[0]&0x1F; uint16_t part[13]; lfnChars(e,part);
           if(seq>=1&&seq<=20){
             int base=(seq-1)*13;
             for(int i=0;i<13;i++) if(base+i<260) lfn[base+i]=part[i];
@@ -953,7 +966,7 @@ static bool dirFind(uint32_t dirClus,const String&want,
         }
         if(e[11]&0x08){haveLfn=false;continue;}            // volume label
         String nm;
-        if(haveLfn&&lfnLen>0){ nm=String(lfn); }
+        if(haveLfn&&lfnLen>0){ nm=lfnToUtf8(lfn,lfnLen); }
         else {
           char n[13];int k=0;
           for(int i=0;i<8&&e[i]!=' ';i++)n[k++]=e[i];
