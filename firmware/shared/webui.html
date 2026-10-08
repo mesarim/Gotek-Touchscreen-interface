@@ -1867,14 +1867,19 @@ async function handleUploadFiles(files) {
       };
 
       await new Promise((resolve, reject) => {
-        xhr.onload = () => { resolve(); };
+        xhr.onload = () => {   // P6: only a 2xx is an upload; a 400/413 used to be toasted as "uploaded"
+          if (xhr.status >= 200 && xhr.status < 300) { resolve(); return; }
+          let msg = 'HTTP ' + xhr.status;
+          try { const j = JSON.parse(xhr.responseText); if (j && j.error) msg = j.error; } catch (_) {}
+          reject(new Error(msg));
+        };
         xhr.onerror = () => { reject(new Error('Upload failed')); };
         xhr.send(form);
       });
 
       toast(file.name + ' uploaded!');
     } catch (e) {
-      toast('Failed to upload ' + file.name, 'error');
+      toast('Failed to upload ' + file.name + ' — ' + e.message, 'error');
     }
   }
 
