@@ -1000,7 +1000,12 @@ static void apiConfig(){
 static void apiConfigSave(){
   String ssid = server.arg("WIFI_CLIENT_SSID");
   String pass = server.arg("WIFI_CLIENT_PASS");
-  if (ssid.length()) { saveWifiCfg(ssid, pass); server.send(200,"application/json","{\"status\":\"ok\",\"reboot\":true}"); delay(400); ESP.restart(); return; }
+  // 1.6.12: the page posts the whole form with the password MASKED (empty). Empty = keep the
+  // stored one, and only a real change saves + reboots. Save on the Config tab used to write
+  // PASS= blank and strand the dongle on its own AP.
+  if (pass.length() == 0) pass = g_pass;
+  const bool changed = ssid.length() && (ssid != g_ssid || pass != g_pass);
+  if (changed) { saveWifiCfg(ssid, pass); server.send(200,"application/json","{\"status\":\"ok\",\"reboot\":true}"); delay(400); ESP.restart(); return; }
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiReboot(){ server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
