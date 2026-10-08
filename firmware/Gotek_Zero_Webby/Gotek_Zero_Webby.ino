@@ -924,12 +924,15 @@ static void onOtaUpload(){
   HTTPUpload& up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
     g_ota_ok=false; g_ota_first=true;
+    if (Update.isRunning()) Update.abort();   // 1.6.12: a previous aborted upload must not block this one
     g_ota_run = Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
   } else if (up.status == UPLOAD_FILE_WRITE && g_ota_run) {
     if (g_ota_first) { g_ota_first=false; if (up.currentSize>0 && up.buf[0]!=0xE9) { Update.abort(); g_ota_run=false; return; } }
-    if (Update.write(up.buf, up.currentSize) != up.currentSize) { g_ota_run=false; }
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) { Update.abort(); g_ota_run=false; }   // 1.6.12: release the slot
   } else if (up.status == UPLOAD_FILE_END && g_ota_run) {
     g_ota_ok = Update.end(true);
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (g_ota_run) Update.abort(); g_ota_run=false; g_ota_ok=false;   // 1.6.12: a dropped upload left Update "running" until a power cycle
   }
 }
 static void onOtaDone(){
