@@ -10,6 +10,7 @@
 #include <SD_MMC.h>
 #include <WiFiClient.h>
 #include <ESPmDNS.h>   // home-WiFi transport: resolve the dongle's gotek.local
+bool cfgWriteAll(const String& text);   // S8: defined in Gotek_JC3248.ino
 
 #define ESPNOW_CHANNEL 6
 
@@ -165,8 +166,7 @@ static void handleIncoming(const uint8_t* data, int len) {
       fr.close();
     }
     if (!written) lines += "XIAO_MAC=" + String(macStr) + "\n";
-    File fw = SD_MMC.open("/CONFIG.TXT", FILE_WRITE);
-    if (fw) { fw.print(lines); fw.close(); }
+    cfgWriteAll(lines);   // S8: tmp + rename (Gotek_JC3248.ino)
     Serial.printf("[NOW] Paired: MAC=%s IP=%s\n", macStr, _xiao_ip.c_str());
     return;
   }
@@ -317,8 +317,7 @@ bool espnowScanSelect(int i) {
     else lines+=line+"\n";}fr.close();}
   if(!w1)lines+="XIAO_MAC="+String(macStr)+"\n";
   if(!w2)lines+="XIAO_IP="+_xiao_ip+"\n";
-  File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);
-  if(fw){fw.print(lines);fw.close();}
+  cfgWriteAll(lines);   // S8: tmp + rename (Gotek_JC3248.ino)
   Serial.printf("[NOW] Selected dongle %d: %s\n", i, macStr);
   return true;
 }
@@ -369,7 +368,7 @@ void espnowForgetActive(const uint8_t* mac){
   String lines=""; File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
   if(fr){ while(fr.available()){ String line=fr.readStringUntil('\n'); line.trim();
     if(line.startsWith("XIAO_MAC=")||line.startsWith("XIAO_IP=")) continue; lines+=line+"\n"; } fr.close(); }
-  File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE); if(fw){ fw.print(lines); fw.close(); }
+  cfgWriteAll(lines);   // S8: tmp + rename (Gotek_JC3248.ino)
 }
 
 // lab14s: let ONE more screen become an owner of this dongle (the dongle opens pairing for 2 minutes;

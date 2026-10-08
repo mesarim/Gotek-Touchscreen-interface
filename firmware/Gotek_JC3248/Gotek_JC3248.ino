@@ -2550,6 +2550,24 @@ static void applyTheme(int idx){
 // bevel/bevelW/radius/scale (stored for the editor, not used by this screen). The 16 screen roles are
 // mixed from those five colours; green/orange/blue stay NAVY's (on / warning / INSERT keep their meaning).
 // The same table is in webui.html (teGtiRoles) for the editor's preview - change both together.
+// S8: the one CONFIG.TXT rewriter. It writes /CONFIG.TMP in full and only then swaps it in, so a power
+// cut mid-write can no longer leave an empty CONFIG.TXT (which generateDefaultConfig would not recreate,
+// because the file exists). FAT rename cannot replace a file, hence write TMP -> remove TXT -> rename;
+// cfgRecover() at boot finishes a swap that a power cut interrupted between those two steps.
+// Not static: espnow_server.cpp uses it too.
+bool cfgWriteAll(const String& text){
+  File fw=SD_MMC.open("/CONFIG.TMP",FILE_WRITE); if(!fw) return false;
+  const size_t n=fw.print(text); fw.close();
+  if(n!=text.length()){ SD_MMC.remove("/CONFIG.TMP"); return false; }   // short write (card full?): keep the old file
+  SD_MMC.remove("/CONFIG.TXT");
+  return SD_MMC.rename("/CONFIG.TMP","/CONFIG.TXT");
+}
+static void cfgRecover(){
+  if(!SD_MMC.exists("/CONFIG.TMP")) return;
+  if(!SD_MMC.exists("/CONFIG.TXT")) SD_MMC.rename("/CONFIG.TMP","/CONFIG.TXT");   // cut between remove and rename
+  else SD_MMC.remove("/CONFIG.TMP");                                               // cut before the swap: the old file is whole
+}
+
 static void saveConfigKey(const String&key,const String&val);
 static uint32_t c565to888(uint16_t c){ return (((uint32_t)((c>>11)&31)*255/31)<<16)|(((uint32_t)((c>>5)&63)*255/63)<<8)|((uint32_t)(c&31)*255/31); }
 static uint16_t c888to565(uint32_t c){ return (uint16_t)((((c>>16)&0xF8)<<8)|(((c>>8)&0xFC)<<3)|((c&0xFF)>>3)); }
@@ -2785,7 +2803,7 @@ static void saveConfigKey(const String&key,const String&val){
   uint32_t _t0=millis();   // lab15a2
   String lines="";bool written=false;File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
   if(fr){while(fr.available()){String l=fr.readStringUntil('\n');l.trim();if(l.startsWith(key+"=")){lines+=key+"="+val+"\n";written=true;}else lines+=l+"\n";}fr.close();}
-  if(!written)lines+=key+"="+val+"\n";File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);if(fw){fw.print(lines);fw.close();}
+  if(!written)lines+=key+"="+val+"\n";cfgWriteAll(lines);   /* S8 */
   { uint32_t dt=millis()-_t0; if(dt>300) gLog("[slow] saveConfigKey %s: %lums, CONFIG.TXT %u bytes\n",key.c_str(),(unsigned long)dt,(unsigned)lines.length()); }
 }
 
@@ -2852,7 +2870,7 @@ static void setDongleName(const String&mac,const String&name){String key=macKey(
     if(l=="# Dongle names")hasHeading=true;
     if(l.startsWith(key+"=")){lines+=key+"="+name+"\n";written=true;}else lines+=l+"\n";}fr.close();}
   if(!written){if(!hasHeading)lines+="\n# Dongle names\n";lines+=key+"="+name+"\n";}
-  File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);if(fw){fw.print(lines);fw.close();}}
+  cfgWriteAll(lines);   /* S8 */}
 // Webby security: per-dongle LOCK flag, stored as a "DONGLE_<hex>.LOCK=1" line (mirrors setDongleName).
 static bool getDongleLock(const String&mac){String key=macKey(mac)+".LOCK";File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);if(!f)return false;bool r=false;
   while(f.available()){String l=f.readStringUntil('\n');l.trim();if(l.startsWith("#"))continue;if(l.startsWith(key+"=")){r=(l.substring(key.length()+1).toInt()!=0);break;}}f.close();return r;}
@@ -2861,7 +2879,7 @@ static void setDongleLock(const String&mac,bool on){String key=macKey(mac)+".LOC
   if(fr){while(fr.available()){String l=fr.readStringUntil('\n');l.trim();
     if(l.startsWith(key+"=")){lines+=key+"="+(on?"1":"0")+"\n";written=true;}else lines+=l+"\n";}fr.close();}
   if(!written)lines+=key+"="+(on?"1":"0")+"\n";
-  File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);if(fw){fw.print(lines);fw.close();}}
+  cfgWriteAll(lines);   /* S8 */}
 static uint8_t hexNib(char c){ if(c>='0'&&c<='9')return c-'0'; c=(char)toupper(c); if(c>='A'&&c<='F')return c-'A'+10; return 0; }
 // Collect MACs of dongles named with a "MuCa-" prefix (the undocumented multicast group), from CONFIG.TXT.
 static int enumMuCaDongles(uint8_t macs[][6], int maxN){
@@ -3007,7 +3025,7 @@ static inline const char* T(int id){ return LSTR[id][g_lang]; }
 
 static void generateDefaultConfig(){
   if(SD_MMC.exists("/CONFIG.TXT"))return;  // never overwrite an existing config
-  File f=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);if(!f)return;
+  File f=SD_MMC.open("/CONFIG.TMP",FILE_WRITE);if(!f)return;   // S8: write aside, then rename - a cut mid-write never leaves a half template that "exists"
   static const char DEFAULT_CONFIG[] =
 R"CFG(# ============================================================
 #  Gotek Touchscreen Interface  -  OMEGAWARE
@@ -3251,6 +3269,7 @@ DEVMODE=ON
 )CFG";
   sdWriteFromFlash(f,(const uint8_t*)DEFAULT_CONFIG,sizeof(DEFAULT_CONFIG)-1);   // lab14o: via RAM (was f.print - first 4 KB came out blank)
   f.close();
+  SD_MMC.rename("/CONFIG.TMP","/CONFIG.TXT");   // S8
 }
 
 // Self-heal: after a firmware update adds a new key, an existing CONFIG.TXT won't
@@ -7892,6 +7911,7 @@ void setup(){
     if(!SD_MMC.exists("/ADF")){SD_MMC.mkdir("/ADF");ensureSampleFolder();SD_MMC.mkdir("/screensaver");}   // blank card: SAMPLE example + arm the screensaver by default (v4.8.5 — DELETE /screensaver to disable it; empty = the bouncing starburst, drop in JPGs for a gallery)
     if(!SD_MMC.exists("/DSK"))SD_MMC.mkdir("/DSK");
     if(!SD_MMC.exists("/GENERIC"))SD_MMC.mkdir("/GENERIC");   // v5.2: generic/any-machine library
+    cfgRecover();               // S8: finish a CONFIG.TXT swap a power cut interrupted
     generateDefaultConfig();
     selfHealConfig();           // append any documented keys an older CONFIG.TXT is missing
     loadConfig();
