@@ -159,14 +159,18 @@ def main():
     size = a.size * 1024
     global PINGMON; PINGMON = a.pingmon
     if a.poll:
+        # the SPA (/app) fires several fetches per tick; emulate that with three parallel GETs every second
         import threading
+        def one(path):
+            try:
+                c = http.client.HTTPConnection(a.host, 80, timeout=5); c.request("GET", path); c.getresponse().read(); c.close()
+            except Exception as e:
+                print(f"  poll {path}: {type(e).__name__}")
         def poller():
             while True:
-                try:
-                    c = http.client.HTTPConnection(a.host, 80, timeout=5); c.request("GET", "/status"); c.getresponse().read(); c.close()
-                except Exception as e:
-                    print(f"  poll: {type(e).__name__}")
-                time.sleep(2)
+                ts = [threading.Thread(target=one, args=(p,), daemon=True) for p in ("/status", "/api/fleet", "/api/disk/status")]
+                for t in ts: t.start()
+                time.sleep(1)
         threading.Thread(target=poller, daemon=True).start()
 
     st = status(a.host)
