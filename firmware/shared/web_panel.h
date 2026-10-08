@@ -389,6 +389,7 @@ static void otaUpload() {
   HTTPUpload &up = webPanelHttp.upload();
   if (up.status == UPLOAD_FILE_START) {
     g_otaBad = false; g_otaFail = false; g_otaWrote = 0;
+    if (Update.isRunning()) Update.abort();   // S6: a previous aborted upload must not block this one
     if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) g_otaFail = true;
   } else if (up.status == UPLOAD_FILE_WRITE) {
     if (g_otaFail || g_otaBad) return;
@@ -397,6 +398,9 @@ static void otaUpload() {
     g_otaWrote += up.currentSize;
   } else if (up.status == UPLOAD_FILE_END) {
     if (!g_otaBad && !g_otaFail) { if (!Update.end(true)) g_otaFail = true; }
+  } else if (up.status == UPLOAD_FILE_ABORTED) {   // S6: browser closed / connection lost - was unhandled, so Update stayed
+    if (Update.isRunning()) Update.abort();        // running and every later begin() failed until a power cycle
+    g_otaFail = true;
   }
 }
 static void otaDone() {
@@ -408,20 +412,30 @@ static void otaDone() {
 
 // ── Game/image upload (streamed into the RAM disk, then mounted) ────────────
 
-static size_t g_guRecv = 0; static bool g_guOverflow = false; static String g_guName = "";
+static size_t g_guRecv = 0; static bool g_guOverflow = false, g_guAborted = false; static String g_guName = "";
+// S5: after a failed upload. Nothing written yet -> the previous disk is intact: put it back. Some bytes
+// already written over its data area -> it is no longer that disk: say "empty" and leave the drive off,
+// instead of re-attaching the old FAT over overwritten data.
+static void guFail() {
+  if (g_guRecv == 0) { if (g_loaded) hardAttach(); return; }
+  g_loaded = false; g_loaded_name = ""; g_loaded_display = ""; g_loaded_path = ""; g_img_bytes = 0; svDirtyReset();
+}
 static void guUpload() {
   HTTPUpload &up = webPanelHttp.upload();
   if (up.status == UPLOAD_FILE_START) {
-    hardDetach(); g_guRecv = 0; g_guOverflow = false; g_guName = up.filename;
+    hardDetach(); g_guRecv = 0; g_guOverflow = false; g_guAborted = false; g_guName = up.filename;
   } else if (up.status == UPLOAD_FILE_WRITE) {
     uint8_t *dst = g_disk + DATA_LBA * 512;
     if (g_guRecv + up.currentSize <= (size_t)MAX_FILE_BYTES) { memcpy(dst + g_guRecv, up.buf, up.currentSize); g_guRecv += up.currentSize; }
     else g_guOverflow = true;
+  } else if (up.status == UPLOAD_FILE_ABORTED) {   // S5: was unhandled
+    g_guAborted = true; guFail();
   }
 }
 static void guDone() {
-  if (g_guOverflow) { hardAttach(); webPanelHttp.send(400, "application/json", "{\"error\":\"Image is larger than this board's volume\"}"); return; }
-  if (g_guRecv == 0) { hardAttach(); webPanelHttp.send(400, "application/json", "{\"error\":\"Upload was empty\"}"); return; }
+  if (g_guAborted)  { webPanelHttp.send(400, "application/json", "{\"error\":\"Upload was interrupted\"}"); return; }
+  if (g_guOverflow) { guFail(); webPanelHttp.send(413, "application/json", "{\"error\":\"Image is larger than this board's volume\"}"); return; }
+  if (g_guRecv == 0) { guFail(); webPanelHttp.send(400, "application/json", "{\"error\":\"Upload was empty\"}"); return; }
   memset(g_disk, 0, DATA_LBA * 512);
   build_boot_sector(g_disk);
   build_fat(g_disk + RESERVED_SECTORS * 512, (uint32_t)g_guRecv);
