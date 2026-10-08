@@ -5763,12 +5763,14 @@ static bool doLoadSelected(const String&adfPath){
   // #console: this disk goes to a dongle ONLY if one is actually reachable; with none in earshot
   // the panel stays the local drive, exactly as it does in every other mode.
   const bool toFleet = (g_wireless_mode && g_link_home && WiFi.status()==WL_CONNECTED && pfVisibleCount()>0);
-  if(!toFleet && g_loaded && !g_forceswap) hardDetach();
-  File f=SD_MMC.open(loadPath.c_str(),FILE_READ);if(!f){gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_FAILED));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
+  const bool s2Detached=(!toFleet && g_loaded && !g_forceswap);   // S2: remember, so every early return can put the previous disk back
+  if(s2Detached) hardDetach();
+  auto s2PutBack=[&](){ if(s2Detached){ mscAnnounce(g_alias?g_alias_sectors:TOTAL_SECTORS); hardAttach(); } };   // S2: nothing was changed yet -> the old disk is still valid
+  File f=SD_MMC.open(loadPath.c_str(),FILE_READ);if(!f){s2PutBack();gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_FAILED));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
   // Use VFS to get real file size (SD_MMC f.size() returns 0 for subdirectory files)
   String vfsLoad="/sdcard"+loadPath;
   struct stat stLoad;
-  if(stat(vfsLoad.c_str(),&stLoad)!=0||stLoad.st_size==0) {f.close();gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_SIZE_ERR));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
+  if(stat(vfsLoad.c_str(),&stLoad)!=0||stLoad.st_size==0) {f.close();s2PutBack();gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_SIZE_ERR));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
   uint32_t fsz=(uint32_t)stLoad.st_size;
   uint32_t copied=0;
   if(g_wireless_mode){
@@ -5776,7 +5778,7 @@ static bool doLoadSelected(const String&adfPath){
     //    g_disk (espnowSendDisk reads from it), so it has to be copied there,
     //    and the BIGDISK size remains the hard ceiling for anything sent by radio.
     if(fsz>MAX_FILE_BYTES){
-      f.close();
+      f.close(); s2PutBack();
       gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
       gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_PANEL);
       gfx_setCursor(6,STATUS_H+16);gfx_print(T(L_TOO_BIG));
@@ -5813,6 +5815,7 @@ static bool doLoadSelected(const String&adfPath){
     String vn = presentName(adfPath);   // lab14q: GEN real name, ADF/DSK DISK.xxx unless LONGNAME=ON
     if(!geomOk || !aliasMount(loadPath,fsz,vn.c_str(),pS,pC,&aerr)){
       g_alias=false;
+      if(s2Detached){ g_loaded=false; g_loaded_name=""; g_loaded_display=""; }   // S2: aliasMount already dropped the old alias -> say "empty", not "loaded"
       gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
       gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_PANEL);
       gfx_setCursor(6,STATUS_H+16);gfx_print(T(L_FAILED));
