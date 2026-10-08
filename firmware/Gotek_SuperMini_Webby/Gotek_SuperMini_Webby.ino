@@ -804,6 +804,7 @@ static String statusJson(){
   s += ",\"devname\":\""; s += jsonEsc(discoName()); s += "\"";   // #name: current device name (custom or mac-based) for portal pre-fill + the fleet
   { uint8_t am[6] = {0}; esp_read_mac(am, ESP_MAC_WIFI_SOFTAP); char ab[20]; snprintf(ab, sizeof(ab), "%02x:%02x:%02x:%02x:%02x:%02x", am[0],am[1],am[2],am[3],am[4],am[5]); s += ",\"ap_mac\":\""; s += ab; s += "\""; }   // 1.6.11: the MAC a paired screen knows (PKT_PAIR_REPLY), so it can tell this dongle exactly on home Wi-Fi (#110)
   s += ",\"join_failed\":"; s += (g_join_failed ? "true" : "false");
+  s += ",\"rssi\":"; s += String((g_webmode==1 && WiFi.status()==WL_CONNECTED) ? WiFi.RSSI() : 0);   // 1.6.12: link margin to the router - slow or stalling flings are a weak link, not the code
   s += ",\"ip\":\""; s += ip; s += "\"";
   s += ",\"heap\":"; s += String((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));   // HD test
   s += ",\"psram\":"; s += String((unsigned)ESP.getFreePsram());
@@ -870,7 +871,8 @@ static void handleScan(){
     if (i) jj += ",";
     jj += "{\"ssid\":\""; jj += jsonEsc(WiFi.SSID(i));
     jj += "\",\"rssi\":"; jj += String(WiFi.RSSI(i));
-    jj += ",\"enc\":"; jj += (WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "false" : "true");
+    const char* enc = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "false" : "true");
+    jj += ",\"enc\":"; jj += enc; jj += ",\"encrypted\":"; jj += enc;   // 1.6.12: "encrypted" is what the shared page reads
     jj += "}";
     yield();
   }
@@ -987,10 +989,17 @@ static void apiGamesUploadDone(){
   server.send(200,"application/json", j);
 }
 static void apiWifiStatus(){
+  // 1.6.12: the key set the shared page reads (was sta/ip: the page always said "AP: Off" + "Connecting...")
   bool sta = (WiFi.status()==WL_CONNECTED);
-  String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
-  String j = "{\"sta\":"; j += (sta?"true":"false");
-  j += ",\"ip\":\""; j += ip; j += "\",\"sta_ssid\":\""; j += jsonEsc(g_ssid); j += "\"}";
+  bool ap  = (WiFi.getMode() & WIFI_MODE_AP) != 0;
+  String j = "{\"ap_active\":"; j += (ap?"true":"false");
+  j += ",\"ap_ip\":\""; j += (ap ? WiFi.softAPIP().toString() : String("")); j += "\"";
+  j += ",\"ap_clients\":"; j += String(ap ? (unsigned)WiFi.softAPgetStationNum() : 0u);
+  j += ",\"sta_connected\":"; j += (sta?"true":"false");
+  j += ",\"sta_ip\":\""; j += (sta ? WiFi.localIP().toString() : String("")); j += "\"";
+  j += ",\"sta_ssid\":\""; j += jsonEsc(g_ssid); j += "\"";
+  j += ",\"rssi\":"; j += String(sta ? WiFi.RSSI() : 0);
+  j += "}";
   server.send(200,"application/json", j);
 }
 static void apiConfig(){
@@ -1204,6 +1213,7 @@ static void startWebServer(){
   server.on("/api/games/upload", HTTP_POST, apiGamesUploadDone, handleUpload);
   server.on("/api/games/list",   HTTP_GET,  [](){ server.send(200,"application/json","{\"games\":[]}"); });
   server.on("/api/wifi/status",  HTTP_GET,  apiWifiStatus);
+  server.on("/api/wifi/scan",    HTTP_GET,  handleScan);   // 1.6.12: the page's Scan button (was only /scan)
   server.on("/api/config",       HTTP_GET,  apiConfig);
   server.on("/api/config",       HTTP_POST, apiConfigSave);
   server.on("/api/system/reboot",HTTP_POST, apiReboot);
