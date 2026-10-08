@@ -174,7 +174,8 @@ static uint32_t g_next_status_ms = 0;
 static inline bool dGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void dSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
 static inline void dClr(uint8_t*m,uint32_t i){m[i>>3]&=(uint8_t)~(1u<<(i&7));}
-static void dirtyReset(){memset(g_dirty,0,sizeof(g_dirty));g_dirty_count=0;g_last_write_ms=0;g_next_beacon_ms=0;}
+static portMUX_TYPE g_dirtyMux = portMUX_INITIALIZER_UNLOCKED;   // 1.6.12: g_dirty + g_dirty_count are touched from the USB task (onWrite) and from loop()
+static void dirtyReset(){portENTER_CRITICAL(&g_dirtyMux);memset(g_dirty,0,sizeof(g_dirty));g_dirty_count=0;portEXIT_CRITICAL(&g_dirtyMux);g_last_write_ms=0;g_next_beacon_ms=0;}
 static uint32_t crc32sw(uint32_t crc,const uint8_t*p,size_t n){
   crc=~crc;
   while(n--){crc^=*p++;for(int k=0;k<8;k++)crc=(crc>>1)^(0xEDB88320UL&(uint32_t)(-(int32_t)(crc&1)));}
@@ -265,7 +266,7 @@ static int32_t onWrite(uint32_t lba, uint32_t off, uint8_t* buf, uint32_t n) {
     if(l<DATA_LBA)continue;
     uint32_t i=l-DATA_LBA;
     if(i>=imgSecs)continue;
-    if(!dGet(g_dirty,i)){dSet(g_dirty,i);g_dirty_count=g_dirty_count+1;}
+    portENTER_CRITICAL(&g_dirtyMux); if(!dGet(g_dirty,i)){dSet(g_dirty,i);g_dirty_count=g_dirty_count+1;} portEXIT_CRITICAL(&g_dirtyMux);
   }
   g_last_write_ms=millis();
   return (int32_t)n;
@@ -649,7 +650,7 @@ static void doGetSave(WiFiClient& client){
   uint8_t cb[4]; wrLE32(cb,crc); client.write(cb,4); client.flush();
   uint32_t t0=millis(); while(!client.available()&&millis()-t0<10000)delay(5);
   bool ok=(client.available()&&client.read()==0x01);
-  if(ok){ for(uint32_t i=0;i<imgSecs;i++) if(dGet(g_snap,i)&&dGet(g_dirty,i)){dClr(g_dirty,i);if(g_dirty_count)g_dirty_count=g_dirty_count-1;} g_next_beacon_ms=0; if(g_dirty_count==0) setLeds(false,g_disk_loaded); }
+  if(ok){ portENTER_CRITICAL(&g_dirtyMux); for(uint32_t i=0;i<imgSecs;i++) if(dGet(g_snap,i)&&dGet(g_dirty,i)){dClr(g_dirty,i);if(g_dirty_count)g_dirty_count=g_dirty_count-1;} portEXIT_CRITICAL(&g_dirtyMux); g_next_beacon_ms=0; if(g_dirty_count==0) setLeds(false,g_disk_loaded); }
 }
 static void sendDirtyBeacon(){
   PktDirty pkt={}; pkt.type=PKT_XIAO_DIRTY; pkt.load_id=g_load_id; pkt.dirty_count=g_dirty_count;
