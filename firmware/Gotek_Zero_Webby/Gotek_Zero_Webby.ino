@@ -69,7 +69,7 @@
 #else
 #define WEBBY_BOARD    "supermini"
 #endif
-#define FW_VERSION     "Webby-1.6.11-" WEBBY_BOARD   // 1.6.11: the fleet leader answers to gotekomega.local AND its own gotekomega-xxxx.local | /status has "ap_mac" (the MAC a paired screen knows) | the phone's "sign in to network" window shows a short signpost (keep the network, then open 192.168.4.1 in the browser) instead of the app, which half-worked there - no disk upload, and it closed when you kept the network | 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
+#define FW_VERSION     "Webby-1.6.11-" WEBBY_BOARD "-rxdiag"   // 1.6.11: the fleet leader answers to gotekomega.local AND its own gotekomega-xxxx.local | /status has "ap_mac" (the MAC a paired screen knows) | the phone's "sign in to network" window shows a short signpost (keep the network, then open 192.168.4.1 in the browser) instead of the app, which half-worked there - no disk upload, and it closed when you kept the network | 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
 #define ESPNOW_CHANNEL 6
 //  Board profile 
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -660,6 +660,45 @@ static void sendStatusBeacon(){
   _wavePeer->send_pkt((uint8_t*)&pkt,sizeof(pkt));
 }
 
+// #diag (webby-rx-diag): a ring log of receive stalls and radio events, read back over GET /diag.
+// Bench-only instrumentation for the slow-fling hunt (8 KB/s over a router, Mez 8 Oct 2026).
+#include <esp_wifi.h>
+struct DiagEv { uint32_t ms; char tag[8]; uint32_t a, b; };
+static DiagEv   g_diag[96]; static uint8_t g_diag_n = 0, g_diag_w = 0;
+static uint32_t g_diag_loops = 0, g_diag_loop_t0 = 0, g_diag_lps = 0;   // loop() iterations per second
+static uint32_t g_diag_rx_reads = 0, g_diag_rx_idle = 0;                // reads / empty polls in the last receive
+static void diagLog(const char* tag, uint32_t a, uint32_t b) {
+  DiagEv& e = g_diag[g_diag_w]; e.ms = millis(); strlcpy(e.tag, tag, sizeof(e.tag)); e.a = a; e.b = b;
+  g_diag_w = (uint8_t)((g_diag_w + 1) % 96); if (g_diag_n < 96) g_diag_n++;
+}
+static bool diagMaster(); static int diagPeers();   // defined next to the fleet roster below
+static String diagJson() {
+  wifi_ps_type_t ps = WIFI_PS_NONE; esp_wifi_get_ps(&ps);
+  wifi_phy_mode_t phy = WIFI_PHY_MODE_LR; esp_wifi_sta_get_negotiated_phymode(&phy);
+  wifi_bandwidth_t bw = WIFI_BW_HT20; esp_wifi_get_bandwidth(WIFI_IF_STA, &bw);
+  int8_t txp = 0; esp_wifi_get_max_tx_power(&txp);
+  String s = "{\"fw\":\"" FW_VERSION "\"";
+  s += ",\"uptime_s\":" + String(millis() / 1000);
+  s += ",\"ps\":" + String((int)ps);                      // 0 = NONE, 1 = MIN_MODEM, 2 = MAX_MODEM
+  s += ",\"rssi\":" + String(WiFi.RSSI());
+  s += ",\"channel\":" + String(WiFi.channel());
+  s += ",\"phy\":" + String((int)phy);                    // wifi_phy_mode_t: 3 = 11b, 4 = 11g, 5 = HT20, 6 = HT40, 7 = HE20
+  s += ",\"bw\":" + String((int)bw);
+  s += ",\"txpow_q4\":" + String((int)txp);
+  s += ",\"heap\":" + String((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+  s += ",\"lps\":" + String(g_diag_lps);
+  s += ",\"rx_reads\":" + String(g_diag_rx_reads) + ",\"rx_idle\":" + String(g_diag_rx_idle);
+  s += ",\"master\":" + String(diagMaster() ? "true" : "false") + ",\"peers\":" + String(diagPeers());
+  s += ",\"ev\":[";
+  for (uint8_t i = 0; i < g_diag_n; i++) {
+    const DiagEv& e = g_diag[(uint8_t)((g_diag_w + 96 - g_diag_n + i) % 96)];
+    if (i) s += ",";
+    s += "[" + String(e.ms) + ",\"" + e.tag + "\"," + String(e.a) + "," + String(e.b) + "]";
+  }
+  s += "]}";
+  return s;
+}
+
 static void handleTCPClient(WiFiClient& client) {
   oledStatus("Receiving...", "TCP connected", "", "");
   uint32_t t0 = millis();
@@ -724,13 +763,21 @@ static void handleTCPClient(WiFiClient& client) {
   uint32_t received = 0; const size_t BUF = 4096;
   uint8_t* buf = (uint8_t*)malloc(BUF); if (!buf) { client.write((uint8_t)0x00); return; }
   t0 = millis();
+  diagLog("rxbeg", size, 0); g_diag_rx_reads = 0; g_diag_rx_idle = 0;
+  const uint32_t tRx0 = millis(); uint32_t tLastRead = millis(), gapMax = 0;
   while (received < size && millis()-t0 < 30000) {   // 30s = max STALL (no progress), not total  a slow-but-steady fling completes; t0 resets on every read below
     if (!client.connected()) break;
-    int avail = client.available(); if (avail <= 0) { delay(1); continue; }
+    int avail = client.available(); if (avail <= 0) { g_diag_rx_idle++; delay(1); continue; }
     size_t toRead = min((size_t)avail, min(BUF, (size_t)(size-received)));
     int rd = client.read(buf, toRead);
-    if (rd > 0) { memcpy(dst + received, buf, rd); received += rd; oledProgress(received, size); t0 = millis(); }
+    if (rd > 0) { memcpy(dst + received, buf, rd); received += rd; oledProgress(received, size); t0 = millis();
+      g_diag_rx_reads++;
+      const uint32_t gap = t0 - tLastRead; tLastRead = t0;
+      if (gap > gapMax) gapMax = gap;
+      if (gap > 100) diagLog("rxgap", gap, received);
+    }
   }
+  diagLog(received == size ? "rxend" : "rxerr", millis() - tRx0, received); diagLog("rxmax", gapMax, g_diag_rx_reads);
   free(buf);
   if (received == size) {
     g_load_id++; g_image_size = size; dirtyReset();
@@ -1038,6 +1085,7 @@ static void sendAliveBeacon(){
   j += ",\"disk\":\"";  j += jsonEsc(g_loaded_name); j += "\"";
   j += "}";
   IPAddress sub = ip; sub[3] = 255;   // subnet-directed + global broadcast (APs vary)
+  diagLog("alive", 0, 0);
   _disco.beginPacket(sub, GTI_DISCO_PORT);                         _disco.write((const uint8_t*)j.c_str(), j.length()); _disco.endPacket();
   _disco.beginPacket(IPAddress(255,255,255,255), GTI_DISCO_PORT);  _disco.write((const uint8_t*)j.c_str(), j.length()); _disco.endPacket();
 }
@@ -1046,6 +1094,7 @@ static void sendAliveBeacon(){
 struct FleetPeer { String id, name, ip, fw; bool hd; bool loaded; bool isPanel; uint32_t seen; };   // #rule: isPanel = a screen; a screen always leads, so dongles defer
 static FleetPeer g_peers[16]; static int g_peer_n = 0;
 static bool      g_is_master = false;
+static bool diagMaster() { return g_is_master; } static int diagPeers() { return g_peer_n; }   // #diag accessors
 static uint32_t  g_next_elect_ms = 0;
 #define FLEET_STALE_MS 40000   // drop a peer unheard for >40 s (~3 missed beacons)
 
@@ -1088,6 +1137,7 @@ static void doElection(){   // a screen always leads; otherwise the lowest MAC w
   for(int i=0;i<g_peer_n;i++) if(g_peers[i].isPanel){ master=false; break; }   // #rule: a panel (screen) is present -> it is the leader, dongles defer (stay gotekomega-<mac>.local)
   if(master) for(int i=0;i<g_peer_n;i++) if(g_peers[i].id < me){ master=false; break; }
   if(master!=g_is_master){
+    diagLog("elect", master ? 1 : 0, g_peer_n);
     g_is_master=master;
     MDNS.end();
     if(master) MDNS.begin(MDNS_NAME); else MDNS.begin(discoName().c_str());
@@ -1182,6 +1232,7 @@ static void startWebServer(){
   // PANEL: theme gallery (built-in presets, no card needed)
   server.on("/api/themes/list", HTTP_GET,  apiThemesList);
   server.on("/api/fleet",       HTTP_GET,  apiFleet);        // FLEET roster
+  server.on("/diag",            HTTP_GET,  [](){ server.send(200,"application/json", diagJson()); });   // #diag (webby-rx-diag)
   // API misses -> clean 404 JSON (SPA tolerates it); everything else -> captive portal to /
   server.onNotFound([](){
     String u = server.uri();
@@ -1375,6 +1426,8 @@ void setup() {
 // LOOP
 // ============================================================================
 void loop() {
+  g_diag_loops++;
+  if (millis() - g_diag_loop_t0 >= 1000) { g_diag_lps = g_diag_loops; g_diag_loops = 0; g_diag_loop_t0 = millis(); }
   ledTick();
   server.handleClient();
   if (g_dns_up) dnsServer.processNextRequest();
