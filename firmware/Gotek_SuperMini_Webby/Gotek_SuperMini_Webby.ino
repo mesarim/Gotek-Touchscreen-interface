@@ -655,6 +655,15 @@ static void sendStatusBeacon(){
   _wavePeer->send_pkt((uint8_t*)&pkt,sizeof(pkt));
 }
 
+// 1.6.12: a transfer that fails after the old disk was detached must leave the dongle
+// cleanly EMPTY: no stale load_id (the screen would fetch "saves" from a wiped image),
+// no stale dirty map (LED amber, EJECT refused), no old name on the page.
+static void markDiskEmpty(const char* why) {
+  if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
+  dirtyReset(); g_loaded_name = ""; g_image_size = 0; g_load_id++; g_next_name = "";
+  loaderClear(); ledBlue(false); g_next_status_ms = 0;
+  Serial.printf("[DISK] empty: %s\n", why);
+}
 static void handleTCPClient(WiFiClient& client) {
   oledStatus("Receiving...", "TCP connected", "", "");
   uint32_t t0 = millis();
@@ -713,11 +722,17 @@ static void handleTCPClient(WiFiClient& client) {
   // 1.6.4 (#24): if a disk is already attached, detach FIRST - otherwise the host stays
   // mounted on a volume we are rewriting underneath it for the whole transfer.
   // (The browser-upload path already did this; the TCP path now matches.)
-  if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
-  build_volume(fatName.c_str(), size);
+  // 1.6.12: nothing is touched until the first payload bytes are here. A header with no
+  // body (port scan, a screen that gives up) used to detach the Amiga's disk, zero the
+  // whole ramdisk and block loop() for 30 s. The FAT/root metadata is laid down at the
+  // END (as the browser upload path does), so only the data region is streamed into.
   uint8_t* dst = g_disk + DATA_LBA * SECTOR_SIZE;
   uint32_t received = 0; const size_t BUF = 4096;
   uint8_t* buf = (uint8_t*)malloc(BUF); if (!buf) { client.write((uint8_t)0x00); return; }
+  t0 = millis();
+  while (client.available() <= 0 && client.connected() && millis()-t0 < 5000) delay(1);
+  if (client.available() <= 0) { free(buf); client.write((uint8_t)0x00); client.stop(); oledStatus("No data", "", "", "disk untouched"); return; }
+  if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   t0 = millis();
   while (received < size && millis()-t0 < 30000) {   // 30s = max STALL (no progress), not total  a slow-but-steady fling completes; t0 resets on every read below
     if (!client.connected()) break;
@@ -728,6 +743,7 @@ static void handleTCPClient(WiFiClient& client) {
   }
   free(buf);
   if (received == size) {
+    build_volume_ex(fatName.c_str(), size, false);   // 1.6.12: metadata last, the data is already in place
     g_load_id++; g_image_size = size; dirtyReset();
     { String pretty = g_next_name.length() ? g_next_name : String("DISK.ADF");   // #24/1.6.3: pretty display name (extension stripped)
       int d = pretty.lastIndexOf('.'); if (d > 0) pretty = pretty.substring(0, d);
@@ -750,7 +766,8 @@ static void handleTCPClient(WiFiClient& client) {
     sendSimple(PKT_XIAO_DONE);
   } else {
     client.write((uint8_t)0x00); client.flush(); delay(100); client.stop();
-    oledStatus("TRANSFER ERROR", "", "", ""); sendSimple(PKT_XIAO_ERROR);
+    markDiskEmpty(received ? "fling stalled or dropped" : "fling: no data");
+    oledStatus("TRANSFER ERROR", "", "dongle is empty", "send again"); sendSimple(PKT_XIAO_ERROR);
   }
 }
 
@@ -808,19 +825,23 @@ static void handleUpload(){
   if (up.status == UPLOAD_FILE_START) {
     g_up_recv = 0; g_up_overflow = false;
     g_up_name = up.filename; if (g_up_name.length()==0) g_up_name = "DISK.ADF";
-    // detach first so the Amiga isn't reading the disk while we rewrite its data region
-    if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; ledBlue(false); }
   } else if (up.status == UPLOAD_FILE_WRITE) {
+    // 1.6.12: detach on the FIRST data chunk, not at START - an upload that dies before any
+    // data (or a 0-byte file) leaves the Amiga's disk alone
+    if (g_up_recv == 0 && up.currentSize > 0 && g_disk_loaded) { hardDetach(); g_disk_loaded = false; ledBlue(false); }
     if (!g_up_overflow && g_up_recv + up.currentSize <= MAX_FILE_BYTES) {
       memcpy(g_disk + DATA_LBA*SECTOR_SIZE + g_up_recv, up.buf, up.currentSize);
       g_up_recv += up.currentSize;
     } else { g_up_overflow = true; }
   } else if (up.status == UPLOAD_FILE_END) {
     // finalized by the POST responder below
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (g_up_recv > 0) markDiskEmpty("browser upload aborted");   // 1.6.12: the data region is half new, half old
+    g_up_recv = 0; g_up_overflow = false;
   }
 }
 static void handleUploadDone(){
-  if (g_up_overflow) { server.send(413,"application/json","{\"ok\":false,\"err\":\"image too big - this dongle holds up to 1.75 MB\"}"); return; }
+  if (g_up_overflow) { markDiskEmpty("browser upload too big"); server.send(413,"application/json","{\"ok\":false,\"err\":\"image too big - this dongle holds up to 1.75 MB\"}"); return; }
   if (g_up_recv == 0) { server.send(400,"application/json","{\"ok\":false,\"err\":\"empty upload\"}"); return; }
   g_loaded_name = g_up_name;
   webFinishLoad();
@@ -950,7 +971,7 @@ static void apiDiskUnload(){
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiGamesUploadDone(){
-  if (g_up_overflow) { server.send(413,"application/json","{\"error\":\"image too big for the HD ramdisk\"}"); return; }
+  if (g_up_overflow) { markDiskEmpty("browser upload too big"); server.send(413,"application/json","{\"error\":\"image too big for the HD ramdisk\"}"); return; }
   if (g_up_recv == 0) { server.send(400,"application/json","{\"error\":\"empty upload\"}"); return; }
   g_loaded_name = g_up_name;
   webFinishLoad();
