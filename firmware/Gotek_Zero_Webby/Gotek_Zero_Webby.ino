@@ -174,6 +174,7 @@ static uint32_t g_next_status_ms = 0;
 static inline bool dGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void dSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
 static inline void dClr(uint8_t*m,uint32_t i){m[i>>3]&=(uint8_t)~(1u<<(i&7));}
+static inline void wrLE32(uint8_t*p,uint32_t v);   // 1.6.12: used in the pairing reply before its definition
 static portMUX_TYPE g_dirtyMux = portMUX_INITIALIZER_UNLOCKED;   // 1.6.12: g_dirty + g_dirty_count are touched from the USB task (onWrite) and from loop()
 static void dirtyReset(){portENTER_CRITICAL(&g_dirtyMux);memset(g_dirty,0,sizeof(g_dirty));g_dirty_count=0;portEXIT_CRITICAL(&g_dirtyMux);g_last_write_ms=0;g_next_beacon_ms=0;}
 static uint32_t crc32sw(uint32_t crc,const uint8_t*p,size_t n){
@@ -465,7 +466,8 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
     PktHello reply = {}; reply.type = PKT_PAIR_REPLY;
     WiFi.softAPmacAddress(reply.mac); strncpy(reply.ip, AP_IP, 15); reply.pad[0] = SAVE_PROTO_VER;
     // 1.6.6: who has a disk in me (pad[7] marker 0xA5, [8] loaded, [9..14] screen MAC, [15] len, [16..39] name).
-    // pad[1..6] stay free for the parked HD-capability fields.
+    // 1.6.12: capability - pad[1] = 1 HD-capable (the screen's g_espnow_dongle_board), pad[2] = board (1 SuperMini, 2 Zero), pad[3..6] = max image bytes LE.
+    reply.pad[1] = 1; reply.pad[2] = WEBBY_ZERO ? 2 : 1; wrLE32(reply.pad + 3, MAX_FILE_BYTES);
     reply.pad[7] = 0xA5; reply.pad[8] = g_disk_loaded ? 1 : 0; memcpy(reply.pad+9, g_loader_mac, 6);
     { uint8_t L = (uint8_t)strlen(g_loader_name); if (L > 24) L = 24; reply.pad[15] = L; memcpy(reply.pad+16, g_loader_name, L); }
     XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
@@ -1335,6 +1337,7 @@ static void startEspnowApMode(){
   while (millis()-t0 < (uint32_t)(_paired ? 8000 : 3000)) {
     PktHello hello = {}; hello.type = PKT_PAIR_HELLO; WiFi.softAPmacAddress(hello.mac);
     strncpy(hello.ip, AP_IP, 15); hello.pad[0] = SAVE_PROTO_VER;
+    hello.pad[1] = 1; hello.pad[2] = WEBBY_ZERO ? 2 : 1; wrLE32(hello.pad + 3, MAX_FILE_BYTES);   // 1.6.12: same capability fields as the pairing reply
     if (_bcastPeer) _bcastPeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     if (_wavePeer)  _wavePeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len, pkt.src);
