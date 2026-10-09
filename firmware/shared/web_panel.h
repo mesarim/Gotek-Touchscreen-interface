@@ -402,20 +402,55 @@ static void hFleetUnenroll() {
 
 static bool   g_otaBad = false, g_otaFail = false;
 static size_t g_otaWrote = 0;
+// S9: writing flash while Wi-Fi is receiving drops the link on the S3 (this core keeps the Wi-Fi/lwIP
+// buffers in PSRAM, and a flash erase/write blocks PSRAM), so a 2 MB image broke off at ~1 MB. When the
+// sketch opts in (GTI_WEB_OTA_VIA_SD) and a card is present, the upload is streamed to the SD card only;
+// the SD bus is separate from flash, so Wi-Fi keeps running. Once it is complete, loop() installs it with
+// the sketch's own SD updater (verified image, inactive slot, then reboot). No card -> direct, as before.
+#if defined(GTI_WEB_OTA_VIA_SD)
+#define WEB_FW_PART "/GTi_web_update.part"
+#define WEB_FW_BIN  "/GTi_web_update.bin"
+static String g_webFwPending = "";   // set when a complete upload is on the card; loop() installs it
+static File   g_otaFile;
+#endif
+static bool   g_otaToSd = false;
 static void otaUpload() {
   HTTPUpload &up = webPanelHttp.upload();
   if (up.status == UPLOAD_FILE_START) {
-    g_otaBad = false; g_otaFail = false; g_otaWrote = 0;
+    g_otaBad = false; g_otaFail = false; g_otaWrote = 0; g_otaToSd = false;
     if (Update.isRunning()) Update.abort();   // S6: a previous aborted upload must not block this one
+#if defined(GTI_WEB_OTA_VIA_SD)
+    if (SD_MMC.cardType() != CARD_NONE) {
+      SD_MMC.remove(WEB_FW_PART);
+      g_otaFile = SD_MMC.open(WEB_FW_PART, FILE_WRITE);
+      g_otaToSd = (bool)g_otaFile;
+    }
+    if (g_otaToSd) return;
+#endif
     if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) g_otaFail = true;
   } else if (up.status == UPLOAD_FILE_WRITE) {
     if (g_otaFail || g_otaBad) return;
-    if (g_otaWrote == 0 && up.currentSize > 0 && up.buf[0] != 0xE9) { g_otaBad = true; Update.abort(); return; }
+    if (g_otaWrote == 0 && up.currentSize > 0 && up.buf[0] != 0xE9) { g_otaBad = true; if (!g_otaToSd) Update.abort(); return; }
+#if defined(GTI_WEB_OTA_VIA_SD)
+    if (g_otaToSd) { if (g_otaFile.write(up.buf, up.currentSize) != up.currentSize) g_otaFail = true; g_otaWrote += up.currentSize; return; }
+#endif
     if (Update.write(up.buf, up.currentSize) != up.currentSize) g_otaFail = true;
     g_otaWrote += up.currentSize;
   } else if (up.status == UPLOAD_FILE_END) {
+#if defined(GTI_WEB_OTA_VIA_SD)
+    if (g_otaToSd) {
+      g_otaFile.close();
+      if (g_otaBad || g_otaFail || g_otaWrote == 0) { SD_MMC.remove(WEB_FW_PART); return; }
+      SD_MMC.remove(WEB_FW_BIN);
+      if (!SD_MMC.rename(WEB_FW_PART, WEB_FW_BIN)) { g_otaFail = true; SD_MMC.remove(WEB_FW_PART); }
+      return;
+    }
+#endif
     if (!g_otaBad && !g_otaFail) { if (!Update.end(true)) g_otaFail = true; }
   } else if (up.status == UPLOAD_FILE_ABORTED) {   // S6: browser closed / connection lost - was unhandled, so Update stayed
+#if defined(GTI_WEB_OTA_VIA_SD)
+    if (g_otaToSd) { g_otaFile.close(); SD_MMC.remove(WEB_FW_PART); g_otaFail = true; return; }
+#endif
     if (Update.isRunning()) Update.abort();        // running and every later begin() failed until a power cycle
     g_otaFail = true;
   }
@@ -423,6 +458,13 @@ static void otaUpload() {
 static void otaDone() {
   if (g_otaBad)                      { webPanelHttp.send(400, "application/json", "{\"error\":\"that is not an ESP32 firmware image\"}"); return; }
   if (g_otaFail || g_otaWrote == 0)  { webPanelHttp.send(500, "application/json", "{\"error\":\"firmware update failed\"}"); return; }
+#if defined(GTI_WEB_OTA_VIA_SD)
+  if (g_otaToSd) {   // S9: on the card now; the screen installs it (progress on screen) and reboots by itself
+    webPanelHttp.send(200, "application/json", "{\"status\":\"ok\",\"bytes\":" + String((uint32_t)g_otaWrote) + ",\"stage\":\"saved to the SD card - the screen is installing it and will restart\"}");
+    g_webFwPending = WEB_FW_BIN;
+    return;
+  }
+#endif
   webPanelHttp.send(200, "application/json", "{\"status\":\"ok\",\"bytes\":" + String((uint32_t)g_otaWrote) + "}");
   delay(300); ESP.restart();
 }

@@ -5997,6 +5997,8 @@ static String neoBenchJson(){
 }
 #define GTI_THEMES   // A600-theme1: the web Themes tab + Theme Editor (web_panel.h /api/themes/*)
 #define GTI_WEB_FLEET 1      // OMEGAWARE: LAN dongle roster + fling endpoints (needs panel_fleet.h)
+#define GTI_WEB_OTA_VIA_SD 1   // S9: a web firmware upload is saved to the SD card, then installed locally (no Wi-Fi during the flash write)
+static void doFirmwareUpdateFrom(const String& forcePath, bool ask);
 #include "../shared/web_panel.h"
 
 static void doUnload(){
@@ -7684,10 +7686,13 @@ static String fwupFindFile(){
   gLog("[fwup] NO candidate .bin in SD ROOT (root is not searched recursively)\n");
   return String();
 }
-static void doFirmwareUpdate(){
+// S9: forcePath = install exactly this file (the web page's upload, saved to the card first, so the
+// flash write happens locally with no Wi-Fi in flight); ask=false = no CANCEL/FLASH screen, since the
+// person already chose it on the web page - an unrecognised image is then refused instead of offered.
+static void doFirmwareUpdateFrom(const String& forcePath, bool ask){
   gfx_fillScreen(COL_BG);
-  gLog("[fwup] ===== FW UPDATE requested, running %s =====\n",FW_VERSION);
-  String fpath=fwupFindFile();
+  gLog("[fwup] ===== FW UPDATE requested (%s), running %s =====\n",forcePath.length()?"web upload via SD":"SD",FW_VERSION);
+  String fpath=forcePath.length()?forcePath:fwupFindFile();
   File f; if(fpath.length())f=SD_MMC.open(fpath,FILE_READ);
   if(!f||f.isDirectory()){
     if(f)f.close();
@@ -7735,6 +7740,12 @@ static void doFirmwareUpdate(){
     fwupMsg(VH/2+10,"(web flasher) to add the OTA layout.",COL_DIM,COL_BG,1);
     fwupMsg(VH/2+24,"After that, SD updates work forever.",COL_DIM,COL_BG,1);
     fwupMsg(VH-22,"tap to return",COL_MID,COL_BG,1);fwupWait();return;}
+  if(!ask && !idOK){   // S9: from the web page, never flash an image that is not a GTi-JC build
+    f.close(); gLog("[fwup] web upload REFUSED: not a GTi-JC image\n");
+    gfx_fillScreen(COL_BG); fwupMsg(VH/2-8,"NOT A GTi-JC FIRMWARE",COL_ORANGE,COL_BG,2);
+    fwupMsg(VH/2+16,"the web upload was not installed",COL_DIM,COL_BG,1); fwupMsg(VH-22,"tap to return",COL_MID,COL_BG,1); fwupWait(); return; }
+  bool go=!ask;
+  if(ask){
   // ── confirm ──
   gfx_fillScreen(COL_BG);
   fwupMsg(24,"FIRMWARE UPDATE",COL_LIT,COL_BG,2);
@@ -7748,12 +7759,12 @@ static void doFirmwareUpdate(){
   {uint16_t okc=idOK?COL_GREEN:COL_ORANGE;const char*okl=idOK?"FLASH":"FLASH ANYWAY";int osz=idOK?2:1;
    gfx_fillRoundRect(ox,by,bw,bbh,8,okc);gfx_setTextColor(TFT_BLACK,okc);gfx_setTextSize(osz);gfx_setCursor(ox+(bw-gfx_textWidth(okl))/2,by+(idOK?13:17));gfx_print(okl);}
   gfx_flush();
-  bool go=false;
   while(true){uint16_t tx,ty;if(Touch_ReadFrame()&&getTouchXY(&tx,&ty)){
     if(ty>=(uint16_t)(by-8)&&ty<(uint16_t)(by+bbh+8)){
       if(tx>=(uint16_t)(cx-8)&&tx<(uint16_t)(cx+bw+8)){go=false;break;}
       if(tx>=(uint16_t)(ox-8)&&tx<(uint16_t)(ox+bw+8)){go=true;break;}}}
     delay(25);}
+  }   // S9: end if(ask)
   if(!go){f.close();return;}
   // ── flash ──
   gfx_fillScreen(COL_BG);fwupMsg(VH/2-46,"FLASHING - DO NOT UNPLUG",COL_AMBER,COL_BG,2);gfx_flush();
@@ -7788,9 +7799,11 @@ static void doFirmwareUpdate(){
     fwupMsg(VH/2+40,"current firmware kept.",COL_DIM,COL_BG,1);fwupMsg(VH-22,"tap to return",COL_MID,COL_BG,1);fwupWait();return;}
   fwupIdfEnd();
   gLog("[fwup] end ok - activating new image, rebooting\n");
-  SD_MMC.rename(fpath.c_str(),(fpath+".installed").c_str());   // best-effort: don't re-offer the same file
+  if(forcePath.length()) SD_MMC.remove(fpath.c_str());   // S9: the web upload's copy has done its job
+  else SD_MMC.rename(fpath.c_str(),(fpath+".installed").c_str());   // best-effort: don't re-offer the same file
   gfx_fillScreen(COL_BG);fwupMsg(VH/2-8,"UPDATE OK - REBOOTING",COL_GREEN,COL_BG,2);gfx_flush();delay(900);ESP.restart();
 }
+static void doFirmwareUpdate(){ doFirmwareUpdateFrom(String(),true); }   // Settings > FW UPDATE (SD card, with confirm)
 
 // ════════════════════════════════════════════════════════════════════════════
 // 5.9.38 — exFAT / NTFS CARD DETECTION (lab14h: detection only - the GTi never formats)
@@ -8434,6 +8447,7 @@ void loop(){
     if ((int32_t)(millis() - batNext) >= 0) { batNext = millis() + 5000; battery_poll(); } }
   webPanelService();   // one web client + one queued DAV load per pass (merge step 2)
   if(g_theme_redraw){ g_theme_redraw=false; themeRedraw(); }
+  if(g_webFwPending.length()){ String fp=g_webFwPending; g_webFwPending=""; doFirmwareUpdateFrom(fp,false); drawFullUI(); gfx_flush(); }   // S9: only returns on failure (success reboots)
   pfService();          // #console: hear dongle beacons so /api/fleet has a roster
   pfWorker();           // #console: run one queued fling/eject/claim per pass (non-blocking)
   { static String mdnsShown; if(pfMdnsName()!=mdnsShown){ mdnsShown=pfMdnsName();
