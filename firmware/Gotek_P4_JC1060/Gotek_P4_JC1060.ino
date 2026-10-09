@@ -5836,6 +5836,10 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
 // Merge step 2: the shared web interface + OTA, served over HOME_SSID when
 // WEBUI=ON. Placed here because it calls doLoadWebdav and the disk builders.
 #define GTI_WEB_SD_FILES 1   // 5.9.9: WiFi SD file-access endpoints (JC3.5 only for now)
+// release-a600-lab2 on: the shared web panel writes these two on a web upload (the S3 sketches declare them for the
+// fleet fling). The P4 keeps them so it still compiles against that web_panel.h; unused with the older one.
+__attribute__((unused)) static uint32_t g_img_bytes=0;
+__attribute__((unused)) static String g_loaded_display="";
 #include "../shared/web_panel.h"
 
 static void doUnload(){
