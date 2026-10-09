@@ -50,7 +50,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-lab2f-JC3248"   // A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-lab2g-JC3248"   // A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -5747,6 +5747,15 @@ static bool claimAskUI(bool dirty, const char* who){
   return take;
 }
 
+// S13 (Dimmy's bench): load-failure cards are read-and-act messages, but they vanished after 1-2 s.
+// Hold at least 3 s, then until a fresh tap, at most 10 s. Touch frames are drained first so the
+// tap that started the load does not dismiss its own error.
+static void msgHold(){
+  uint16_t tx,ty; const uint32_t t0=millis();
+  while(millis()-t0<3000){ Touch_ReadFrame(); delay(30); }
+  while(Touch_ReadFrame()&&getTouchXY(&tx,&ty)&&millis()-t0<10000) delay(30);      // finger still down: wait for release
+  while(millis()-t0<10000){ if(Touch_ReadFrame()&&getTouchXY(&tx,&ty)) break; delay(30); }
+}
 static bool doLoadSelected(const String&adfPath){
   // v4.9 / v5.x: HD (1.76MB) over wireless is now gated by the dongle's advertised
   // capability (pad[1] of the pairing reply). An HD-capable XIAO (2MB ramdisk,
@@ -5767,7 +5776,7 @@ static bool doLoadSelected(const String&adfPath){
       gfx_setCursor(6,STATUS_H+42);gfx_print(T(L_AVAIL_HD));
     }
     gfx_setCursor(6,STATUS_H+56);gfx_print(T(L_USE_CABLE));
-    gfx_flush();delay(2200);drawFullUI();gfx_flush();return false;
+    gfx_flush();msgHold();drawFullUI();gfx_flush();return false;
   }
   // v4.8.0 interlocks: pending saves die when the RAM disk is rebuilt — drain first
   // (v4.8.1: own-disk flush runs in ANY mode — a wireless GTi can still be USB-attached)
@@ -5803,11 +5812,11 @@ static bool doLoadSelected(const String&adfPath){
   const bool s2Detached=(!toFleet && g_loaded && !g_forceswap);   // S2: remember, so every early return can put the previous disk back
   if(s2Detached) hardDetach();
   auto s2PutBack=[&](){ if(s2Detached){ mscAnnounce(g_alias?g_alias_sectors:TOTAL_SECTORS); hardAttach(); } };   // S2: nothing was changed yet -> the old disk is still valid
-  File f=SD_MMC.open(loadPath.c_str(),FILE_READ);if(!f){s2PutBack();gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_FAILED));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
+  File f=SD_MMC.open(loadPath.c_str(),FILE_READ);if(!f){s2PutBack();gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_FAILED));gfx_flush();msgHold();drawFullUI();gfx_flush();return false;}
   // Use VFS to get real file size (SD_MMC f.size() returns 0 for subdirectory files)
   String vfsLoad="/sdcard"+loadPath;
   struct stat stLoad;
-  if(stat(vfsLoad.c_str(),&stLoad)!=0||stLoad.st_size==0) {f.close();s2PutBack();gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_SIZE_ERR));gfx_flush();delay(1000);drawFullUI();gfx_flush();return false;}
+  if(stat(vfsLoad.c_str(),&stLoad)!=0||stLoad.st_size==0) {f.close();s2PutBack();gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_SIZE_ERR));gfx_flush();msgHold();drawFullUI();gfx_flush();return false;}
   uint32_t fsz=(uint32_t)stLoad.st_size;
   uint32_t copied=0;
   if(g_wireless_mode){
@@ -5824,7 +5833,7 @@ static bool doLoadSelected(const String&adfPath){
       gfx_setCursor(6,STATUS_H+44);gfx_print(T(L_HD_NO_WIRELESS));
       gfx_setTextColor(COL_DIM,COL_PANEL);
       gfx_setCursor(6,STATUS_H+58);gfx_print(T(L_USE_CABLE));
-      gfx_flush();delay(2200);drawFullUI();gfx_flush();return false;
+      gfx_flush();msgHold();drawFullUI();gfx_flush();return false;
     }
     g_alias=false;
     {String pn=presentName(adfPath);build_volume(pn.c_str(),fsz);}   // v5.2: GEN keeps the real name+ext so FlashFloppy detects the format; lab14q: LONGNAME
@@ -5836,7 +5845,7 @@ static bool doLoadSelected(const String&adfPath){
       g_loaded=false; g_loaded_name=""; g_loaded_display=""; g_img_bytes=0; svDirtyReset();   // build_volume already replaced the old disk's metadata
       gfx_setTextColor(TFT_RED,COL_PANEL);gfx_setCursor(6,STATUS_H+40);gfx_print(T(L_FAILED));
       gfx_setTextColor(COL_DIM,COL_PANEL);gfx_setCursor(6,STATUS_H+52);gfx_print("SD read error - not sent");
-      gfx_flush();delay(1800);drawFullUI();gfx_flush();return false;
+      gfx_flush();msgHold();drawFullUI();gfx_flush();return false;
     }
     // v4.8.0: fresh disk in the RAM disk = fresh save tracking
     g_sv_img_size=(g_mode==MODE_GEN)?0:fsz;svDirtyReset();   // v5.2: GEN has no Amiga save-writeback (0 = no dirty tracking)
@@ -5867,7 +5876,7 @@ static bool doLoadSelected(const String&adfPath){
       gfx_setCursor(6,STATUS_H+30);gfx_print(String(fsz/1024)+"KB");
       gfx_setTextColor(COL_DIM,COL_PANEL);
       gfx_setCursor(6,STATUS_H+44);gfx_print(aerr);
-      gfx_flush();delay(2200);drawFullUI();gfx_flush();return false;
+      gfx_flush();msgHold();drawFullUI();gfx_flush();return false;
     }
     copied=fsz;
     // Save tracking is LIVE under alias: the dirty map is what makes the overlay
