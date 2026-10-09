@@ -71,7 +71,7 @@ static String  _xiao_ip     = "";
 
 // ---------- Multi-dongle scan (Path 1: collect-all, pick one into active slot) ----------
 #define MAX_SCANNED 64   // hard ceiling (array size); runtime cap set from CONFIG.TXT CAP=
-struct ScannedDongle { uint8_t mac[6]; char ip[16]; uint8_t loaded; uint8_t lmac[6]; char lname[25]; };   // lab14s: + who has a disk in it (Webby 1.6.6+)
+struct ScannedDongle { uint8_t mac[6]; char ip[16]; uint8_t loaded; uint8_t lmac[6]; char lname[25]; uint8_t hd; };   // S11: + hd = PAIR_REPLY pad[1]   // lab14s: + who has a disk in it (Webby 1.6.6+)
 static ScannedDongle _scanned[MAX_SCANNED];
 static int  _scanned_count = 0;
 static volatile bool _scan_mode = false;
@@ -129,6 +129,7 @@ static void handleIncoming(const uint8_t* data, int len) {
         memcpy(_scanned[_scanned_count].mac, p->mac, 6);
         strncpy(_scanned[_scanned_count].ip, p->ip, 15);
         _scanned[_scanned_count].ip[15]=0;
+        _scanned[_scanned_count].hd = p->pad[1];   // S11
         scanNoteInUse(_scanned[_scanned_count], p);
         _scanned_count++;
         g_espnow_xiao_last_seen = millis();
@@ -161,13 +162,15 @@ static void handleIncoming(const uint8_t* data, int len) {
         String line = fr.readStringUntil('\n'); line.trim();
         if (line.startsWith("XIAO_MAC=")) { lines += "XIAO_MAC=" + String(macStr) + "\n"; written = true; }
         else if (line.startsWith("XIAO_IP=")) { lines += "XIAO_IP=" + _xiao_ip + "\n"; }
+        else if (line.startsWith("XIAO_HD=")) { }   // S11: rewritten below
         else { lines += line + "\n"; }
       }
       fr.close();
     }
     if (!written) lines += "XIAO_MAC=" + String(macStr) + "\n";
+    lines += "XIAO_HD=" + String((int)g_espnow_dongle_board) + "\n";   // S11: survives a reboot (was reset to 0, so HD flings were refused)
     cfgWriteAll(lines);   // S8: tmp + rename (Gotek_JC3248.ino)
-    Serial.printf("[NOW] Paired: MAC=%s IP=%s\n", macStr, _xiao_ip.c_str());
+    Serial.printf("[NOW] Paired: MAC=%s IP=%s HD=%d\n", macStr, _xiao_ip.c_str(), (int)g_espnow_dongle_board);
     return;
   }
 
@@ -228,6 +231,7 @@ static void loadConfig() {
       if (!isZero) g_espnow_paired = true;
     }
     if (line.startsWith("XIAO_IP=")) _xiao_ip = line.substring(8);
+    if (line.startsWith("XIAO_HD=")) g_espnow_dongle_board = (uint8_t)line.substring(8).toInt();   // S11
   }
   f.close();
   if (g_espnow_paired) Serial.printf("[NOW] Loaded config: IP=%s\n", _xiao_ip.c_str());
@@ -299,6 +303,7 @@ bool espnowScanSelect(int i) {
   g_espnow_paired = true;
   g_espnow_link_just_established = true;
   g_espnow_xiao_last_seen = millis();
+  g_espnow_dongle_board = _scanned[i].hd;   // S11: was left at whatever the last dongle had
 
   // Register as direct peer (same as the original pairing path)
   if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
@@ -314,9 +319,11 @@ bool espnowScanSelect(int i) {
   if(fr){while(fr.available()){String line=fr.readStringUntil('\n');line.trim();
     if(line.startsWith("XIAO_MAC=")){lines+="XIAO_MAC="+String(macStr)+"\n";w1=true;}
     else if(line.startsWith("XIAO_IP=")){lines+="XIAO_IP="+_xiao_ip+"\n";w2=true;}
+    else if(line.startsWith("XIAO_HD=")){}   // S11: rewritten below
     else lines+=line+"\n";}fr.close();}
   if(!w1)lines+="XIAO_MAC="+String(macStr)+"\n";
   if(!w2)lines+="XIAO_IP="+_xiao_ip+"\n";
+  lines+="XIAO_HD="+String((int)g_espnow_dongle_board)+"\n";   // S11
   cfgWriteAll(lines);   // S8: tmp + rename (Gotek_JC3248.ino)
   Serial.printf("[NOW] Selected dongle %d: %s\n", i, macStr);
   return true;
@@ -367,7 +374,8 @@ void espnowForgetActive(const uint8_t* mac){
   if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
   String lines=""; File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
   if(fr){ while(fr.available()){ String line=fr.readStringUntil('\n'); line.trim();
-    if(line.startsWith("XIAO_MAC=")||line.startsWith("XIAO_IP=")) continue; lines+=line+"\n"; } fr.close(); }
+    if(line.startsWith("XIAO_MAC=")||line.startsWith("XIAO_IP=")||line.startsWith("XIAO_HD=")) continue; lines+=line+"\n"; } fr.close(); }
+  g_espnow_dongle_board = 0;   // S11
   cfgWriteAll(lines);   // S8: tmp + rename (Gotek_JC3248.ino)
 }
 
