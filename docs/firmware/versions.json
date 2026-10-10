@@ -258,19 +258,11 @@
       {
         "v": "5.9.42-lab4-P4",
         "ch": "lab",
-        "date": "2026-10-05",
-        "full": "firmware/p4-beta/manifest-5.9.42-lab4.json",
-        "app": "firmware/p4-beta/GTi-P4-5.9.42-lab4-update.bin",
-        "note": "LAB - NEO look with a switch: Settings > NEO ON/OFF (CONFIG.TXT NEO=) brings back the classic layout and colour themes. Also: matrix saver fills the width, symmetric synthwave cracktro, the omega GTi brand, disk loads / ejects / USB host logged in gti.log, faster and steadier dongle joins, EJECT really ejects the dongle and pulls the saves back. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). After flashing, power it off and on once before saving games.",
+        "date": "2026-10-10",
+        "full": "firmware/p4-beta/manifest-5.9.42-lab4r.json",
+        "app": "firmware/p4-beta/GTi-P4-5.9.42-lab4r-update.bin",
+        "note": "LAB - rebuilt 10 Oct (replaces the 5 Oct lab4 and lab1 images). NEO look with a switch: Settings > NEO ON/OFF (CONFIG.TXT NEO=) brings back the classic layout and colour themes. Also: matrix saver fills the width, symmetric synthwave cracktro, the omega GTi brand, disk loads / ejects / USB host logged in gti.log, faster and steadier dongle joins, EJECT really ejects the dongle and pulls the saves back. A new P4 updates its WiFi co-processor (C6) from the SD card file c6_network_adapter_2.12.13.bin. For P4 chips revision v1.x (\"Before v3.00\"). After flashing, power it off and on once before saving games.",
         "latest": true
-      },
-      {
-        "v": "5.9.42-lab1-P4",
-        "ch": "lab",
-        "date": "2026-10-03",
-        "full": "firmware/p4-beta/manifest-5.9.42-lab1.json",
-        "app": "firmware/p4-beta/GTi-P4-5.9.42-lab1-update.bin",
-        "note": "LAB - the new NEO look: list + game panel, big covers, up/down reel in portrait; cable + wireless tested. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (the IDE says \"Before v3.00\"). After flashing, power it off and on once before saving games."
       },
       {
         "v": "5.9.11-P4",
