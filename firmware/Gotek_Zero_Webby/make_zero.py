@@ -18,6 +18,5 @@ banner = ("// ==================================================================
           "// ============================================================================\n")
 out = banner + src.replace(flag, "#define WEBBY_ZERO     1")
 (here / "Gotek_Zero_Webby.ino").write_text(out, encoding="utf-8", newline="")
-shutil.copyfile(src_dir / "webui.h", here / "webui.h")
 shutil.copyfile(src_dir / "dongle_page.h", here / "dongle_page.h")   # size-trim: the gzipped own page
-print("make_zero: Gotek_Zero_Webby.ino + webui.h + dongle_page.h written")
+print("make_zero: Gotek_Zero_Webby.ino + dongle_page.h written (webui.h comes from ../shared since 1.6.12)")

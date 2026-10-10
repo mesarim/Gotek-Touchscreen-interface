@@ -46,7 +46,7 @@
 #include <mdns.h>          // 1.6.11: mdns_delegate_hostname_add - the leader keeps its own name too
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
-#include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
+#include "../shared/webui.h"   // PANEL: the shared SPA, gzipped, straight from firmware/shared (1.6.12: no stale copy per dongle folder)
 
 // 1.6.8: ONE source, TWO builds - the SuperMini and the Waveshare S3-Zero differ only in their status light.
 //   0 = SuperMini  : two plain LEDs, red GPIO1 + blue GPIO2. GPIO21 is never touched.   (THIS sketch)
@@ -64,7 +64,7 @@
 #else
 #define WEBBY_BOARD    "supermini"
 #endif
-#define FW_VERSION     "Webby-1.6.11-" WEBBY_BOARD   // 1.6.11: the fleet leader answers to gotekomega.local AND its own gotekomega-xxxx.local | /status has "ap_mac" (the MAC a paired screen knows) | the phone's "sign in to network" window shows a short signpost (keep the network, then open 192.168.4.1 in the browser) instead of the app, which half-worked there - no disk upload, and it closed when you kept the network | 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
+#define FW_VERSION     "Webby-1.6.12-" WEBBY_BOARD   // 1.6.12 (8 Oct 2026, Dimmy): a fling or browser upload that fails leaves the dongle cleanly EMPTY (no stale dirty map / load_id, nothing is wiped before the first payload byte, a header with no body no longer ejects the Amiga's disk or blocks 30 s) | Config-tab Save keeps the stored password (it used to write PASS= blank and reboot onto the own AP) | an aborted OTA can be retried without a power cycle | a home join that failed at boot is retried every 3 min while the dongle is idle | first fleet election after a full beacon round, peers stale after 5 missed beacons (was: every boot grabbed gotekomega.local for 12 s) | pairing reply says HD-capable + max image bytes (pad[1..6]) | /api/wifi/scan served, /api/wifi/status with the keys the page reads, rssi in /status | the shared page comes straight from firmware/shared (the dongle folders carried a copy from 4 Sep) | 1.6.11: the fleet leader answers to gotekomega.local AND its own gotekomega-xxxx.local | /status has "ap_mac" (the MAC a paired screen knows) | the phone's "sign in to network" window shows a short signpost (keep the network, then open 192.168.4.1 in the browser) instead of the app, which half-worked there - no disk upload, and it closed when you kept the network | 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
 #define ESPNOW_CHANNEL 6
 //  Board profile 
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -169,7 +169,9 @@ static uint32_t g_next_status_ms = 0;
 static inline bool dGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void dSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
 static inline void dClr(uint8_t*m,uint32_t i){m[i>>3]&=(uint8_t)~(1u<<(i&7));}
-static void dirtyReset(){memset(g_dirty,0,sizeof(g_dirty));g_dirty_count=0;g_last_write_ms=0;g_next_beacon_ms=0;}
+static inline void wrLE32(uint8_t*p,uint32_t v);   // 1.6.12: used in the pairing reply before its definition
+static portMUX_TYPE g_dirtyMux = portMUX_INITIALIZER_UNLOCKED;   // 1.6.12: g_dirty + g_dirty_count are touched from the USB task (onWrite) and from loop()
+static void dirtyReset(){portENTER_CRITICAL(&g_dirtyMux);memset(g_dirty,0,sizeof(g_dirty));g_dirty_count=0;portEXIT_CRITICAL(&g_dirtyMux);g_last_write_ms=0;g_next_beacon_ms=0;}
 static uint32_t crc32sw(uint32_t crc,const uint8_t*p,size_t n){
   crc=~crc;
   while(n--){crc^=*p++;for(int k=0;k<8;k++)crc=(crc>>1)^(0xEDB88320UL&(uint32_t)(-(int32_t)(crc&1)));}
@@ -260,7 +262,7 @@ static int32_t onWrite(uint32_t lba, uint32_t off, uint8_t* buf, uint32_t n) {
     if(l<DATA_LBA)continue;
     uint32_t i=l-DATA_LBA;
     if(i>=imgSecs)continue;
-    if(!dGet(g_dirty,i)){dSet(g_dirty,i);g_dirty_count=g_dirty_count+1;}
+    portENTER_CRITICAL(&g_dirtyMux); if(!dGet(g_dirty,i)){dSet(g_dirty,i);g_dirty_count=g_dirty_count+1;} portEXIT_CRITICAL(&g_dirtyMux);
   }
   g_last_write_ms=millis();
   return (int32_t)n;
@@ -459,7 +461,8 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
     PktHello reply = {}; reply.type = PKT_PAIR_REPLY;
     WiFi.softAPmacAddress(reply.mac); strncpy(reply.ip, AP_IP, 15); reply.pad[0] = SAVE_PROTO_VER;
     // 1.6.6: who has a disk in me (pad[7] marker 0xA5, [8] loaded, [9..14] screen MAC, [15] len, [16..39] name).
-    // pad[1..6] stay free for the parked HD-capability fields.
+    // 1.6.12: capability - pad[1] = 1 HD-capable (the screen's g_espnow_dongle_board), pad[2] = board (1 SuperMini, 2 Zero), pad[3..6] = max image bytes LE.
+    reply.pad[1] = 1; reply.pad[2] = WEBBY_ZERO ? 2 : 1; wrLE32(reply.pad + 3, MAX_FILE_BYTES);
     reply.pad[7] = 0xA5; reply.pad[8] = g_disk_loaded ? 1 : 0; memcpy(reply.pad+9, g_loader_mac, 6);
     { uint8_t L = (uint8_t)strlen(g_loader_name); if (L > 24) L = 24; reply.pad[15] = L; memcpy(reply.pad+16, g_loader_name, L); }
     XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
@@ -562,6 +565,8 @@ static String discoName(){
   char b[24]; snprintf(b,sizeof(b),"gotekomega-%02x%02x",m[4],m[5]); return String(b); }
 static int    g_webmode = 0;
 static bool   g_join_failed = false;   // resolved at boot: 0 = ESPNOW/AP, 1 = WIFI/STA
+static uint32_t g_join_retry_ms = 0;   // 1.6.12: when the boot join gave up
+#define WIFI_RETRY_MS 180000UL           // 1.6.12: retry the home join (by restart) this often while idle
 static String g_loaded_name = "";
 
 static void loadWifiCfg() {
@@ -642,7 +647,7 @@ static void doGetSave(WiFiClient& client){
   uint8_t cb[4]; wrLE32(cb,crc); client.write(cb,4); client.flush();
   uint32_t t0=millis(); while(!client.available()&&millis()-t0<10000)delay(5);
   bool ok=(client.available()&&client.read()==0x01);
-  if(ok){ for(uint32_t i=0;i<imgSecs;i++) if(dGet(g_snap,i)&&dGet(g_dirty,i)){dClr(g_dirty,i);if(g_dirty_count)g_dirty_count=g_dirty_count-1;} g_next_beacon_ms=0; if(g_dirty_count==0) setLeds(false,g_disk_loaded); }
+  if(ok){ portENTER_CRITICAL(&g_dirtyMux); for(uint32_t i=0;i<imgSecs;i++) if(dGet(g_snap,i)&&dGet(g_dirty,i)){dClr(g_dirty,i);if(g_dirty_count)g_dirty_count=g_dirty_count-1;} portEXIT_CRITICAL(&g_dirtyMux); g_next_beacon_ms=0; if(g_dirty_count==0) setLeds(false,g_disk_loaded); }
 }
 static void sendDirtyBeacon(){
   PktDirty pkt={}; pkt.type=PKT_XIAO_DIRTY; pkt.load_id=g_load_id; pkt.dirty_count=g_dirty_count;
@@ -655,6 +660,15 @@ static void sendStatusBeacon(){
   _wavePeer->send_pkt((uint8_t*)&pkt,sizeof(pkt));
 }
 
+// 1.6.12: a transfer that fails after the old disk was detached must leave the dongle
+// cleanly EMPTY: no stale load_id (the screen would fetch "saves" from a wiped image),
+// no stale dirty map (LED amber, EJECT refused), no old name on the page.
+static void markDiskEmpty(const char* why) {
+  if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
+  dirtyReset(); g_loaded_name = ""; g_image_size = 0; g_load_id++; g_next_name = "";
+  loaderClear(); ledBlue(false); g_next_status_ms = 0;
+  Serial.printf("[DISK] empty: %s\n", why);
+}
 static void handleTCPClient(WiFiClient& client) {
   oledStatus("Receiving...", "TCP connected", "", "");
   uint32_t t0 = millis();
@@ -713,11 +727,17 @@ static void handleTCPClient(WiFiClient& client) {
   // 1.6.4 (#24): if a disk is already attached, detach FIRST - otherwise the host stays
   // mounted on a volume we are rewriting underneath it for the whole transfer.
   // (The browser-upload path already did this; the TCP path now matches.)
-  if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
-  build_volume(fatName.c_str(), size);
+  // 1.6.12: nothing is touched until the first payload bytes are here. A header with no
+  // body (port scan, a screen that gives up) used to detach the Amiga's disk, zero the
+  // whole ramdisk and block loop() for 30 s. The FAT/root metadata is laid down at the
+  // END (as the browser upload path does), so only the data region is streamed into.
   uint8_t* dst = g_disk + DATA_LBA * SECTOR_SIZE;
   uint32_t received = 0; const size_t BUF = 4096;
   uint8_t* buf = (uint8_t*)malloc(BUF); if (!buf) { client.write((uint8_t)0x00); return; }
+  t0 = millis();
+  while (client.available() <= 0 && client.connected() && millis()-t0 < 5000) delay(1);
+  if (client.available() <= 0) { free(buf); client.write((uint8_t)0x00); client.stop(); oledStatus("No data", "", "", "disk untouched"); return; }
+  if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   t0 = millis();
   while (received < size && millis()-t0 < 30000) {   // 30s = max STALL (no progress), not total  a slow-but-steady fling completes; t0 resets on every read below
     if (!client.connected()) break;
@@ -728,6 +748,7 @@ static void handleTCPClient(WiFiClient& client) {
   }
   free(buf);
   if (received == size) {
+    build_volume_ex(fatName.c_str(), size, false);   // 1.6.12: metadata last, the data is already in place
     g_load_id++; g_image_size = size; dirtyReset();
     { String pretty = g_next_name.length() ? g_next_name : String("DISK.ADF");   // #24/1.6.3: pretty display name (extension stripped)
       int d = pretty.lastIndexOf('.'); if (d > 0) pretty = pretty.substring(0, d);
@@ -750,7 +771,8 @@ static void handleTCPClient(WiFiClient& client) {
     sendSimple(PKT_XIAO_DONE);
   } else {
     client.write((uint8_t)0x00); client.flush(); delay(100); client.stop();
-    oledStatus("TRANSFER ERROR", "", "", ""); sendSimple(PKT_XIAO_ERROR);
+    markDiskEmpty(received ? "fling stalled or dropped" : "fling: no data");
+    oledStatus("TRANSFER ERROR", "", "dongle is empty", "send again"); sendSimple(PKT_XIAO_ERROR);
   }
 }
 
@@ -782,6 +804,7 @@ static String statusJson(){
   s += ",\"devname\":\""; s += jsonEsc(discoName()); s += "\"";   // #name: current device name (custom or mac-based) for portal pre-fill + the fleet
   { uint8_t am[6] = {0}; esp_read_mac(am, ESP_MAC_WIFI_SOFTAP); char ab[20]; snprintf(ab, sizeof(ab), "%02x:%02x:%02x:%02x:%02x:%02x", am[0],am[1],am[2],am[3],am[4],am[5]); s += ",\"ap_mac\":\""; s += ab; s += "\""; }   // 1.6.11: the MAC a paired screen knows (PKT_PAIR_REPLY), so it can tell this dongle exactly on home Wi-Fi (#110)
   s += ",\"join_failed\":"; s += (g_join_failed ? "true" : "false");
+  s += ",\"rssi\":"; s += String((g_webmode==1 && WiFi.status()==WL_CONNECTED) ? WiFi.RSSI() : 0);   // 1.6.12: link margin to the router - slow or stalling flings are a weak link, not the code
   s += ",\"ip\":\""; s += ip; s += "\"";
   s += ",\"heap\":"; s += String((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));   // HD test
   s += ",\"psram\":"; s += String((unsigned)ESP.getFreePsram());
@@ -808,19 +831,23 @@ static void handleUpload(){
   if (up.status == UPLOAD_FILE_START) {
     g_up_recv = 0; g_up_overflow = false;
     g_up_name = up.filename; if (g_up_name.length()==0) g_up_name = "DISK.ADF";
-    // detach first so the Amiga isn't reading the disk while we rewrite its data region
-    if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; ledBlue(false); }
   } else if (up.status == UPLOAD_FILE_WRITE) {
+    // 1.6.12: detach on the FIRST data chunk, not at START - an upload that dies before any
+    // data (or a 0-byte file) leaves the Amiga's disk alone
+    if (g_up_recv == 0 && up.currentSize > 0 && g_disk_loaded) { hardDetach(); g_disk_loaded = false; ledBlue(false); }
     if (!g_up_overflow && g_up_recv + up.currentSize <= MAX_FILE_BYTES) {
       memcpy(g_disk + DATA_LBA*SECTOR_SIZE + g_up_recv, up.buf, up.currentSize);
       g_up_recv += up.currentSize;
     } else { g_up_overflow = true; }
   } else if (up.status == UPLOAD_FILE_END) {
     // finalized by the POST responder below
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (g_up_recv > 0) markDiskEmpty("browser upload aborted");   // 1.6.12: the data region is half new, half old
+    g_up_recv = 0; g_up_overflow = false;
   }
 }
 static void handleUploadDone(){
-  if (g_up_overflow) { server.send(413,"application/json","{\"ok\":false,\"err\":\"image too big - this dongle holds up to 1.75 MB\"}"); return; }
+  if (g_up_overflow) { markDiskEmpty("browser upload too big"); server.send(413,"application/json","{\"ok\":false,\"err\":\"image too big - this dongle holds up to 1.75 MB\"}"); return; }
   if (g_up_recv == 0) { server.send(400,"application/json","{\"ok\":false,\"err\":\"empty upload\"}"); return; }
   g_loaded_name = g_up_name;
   webFinishLoad();
@@ -844,7 +871,8 @@ static void handleScan(){
     if (i) jj += ",";
     jj += "{\"ssid\":\""; jj += jsonEsc(WiFi.SSID(i));
     jj += "\",\"rssi\":"; jj += String(WiFi.RSSI(i));
-    jj += ",\"enc\":"; jj += (WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "false" : "true");
+    const char* enc = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "false" : "true");
+    jj += ",\"enc\":"; jj += enc; jj += ",\"encrypted\":"; jj += enc;   // 1.6.12: "encrypted" is what the shared page reads
     jj += "}";
     yield();
   }
@@ -898,12 +926,15 @@ static void onOtaUpload(){
   HTTPUpload& up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
     g_ota_ok=false; g_ota_first=true;
+    if (Update.isRunning()) Update.abort();   // 1.6.12: a previous aborted upload must not block this one
     g_ota_run = Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
   } else if (up.status == UPLOAD_FILE_WRITE && g_ota_run) {
     if (g_ota_first) { g_ota_first=false; if (up.currentSize>0 && up.buf[0]!=0xE9) { Update.abort(); g_ota_run=false; return; } }
-    if (Update.write(up.buf, up.currentSize) != up.currentSize) { g_ota_run=false; }
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) { Update.abort(); g_ota_run=false; }   // 1.6.12: release the slot
   } else if (up.status == UPLOAD_FILE_END && g_ota_run) {
     g_ota_ok = Update.end(true);
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (g_ota_run) Update.abort(); g_ota_run=false; g_ota_ok=false;   // 1.6.12: a dropped upload left Update "running" until a power cycle
   }
 }
 static void onOtaDone(){
@@ -950,7 +981,7 @@ static void apiDiskUnload(){
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiGamesUploadDone(){
-  if (g_up_overflow) { server.send(413,"application/json","{\"error\":\"image too big for the HD ramdisk\"}"); return; }
+  if (g_up_overflow) { markDiskEmpty("browser upload too big"); server.send(413,"application/json","{\"error\":\"image too big for the HD ramdisk\"}"); return; }
   if (g_up_recv == 0) { server.send(400,"application/json","{\"error\":\"empty upload\"}"); return; }
   g_loaded_name = g_up_name;
   webFinishLoad();
@@ -958,10 +989,17 @@ static void apiGamesUploadDone(){
   server.send(200,"application/json", j);
 }
 static void apiWifiStatus(){
+  // 1.6.12: the key set the shared page reads (was sta/ip: the page always said "AP: Off" + "Connecting...")
   bool sta = (WiFi.status()==WL_CONNECTED);
-  String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
-  String j = "{\"sta\":"; j += (sta?"true":"false");
-  j += ",\"ip\":\""; j += ip; j += "\",\"sta_ssid\":\""; j += jsonEsc(g_ssid); j += "\"}";
+  bool ap  = (WiFi.getMode() & WIFI_MODE_AP) != 0;
+  String j = "{\"ap_active\":"; j += (ap?"true":"false");
+  j += ",\"ap_ip\":\""; j += (ap ? WiFi.softAPIP().toString() : String("")); j += "\"";
+  j += ",\"ap_clients\":"; j += String(ap ? (unsigned)WiFi.softAPgetStationNum() : 0u);
+  j += ",\"sta_connected\":"; j += (sta?"true":"false");
+  j += ",\"sta_ip\":\""; j += (sta ? WiFi.localIP().toString() : String("")); j += "\"";
+  j += ",\"sta_ssid\":\""; j += jsonEsc(g_ssid); j += "\"";
+  j += ",\"rssi\":"; j += String(sta ? WiFi.RSSI() : 0);
+  j += "}";
   server.send(200,"application/json", j);
 }
 static void apiConfig(){
@@ -979,7 +1017,12 @@ static void apiConfig(){
 static void apiConfigSave(){
   String ssid = server.arg("WIFI_CLIENT_SSID");
   String pass = server.arg("WIFI_CLIENT_PASS");
-  if (ssid.length()) { saveWifiCfg(ssid, pass); server.send(200,"application/json","{\"status\":\"ok\",\"reboot\":true}"); delay(400); ESP.restart(); return; }
+  // 1.6.12: the page posts the whole form with the password MASKED (empty). Empty = keep the
+  // stored one, and only a real change saves + reboots. Save on the Config tab used to write
+  // PASS= blank and strand the dongle on its own AP.
+  if (pass.length() == 0) pass = g_pass;
+  const bool changed = ssid.length() && (ssid != g_ssid || pass != g_pass);
+  if (changed) { saveWifiCfg(ssid, pass); server.send(200,"application/json","{\"status\":\"ok\",\"reboot\":true}"); delay(400); ESP.restart(); return; }
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiReboot(){ server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
@@ -1042,7 +1085,7 @@ struct FleetPeer { String id, name, ip, fw; bool hd; bool loaded; bool isPanel; 
 static FleetPeer g_peers[16]; static int g_peer_n = 0;
 static bool      g_is_master = false;
 static uint32_t  g_next_elect_ms = 0;
-#define FLEET_STALE_MS 40000   // drop a peer unheard for >40 s (~3 missed beacons)
+#define FLEET_STALE_MS 62000   // 1.6.12: drop a peer unheard for >62 s (5 missed beacons; was 3 - a few lost broadcasts on a weak link made two leaders)
 
 static String jf(const String& s, const char* key){   // tiny "key":"val" / "key":val extractor
   String k = String("\"") + key + "\":";
@@ -1170,6 +1213,7 @@ static void startWebServer(){
   server.on("/api/games/upload", HTTP_POST, apiGamesUploadDone, handleUpload);
   server.on("/api/games/list",   HTTP_GET,  [](){ server.send(200,"application/json","{\"games\":[]}"); });
   server.on("/api/wifi/status",  HTTP_GET,  apiWifiStatus);
+  server.on("/api/wifi/scan",    HTTP_GET,  handleScan);   // 1.6.12: the page's Scan button (was only /scan)
   server.on("/api/config",       HTTP_GET,  apiConfig);
   server.on("/api/config",       HTTP_POST, apiConfigSave);
   server.on("/api/system/reboot",HTTP_POST, apiReboot);
@@ -1298,6 +1342,7 @@ static void startEspnowApMode(){
   while (millis()-t0 < (uint32_t)(_paired ? 8000 : 3000)) {
     PktHello hello = {}; hello.type = PKT_PAIR_HELLO; WiFi.softAPmacAddress(hello.mac);
     strncpy(hello.ip, AP_IP, 15); hello.pad[0] = SAVE_PROTO_VER;
+    hello.pad[1] = 1; hello.pad[2] = WEBBY_ZERO ? 2 : 1; wrLE32(hello.pad + 3, MAX_FILE_BYTES);   // 1.6.12: same capability fields as the pairing reply
     if (_bcastPeer) _bcastPeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     if (_wavePeer)  _wavePeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len, pkt.src);
@@ -1347,6 +1392,7 @@ void setup() {
     }
     ledRed(false);
     g_join_failed = (WiFi.status() != WL_CONNECTED);
+    g_join_retry_ms = millis();
     if (WiFi.status() == WL_CONNECTED) {
       g_webmode = 1;
       g_is_master = false;
@@ -1354,7 +1400,7 @@ void setup() {
       _tcpServer.begin();        // app can reach us over the LAN too
       _disco.begin(GTI_DISCO_PORT);   // FLEET: open discovery socket
       g_next_alive_ms = 0;            // FLEET: beacon on the next loop tick
-      g_next_elect_ms = millis() + 2000;   // FLEET: first election shortly after join
+      g_next_elect_ms = millis() + ALIVE_BEACON_MS + 3000;   // 1.6.12: first election only after a full beacon round - at +2 s the roster was always empty and every boot took gotekomega.local for 12 s
       setLeds(false, true);      // blue = connected/ready
       Serial.printf("[WIFI] joined %s  IP %s  host %s  (gotekomega.local)\n", g_ssid.c_str(), WiFi.localIP().toString().c_str(), discoName().c_str());
     }
@@ -1380,6 +1426,13 @@ void loop() {
   // TCP app transfers (begun in both modes)
   WiFiClient client = _tcpServer.accept();
   if (client) handleTCPClient(client);
+
+  // 1.6.12: a home join that failed at boot (router still coming up after a power cut) is
+  // retried with a clean restart every 3 min - only while nobody is using the dongle. Before:
+  // two 12 s tries, then the own AP for good, which looked like a lost configuration.
+  if (g_join_failed && g_webmode == 0 && !g_disk_loaded && g_dirty_count == 0 && WiFi.softAPgetStationNum() == 0 && (millis() - g_join_retry_ms) > WIFI_RETRY_MS) {
+    Serial.println("[WIFI] home join failed at boot - restarting to try again"); delay(50); ESP.restart();
+  }
 
   bool dirtyWaiting = (g_dirty_count > 0 && g_last_write_ms && (millis()-g_last_write_ms) > SAVE_SETTLE_MS);
   if (dirtyWaiting && millis() > g_next_beacon_ms) { sendDirtyBeacon(); g_next_beacon_ms = millis()+SAVE_BEACON_MS; }

@@ -50,7 +50,7 @@
 #include <ESPmDNS.h>       // WEBBY: gotekomega.local
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
-#include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
+#include "../shared/webui.h"   // PANEL: the shared SPA, gzipped, straight from firmware/shared (no stale copy per dongle folder)
 
 #define FW_VERSION     "Webby-1.6.4-xiao"   // 1.6.4-xiao: brought level with SuperMini Webby-1.6.4 (DSK/GENERIC keep their extension over wireless, LED HAL + LED=OFF); same number = same features
 #define ESPNOW_CHANNEL 6
