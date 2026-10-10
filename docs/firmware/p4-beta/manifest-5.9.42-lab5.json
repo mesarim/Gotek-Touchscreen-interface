@@ -1,0 +1,16 @@
+{
+  "name": "Gotek Touchscreen Interface — JC4880 4.3\" P4 LAB (5.9.42-lab5-P4, cable loads on every Gotek)",
+  "version": "5.9.42-lab5-P4",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-P4",
+      "parts": [
+        {
+          "path": "Gotek_P4-5.9.42-lab5-c6.merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}
