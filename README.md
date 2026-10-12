@@ -199,6 +199,12 @@ enrol, so it can't be paired or stolen over the air:
   or hold the dongle's **BOOT ~15 s** to wipe all owners (auto-fires at 15 s, no release needed).
 - **Rename:** JC screens — **SCAN DONGLES → RENAME**.
 
+**Webby dongle** (Super Mini / S3-Zero Webby). Open until its first pairing, then locked to its
+owners. From **1.6.13** the lock also covers the disk path in ESP-NOW mode: while the dongle has
+an owner, only owner screens get onto its Wi-Fi and its upload routes — and once you give the
+dongle its own Wi-Fi password (its page, *Wi-Fi* tab) that password is the lock for phones and
+PCs, while owner screens learn it when they pair. Details in the [Pairing guide](docs/PAIRING.md).
+
 > Most dongle boards have no LEDs and no screen — go by the timings, not the lights. If a beta
 > dongle doesn't appear in SCAN, it's locked to another GTi: BOOT-hold ~5 s to open enrolment.
 

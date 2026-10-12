@@ -16,6 +16,9 @@ which firmware the dongle is running.
 - **Beta dongle — "owner-lock"** (Super Mini v3.5.0+, XIAO v3.6.1+): the dongle only
   obeys GTis you **deliberately enrol** with a BOOT-button hold. It ignores everyone
   else and doesn't advertise itself.
+- **Webby dongle** (Super Mini / S3-Zero Webby 1.6.5+): open until its first pairing, then
+  locked to its owners like the beta dongle. From **Webby 1.6.13** the lock also covers the
+  disk itself — see [Webby: the lock and the dongle's own Wi-Fi](#webby-the-lock-and-the-dongles-own-wi-fi).
 
 The GTi side is the same **SCAN DONGLES** menu on both; only the dongle's willingness to
 be enrolled differs. (On the trial-UI JC beta the menu lives under **CONFIG**; on stable
@@ -65,12 +68,43 @@ On the JC (3.5"/4.3") screens: **SCAN DONGLES → select → RENAME**, type a fr
 
 ---
 
+## Webby: the lock and the dongle's own Wi-Fi
+
+A Webby ships **open**: the first GTi that scans it becomes its owner, no button needed
+(1.6.5). After that it behaves like a beta dongle: a second screen needs the BOOT-hold, or
+**SHARE** from an owner screen (2 minutes, one more screen). Up to 4 owners.
+
+Until 1.6.12 that lock only guarded *pairing* and *eject*. The disk itself travels over the
+dongle's own Wi-Fi (`GotekOMEGA-XXXX`, password `gotek1234` on every dongle) and nothing
+there checked who was sending, so at a club day any screen or phone could put a disk in
+any dongle. **Webby 1.6.13** closes that, in ESP-NOW mode only (on your home Wi-Fi the
+Wi-Fi access is the lock):
+
+- **While the dongle has an owner and still uses the default password**, only owner
+  screens get onto its Wi-Fi, onto port 3333 and onto the parts of its page that change
+  something. Anyone else is dropped from the Wi-Fi, refused on 3333, or told *locked* by the
+  page. A BOOT-hold of ~5 s (30 s window) or SHARE from an owner screen (2 min) opens the dongle
+  to anyone for that long — join, page, even a disk — which is how you get a phone onto a dongle
+  a screen already owns.
+- **Give the dongle its own password** (its page → *Wi-Fi* tab → *This dongle's own Wi-Fi*,
+  or from an owner screen). From then on the password is the lock: phones and PCs that know
+  it are welcome, nobody else gets on, and an owner screen learns the password by itself when
+  it pairs. You can rename the Wi-Fi there too (screens find the dongle by its radio address,
+  so a rename breaks nothing).
+- **Away from home** (home Wi-Fi saved, but no router in sight, so the dongle fell back to
+  ESP-NOW): a dongle with no owner does **not** take the first screen that scans. Hold BOOT
+  ~5 s to pair it, like a beta dongle.
+- **BOOT 15 s** wipes the owners *and* puts the name and password back to
+  `GotekOMEGA-XXXX` / `gotek1234`.
+
+---
+
 ## BOOT-button cheat-sheet (beta dongles)
 
 | Hold BOOT for… | Result |
 |---|---|
 | ~5–15 s, then release | Opens the 30-second **pairing** window (then SCAN → USE on the GTi) |
-| ~15 s (auto) | **Wipes all owners** — fires by itself, no release needed |
+| ~15 s (auto) | **Wipes all owners** — fires by itself, no release needed (Webby 1.6.13: also restores the default Wi-Fi name and password) |
 | under 5 s | Nothing (safe — ignores accidental taps) |
 
 Changed your mind mid-hold before 15 s? Unplug or tap reset — nothing is wiped until the
@@ -97,7 +131,14 @@ Fixed in current firmware (JC 5.6.9+). Update to the latest build.
 
 **Can a stranger pair with or steal my dongle?**
 On a beta (owner-lock) dongle, no — nothing enrols without the physical BOOT-hold, and a
-locked dongle ignores any GTi that isn't already an owner.
+locked dongle ignores any GTi that isn't already an owner. On a Webby, from 1.6.13, the same
+goes for the disk path: a stranger's screen or phone cannot put a disk in a dongle that has
+an owner, and once the dongle has its own Wi-Fi password only devices that know it can.
+
+**My phone can't join the dongle's Wi-Fi any more (Webby 1.6.13).**
+The dongle has an owner screen and still the default password, so it only lets owners on.
+Hold BOOT ~5 s, join within 30 s, and give the dongle its own password on the *Wi-Fi* tab;
+after that the password is what counts.
 
 ---
 
