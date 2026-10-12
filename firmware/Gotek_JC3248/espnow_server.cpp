@@ -68,10 +68,19 @@ static uint32_t crc32sw(uint32_t crc, const uint8_t* p, size_t n) {
 
 static uint8_t _xiao_mac[6] = {0};
 static String  _xiao_ip     = "";
+// lock-a: Webby 1.6.13 hands an owner screen its AP password + SSID in PAIR_REPLY (pad[40]=0x5A block).
+// Empty = the dongle still uses the default (DONGLE_AP_PASS) / we find its SSID by a BSSID scan.
+static String  _xiao_key    = "";
+static String  _xiao_ssid   = "";
+// lock-a: real pairing handshake. USE sends a unicast PAIR_HELLO to ONE dongle and only accepts a
+// PAIR_REPLY from that MAC; nothing else may change the pairing while we wait.
+static uint8_t _pairTarget[6] = {0};
+static volatile bool _pairWait = false, _pairGot = false;
+volatile bool g_espnow_lock_refused = false;   // lock-a: the last send was refused because we are not an owner (0x05)
 
 // ---------- Multi-dongle scan (Path 1: collect-all, pick one into active slot) ----------
 #define MAX_SCANNED 64   // hard ceiling (array size); runtime cap set from CONFIG.TXT CAP=
-struct ScannedDongle { uint8_t mac[6]; char ip[16]; uint8_t loaded; uint8_t lmac[6]; char lname[25]; uint8_t hd; };   // S11: + hd = PAIR_REPLY pad[1]   // lab14s: + who has a disk in it (Webby 1.6.6+)
+struct ScannedDongle { uint8_t mac[6]; char ip[16]; uint8_t loaded; uint8_t lmac[6]; char lname[25]; uint8_t hd; uint8_t own; };   // S11: + hd = PAIR_REPLY pad[1]; lock-a: + own   // lab14s: + who has a disk in it (Webby 1.6.6+)
 static ScannedDongle _scanned[MAX_SCANNED];
 static int  _scanned_count = 0;
 static volatile bool _scan_mode = false;
@@ -130,6 +139,7 @@ static void handleIncoming(const uint8_t* data, int len) {
         strncpy(_scanned[_scanned_count].ip, p->ip, 15);
         _scanned[_scanned_count].ip[15]=0;
         _scanned[_scanned_count].hd = p->pad[1];   // S11
+        _scanned[_scanned_count].own = (p->pad[100] == 0xD1 && p->pad[99] <= 2) ? p->pad[99] : 0xFF;   // lock-a: a 1.6.13 discover reply echoes 0xD1 in pad[100]
         scanNoteInUse(_scanned[_scanned_count], p);
         _scanned_count++;
         g_espnow_xiao_last_seen = millis();
@@ -137,9 +147,15 @@ static void handleIncoming(const uint8_t* data, int len) {
       return;
     }
 
+    if (!_pairWait || memcmp(p->mac, _pairTarget, 6) != 0) return;   // lock-a: only the dongle USE asked, and only while we ask
     memcpy(_xiao_mac, p->mac, 6);
     _xiao_ip = String(p->ip);
     g_espnow_paired = true;
+    _xiao_key = ""; _xiao_ssid = "";
+    if (p->pad[40] == 0x5A) {   // lock-a: Webby 1.6.13+ - this dongle's own AP password + SSID
+      uint8_t L = p->pad[41]; if (L > 32) L = 32; if (L) { char b[33]; memcpy(b, p->pad + 42, L); b[L] = 0; _xiao_key = String(b); }
+      uint8_t S = p->pad[74]; if (S > 24) S = 24; if (S) { char b[25]; memcpy(b, p->pad + 75, S); b[S] = 0; _xiao_ssid = String(b); }
+    }
     g_espnow_link_just_established = true;
     g_espnow_xiao_last_seen = millis();
     g_espnow_dongle_caps  = p->pad[0];   // v3.2.0+ dongles advertise the save protocol here
@@ -163,14 +179,18 @@ static void handleIncoming(const uint8_t* data, int len) {
         if (line.startsWith("XIAO_MAC=")) { lines += "XIAO_MAC=" + String(macStr) + "\n"; written = true; }
         else if (line.startsWith("XIAO_IP=")) { lines += "XIAO_IP=" + _xiao_ip + "\n"; }
         else if (line.startsWith("XIAO_HD=")) { }   // S11: rewritten below
+        else if (line.startsWith("XIAO_KEY=") || line.startsWith("XIAO_SSID=")) { }   // lock-a: rewritten below
         else { lines += line + "\n"; }
       }
       fr.close();
     }
     if (!written) lines += "XIAO_MAC=" + String(macStr) + "\n";
     lines += "XIAO_HD=" + String((int)g_espnow_dongle_board) + "\n";   // S11: survives a reboot (was reset to 0, so HD flings were refused)
+    if (_xiao_key.length())  lines += "XIAO_KEY="  + _xiao_key  + "\n";   // lock-a
+    if (_xiao_ssid.length()) lines += "XIAO_SSID=" + _xiao_ssid + "\n";   // lock-a
     cfgWriteAll(lines);   // S8: tmp + rename (Gotek_JC3248.ino)
-    Serial.printf("[NOW] Paired: MAC=%s IP=%s HD=%d\n", macStr, _xiao_ip.c_str(), (int)g_espnow_dongle_board);
+    Serial.printf("[NOW] Paired: MAC=%s IP=%s HD=%d key=%s\n", macStr, _xiao_ip.c_str(), (int)g_espnow_dongle_board, _xiao_key.length()?"custom":"default");
+    _pairGot = true;   // lock-a
     return;
   }
 
@@ -232,6 +252,8 @@ static void loadConfig() {
     }
     if (line.startsWith("XIAO_IP=")) _xiao_ip = line.substring(8);
     if (line.startsWith("XIAO_HD=")) g_espnow_dongle_board = (uint8_t)line.substring(8).toInt();   // S11
+    if (line.startsWith("XIAO_KEY="))  _xiao_key  = line.substring(9);    // lock-a
+    if (line.startsWith("XIAO_SSID=")) _xiao_ssid = line.substring(10);   // lock-a
   }
   f.close();
   if (g_espnow_paired) Serial.printf("[NOW] Loaded config: IP=%s\n", _xiao_ip.c_str());
@@ -277,6 +299,7 @@ void espnowBroadcastHello() {
   PktHello pkt = {};
   pkt.type = PKT_PAIR_HELLO;
   WiFi.macAddress(pkt.mac);
+  pkt.pad[0] = 0xD1;   // lock-a: DISCOVER ONLY - a 1.6.13 dongle answers without enrolling us (older ones still enrol, as before)
   _bcastPeer->send_pkt((uint8_t*)&pkt, sizeof(pkt));
 }
 
@@ -296,36 +319,28 @@ String espnowScanGetMac(int i) {
 
 // Commit a scanned dongle as the active target (copies into the proven single slot)
 bool espnowScanSelect(int i) {
+  // lock-a: was "copy the MAC, mark it paired" - no handshake at all. Now: a unicast PAIR_HELLO to THIS dongle, and
+  // it only counts once that dongle answers with PAIR_REPLY (handled in handleIncoming, which also persists
+  // XIAO_MAC/IP/HD/KEY/SSID). No answer = it belongs to another screen (or is out of reach); the old pairing stays.
   if (i<0 || i>=_scanned_count) return false;
   _scan_mode = false;
-  memcpy(_xiao_mac, _scanned[i].mac, 6);
-  _xiao_ip = String(_scanned[i].ip);
-  g_espnow_paired = true;
-  g_espnow_link_just_established = true;
-  g_espnow_xiao_last_seen = millis();
-  g_espnow_dongle_board = _scanned[i].hd;   // S11: was left at whatever the last dongle had
-
-  // Register as direct peer (same as the original pairing path)
-  if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
+  memcpy(_pairTarget, _scanned[i].mac, 6); _pairGot = false; _pairWait = true;
+  PktHello pkt = {}; pkt.type = PKT_PAIR_HELLO; WiFi.macAddress(pkt.mac);   // pad[0]=0: a real pairing request
+  GotekPeer* tp = nullptr;
+  if (!(_xiaoPeer && memcmp(_xiao_mac, _pairTarget, 6)==0)) { tp = new GotekPeer(_pairTarget, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr); if (!tp->add_peer()) { delete tp; tp = nullptr; } }
+  GotekPeer* via = tp ? tp : _xiaoPeer;
+  uint32_t t0 = millis(); int sent = 0;
+  while (!_pairGot && millis()-t0 < 2500) {
+    if (via && sent < 3 && millis()-t0 >= (uint32_t)sent*600) { via->send_pkt((uint8_t*)&pkt, sizeof(pkt)); sent++; }
+    delay(20);
+  }
+  _pairWait = false;
+  if (tp) { delete tp; tp = nullptr; }
+  if (!_pairGot) { Serial.printf("[NOW] USE: no PAIR_REPLY from dongle %d - not paired\n", i); return false; }
+  if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }   // the handler's peer may have clashed with tp: make it fresh
   _xiaoPeer = new GotekPeer(_xiao_mac, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
   if (!_xiaoPeer->add_peer()) { delete _xiaoPeer; _xiaoPeer = nullptr; }
-
-  // Persist active dongle to CONFIG.TXT (same keys as original pairing)
-  char macStr[18];
-  snprintf(macStr,sizeof(macStr),"%02X:%02X:%02X:%02X:%02X:%02X",
-           _xiao_mac[0],_xiao_mac[1],_xiao_mac[2],_xiao_mac[3],_xiao_mac[4],_xiao_mac[5]);
-  String lines=""; bool w1=false,w2=false;
-  File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
-  if(fr){while(fr.available()){String line=fr.readStringUntil('\n');line.trim();
-    if(line.startsWith("XIAO_MAC=")){lines+="XIAO_MAC="+String(macStr)+"\n";w1=true;}
-    else if(line.startsWith("XIAO_IP=")){lines+="XIAO_IP="+_xiao_ip+"\n";w2=true;}
-    else if(line.startsWith("XIAO_HD=")){}   // S11: rewritten below
-    else lines+=line+"\n";}fr.close();}
-  if(!w1)lines+="XIAO_MAC="+String(macStr)+"\n";
-  if(!w2)lines+="XIAO_IP="+_xiao_ip+"\n";
-  lines+="XIAO_HD="+String((int)g_espnow_dongle_board)+"\n";   // S11
-  cfgWriteAll(lines);   // S8: tmp + rename (Gotek_JC3248.ino)
-  Serial.printf("[NOW] Selected dongle %d: %s\n", i, macStr);
+  Serial.printf("[NOW] USE: paired with dongle %d (handshake ok)\n", i);
   return true;
 }
 
@@ -374,7 +389,8 @@ void espnowForgetActive(const uint8_t* mac){
   if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
   String lines=""; File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
   if(fr){ while(fr.available()){ String line=fr.readStringUntil('\n'); line.trim();
-    if(line.startsWith("XIAO_MAC=")||line.startsWith("XIAO_IP=")||line.startsWith("XIAO_HD=")) continue; lines+=line+"\n"; } fr.close(); }
+    if(line.startsWith("XIAO_MAC=")||line.startsWith("XIAO_IP=")||line.startsWith("XIAO_HD=")||line.startsWith("XIAO_KEY=")||line.startsWith("XIAO_SSID=")) continue; lines+=line+"\n"; } fr.close(); }
+  _xiao_key = ""; _xiao_ssid = "";   // lock-a
   g_espnow_dongle_board = 0;   // S11
   cfgWriteAll(lines);   // S8: tmp + rename (Gotek_JC3248.ino)
 }
@@ -391,6 +407,7 @@ void espnowSendShare(const uint8_t* mac){
   if (tp->add_peer()) for(int k=0;k<3;k++){ tp->send_pkt((uint8_t*)&pkt, sizeof(pkt)); delay(30); }
   delete tp;
 }
+int espnowScanOwnState(int i){ return (i<0||i>=_scanned_count) ? 0xFF : _scanned[i].own; }   // lock-a: 1 mine, 2 open, 0 locked, 0xFF unknown (old dongle)
 String espnowScanInUseBy(int i){
   if (i<0 || i>=_scanned_count || !_scanned[i].loaded) return "";
   static const uint8_t Z[6]={0,0,0,0,0,0};
@@ -458,7 +475,11 @@ static void tcpSendSetName(const char* ip){
 // (~0.2 s, first send only - remembered after) tells us the name; nothing found = the old "GotekOMEGA".
 static uint8_t _ssidMac[6] = {0};
 static String  _ssidName   = "";
+static const char* donglePass(const uint8_t* mac){   // lock-a: the paired dongle's own password, else the default
+  return (_xiao_key.length() && memcmp(mac, _xiao_mac, 6)==0) ? _xiao_key.c_str() : DONGLE_AP_PASS;
+}
 static String dongleSsid(const uint8_t* bssid){
+  if (_xiao_ssid.length() && memcmp(bssid, _xiao_mac, 6)==0) return _xiao_ssid;   // lock-a: known from PAIR_REPLY, no scan needed
   if (_ssidName.length() && memcmp(_ssidMac, bssid, 6)==0) return _ssidName;
   String s = DONGLE_AP_SSID;
   int n = WiFi.scanNetworks(false, false, false, 250, ESPNOW_CHANNEL, nullptr, bssid);
@@ -486,7 +507,7 @@ static String screenName(){
   uint8_t m[6]; WiFi.macAddress(m); char b[12]; snprintf(b, sizeof(b), "GTi-%02X%02X", m[4], m[5]); return String(b);
 }
 static bool tcpClaim(const char* ip){          // true = go ahead and send
-  _claimCancelled = false;
+  _claimCancelled = false; g_espnow_lock_refused = false;
   for (int pass = 0; pass < 2; pass++) {
     WiFiClient c;
     if (!c.connect(ip, DONGLE_TCP_PORT)) return true;          // can't ask: old behaviour
@@ -496,6 +517,7 @@ static bool tcpClaim(const char* ip){          // true = go ahead and send
     c.write(esc, 5); c.write(my, 6); c.write(&fl, 1); c.write(&L, 1); c.write((const uint8_t*)nm.c_str(), L);
     uint32_t t0 = millis(); while (!c.available() && millis()-t0 < 1500) delay(5);
     int r = c.available() ? c.read() : -1;
+    if (r == 0x05) { c.stop(); delay(20); g_espnow_lock_refused = true; _claimCancelled = true; Serial.println("[TCP] dongle: not an owner (0x05)"); return false; }   // lock-a
     if (r != 0x02 && r != 0x03) { c.stop(); delay(20); return true; }
     char who[25] = {0}; t0 = millis(); while (!c.available() && millis()-t0 < 500) delay(2);
     int wl = c.available() ? c.read() : 0; if (wl > 24) wl = 24;
@@ -529,7 +551,7 @@ static bool sendDiskCore(const uint8_t* mac, const char* ipc, uint32_t size, uin
   delay(200);
   // Target the specific dongle by BSSID. Without the BSSID, with multiple dongles powered on we'd
   // associate to a random one. lab14s: and by its REAL Wi-Fi name (GotekOMEGA or GotekOMEGA-XXXX).
-  { String ss = dongleSsid(mac); WiFi.begin(ss.c_str(), DONGLE_AP_PASS, ESPNOW_CHANNEL, (uint8_t*)mac); }
+  { String ss = dongleSsid(mac); WiFi.begin(ss.c_str(), donglePass(mac), ESPNOW_CHANNEL, (uint8_t*)mac); }   // lock-a: own password
 
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis()-t0 < connectTimeoutMs) {
@@ -609,6 +631,7 @@ static bool sendDiskCore(const uint8_t* mac, const char* ipc, uint32_t size, uin
   if (client.available()) {
     uint8_t resp = client.read();
     ok = (resp == 0x01);
+    if (resp == 0x05) g_espnow_lock_refused = true;   // lock-a: not an owner
     Serial.printf("[TCP] XIAO response: 0x%02X (%s)\n", resp, ok?"OK":"ERROR");
     if (ok) {
       // v3.2.0 dongles append a 4-byte load_id after the ack (old dongles don't —
@@ -816,7 +839,7 @@ bool espnowFetchSave(SavePersistCb persist) {
   WiFi.setAutoReconnect(false);
   WiFi.disconnect(false, true);
   delay(200);
-  { String ss = dongleSsid(_xiao_mac); WiFi.begin(ss.c_str(), DONGLE_AP_PASS, ESPNOW_CHANNEL, (uint8_t*)_xiao_mac); }   // lab14s: real Wi-Fi name
+  { String ss = dongleSsid(_xiao_mac); WiFi.begin(ss.c_str(), donglePass(_xiao_mac), ESPNOW_CHANNEL, (uint8_t*)_xiao_mac); }   // lock-a: own password   // lab14s: real Wi-Fi name
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) delay(200);
   if (WiFi.status() != WL_CONNECTED) { dongleSsidForget(); Serial.println("[SAVE] WiFi join failed"); restoreEspNow(); return false; }
