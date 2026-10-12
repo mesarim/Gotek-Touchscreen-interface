@@ -83,7 +83,7 @@ Wi-Fi access is the lock):
 - **While the dongle has an owner and still uses the default password**, only owner
   screens get onto its Wi-Fi, onto port 3333 and onto the parts of its page that change
   something. Anyone else is dropped from the Wi-Fi, refused on 3333, or told *locked* by the
-  page. A BOOT-hold of ~5 s (30 s window) or SHARE from an owner screen (2 min) opens the dongle
+  page. A BOOT-hold of ~5 s or SHARE from an owner screen (2 min either way) opens the dongle
   to anyone for that long — join, page, even a disk — which is how you get a phone onto a dongle
   a screen already owns.
 - **Give the dongle its own password** (its page → *Wi-Fi* tab → *This dongle's own Wi-Fi*,
@@ -103,7 +103,7 @@ Wi-Fi access is the lock):
 
 | Hold BOOT for… | Result |
 |---|---|
-| ~5–15 s, then release | Opens the 30-second **pairing** window (then SCAN → USE on the GTi) |
+| ~5–15 s, then release | Opens the 30-second **pairing** window (then SCAN → USE on the GTi); 2 minutes on a Webby 1.6.13+ |
 | ~15 s (auto) | **Wipes all owners** — fires by itself, no release needed (Webby 1.6.13: also restores the default Wi-Fi name and password) |
 | under 5 s | Nothing (safe — ignores accidental taps) |
 
@@ -137,7 +137,7 @@ an owner, and once the dongle has its own Wi-Fi password only devices that know 
 
 **My phone can't join the dongle's Wi-Fi any more (Webby 1.6.13).**
 The dongle has an owner screen and still the default password, so it only lets owners on.
-Hold BOOT ~5 s, join within 30 s, and give the dongle its own password on the *Wi-Fi* tab;
+Hold BOOT ~5 s, join within 2 minutes, and give the dongle its own password on the *Wi-Fi* tab;
 after that the password is what counts.
 
 ---
