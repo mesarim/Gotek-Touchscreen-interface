@@ -826,6 +826,76 @@ static void restoreEspNow() {
   }
 }
 
+// ── lock-b: owner commands to the paired dongle (Webby 1.6.13, TCP 3333 escape 0xFFFFFFFF + cmd) ──
+// 0x0B SET_SSID len+bytes, 0x0C SET_APPASS len+bytes (len 0 = back to the default), 0x0D LIST_OWNERS,
+// 0x0E REMOVE_OWNER mac[6]. Replies: 0x01 ok, 0x00 bad input, 0x05 not an owner. Joins the dongle's own AP
+// with its known password, then restores ESP-NOW. Returns 1 ok, 0 bad input, 5 not owner, -1 unreachable.
+static void persistKeySsid(){
+  String lines=""; File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
+  if(fr){ while(fr.available()){ String line=fr.readStringUntil('\n'); line.trim();
+    if(line.startsWith("XIAO_KEY=")||line.startsWith("XIAO_SSID=")) continue; lines+=line+"\n"; } fr.close(); }
+  if(_xiao_key.length())  lines+="XIAO_KEY="+_xiao_key+"\n";
+  if(_xiao_ssid.length()) lines+="XIAO_SSID="+_xiao_ssid+"\n";
+  cfgWriteAll(lines);
+}
+static int dongleCmd(uint8_t cmd, const uint8_t* payload, size_t plen, uint8_t* reply, size_t rmax, size_t* rlen){
+  if (!g_espnow_paired) return -1;
+  if (rlen) *rlen = 0;
+  String ip = _xiao_ip.length() ? _xiao_ip : String(DONGLE_AP_IP);
+  ESP_NOW.end(); delay(100);
+  WiFi.mode(WIFI_STA); delay(100);
+  WiFi.persistent(false); WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, true); delay(200);
+  { String ss = dongleSsid(_xiao_mac); WiFi.begin(ss.c_str(), donglePass(_xiao_mac), ESPNOW_CHANNEL, (uint8_t*)_xiao_mac); }
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) delay(200);
+  if (WiFi.status() != WL_CONNECTED) { dongleSsidForget(); Serial.println("[DONGLE] join failed"); restoreEspNow(); return -1; }
+  int res = -1;
+  WiFiClient c;
+  if (c.connect(ip.c_str(), DONGLE_TCP_PORT)) {
+    c.setNoDelay(true);
+    uint8_t esc[5] = {0xFF,0xFF,0xFF,0xFF, cmd};
+    c.write(esc, 5); if (plen) c.write(payload, plen);
+    t0 = millis(); while (!c.available() && millis()-t0 < 3000) { if (!c.connected()) break; delay(5); }
+    int r = c.available() ? c.read() : -1;
+    if (r == 0x01) {
+      res = 1;
+      size_t got = 0; t0 = millis();
+      while (reply && got < rmax && millis()-t0 < 400) { int ch = c.read(); if (ch < 0) { if (!c.connected()) break; delay(2); continue; } reply[got++] = (uint8_t)ch; t0 = millis(); }
+      if (rlen) *rlen = got;
+    } else if (r == 0x05) res = 5; else if (r == 0x00) res = 0;
+    c.stop();
+  }
+  Serial.printf("[DONGLE] cmd 0x%02X -> %d\n", cmd, res);
+  restoreEspNow();
+  return res;
+}
+int espnowDongleSetSsid(const String& ssid){
+  if (ssid.length() < 1 || ssid.length() > 24) return 0;
+  uint8_t b[25]; b[0] = (uint8_t)ssid.length(); memcpy(b+1, ssid.c_str(), b[0]);
+  int r = dongleCmd(0x0B, b, 1+b[0], nullptr, 0, nullptr);
+  if (r == 1) { _xiao_ssid = ssid; persistKeySsid(); }   // the dongle re-raises its AP ~300 ms after the reply
+  return r;
+}
+int espnowDongleSetPass(const String& pass){   // "" = back to the default password
+  if (pass.length() && (pass.length() < 8 || pass.length() > 32)) return 0;
+  uint8_t b[33]; b[0] = (uint8_t)pass.length(); if (b[0]) memcpy(b+1, pass.c_str(), b[0]);
+  int r = dongleCmd(0x0C, b, 1+b[0], nullptr, 0, nullptr);
+  if (r == 1) { _xiao_key = pass; persistKeySsid(); }
+  return r;
+}
+int espnowDongleListOwners(uint8_t macs[][6], uint8_t* flags, int maxN, int* n){   // flags bit0 = this screen
+  uint8_t rb[1+4*7]; size_t rl = 0; *n = 0;
+  int r = dongleCmd(0x0D, nullptr, 0, rb, sizeof rb, &rl);
+  if (r != 1 || rl < 1) return r;
+  int cnt = rb[0]; if (cnt > maxN) cnt = maxN;
+  for (int k = 0; k < cnt && (size_t)(1+k*7+7) <= rl; k++) { memcpy(macs[k], rb+1+k*7, 6); if (flags) flags[k] = rb[1+k*7+6]; (*n)++; }
+  return r;
+}
+int espnowDongleRemoveOwner(const uint8_t* mac){ return dongleCmd(0x0E, mac, 6, nullptr, 0, nullptr); }
+String espnowDongleSsid(){ return _xiao_ssid; }
+bool   espnowDongleHasKey(){ return _xiao_key.length() > 0; }
+
 bool espnowFetchSave(SavePersistCb persist) {
   if (!g_espnow_paired || !persist) return false;
   String ip = _xiao_ip.length() ? _xiao_ip : String(DONGLE_AP_IP);

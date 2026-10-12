@@ -50,7 +50,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-lab2h-JC3248"   // A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-lab2i-JC3248"   // A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -4211,7 +4211,7 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_TESTPAGE, IA_TESTBACK, IA_NEOUI, IA_CRKSTYLE, IA_SAVEDWIFI, IA_FLEET, IA_ORPHAN };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_TESTPAGE, IA_TESTBACK, IA_NEOUI, IA_CRKSTYLE, IA_SAVEDWIFI, IA_FLEET, IA_ORPHAN, IA_DONGLESETUP };
 #if defined(GTI_FLEET)
 static int  pfOrphanCount();     // #lock: locked dongles this screen does not own (defined with the fleet console below)
 static void doReleaseOrphans();  // #lock: offer our token to each of them - only a real owner token releases one
@@ -4280,6 +4280,7 @@ static void drawInfoPanel(){
    add(String(T(L_CFG_MODE))+": "+mlbl, mcol, TFT_BLACK, IA_MODE);}
   if(g_wireless_mode && !g_link_home){   // ESP-NOW: blind Webby dongles (their own AP, no router)
     add(espnowIsPaired()?String(T(L_SWITCH_DONGLE)):String(T(L_SCAN_DONGLES)), espnowIsPaired()?COL_GREEN:COL_AMBER, TFT_BLACK, IA_DONGLE);
+    if(espnowIsPaired()) add(String("DONGLE SETUP"), COL_ACCENT, TFT_WHITE, IA_DONGLESETUP);   // lock-b
     // lab15p: the GTi's own Wi-Fi - name / password and where the web page is (read-only rows)
     add(String("WIFI ")+espnowApName()+" / "+espnowApPass(), COL_BAR, COL_LIT, IA_NONE);
     add("WEB PAGE: 192.168.4.1", COL_BAR, COL_LIT, IA_NONE);
@@ -7143,7 +7144,9 @@ static void doManual(const String& path,const char* title=nullptr){   // lab15j:
 }
 
 // ── On-screen keyboard (blocking). Returns true on SAVE (result in out), false on CANCEL. ──
-static bool onScreenKeyboard(const String&macLabel,const String&initial,String&out){
+static bool onScreenKeyboardT(const char*title,const String&macLabel,const String&initial,String&out);
+static bool onScreenKeyboard(const String&macLabel,const String&initial,String&out){ return onScreenKeyboardT(T(L_NAME_DONGLE),macLabel,initial,out); }
+static bool onScreenKeyboardT(const char*title,const String&macLabel,const String&initial,String&out){   // lock-b: + title
   out=initial;
   static const char* KROWS[4]={"1234567890","QWERTYUIOP","ASDFGHJKL-","ZXCVBNM'."};
   const int kh=42,gap=4;
@@ -7157,7 +7160,7 @@ static bool onScreenKeyboard(const String&macLabel,const String&initial,String&o
       // Theme-aware inks: on light bars/panels (PAPER) amber/white/dim gray are
       // unreadable — fall back to dark ink via inkFor().
       bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
-      gfx_fillRect(0,0,VW,22,COL_BAR);gfx_setTextSize(1);gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);gfx_setCursor(6,7);gfx_print(T(L_NAME_DONGLE));
+      gfx_fillRect(0,0,VW,22,COL_BAR);gfx_setTextSize(1);gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);gfx_setCursor(6,7);gfx_print(title);
       gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR);gfx_setCursor(VW-gfx_textWidth(macLabel)-6,7);gfx_print(macLabel);
       gfx_fillRoundRect(8,28,VW-16,34,6,COL_PANEL);gfx_drawRoundRect(8,28,VW-16,34,6,COL_AMBER);
       gfx_setTextSize(2);gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL);
@@ -7198,6 +7201,85 @@ static bool onScreenKeyboard(const String&macLabel,const String&initial,String&o
 }
 
 // Full-screen dongle scan + picker. Scans ~4s, lists all dongles found, then USE/RENAME/BACK.
+
+// ── lock-b: DONGLE SETUP - an owner screen sets up its paired dongle (Webby 1.6.13+) ──
+// Wi-Fi name, Wi-Fi password (own / back to default), owners (remove one), SHARE, FORGET. Firmware is NOT updated here.
+static void dongleMsg(const char*l1,const char*l2,uint16_t c){
+  gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(c,COL_BG);gfx_setCursor((VW-gfx_textWidth(l1))/2,VH/2-20);gfx_print(l1);
+  if(l2&&*l2){gfx_setTextSize(1);gfx_setTextColor(COL_LIT,COL_BG);gfx_setCursor((VW-gfx_textWidth(l2))/2,VH/2+10);gfx_print(l2);}
+  gfx_flush();
+}
+static void dongleResult(int r,const char*okText){
+  if(r==1)       dongleMsg(okText,"",COL_GREEN);
+  else if(r==5)  dongleMsg("NOT AN OWNER","this screen does not own the dongle (USE it first)",COL_ORANGE);
+  else if(r==0)  dongleMsg("NOT ACCEPTED","the dongle refused the value (length / characters)",COL_ORANGE);
+  else           dongleMsg("NO CONTACT","dongle not reachable - on, in range, Webby 1.6.13+?",COL_ORANGE);
+  msgHold();
+}
+static void doDongleOwners(){
+  uint8_t macs[4][6]; uint8_t fl[4]={0}; int n=0;
+  dongleMsg("OWNERS","asking the dongle...",COL_ACCENT);
+  int r=espnowDongleListOwners(macs,fl,4,&n);
+  if(r!=1){dongleResult(r,"");return;}
+  int sel=-1; bool dirty=true,down=false; int downX=0,downY=0; const int rowH=40,top=30,btnY=VH-40;
+  kbWaitRelease(600);
+  while(true){
+    webPanelPoll();
+    if(dirty){dirty=false;gfx_fillScreen(COL_BG);gfx_setTextSize(1);gfx_setTextColor(COL_ORANGE,COL_BG);gfx_setCursor(8,8);gfx_print("Owners of this dongle ("+String(n)+" of 4) - tap one to remove:");
+      for(int k=0;k<n;k++){int y=top+k*rowH;char m[18];snprintf(m,sizeof m,"%02X:%02X:%02X:%02X:%02X:%02X",macs[k][0],macs[k][1],macs[k][2],macs[k][3],macs[k][4],macs[k][5]);
+        uint16_t bg=(k==sel)?COL_SEL:COL_PANEL;gfx_fillRoundRect(8,y,VW-16,rowH-4,6,bg);gfx_setTextColor(inkFor(bg),bg);gfx_setCursor(18,y+13);
+        gfx_print(String(m)+((fl[k]&1)?"   (this screen)":""));}
+      int bw=(VW-3*4)/2;gfx_fillRoundRect(4,btnY+2,bw,34,6,sel>=0?(uint16_t)0x8000:COL_BAR);gfx_setTextColor(TFT_WHITE,sel>=0?(uint16_t)0x8000:COL_BAR);gfx_setCursor(4+(bw-gfx_textWidth("REMOVE"))/2,btnY+14);gfx_print("REMOVE");
+      gfx_fillRoundRect(8+bw,btnY+2,bw,34,6,COL_BAR);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setCursor(8+bw+(bw-gfx_textWidth("BACK"))/2,btnY+14);gfx_print("BACK");gfx_flush();}
+    uint16_t tx=0,ty=0; bool t=Touch_ReadFrame(); if(t)t=getTouchXY(&tx,&ty);
+    if(t){if(!down){down=true;downX=tx;downY=ty;}}
+    else if(down){down=false;
+      if(downY>=btnY){int bw=(VW-3*4)/2; if(downX<4+bw){ if(sel>=0){
+          if(fl[sel]&1){dongleMsg("NOT REMOVED","use FORGET to remove this screen",COL_ORANGE);msgHold();dirty=true;continue;}
+          int rr=espnowDongleRemoveOwner(macs[sel]); dongleResult(rr,"REMOVED"); return; } }
+        else return; }
+      else{int k=(downY-top)/rowH; if(downY>=top&&k>=0&&k<n){sel=k;dirty=true;}}}
+    delay(15);
+  }
+}
+static void doDongleSetup(){
+  if(!espnowIsPaired()){dongleMsg("NO DONGLE","pair one first: SCAN DONGLES, pick it, USE",COL_ORANGE);msgHold();return;}
+  ensureEspNow();
+  bool dirty=true,down=false; int downX=0,downY=0;
+  const int rowH=44,top=30; const char* L[6]={"WIFI NAME","WIFI PASSWORD","DEFAULT PASSWORD","OWNERS","SHARE (2 MIN)","FORGET DONGLE"};
+  kbWaitRelease(600);
+  while(true){
+    webPanelPoll();
+    if(dirty){dirty=false;gfx_fillScreen(COL_BG);gfx_setTextSize(1);gfx_setTextColor(COL_ORANGE,COL_BG);gfx_setCursor(8,8);
+      String mac=espnowGetXiaoMac(),nm=getDongleName(mac);gfx_print("DONGLE SETUP - "+(nm.length()?nm:("OMEGA-"+mac.substring(12))));
+      int cols=g_portrait?1:2,colW=(VW-8*(cols+1))/cols;
+      for(int k=0;k<6;k++){int c=k%cols,r=k/cols,x=8+c*(colW+8),y=top+r*rowH;uint16_t bg=(k==5)?(uint16_t)0x8000:(k==4)?COL_ORANGE:COL_ACCENT;
+        gfx_fillRoundRect(x,y,colW,rowH-6,8,bg);gfx_setTextColor(inkFor(bg),bg);gfx_setCursor(x+10,y+8);gfx_print(L[k]);
+        String v=(k==0)?(espnowDongleSsid().length()?espnowDongleSsid():String("default name")):(k==1)?String(espnowDongleHasKey()?"own password":"default password"):String("");
+        if(v.length()){gfx_setCursor(x+10,y+22);gfx_print(v);}}
+      int bw=120;gfx_fillRoundRect((VW-bw)/2,VH-40,bw,34,6,COL_BAR);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setCursor((VW-gfx_textWidth(T(L_BACK)))/2,VH-28);gfx_print(T(L_BACK));gfx_flush();}
+    uint16_t tx=0,ty=0; bool t=Touch_ReadFrame(); if(t)t=getTouchXY(&tx,&ty);
+    if(t){if(!down){down=true;downX=tx;downY=ty;}}
+    else if(down){down=false;
+      if(downY>=VH-44) return;   // BACK
+      int cols=g_portrait?1:2,colW=(VW-8*(cols+1))/cols; int c=(downX-8)/(colW+8), r=(downY-top)/rowH; int k=r*cols+c;
+      if(downY<top||c<0||c>=cols||k<0||k>5){continue;}
+      String mac=espnowGetXiaoMac(), lbl="OMEGA-"+mac.substring(12), out;
+      if(k==0){ if(onScreenKeyboardT("DONGLE WIFI NAME",lbl,espnowDongleSsid(),out)&&out.length()){ dongleMsg("SAVING","renaming the dongle's Wi-Fi...",COL_ACCENT); dongleResult(espnowDongleSetSsid(out),"WIFI RENAMED"); } }
+      else if(k==1){ if(onScreenKeyboardT("DONGLE WIFI PASSWORD (8+)",lbl,"",out)&&out.length()){
+          if(out.length()<8){dongleMsg("TOO SHORT","at least 8 characters",COL_ORANGE);msgHold();}
+          else { dongleMsg("SAVING","setting the dongle's password...",COL_ACCENT); dongleResult(espnowDongleSetPass(out),"PASSWORD SET"); } } }
+      else if(k==2){ dongleMsg("SAVING","back to the default password...",COL_ACCENT); dongleResult(espnowDongleSetPass(""),"DEFAULT PASSWORD"); }
+      else if(k==3){ doDongleOwners(); }
+      else if(k==4){ uint8_t m[6]; for(int i=0;i<6;i++) m[i]=(uint8_t)strtoul(mac.substring(i*3,i*3+2).c_str(),nullptr,16);
+          espnowSendShare(m); dongleMsg("SHARED","within 2 minutes another screen can USE it",COL_ORANGE); msgHold(); }
+      else if(k==5){ uint8_t m[6]; for(int i=0;i<6;i++) m[i]=(uint8_t)strtoul(mac.substring(i*3,i*3+2).c_str(),nullptr,16);
+          espnowSendUnpair(m); espnowForgetActive(m); setDongleName(mac,""); dongleMsg("FORGOTTEN","this screen is no longer an owner",(uint16_t)0xE8C4); msgHold(); return; }
+      dirty=true; kbWaitRelease(600);
+    }
+    delay(15);
+  }
+}
 static void doScanDongles(){
   ensureEspNow();
   espnowScanBegin();
@@ -7258,7 +7340,7 @@ static void doScanDongles(){
         int thumbY=trackY+(trackH-thumbH)*scanScroll/maxScroll;
         gfx_fillRect(VW-4,trackY,3,trackH,COL_PANEL);gfx_fillRect(VW-4,thumbY,3,thumbH,COL_AMBER);}
       bool selLocked=(n>0)?getDongleLock(espnowScanGetMac(sel)):false;
-      int bw=(VW-7*4)/6,bx=4;const char* BL[6]={"USE","RENAME","DEL","SHARE",selLocked?"UNLOCK":"LOCK","BACK"};uint16_t BC[6]={COL_GREEN,COL_ACCENT,(uint16_t)0x8000,COL_ORANGE,COL_AMBER,COL_BAR};   // lab14s: + SHARE
+      int bw=(VW-7*4)/6,bx=4;const char* BL[6]={"USE","RENAME","DEL","SHARE","SETUP","BACK"};(void)selLocked;/* lock-b: SETUP replaces the LOCK button that never did anything on the dongle */uint16_t BC[6]={COL_GREEN,COL_ACCENT,(uint16_t)0x8000,COL_ORANGE,COL_AMBER,COL_BAR};   // lab14s: + SHARE
       for(int i=0;i<6;i++){gfx_fillRoundRect(bx,btnBarY+2,bw,34,6,BC[i]);gfx_setTextColor(inkFor(BC[i]),BC[i]);gfx_setTextSize(1);gfx_setCursor(bx+(bw-gfx_textWidth(BL[i]))/2,btnBarY+14);gfx_print(BL[i]);bx+=bw+4;}
       gfx_flush();
     }
@@ -7292,12 +7374,10 @@ static void doScanDongles(){
             {const char*s="SCAN, pick this dongle, USE.";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2+18);gfx_print(s);}
             gfx_flush();delay(2200);
             uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<500)delay(10);down=false;dirty=true;}
-          else if(i==4){   // LOCK / UNLOCK — Webby security: lock this dongle to this GTi, or open it up
-            uint8_t m[6]; espnowScanMacBytes(sel,m); String mac=espnowScanGetMac(sel);
-            bool now=!getDongleLock(mac);
-            if(now) espnowSendLock(m); else espnowSendUnlock(m);
-            setDongleLock(mac,now);
-            gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_AMBER,COL_BG);{const char*s=now?"LOCKED":"UNLOCKED";gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8);gfx_print(s);}gfx_flush();delay(800);
+          else if(i==4){   // lock-b: SETUP - the paired dongle's Wi-Fi name / password / owners
+            String mac=espnowScanGetMac(sel);
+            if(!(espnowIsPaired()&&espnowGetXiaoMac()==mac)){dongleMsg("USE IT FIRST","pick this dongle and tap USE, then SETUP",COL_ORANGE);msgHold();}
+            else doDongleSetup();
             uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<500)delay(10);down=false;dirty=true;}
           else break; // BACK (i==5)
         } else if(downY>=listTop&&downY<listTop+maxRows*rowH){int slot=(downY-listTop)/rowH,idx=scanScroll+slot; if(idx>=0&&idx<n&&idx!=sel){sel=idx;dirty=true;}}
@@ -8323,6 +8403,7 @@ static void infoAction(uint8_t act){
     case IA_ROTATE: g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_COMPACT: g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_DONGLE: doPairNow();drawInfoFull();break;
+    case IA_DONGLESETUP: doDongleSetup();g_info_showing=true;drawInfoFull();break;   // lock-b
     case IA_HIVEMIND: g_hivemind=!g_hivemind;saveConfigKey("HIVEMIND",g_hivemind?"ON":"OFF");drawInfoFull();break;
     case IA_HOMEWIFI: doHomeWifiSetup(); drawInfoFull(); break;   // on-screen SSID/password entry
     case IA_RESCAN: doRescan();break;
