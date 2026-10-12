@@ -621,6 +621,7 @@ static bool apStationMac(const IPAddress& ip, uint8_t out[6]){
 // boot and again from loop() when an owner changed either (after the reply has left): every station drops
 // once and reconnects with the new settings - no reboot, the Amiga keeps its disk.
 static void applyApConfig(){
+  if (g_webmode != 0) return;   // home-WiFi mode has no AP of ours; the settings wait in WEBBY.TXT for the next ESP-NOW boot
   uint8_t apm[6] = {0}; esp_read_mac(apm, ESP_MAC_WIFI_SOFTAP);
   char apid[24]; snprintf(apid, sizeof(apid), "%s-%02X%02X", AP_SSID, apm[4], apm[5]);
   strncpy(g_ap_name, g_ap_ssid.length() ? g_ap_ssid.c_str() : apid, sizeof(g_ap_name)-1); g_ap_name[sizeof(g_ap_name)-1] = 0;
