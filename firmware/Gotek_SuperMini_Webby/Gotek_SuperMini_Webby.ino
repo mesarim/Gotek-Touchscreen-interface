@@ -68,7 +68,7 @@
 #else
 #define WEBBY_BOARD    "supermini"
 #endif
-#define FW_VERSION     "Webby-1.6.13-" WEBBY_BOARD   // 1.6.13 (12 Oct 2026, Dimmy): the owner lock covers the DISK path in ESP-NOW mode (Mez, after Kickstart: the lock only guarded pairing/eject, any screen or phone with gotek1234 could fling) - while the dongle has an owner and its AP password is still the default, only owner stations may join the AP (others are deauthed), use TCP 3333 (0x05) or the mutating web routes (403) - a BOOT 5 s / SHARE window (both 2 min now, BOOT was 30 s) opens all of that to anyone for its duration, so a phone can get on and set a password; a dongle that fell back to ESP-NOW because the home join failed (= away from home) no longer enrols the first screen that scans - BOOT 5 s or SHARE opens it; /status and /api/system/info say locked + owners; the dongle gets its OWN AP name and password (its page, Wi-Fi tab, or an owner screen over TCP 0x0B SET_SSID / 0x0C SET_APPASS; also 0x0D LIST_OWNERS / 0x0E REMOVE_OWNER), once a password is set it is the gate and the MAC checks are off; an owner screen learns password + name in the pairing reply (pad[40]=0x5A), never the broadcast hello; BOOT 15 s wipes owners AND restores GotekOMEGA-XXXX / gotek1234; a new AP name/password is applied live (no reboot, the Amiga keeps its disk); WEBBY.TXT has one writer, so the device name survives a creds wipe | 1.6.12 (8 Oct 2026, Dimmy): a fling or browser upload that fails leaves the dongle cleanly EMPTY (no stale dirty map / load_id, nothing is wiped before the first payload byte, a header with no body no longer ejects the Amiga's disk or blocks 30 s) | Config-tab Save keeps the stored password (it used to write PASS= blank and reboot onto the own AP) | an aborted OTA can be retried without a power cycle | a home join that failed at boot is retried every 3 min while the dongle is idle | first fleet election after a full beacon round, peers stale after 5 missed beacons (was: every boot grabbed gotekomega.local for 12 s) | pairing reply says HD-capable + max image bytes (pad[1..6]) | /api/wifi/scan served, /api/wifi/status with the keys the page reads, rssi in /status | the shared page comes straight from firmware/shared (the dongle folders carried a copy from 4 Sep) | 1.6.11: the fleet leader answers to gotekomega.local AND its own gotekomega-xxxx.local | /status has "ap_mac" (the MAC a paired screen knows) | the phone's "sign in to network" window shows a short signpost (keep the network, then open 192.168.4.1 in the browser) instead of the app, which half-worked there - no disk upload, and it closed when you kept the network | 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
+#define FW_VERSION     "Webby-1.6.13-" WEBBY_BOARD   // 1.6.13 (12 Oct 2026, Dimmy): the owner lock covers the DISK path in ESP-NOW mode (Mez, after Kickstart: the lock only guarded pairing/eject, any screen or phone with gotek1234 could fling) - while the dongle has an owner and its AP password is still the default, only owner stations may join the AP (others are deauthed at the join, and swept every 2 s if they were already on), use TCP 3333 (0x05) or the mutating web routes (403) - a BOOT 5 s / SHARE window (both 2 min now, BOOT was 30 s) opens all of that to anyone for its duration, so a phone can get on and set a password; a dongle that fell back to ESP-NOW because the home join failed (= away from home) no longer enrols the first screen that scans - BOOT 5 s or SHARE opens it; /status and /api/system/info say locked + owners; the dongle gets its OWN AP name and password (its page, Wi-Fi tab, or an owner screen over TCP 0x0B SET_SSID / 0x0C SET_APPASS; also 0x0D LIST_OWNERS / 0x0E REMOVE_OWNER), once a password is set it is the gate and the MAC checks are off; an owner screen learns password + name in the pairing reply (pad[40]=0x5A), never the broadcast hello; BOOT 15 s wipes owners AND restores GotekOMEGA-XXXX / gotek1234; a new AP name/password is applied live (no reboot, the Amiga keeps its disk); WEBBY.TXT has one writer, so the device name survives a creds wipe | 1.6.12 (8 Oct 2026, Dimmy): a fling or browser upload that fails leaves the dongle cleanly EMPTY (no stale dirty map / load_id, nothing is wiped before the first payload byte, a header with no body no longer ejects the Amiga's disk or blocks 30 s) | Config-tab Save keeps the stored password (it used to write PASS= blank and reboot onto the own AP) | an aborted OTA can be retried without a power cycle | a home join that failed at boot is retried every 3 min while the dongle is idle | first fleet election after a full beacon round, peers stale after 5 missed beacons (was: every boot grabbed gotekomega.local for 12 s) | pairing reply says HD-capable + max image bytes (pad[1..6]) | /api/wifi/scan served, /api/wifi/status with the keys the page reads, rssi in /status | the shared page comes straight from firmware/shared (the dongle folders carried a copy from 4 Sep) | 1.6.11: the fleet leader answers to gotekomega.local AND its own gotekomega-xxxx.local | /status has "ap_mac" (the MAC a paired screen knows) | the phone's "sign in to network" window shows a short signpost (keep the network, then open 192.168.4.1 in the browser) instead of the app, which half-worked there - no disk upload, and it closed when you kept the network | 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
 #define ESPNOW_CHANNEL 6
 //  Board profile 
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -623,12 +623,42 @@ static void applyApConfig(){
   WiFi.softAP(g_ap_name, g_ap_pass.length() ? g_ap_pass.c_str() : AP_PASS, ESPNOW_CHANNEL);
   Serial.printf("[AP] %s (%s password)\n", g_ap_name, g_ap_pass.length() ? "own" : "default");
 }
+// Who is on our AP right now (MAC + association id), kept from the connect/disconnect events: the station
+// list IDF hands out has no aid, and esp_wifi_deauth_sta() wants one. Written on the event task, read from
+// loop() - a spinlock keeps the two apart.
+struct ApSta { uint8_t mac[6]; uint16_t aid; };
+static ApSta g_ap_sta[10]; static uint8_t g_ap_sta_n = 0;
+static portMUX_TYPE g_ap_sta_mux = portMUX_INITIALIZER_UNLOCKED;
+static void apStaRemember(const uint8_t* mac, uint16_t aid){
+  portENTER_CRITICAL(&g_ap_sta_mux);
+  uint8_t i = 0; while (i < g_ap_sta_n && memcmp(g_ap_sta[i].mac, mac, 6)) i++;
+  if (i < g_ap_sta_n) g_ap_sta[i].aid = aid;
+  else if (g_ap_sta_n < 10) { memcpy(g_ap_sta[g_ap_sta_n].mac, mac, 6); g_ap_sta[g_ap_sta_n].aid = aid; g_ap_sta_n++; }
+  portEXIT_CRITICAL(&g_ap_sta_mux);
+}
+static void apStaForget(const uint8_t* mac){
+  portENTER_CRITICAL(&g_ap_sta_mux);
+  for (uint8_t i = 0; i < g_ap_sta_n; i++) if (!memcmp(g_ap_sta[i].mac, mac, 6)) { g_ap_sta[i] = g_ap_sta[g_ap_sta_n-1]; g_ap_sta_n--; break; }
+  portEXIT_CRITICAL(&g_ap_sta_mux);
+}
 static void apStationEvent(arduino_event_id_t ev, arduino_event_info_t info){
+  if (ev == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) { apStaForget(info.wifi_ap_stadisconnected.mac); return; }
   if (ev != ARDUINO_EVENT_WIFI_AP_STACONNECTED) return;
   const uint8_t* mac = info.wifi_ap_staconnected.mac;
+  apStaRemember(mac, info.wifi_ap_staconnected.aid);
   if (!lockActive() || isOwner(mac)) return;   // (lockActive is false during an enrol window)
   esp_wifi_deauth_sta(info.wifi_ap_staconnected.aid);
   Serial.printf("[LOCK] AP refused %s (not an owner)\n", macToStr(mac).c_str());
+}
+// The lock can turn on while strangers are already associated: the first screen pairs, an enrol window
+// closes, the password goes back to default. Bench 13 Oct: a laptop that joined before the pairing stayed on.
+// So loop() sweeps every 2 s; a dropped station comes back through apStationEvent and is refused there.
+static void apSweepStrangers(){
+  static uint32_t last = 0; if (millis() - last < 2000) return; last = millis();
+  if (!lockActive()) return;
+  ApSta snap[10]; uint8_t n;
+  portENTER_CRITICAL(&g_ap_sta_mux); n = g_ap_sta_n; memcpy(snap, g_ap_sta, sizeof(ApSta) * n); portEXIT_CRITICAL(&g_ap_sta_mux);
+  for (uint8_t i = 0; i < n; i++) if (!isOwner(snap[i].mac)) { esp_wifi_deauth_sta(snap[i].aid); Serial.printf("[LOCK] AP dropped %s (not an owner)\n", macToStr(snap[i].mac).c_str()); }
 }
 
 static void loadWifiCfg() {
@@ -739,6 +769,9 @@ static void handleTCPClient(WiFiClient& client) {
     uint8_t m[6]; bool known = apStationMac(client.remoteIP(), m);
     if (!known || !isOwner(m)) {
       Serial.printf("[LOCK] TCP refused %s (%s)\n", client.remoteIP().toString().c_str(), known ? macToStr(m).c_str() : "not a station of ours");
+      // Take the client's bytes first: closing with unread data makes lwIP send RST, and Windows throws the 0x05 away with it.
+      uint32_t tw = millis(); while (!client.available() && millis()-tw < 200) delay(5);
+      while (client.available()) client.read();
       client.write((uint8_t)0x05); client.flush(); delay(50); client.stop(); return;
     }
   }
@@ -1454,6 +1487,7 @@ static void startEspnowApMode(){
   // zero, so EVERY dongle was "GotekOMEGA-0000". esp_read_mac() reads the chip's own number and needs
   // no radio. SoftAP MAC = the BSSID the dongle broadcasts = its identity (Wire Protocol Registry).
   WiFi.onEvent(apStationEvent, ARDUINO_EVENT_WIFI_AP_STACONNECTED);   // 1.6.13: the AP gate, registered before the first station can arrive
+  WiFi.onEvent(apStationEvent, ARDUINO_EVENT_WIFI_AP_STADISCONNECTED);
   applyApConfig();   // 1.6.13: GotekOMEGA-XXXX / gotek1234 unless this dongle got its own name / password
   char apline[40]; snprintf(apline, sizeof(apline), "AP: %s", g_ap_name);
   delay(300);
@@ -1558,6 +1592,7 @@ void setup() {
 void loop() {
   ledTick();
   if (g_ap_reapply_ms && millis() > g_ap_reapply_ms) { g_ap_reapply_ms = 0; applyApConfig(); }   // 1.6.13: new AP name/password, after the reply left
+  apSweepStrangers();   // 1.6.13: non-owners already on the AP when the lock turned on
   server.handleClient();
   if (g_dns_up) dnsServer.processNextRequest();
 
