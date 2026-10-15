@@ -24,6 +24,9 @@
 //    Owner-lock is NOT always-on here (Webby = home-LAN trust). The base's
 //     owner-lock code is still compiled and usable in ESPNOW mode, but a fresh
 //     Webby is unlocked; locking is meant to be enrolled from the GTi later.
+//     1.6.13: once the dongle HAS an owner the lock also covers the disk path in
+//     ESP-NOW mode (AP, TCP 3333, the page), and the dongle can get its own AP
+//     name/password - see lockActive(), applyApConfig() and the 0x0B-0x0E commands.
 //
 // *** UNTESTED  compiled/flashed by the owner. No external libraries needed. ***
 //
@@ -43,6 +46,7 @@
 #include <WiFiClient.h>
 #include <esp_mac.h>
 #include "esp_wifi.h"
+#include "esp_wifi_ap_get_sta_list.h"   // 1.6.13: station MAC <-> IP on our own AP (not pulled in by esp_wifi.h)
 #include "esp_heap_caps.h"   // HD test: internal-heap readout
 #include <LittleFS.h>
 #include <Update.h>   // OMEGAWARE: web OTA
@@ -69,7 +73,7 @@
 #else
 #define WEBBY_BOARD    "supermini"
 #endif
-#define FW_VERSION     "Webby-1.6.12-" WEBBY_BOARD   // 1.6.12 (8 Oct 2026, Dimmy): a fling or browser upload that fails leaves the dongle cleanly EMPTY (no stale dirty map / load_id, nothing is wiped before the first payload byte, a header with no body no longer ejects the Amiga's disk or blocks 30 s) | Config-tab Save keeps the stored password (it used to write PASS= blank and reboot onto the own AP) | an aborted OTA can be retried without a power cycle | a home join that failed at boot is retried every 3 min while the dongle is idle | first fleet election after a full beacon round, peers stale after 5 missed beacons (was: every boot grabbed gotekomega.local for 12 s) | pairing reply says HD-capable + max image bytes (pad[1..6]) | /api/wifi/scan served, /api/wifi/status with the keys the page reads, rssi in /status | the shared page comes straight from firmware/shared (the dongle folders carried a copy from 4 Sep) | 1.6.11: the fleet leader answers to gotekomega.local AND its own gotekomega-xxxx.local | /status has "ap_mac" (the MAC a paired screen knows) | the phone's "sign in to network" window shows a short signpost (keep the network, then open 192.168.4.1 in the browser) instead of the app, which half-worked there - no disk upload, and it closed when you kept the network | 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
+#define FW_VERSION     "Webby-1.6.13-" WEBBY_BOARD   // 1.6.13 (12 Oct 2026, Dimmy): the owner lock covers the DISK path in ESP-NOW mode (Mez, after Kickstart: the lock only guarded pairing/eject, any screen or phone with gotek1234 could fling) - while the dongle has an owner and its AP password is still the default, only owner stations may join the AP (others are deauthed at the join, and swept every 2 s if they were already on), use TCP 3333 (0x05) or the mutating web routes (403) - a BOOT 5 s / SHARE window (both 2 min now, BOOT was 30 s) opens all of that to anyone for its duration, so a phone can get on and set a password; a dongle that fell back to ESP-NOW because the home join failed (= away from home) no longer enrols the first screen that scans - BOOT 5 s or SHARE opens it; /status and /api/system/info say locked + owners; the dongle gets its OWN AP name and password (its page, Wi-Fi tab, or an owner screen over TCP 0x0B SET_SSID / 0x0C SET_APPASS; also 0x0D LIST_OWNERS / 0x0E REMOVE_OWNER), once a password is set it is the gate and the MAC checks are off; an owner screen learns password + name in the pairing reply (pad[40]=0x5A), never the broadcast hello; BOOT 15 s wipes owners AND restores GotekOMEGA-XXXX / gotek1234; a new AP name/password is applied live (no reboot, the Amiga keeps its disk); WEBBY.TXT has one writer, so the device name survives a creds wipe | 1.6.12 (8 Oct 2026, Dimmy): a fling or browser upload that fails leaves the dongle cleanly EMPTY (no stale dirty map / load_id, nothing is wiped before the first payload byte, a header with no body no longer ejects the Amiga's disk or blocks 30 s) | Config-tab Save keeps the stored password (it used to write PASS= blank and reboot onto the own AP) | an aborted OTA can be retried without a power cycle | a home join that failed at boot is retried every 3 min while the dongle is idle | first fleet election after a full beacon round, peers stale after 5 missed beacons (was: every boot grabbed gotekomega.local for 12 s) | pairing reply says HD-capable + max image bytes (pad[1..6]) | /api/wifi/scan served, /api/wifi/status with the keys the page reads, rssi in /status | the shared page comes straight from firmware/shared (the dongle folders carried a copy from 4 Sep) | 1.6.11: the fleet leader answers to gotekomega.local AND its own gotekomega-xxxx.local | /status has "ap_mac" (the MAC a paired screen knows) | the phone's "sign in to network" window shows a short signpost (keep the network, then open 192.168.4.1 in the browser) instead of the app, which half-worked there - no disk upload, and it closed when you kept the network | 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
 #define ESPNOW_CHANNEL 6
 //  Board profile 
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -133,6 +137,11 @@
 #define CMD_EJECT_FORCE 0x04
 #define CMD_CLAIM       0x0A   // 1.6.7: was 0x07 = ENROLL in the fleet wire contract (#24). 1.6.6: a screen claims the dongle before sending a disk (mac[6], flags bit0=take over, len, name)
 #define CMD_SET_NAME    0x06   // #24: set the pretty display name for the NEXT flung disk (g_loaded_name only; FAT12 stays DISK.ADF)
+#define CMD_SET_SSID    0x0B   // 1.6.13: owner-only - rename the dongle's AP: len(1) + bytes (1..24 printable ASCII; 0 = back to GotekOMEGA-XXXX)
+#define CMD_SET_APPASS  0x0C   // 1.6.13: owner-only - the AP password: len(1) + bytes (8..32 printable ASCII; 0 = back to gotek1234)
+#define CMD_LIST_OWNERS 0x0D   // 1.6.13: owner-only -> 0x01, n, n x (mac[6], flags: bit0 = that is you)
+#define CMD_REMOVE_OWNER 0x0E  // 1.6.13: owner-only - mac[6] -> 0x01 removed / 0x00 unknown; the last owner out reopens pairing
+// Replies: 0x01 ok, 0x00 bad input, 0x05 = not an owner (the fleet contract's reject). 0x07/0x08/0x09 stay reserved for it.
 //  FLEET: UDP discovery beacon (shared port: dongle, app, JC, browser-master) 
 #define GTI_DISCO_PORT   51703
 #define ALIVE_BEACON_MS  12000   // "I'm alive" cadence, home-WiFi only
@@ -378,6 +387,11 @@ static uint8_t  _owners[MAX_OWNERS][6] = {{0}};
 static uint8_t  _owner_count   = 0;
 static bool     g_enroll_open  = false;
 static uint32_t g_enroll_until = 0;
+static bool     g_fallback_espnow = false;   // 1.6.13: ESP-NOW because the home join FAILED = we are away from home (club day)
+static String   g_ap_ssid = "", g_ap_pass = "";   // 1.6.13: the dongle's own AP name / password (APSSID= / APPASS= in WEBBY.TXT); empty = GotekOMEGA-XXXX / gotek1234
+static uint32_t g_ap_reapply_ms = 0;              // 1.6.13: re-raise the AP with new settings at this time (after the reply has left)
+static char     g_ap_name[25] = "GotekOMEGA";     // 1.6.9: the real AP name, shown on the page (1.6.13: up here, 24 chars max)
+static void writeWebbyCfg();
 
 // ESP-NOW receive queue
 #define RX_PKT_SIZE 250
@@ -429,7 +443,22 @@ static void wipeOwners(){
   _owner_count=0; _paired=false; memset(_wave_mac,0,6);
   if(_wavePeer){ delete _wavePeer; _wavePeer=nullptr; }
   if(LittleFS.begin(true)) LittleFS.remove("/XIAO_CONFIG.TXT");
+  g_ap_ssid = ""; g_ap_pass = ""; writeWebbyCfg(); g_ap_reapply_ms = millis() + 300;   // 1.6.13: BOOT 15 s also restores GotekOMEGA-XXXX / gotek1234
   oledStatus("Gotek OMEGA " FW_VERSION,"** WIPED **","All owners cleared","Hold BOOT to pair");
+}
+// 1.6.13: forget one owner (UNPAIR over ESP-NOW, REMOVE_OWNER over TCP). The last one out puts the dongle
+// back to "looking for a new owner": 6 minutes of open pairing, exactly like a fresh dongle (1.6.5).
+static bool dropOwner(const uint8_t* mac){
+  if (!removeOwner(mac)) return false;
+  saveOwners();
+  if (memcmp(_wave_mac, mac, 6)==0) {
+    if (_wavePeer) { delete _wavePeer; _wavePeer=nullptr; }
+    if (_owner_count) memcpy(_wave_mac, _owners[0], 6); else memset(_wave_mac,0,6);
+  }
+  _paired = (_owner_count>0);
+  if (_owner_count == 0) { g_enroll_open = true; g_enroll_until = millis() + 6UL*60UL*1000UL; }
+  oledStatus("Gotek OMEGA " FW_VERSION, "Unpaired", String(_owner_count)+" owner(s)", "");
+  return true;
 }
 
 static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
@@ -454,7 +483,9 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
       // unpaired (deleted the dongle), and shut 6 minutes after power-on even with no owner, so
       // the dongle went silent to every scan until it was power-cycled or BOOT was held 5 s.
       // Once an owner exists the door is closed as before: a SECOND screen still needs BOOT 5 s.
-      if (!g_enroll_open && _owner_count > 0) return;
+      // 1.6.13: ...except when we fell back from home WiFi: at a club a fresh scan from ANY screen must not
+      // hand the dongle to the first one that asks. BOOT 5 s (or SHARE from an owner) opens it as before.
+      if (!g_enroll_open && (_owner_count > 0 || g_fallback_espnow)) return;
       if (!addOwner(p->mac)) { oledStatus("Gotek OMEGA " FW_VERSION,"OWNERS FULL","Hold BOOT 15s","to wipe & re-pair"); return; }
       saveOwners();
       if (_owner_count>0) g_enroll_open = false;   // once a real owner exists, close the door
@@ -471,6 +502,12 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
     reply.pad[7] = 0xA5; reply.pad[8] = g_disk_loaded ? 1 : 0; memcpy(reply.pad+9, g_loader_mac, 6);
     { uint8_t L = (uint8_t)strlen(g_loader_name); if (L > 24) L = 24; reply.pad[15] = L; memcpy(reply.pad+16, g_loader_name, L); }
     XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
+    if (dst == _wavePeer) {   // 1.6.13: the AP password + name for an OWNER screen (unicast only, never in a broadcast):
+      // pad[40]=0x5A marker, [41]=password length (0 = default gotek1234), [42..73]=password, [74]=name length, [75..98]=AP name
+      size_t pl = g_ap_pass.length(); if (pl > 32) pl = 32; size_t sl = strlen(g_ap_name); if (sl > 24) sl = 24;
+      reply.pad[40] = 0x5A; reply.pad[41] = (uint8_t)pl; memcpy(reply.pad+42, g_ap_pass.c_str(), pl);
+      reply.pad[74] = (uint8_t)sl; memcpy(reply.pad+75, g_ap_name, sl);
+    }
     if (dst) dst->send_pkt((uint8_t*)&reply, sizeof(reply));
     oledStatus("Gotek OMEGA " FW_VERSION, known?"Reconnected":"Owner added", macToStr(_wave_mac), String(_owner_count)+" owner(s)");
     return;
@@ -487,20 +524,7 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
   if (type == PKT_UNPAIR) {
     PktHello up = {}; memcpy(&up, data, min((size_t)len, sizeof(up)));
     if (haveSrc) memcpy(up.mac, src, 6);   // 1.6.4: a screen can only unpair ITSELF
-    const PktHello* p = &up;
-    if (removeOwner(p->mac)) {
-      saveOwners();
-      if (memcmp(_wave_mac, p->mac, 6)==0) {
-        if (_wavePeer) { delete _wavePeer; _wavePeer=nullptr; }
-        if (_owner_count) memcpy(_wave_mac, _owners[0], 6); else memset(_wave_mac,0,6);
-      }
-      _paired = (_owner_count>0);
-      // 1.6.5: the last owner deleted this dongle -> back to "looking for a new owner", exactly like a
-      // fresh dongle at power-on (pairing open, pairing blink). The rule in PAIR_HELLO keeps it open
-      // for as long as it has no owner, so it never goes silent to a scan.
-      if (_owner_count == 0) { g_enroll_open = true; g_enroll_until = millis() + 6UL*60UL*1000UL; }
-      oledStatus("Gotek OMEGA " FW_VERSION, "Unpaired", String(_owner_count)+" owner(s)", "");
-    }
+    dropOwner(up.mac);   // 1.6.13: shared with REMOVE_OWNER over TCP (1.6.5 rule inside: the last owner out reopens pairing)
     return;
   }
   if (type == PKT_DISK_EJECT) {
@@ -574,6 +598,74 @@ static uint32_t g_join_retry_ms = 0;   // 1.6.12: when the boot join gave up
 #define WIFI_RETRY_MS 180000UL           // 1.6.12: retry the home join (by restart) this often while idle
 static String g_loaded_name = "";
 
+// 1.6.13: the owner lock covers the disk path (Mez, 12 Oct 2026, after Kickstart). Until now it only guarded
+// ESP-NOW pairing/eject; the disk itself went over the AP (gotek1234 everywhere) + TCP 3333 / the web page,
+// so any screen or phone in the hall could fling to any dongle. Scope: ESP-NOW mode only - in home-WiFi
+// mode the WiFi access is the lock. The gate is by owner MAC while the AP password is still the default;
+// once a custom AP password is set, the password is the gate and these MAC checks are off.
+// The owner-MAC gate: only while the AP password is still the default, and not during an enrol window - a BOOT
+// hold (2 min) or SHARE from an owner (2 min) opens the whole dongle to anyone for that long, so a phone can
+// get on and set the password.
+static inline bool lockActive(){ return g_webmode == 0 && _owner_count > 0 && g_ap_pass.length() == 0 && !g_enroll_open; }
+// Which station (by MAC) is behind a TCP/HTTP client on our own AP. false = not a station of ours.
+static bool apStationMac(const IPAddress& ip, uint8_t out[6]){
+  wifi_sta_list_t sl; if (esp_wifi_ap_get_sta_list(&sl) != ESP_OK) return false;
+  wifi_sta_mac_ip_list_t il; if (esp_wifi_ap_get_sta_list_with_ip(&sl, &il) != ESP_OK) return false;
+  for (int i = 0; i < il.num; i++) { if (IPAddress(il.sta[i].ip.addr) == ip) { memcpy(out, il.sta[i].mac, 6); return true; } }
+  return false;
+}
+// The access point itself refuses strangers while locked. Runs on the network event task: it only READS
+// the owner list and deauths; nothing is written here. During an enrol window (BOOT 5 s, SHARE) anyone may
+// join, so a phone can reach the setup page.
+// (Re)raise the dongle's own AP: GotekOMEGA-XXXX / gotek1234 unless it has its own name / password. Called at
+// boot and again from loop() when an owner changed either (after the reply has left): every station drops
+// once and reconnects with the new settings - no reboot, the Amiga keeps its disk.
+static void applyApConfig(){
+  if (g_webmode != 0) return;   // home-WiFi mode has no AP of ours; the settings wait in WEBBY.TXT for the next ESP-NOW boot
+  uint8_t apm[6] = {0}; esp_read_mac(apm, ESP_MAC_WIFI_SOFTAP);
+  char apid[24]; snprintf(apid, sizeof(apid), "%s-%02X%02X", AP_SSID, apm[4], apm[5]);
+  strncpy(g_ap_name, g_ap_ssid.length() ? g_ap_ssid.c_str() : apid, sizeof(g_ap_name)-1); g_ap_name[sizeof(g_ap_name)-1] = 0;
+  WiFi.softAP(g_ap_name, g_ap_pass.length() ? g_ap_pass.c_str() : AP_PASS, ESPNOW_CHANNEL);
+  Serial.printf("[AP] %s (%s password)\n", g_ap_name, g_ap_pass.length() ? "own" : "default");
+}
+// Who is on our AP right now (MAC + association id), kept from the connect/disconnect events: the station
+// list IDF hands out has no aid, and esp_wifi_deauth_sta() wants one. Written on the event task, read from
+// loop() - a spinlock keeps the two apart.
+struct ApSta { uint8_t mac[6]; uint16_t aid; };
+static ApSta g_ap_sta[10]; static uint8_t g_ap_sta_n = 0;
+static portMUX_TYPE g_ap_sta_mux = portMUX_INITIALIZER_UNLOCKED;
+static void apStaRemember(const uint8_t* mac, uint16_t aid){
+  portENTER_CRITICAL(&g_ap_sta_mux);
+  uint8_t i = 0; while (i < g_ap_sta_n && memcmp(g_ap_sta[i].mac, mac, 6)) i++;
+  if (i < g_ap_sta_n) g_ap_sta[i].aid = aid;
+  else if (g_ap_sta_n < 10) { memcpy(g_ap_sta[g_ap_sta_n].mac, mac, 6); g_ap_sta[g_ap_sta_n].aid = aid; g_ap_sta_n++; }
+  portEXIT_CRITICAL(&g_ap_sta_mux);
+}
+static void apStaForget(const uint8_t* mac){
+  portENTER_CRITICAL(&g_ap_sta_mux);
+  for (uint8_t i = 0; i < g_ap_sta_n; i++) if (!memcmp(g_ap_sta[i].mac, mac, 6)) { g_ap_sta[i] = g_ap_sta[g_ap_sta_n-1]; g_ap_sta_n--; break; }
+  portEXIT_CRITICAL(&g_ap_sta_mux);
+}
+static void apStationEvent(arduino_event_id_t ev, arduino_event_info_t info){
+  if (ev == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) { apStaForget(info.wifi_ap_stadisconnected.mac); return; }
+  if (ev != ARDUINO_EVENT_WIFI_AP_STACONNECTED) return;
+  const uint8_t* mac = info.wifi_ap_staconnected.mac;
+  apStaRemember(mac, info.wifi_ap_staconnected.aid);
+  if (!lockActive() || isOwner(mac)) return;   // (lockActive is false during an enrol window)
+  esp_wifi_deauth_sta(info.wifi_ap_staconnected.aid);
+  Serial.printf("[LOCK] AP refused %s (not an owner)\n", macToStr(mac).c_str());
+}
+// The lock can turn on while strangers are already associated: the first screen pairs, an enrol window
+// closes, the password goes back to default. Bench 13 Oct: a laptop that joined before the pairing stayed on.
+// So loop() sweeps every 2 s; a dropped station comes back through apStationEvent and is refused there.
+static void apSweepStrangers(){
+  static uint32_t last = 0; if (millis() - last < 2000) return; last = millis();
+  if (!lockActive()) return;
+  ApSta snap[10]; uint8_t n;
+  portENTER_CRITICAL(&g_ap_sta_mux); n = g_ap_sta_n; memcpy(snap, g_ap_sta, sizeof(ApSta) * n); portEXIT_CRITICAL(&g_ap_sta_mux);
+  for (uint8_t i = 0; i < n; i++) if (!isOwner(snap[i].mac)) { esp_wifi_deauth_sta(snap[i].aid); Serial.printf("[LOCK] AP dropped %s (not an owner)\n", macToStr(snap[i].mac).c_str()); }
+}
+
 static void loadWifiCfg() {
   if (!LittleFS.begin(true)) return;
   File f = LittleFS.open("/WEBBY.TXT", "r"); if (!f) return;
@@ -583,40 +675,31 @@ static void loadWifiCfg() {
     else if (line.startsWith("PASS=")) g_pass    = line.substring(5);
     else if (line.startsWith("MODE=")) g_modeStr = line.substring(5);
     else if (line.startsWith("NAME=")) g_devname = line.substring(5);
+    else if (line.startsWith("APSSID=")) { g_ap_ssid = line.substring(7); g_ap_ssid.trim(); }   // 1.6.13
+    else if (line.startsWith("APPASS=")) { g_ap_pass = line.substring(7); g_ap_pass.trim(); }   // 1.6.13
     else if (line.startsWith("LED="))  { String v=line.substring(4); v.trim(); v.toUpperCase(); g_led_enabled = !(v=="OFF"||v=="0"||v=="NO"); }
   }
   f.close();
 }
-static void saveWifiCfg(const String& ssid, const String& pass) {
+// 1.6.13: ONE writer for WEBBY.TXT, from the globals, so the AP name/password and the device name survive
+// every kind of save (the creds wipe used to drop NAME=).
+static void writeWebbyCfg() {
   if (!LittleFS.begin(true)) return;
-  File f = LittleFS.open("/WEBBY.TXT", "w"); if (!f) return;
-  f.printf("SSID=%s\n", ssid.c_str());
-  f.printf("PASS=%s\n", pass.c_str());
-  f.printf("MODE=WIFI\n");
-  f.printf("NAME=%s\n", g_devname.c_str());   // #name: kept alongside the creds
-  f.close();
-}
-static void setModeEspnow() {
-  if (!LittleFS.begin(true)) return;
-  // keep any saved SSID/PASS, just flip MODE=ESPNOW
   File f = LittleFS.open("/WEBBY.TXT", "w"); if (!f) return;
   f.printf("SSID=%s\n", g_ssid.c_str());
   f.printf("PASS=%s\n", g_pass.c_str());
-  f.printf("MODE=ESPNOW\n");
-  f.printf("NAME=%s\n", g_devname.c_str());   // #name: preserved across a mode flip
+  f.printf("MODE=%s\n", g_modeStr == "WIFI" ? "WIFI" : "ESPNOW");
+  f.printf("NAME=%s\n", g_devname.c_str());   // #name: kept alongside the creds
+  f.printf("APSSID=%s\n", g_ap_ssid.c_str());
+  f.printf("APPASS=%s\n", g_ap_pass.c_str());
+  if (!g_led_enabled) f.printf("LED=OFF\n");   // was read but never written back
   f.close();
 }
+static void saveWifiCfg(const String& ssid, const String& pass) { g_ssid = ssid; g_pass = pass; g_modeStr = "WIFI"; writeWebbyCfg(); }
+static void setModeEspnow() { g_modeStr = "ESPNOW"; writeWebbyCfg(); }   // keep any saved SSID/PASS, just flip the mode
 // WEBBY: full wipe of the saved home-Wi-Fi credentials + force ESP-NOW. Used by the
 // long BOOT-hold; the plain flip (setModeEspnow) keeps SSID/PASS for a one-tap rejoin.
-static void wipeWifiCreds() {
-  if (!LittleFS.begin(true)) return;
-  File f = LittleFS.open("/WEBBY.TXT", "w"); if (!f) return;
-  f.printf("SSID=\n");
-  f.printf("PASS=\n");
-  f.printf("MODE=ESPNOW\n");
-  f.close();
-  g_ssid = ""; g_pass = ""; g_modeStr = "ESPNOW";
-}
+static void wipeWifiCreds() { g_ssid = ""; g_pass = ""; g_modeStr = "ESPNOW"; writeWebbyCfg(); }   // 1.6.13: the AP name/password and the device name stay
 
 //  base TCP save/eject/status handlers (unchanged) 
 static WiFiServer _tcpServer(TCP_PORT);
@@ -674,7 +757,29 @@ static void markDiskEmpty(const char* why) {
   loaderClear(); ledBlue(false); g_next_status_ms = 0;
   Serial.printf("[DISK] empty: %s\n", why);
 }
+// 1.6.13: the owner-only commands. ESP-NOW mode, over our own AP, from a station whose MAC is an owner -
+// over the home LAN they answer 0x05 (there the fleet contract rules).
+static bool tcpOwnerMac(WiFiClient& c, uint8_t out[6]){ return g_webmode == 0 && apStationMac(c.remoteIP(), out) && isOwner(out); }
+static bool tcpOwnerOk(WiFiClient& c){ uint8_t m[6]; return tcpOwnerMac(c, m); }
+static int  tcpReadLen(WiFiClient& c){ uint32_t t = millis(); while (c.available() < 1 && c.connected() && millis()-t < 2000) delay(1); return c.available() >= 1 ? c.read() : -1; }
+// exactly len bytes into buf (at most cap kept, NUL-terminated); -1 = short read
+static int  tcpReadBytes(WiFiClient& c, char* buf, int len, int cap){
+  if (len < 0) return -1; int got = 0; uint32_t t = millis();
+  while (got < len && millis()-t < 2000) { if (!c.connected()) break; int ch = c.read(); if (ch < 0) { delay(1); continue; } if (got < cap) buf[got] = (char)ch; got++; t = millis(); }
+  buf[got < cap ? got : cap] = 0; return got == len ? got : -1;
+}
+static bool asciiPrintable(const String& v){ for (unsigned i = 0; i < v.length(); i++) { char ch = v[i]; if (ch < 0x20 || ch > 0x7E) return false; } return true; }
 static void handleTCPClient(WiFiClient& client) {
+  if (lockActive()) {   // 1.6.13: a locked dongle talks on 3333 to owner stations only - 0x05 = reject (fleet contract)
+    uint8_t m[6]; bool known = apStationMac(client.remoteIP(), m);
+    if (!known || !isOwner(m)) {
+      Serial.printf("[LOCK] TCP refused %s (%s)\n", client.remoteIP().toString().c_str(), known ? macToStr(m).c_str() : "not a station of ours");
+      // Take the client's bytes first: closing with unread data makes lwIP send RST, and Windows throws the 0x05 away with it.
+      uint32_t tw = millis(); while (!client.available() && millis()-tw < 200) delay(5);
+      while (client.available()) client.read();
+      client.write((uint8_t)0x05); client.flush(); delay(50); client.stop(); return;
+    }
+  }
   oledStatus("Receiving...", "TCP connected", "", "");
   uint32_t t0 = millis();
   while (client.available() < 4 && millis()-t0 < 5000) delay(1);
@@ -719,6 +824,28 @@ static void handleTCPClient(WiFiClient& client) {
       while(got<len && millis()-tb<2000){ if(!client.connected())break; int c=client.read(); if(c<0){delay(1);continue;} if(got<128)nb[got]=(char)c; got++; tb=millis(); }
       nb[got<128?got:128]=0; g_next_name=String(nb);
       client.write((uint8_t)0x01);
+    }
+    else if (cmd == CMD_SET_SSID || cmd == CMD_SET_APPASS) {   // 1.6.13: owner-only; len(1) + bytes
+      if (!tcpOwnerOk(client)) { client.write((uint8_t)0x05); return; }
+      int len = tcpReadLen(client); char nb[33]; if (tcpReadBytes(client, nb, len, 32) < 0) { client.write((uint8_t)0x00); return; }
+      String v(nb);
+      bool ok = (len == 0) || (asciiPrintable(v) && (cmd == CMD_SET_SSID ? (len <= 24 && v[0] != ' ' && v[len-1] != ' ') : (len >= 8 && len <= 32)));
+      if (!ok) { client.write((uint8_t)0x00); return; }
+      if (cmd == CMD_SET_SSID) g_ap_ssid = v; else g_ap_pass = v;
+      writeWebbyCfg(); client.write((uint8_t)0x01); client.flush();
+      g_ap_reapply_ms = millis() + 300;   // once the reply has left: every station drops and rejoins with the new settings
+      Serial.printf("[LOCK] AP %s %s by %s\n", cmd == CMD_SET_SSID ? "name" : "password", len ? "set" : "back to default", client.remoteIP().toString().c_str());
+    }
+    else if (cmd == CMD_LIST_OWNERS) {   // 1.6.13: owner-only -> 0x01, n, n x (mac[6], flags: bit0 = that is you)
+      uint8_t me[6]; if (!tcpOwnerMac(client, me)) { client.write((uint8_t)0x05); return; }
+      uint8_t r[2 + MAX_OWNERS*7]; r[0] = 0x01; r[1] = _owner_count; int n = 2;
+      for (int i = 0; i < _owner_count; i++) { memcpy(r+n, _owners[i], 6); r[n+6] = memcmp(_owners[i], me, 6) == 0 ? 1 : 0; n += 7; }
+      client.write(r, n); client.flush();
+    }
+    else if (cmd == CMD_REMOVE_OWNER) {   // 1.6.13: owner-only; mac[6] -> 0x01 removed / 0x00 unknown
+      if (!tcpOwnerOk(client)) { client.write((uint8_t)0x05); return; }
+      char m[7]; if (tcpReadBytes(client, m, 6, 6) != 6) { client.write((uint8_t)0x00); return; }
+      client.write((uint8_t)(dropOwner((const uint8_t*)m) ? 0x01 : 0x00)); client.flush();
     }
     else client.write((uint8_t)0x00);
     return;
@@ -792,11 +919,21 @@ static bool       g_dns_up = false;
 static uint32_t g_up_recv = 0;
 static bool     g_up_overflow = false;
 static String   g_up_name = "";
+static bool     g_up_refused = false;    // 1.6.13: this upload comes from a station that may not load a disk
+static bool     g_ota_refused = false;   // 1.6.13: same for a firmware upload
+// 1.6.13: the mutating web routes of a locked dongle are for owner stations only (read-only routes stay
+// open, so a page that got through before the lock closed shows "locked" instead of going blank).
+static bool webOwnerOk(){
+  if (!lockActive()) return true;
+  uint8_t m[6]; if (apStationMac(server.client().remoteIP(), m) && isOwner(m)) return true;
+  Serial.printf("[LOCK] web refused %s %s\n", server.client().remoteIP().toString().c_str(), server.uri().c_str());
+  return false;
+}
+static void webRefuse(){ server.send(403, "application/json", "{\"ok\":false,\"error\":\"locked\",\"err\":\"locked - this dongle belongs to another screen; pair this one or hold BOOT 5 s\"}"); }
 
 static String jsonEsc(const String& s){
   String o; for(size_t i=0;i<s.length();i++){ char c=s[i]; if(c=='"'||c=='\\'){o+='\\';o+=c;} else if(c>=32) o+=c; } return o;
 }
-static char g_ap_name[24] = "GotekOMEGA";   // 1.6.9: the real AP name, shown on the page
 static String statusJson(){
   String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
   String s = "{";
@@ -809,6 +946,8 @@ static String statusJson(){
   s += ",\"devname\":\""; s += jsonEsc(discoName()); s += "\"";   // #name: current device name (custom or mac-based) for portal pre-fill + the fleet
   { uint8_t am[6] = {0}; esp_read_mac(am, ESP_MAC_WIFI_SOFTAP); char ab[20]; snprintf(ab, sizeof(ab), "%02x:%02x:%02x:%02x:%02x:%02x", am[0],am[1],am[2],am[3],am[4],am[5]); s += ",\"ap_mac\":\""; s += ab; s += "\""; }   // 1.6.11: the MAC a paired screen knows (PKT_PAIR_REPLY), so it can tell this dongle exactly on home Wi-Fi (#110)
   s += ",\"join_failed\":"; s += (g_join_failed ? "true" : "false");
+  s += ",\"locked\":"; s += (_owner_count > 0 ? "true" : "false");   // 1.6.13: the dongle has owners
+  s += ",\"owners\":"; s += String((unsigned)_owner_count);
   s += ",\"rssi\":"; s += String((g_webmode==1 && WiFi.status()==WL_CONNECTED) ? WiFi.RSSI() : 0);   // 1.6.12: link margin to the router - slow or stalling flings are a weak link, not the code
   s += ",\"ip\":\""; s += ip; s += "\"";
   s += ",\"heap\":"; s += String((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));   // HD test
@@ -816,6 +955,7 @@ static String statusJson(){
   s += ",\"disk\":"; s += String((unsigned)((uint32_t)TOTAL_SECTORS*SECTOR_SIZE));
   s += ",\"max\":"; s += String((unsigned)MAX_FILE_BYTES);   // 1.6.9: biggest image the page may send
   s += ",\"ap\":\""; s += jsonEsc(String(g_ap_name)); s += "\"";   // 1.6.9: real AP name for the page
+  s += ",\"ap_custom_pass\":"; s += (g_ap_pass.length() ? "true" : "false");   // 1.6.13: whether it has its own password - never the password itself
   s += "}";
   return s;
 }
@@ -835,8 +975,10 @@ static void handleUpload(){
   HTTPUpload& up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
     g_up_recv = 0; g_up_overflow = false;
+    g_up_refused = !webOwnerOk();   // 1.6.13: decided once, before any byte can touch the disk
     g_up_name = up.filename; if (g_up_name.length()==0) g_up_name = "DISK.ADF";
   } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (g_up_refused) return;   // 1.6.13: swallow the body, the disk stays as it is
     // 1.6.12: detach on the FIRST data chunk, not at START - an upload that dies before any
     // data (or a 0-byte file) leaves the Amiga's disk alone
     if (g_up_recv == 0 && up.currentSize > 0 && g_disk_loaded) { hardDetach(); g_disk_loaded = false; ledBlue(false); }
@@ -852,6 +994,7 @@ static void handleUpload(){
   }
 }
 static void handleUploadDone(){
+  if (g_up_refused) { g_up_refused = false; g_up_recv = 0; webRefuse(); return; }   // 1.6.13
   if (g_up_overflow) { markDiskEmpty("browser upload too big"); server.send(413,"application/json","{\"ok\":false,\"err\":\"image too big - this dongle holds up to 1.75 MB\"}"); return; }
   if (g_up_recv == 0) { server.send(400,"application/json","{\"ok\":false,\"err\":\"empty upload\"}"); return; }
   g_loaded_name = g_up_name;
@@ -859,10 +1002,27 @@ static void handleUploadDone(){
   server.send(200,"application/json", statusJson());
 }
 static void handleEjectWeb(){
+  if (!webOwnerOk()) { webRefuse(); return; }   // 1.6.13
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   dirtyReset(); g_loaded_name=""; ledBlue(false); loaderClear();
   oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (web)", "", "Ready");
   server.send(200,"application/json", statusJson());
+}
+// 1.6.13: the dongle's own AP name/password from its page (Wi-Fi tab). Gated like every other change: owners
+// while the password is default, and once a password is set whoever is on the AP knows it. The password
+// never comes back out; the page only learns whether a custom one is set.
+static void apiApSave(){
+  if (!webOwnerOk()) { webRefuse(); return; }
+  bool any = false;
+  if (server.hasArg("ssid")) { String v = server.arg("ssid"); v.trim(); if (v.length() > 24 || !asciiPrintable(v)) { server.send(400,"application/json","{\"ok\":false,\"err\":\"name: up to 24 plain characters\"}"); return; } g_ap_ssid = v; any = true; }
+  if (server.hasArg("pass")) { String v = server.arg("pass"); if (v.length() && (v.length() < 8 || v.length() > 32 || !asciiPrintable(v))) { server.send(400,"application/json","{\"ok\":false,\"err\":\"password: 8 to 32 plain characters\"}"); return; } g_ap_pass = v; any = true; }
+  if (!any) { server.send(400,"application/json","{\"ok\":false,\"err\":\"nothing to save\"}"); return; }
+  writeWebbyCfg();
+  { uint8_t apm[6] = {0}; esp_read_mac(apm, ESP_MAC_WIFI_SOFTAP); char apid[24]; snprintf(apid, sizeof(apid), "%s-%02X%02X", AP_SSID, apm[4], apm[5]);
+    String j = "{\"ok\":true,\"ap\":\""; j += jsonEsc(g_ap_ssid.length() ? g_ap_ssid : String(apid)); j += "\",\"custom_pass\":"; j += (g_ap_pass.length() ? "true" : "false"); j += "}";
+    server.send(200,"application/json", j); }
+  g_ap_reapply_ms = millis() + 400;
+  Serial.printf("[LOCK] AP settings from the page (%s)\n", server.client().remoteIP().toString().c_str());
 }
 static void handleScan(){
   // A scan needs the STA interface. In ESP-NOW/AP-only mode there is no
@@ -887,6 +1047,7 @@ static void handleScan(){
 }
 
 static void handleSaveWifi(){
+  if (!webOwnerOk()) { webRefuse(); return; }   // 1.6.13
   String ssid = server.arg("ssid"); String pass = server.arg("pass");
   if (ssid.length()==0) { server.send(400,"application/json","{\"ok\":false,\"err\":\"no SSID\"}"); return; }
   if (server.hasArg("name")) g_devname = sanitizeName(server.arg("name"));   // #name: set at first setup so it joins already-named (no default-name clash)
@@ -897,6 +1058,7 @@ static void handleSaveWifi(){
   if (saved) { delay(500); ESP.restart(); }
 }
 static void handleEspnowWeb(){
+  if (!webOwnerOk()) { webRefuse(); return; }   // 1.6.13
   setModeEspnow();
   server.send(200,"application/json","{\"ok\":true}");
   delay(400); ESP.restart();
@@ -931,6 +1093,7 @@ static void onOtaUpload(){
   HTTPUpload& up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
     g_ota_ok=false; g_ota_first=true;
+    g_ota_refused = !webOwnerOk(); if (g_ota_refused) { g_ota_run = false; return; }   // 1.6.13: no Update.begin for a stranger
     if (Update.isRunning()) Update.abort();   // 1.6.12: a previous aborted upload must not block this one
     g_ota_run = Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
   } else if (up.status == UPLOAD_FILE_WRITE && g_ota_run) {
@@ -943,6 +1106,7 @@ static void onOtaUpload(){
   }
 }
 static void onOtaDone(){
+  if (g_ota_refused) { g_ota_refused = false; webRefuse(); return; }   // 1.6.13
   server.send(200, "application/json", g_ota_ok ? "{\"status\":\"ok\"}" : "{\"error\":\"firmware update failed - not an ESP32 image?\"}");
   if (g_ota_ok) { delay(600); ESP.restart(); }
 }
@@ -960,6 +1124,9 @@ static void apiSystemInfo(){
   j += "\"theme\":\""; j += g_active_theme; j += "\",";
   j += "\"wifi_ip\":\""; j += ip; j += "\",";
   j += "\"wifi_clients\":"; j += String((unsigned)WiFi.softAPgetStationNum()); j += ",";
+  j += "\"locked\":"; j += (_owner_count > 0 ? "true" : "false"); j += ",";   // 1.6.13
+  j += "\"owners\":"; j += String((unsigned)_owner_count); j += ",";
+  j += "\"ap_custom_pass\":"; j += (g_ap_pass.length() ? "true" : "false"); j += ",";
   j += "\"internet\":"; j += (g_webmode==1 ? "true" : "false"); j += ",";
   j += "\"internet_ssid\":\""; j += (g_webmode==1 ? jsonEsc(g_ssid) : String("")); j += "\",";
   j += "\"internet_ip\":\""; j += (g_webmode==1 ? ip : String("")); j += "\",";
@@ -981,11 +1148,13 @@ static void apiDiskStatus(){
   server.send(200,"application/json", j);
 }
 static void apiDiskUnload(){
+  if (!webOwnerOk()) { webRefuse(); return; }   // 1.6.13
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   dirtyReset(); g_loaded_name=""; ledBlue(false); loaderClear();
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiGamesUploadDone(){
+  if (g_up_refused) { g_up_refused = false; g_up_recv = 0; webRefuse(); return; }   // 1.6.13
   if (g_up_overflow) { markDiskEmpty("browser upload too big"); server.send(413,"application/json","{\"error\":\"image too big for the HD ramdisk\"}"); return; }
   if (g_up_recv == 0) { server.send(400,"application/json","{\"error\":\"empty upload\"}"); return; }
   g_loaded_name = g_up_name;
@@ -1020,6 +1189,7 @@ static void apiConfig(){
   server.send(200,"application/json", j);
 }
 static void apiConfigSave(){
+  if (!webOwnerOk()) { webRefuse(); return; }   // 1.6.13
   String ssid = server.arg("WIFI_CLIENT_SSID");
   String pass = server.arg("WIFI_CLIENT_PASS");
   // 1.6.12: the page posts the whole form with the password MASKED (empty). Empty = keep the
@@ -1030,7 +1200,7 @@ static void apiConfigSave(){
   if (changed) { saveWifiCfg(ssid, pass); server.send(200,"application/json","{\"status\":\"ok\",\"reboot\":true}"); delay(400); ESP.restart(); return; }
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
-static void apiReboot(){ server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
+static void apiReboot(){ if (!webOwnerOk()) { webRefuse(); return; } server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
 static const char* const THEME_NAMES[] = { "NEO","AMIGA_WB2","AMIGA_WB13","PAPER_WHITE","MIDNIGHT","PHOSPHOR","OMEGA_DARK" };   // 1.6.4: one list for /list and /activate | 1.6.11: + NEO (the GTi look; needs the shared webui.h with the NEO preset)
 static bool themeKnown(const String& n){ for (auto t : THEME_NAMES) if (n == t) return true; return false; }
 static void apiThemesList(){
@@ -1211,6 +1381,7 @@ static void startWebServer(){
   server.on("/scan",     HTTP_GET,  handleScan);
   server.on("/savewifi", HTTP_POST, handleSaveWifi);
   server.on("/espnow", HTTP_POST, handleEspnowWeb);
+  server.on("/api/ap", HTTP_POST, apiApSave);   // 1.6.13: own AP name / password
   // PANEL: /api/* shim the SPA calls (has_sd:false dongle surface)
   server.on("/api/system/info",  HTTP_GET,  apiSystemInfo);
   server.on("/api/disk/status",  HTTP_GET,  apiDiskStatus);
@@ -1236,6 +1407,7 @@ static void startWebServer(){
       int a = 12; int b = u.lastIndexOf("/activate");   // 12 = strlen("/api/themes/")
       String nm = (b > a) ? u.substring(a, b) : String("");
       if (!themeKnown(nm)) { server.send(400,"application/json","{\"error\":\"unknown theme\"}"); return; }
+      if (!webOwnerOk()) { webRefuse(); return; }   // 1.6.13
       g_active_theme = nm; saveTheme(g_active_theme);   // PANEL: remember across reboots
       server.send(200,"application/json","{\"status\":\"ok\"}"); return;
     }
@@ -1251,7 +1423,7 @@ static void startWebServer(){
 #define BOOT_WIPE_MS   15000
 #define BOOT_REVERT_MS   3000    // WEBBY: in Wi-Fi mode, hold BOOT >=3s to revert to ESP-NOW (keeps creds)
 #define BOOT_WIFIWIPE_MS 10000   // WEBBY: hold BOOT >=10s to also wipe saved SSID/PASS
-#define ENROLL_WIN_MS  30000
+#define ENROLL_WIN_MS  120000   // WEBBY 1.6.13: 2 min (was 30 s) - the window also lets a phone join the AP and reach the page
 static bool serviceBootButton(){
   uint32_t now = millis();
   static bool held_prev = false; static uint32_t held_t0 = 0; static uint8_t upCount = 8;
@@ -1319,11 +1491,10 @@ static void startEspnowApMode(){
   // start event has run - straight after WiFi.mode() it doesn't yet, the call fails and apm stayed
   // zero, so EVERY dongle was "GotekOMEGA-0000". esp_read_mac() reads the chip's own number and needs
   // no radio. SoftAP MAC = the BSSID the dongle broadcasts = its identity (Wire Protocol Registry).
-  uint8_t apm[6] = {0}; esp_read_mac(apm, ESP_MAC_WIFI_SOFTAP);
-  char apid[24]; snprintf(apid, sizeof(apid), "%s-%02X%02X", AP_SSID, apm[4], apm[5]);
-  strncpy(g_ap_name, apid, sizeof(g_ap_name)-1);
-  char apline[32]; snprintf(apline, sizeof(apline), "AP: %s", apid);
-  WiFi.softAP(apid, AP_PASS, ESPNOW_CHANNEL);
+  WiFi.onEvent(apStationEvent, ARDUINO_EVENT_WIFI_AP_STACONNECTED);   // 1.6.13: the AP gate, registered before the first station can arrive
+  WiFi.onEvent(apStationEvent, ARDUINO_EVENT_WIFI_AP_STADISCONNECTED);
+  applyApConfig();   // 1.6.13: GotekOMEGA-XXXX / gotek1234 unless this dongle got its own name / password
+  char apline[40]; snprintf(apline, sizeof(apline), "AP: %s", g_ap_name);
   delay(300);
   _tcpServer.begin();
   dnsServer.start(53, "*", IPAddress(192,168,4,1)); g_dns_up = true;
@@ -1338,8 +1509,10 @@ static void startEspnowApMode(){
     }
   }
   // Webby is unlocked by default: with no enrolled owner, hold the enrol window
-  // open so a GTi can pair without the BOOT-button dance.
-  if (_owner_count == 0) { g_enroll_open = true; g_enroll_until = millis() + 6UL*60UL*1000UL; }
+  // open so a GTi can pair without the BOOT-button dance. 1.6.13: not after a failed home join - away
+  // from home the first screen that scans must not become the owner (see PAIR_HELLO).
+  if (_owner_count == 0 && !g_fallback_espnow) { g_enroll_open = true; g_enroll_until = millis() + 6UL*60UL*1000UL; }
+  if (g_fallback_espnow) Serial.printf("[LOCK] ESP-NOW by fallback: pairing needs BOOT 5 s (%u owner(s))\n", (unsigned)_owner_count);
 
   // Broadcast hello burst so a GTi can discover us (web stays responsive meanwhile).
   oledStatus("Gotek OMEGA " FW_VERSION, apline, WiFi.softAPIP().toString(), "Broadcasting...");
@@ -1397,6 +1570,7 @@ void setup() {
     }
     ledRed(false);
     g_join_failed = (WiFi.status() != WL_CONNECTED);
+    g_fallback_espnow = g_join_failed;   // 1.6.13: creds saved but no router = away from home
     g_join_retry_ms = millis();
     if (WiFi.status() == WL_CONNECTED) {
       g_webmode = 1;
@@ -1422,6 +1596,8 @@ void setup() {
 // ============================================================================
 void loop() {
   ledTick();
+  if (g_ap_reapply_ms && millis() > g_ap_reapply_ms) { g_ap_reapply_ms = 0; applyApConfig(); }   // 1.6.13: new AP name/password, after the reply left
+  apSweepStrangers();   // 1.6.13: non-owners already on the AP when the lock turned on
   server.handleClient();
   if (g_dns_up) dnsServer.processNextRequest();
 
