@@ -3,7 +3,8 @@
 // Layout (little endian): "GTS1", u8 reserved, u8 slotVer, u16 manifestLen,
 // manifest, u32 atlasLen, atlas PNG, u8 nBg, nBg x (u8 bgId, u32 len, JPEG).
 // Backgrounds are opaque baseline JPEGs (JPEGDEC has no row-width limit; PNGdec
-// tops out near 316 px RGBA); the atlas stays a PNG for its alpha.
+// tops out near 316 px RGBA); the atlas stays a PNG for its alpha. bgId is one
+// screen size (BgId, 1..4); there is no tile chunk: the tile is the atlas TILE slot.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -28,7 +29,7 @@ struct View {
   Chunk bg[MAX_BG];
 };
 
-enum BgId : uint8_t { BG_480x320 = 1, BG_320x480 = 2, BG_480x272 = 3, BG_272x480 = 4, BG_TILE = 5 };
+enum BgId : uint8_t { BG_480x320 = 1, BG_320x480 = 2, BG_480x272 = 3, BG_272x480 = 4 };
 
 inline const char* errText(Err e) {
   switch (e) {
@@ -99,7 +100,7 @@ inline Err parse(const uint8_t* d, size_t n, View& v) {
     uint8_t id = d[off];
     uint32_t len = rd32(d + off + 1);
     off += 5; rem -= 5;
-    if (id < BG_480x320 || id > BG_TILE) return BAD_BGID;
+    if (id < BG_480x320 || id > BG_272x480) return BAD_BGID;
     for (uint8_t j = 0; j < i; ++j) if (v.bgId[j] == id) return DUP_BG;
     if (len > rem) return BAD_LENGTH;
     v.bgId[i] = id;

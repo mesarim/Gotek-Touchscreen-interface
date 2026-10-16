@@ -46,7 +46,7 @@ static void test_roundtrip() {
   v.manifest = {man.data(), (uint32_t)man.size()};
   v.atlas = {at.data(), (uint32_t)at.size()};
   v.nBg = 2;
-  v.bgId[0] = 5; v.bg[0] = {b1.data(), (uint32_t)b1.size()};
+  v.bgId[0] = 4; v.bg[0] = {b1.data(), (uint32_t)b1.size()};
   v.bgId[1] = 2; v.bg[1] = {b2.data(), (uint32_t)b2.size()};
   uint8_t out[512];
   size_t n = gts::pack(v, out, sizeof out);
@@ -59,7 +59,7 @@ static void test_roundtrip() {
   CHECK(r.manifest.n == 3 && std::memcmp(r.manifest.p, man.data(), 3) == 0);
   CHECK(r.atlas.n == at.size() && std::memcmp(r.atlas.p, at.data(), at.size()) == 0);
   CHECK(r.nBg == 2);
-  CHECK(r.bgId[0] == 5 && r.bg[0].n == b1.size() && std::memcmp(r.bg[0].p, b1.data(), b1.size()) == 0);
+  CHECK(r.bgId[0] == 4 && r.bg[0].n == b1.size() && std::memcmp(r.bg[0].p, b1.data(), b1.size()) == 0);
   CHECK(r.bgId[1] == 2 && r.bg[1].n == b2.size() && std::memcmp(r.bg[1].p, b2.data(), b2.size()) == 0);
 }
 
@@ -119,14 +119,20 @@ static void test_bg_count_over_max() {
   Buf b = build(Buf{'x'}, png(3), {1, 2, 3, 4, 5, 1, 2}, jpg(1));
   gts::View v;
   CHECK(gts::parse(b.data(), b.size(), v) == gts::TOO_MANY_BG);
-  // exactly MAX_BG distinct is not possible (only 5 ids), so 5 must be fine
-  b = build(Buf{'x'}, png(3), {1, 2, 3, 4, 5}, jpg(1));
-  CHECK(gts::parse(b.data(), b.size(), v) == gts::OK && v.nBg == 5);
+  // exactly MAX_BG distinct is not possible (only 4 ids), so all 4 must be fine
+  b = build(Buf{'x'}, png(3), {1, 2, 3, 4}, jpg(1));
+  CHECK(gts::parse(b.data(), b.size(), v) == gts::OK && v.nBg == 4);
+  b = build(Buf{'x'}, png(3), {1, 2, 3, 4, 1}, jpg(1));
+  CHECK(gts::parse(b.data(), b.size(), v) == gts::DUP_BG);
 }
 
 static void test_bg_unknown_id() {
   gts::View v;
   Buf b = build(Buf{'x'}, png(3), {0}, jpg(1));
+  CHECK(gts::parse(b.data(), b.size(), v) == gts::BAD_BGID);
+  b = build(Buf{'x'}, png(3), {5}, jpg(1));  // no tile chunk: the tile lives in the atlas
+  CHECK(gts::parse(b.data(), b.size(), v) == gts::BAD_BGID);
+  b = build(Buf{'x'}, png(3), {1, 5}, jpg(1));
   CHECK(gts::parse(b.data(), b.size(), v) == gts::BAD_BGID);
   b = build(Buf{'x'}, png(3), {6}, jpg(1));
   CHECK(gts::parse(b.data(), b.size(), v) == gts::BAD_BGID);
