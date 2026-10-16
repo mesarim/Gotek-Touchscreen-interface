@@ -2545,6 +2545,22 @@ static bool skinRowFits(int w,int bits,int type){
   long second=pitch+16; second+=15-(second&15);
   return second+pitch+1<=(long)PNG_MAX_BUFFERED_PIXELS;
 }
+// The checks a skin file must pass before its atlas is decoded: skinLoad and the web upload (skinCommit) share
+// them, so the panel refuses a file with the same plain words the loader would log. t gets the manifest colours.
+static bool skinCheck(const uint8_t*buf,size_t sz,gts::View&v,struct Theme&t,int&aw,int&ah,String&why){
+  gts::Err e=gts::parse(buf,sz,v);
+  if(e!=gts::OK){ why=gts::errText(e); return false; }
+  if(v.slotVer!=skin::SLOT_VER){ why=String("slot version ")+v.slotVer+", this firmware takes "+skin::SLOT_VER; return false; }
+  String j; j.reserve(v.manifest.n); for(uint32_t i=0;i<v.manifest.n;i++)j+=(char)v.manifest.p[i];
+  if(!themeFromStyle(j,t)){ why="no #RRGGBB colours in the manifest"; return false; }
+  int ab,at,al;
+  if(!skinPngHead(v.atlas.p,v.atlas.n,aw,ah,ab,at,al)){ why="atlas PNG header unreadable"; return false; }
+  if(aw!=skin::ATLAS_W||ah!=skin::ATLAS_H){ why=String("atlas is ")+aw+"x"+ah+", expected "+skin::ATLAS_W+"x"+skin::ATLAS_H; return false; }
+  if(at!=PNG_PIXEL_TRUECOLOR_ALPHA||ab!=8){ why="atlas is not 8-bit RGBA"; return false; }
+  if(al){ why="atlas is interlaced, save it without interlacing"; return false; }
+  if(!skinRowFits(aw,ab,at)){ why="atlas rows too wide for the PNG decoder"; return false; }
+  return true;
+}
 struct SkinDec { PNG* png; uint16_t* rgb; uint8_t* a; int w,h,rows; };
 static int skinAtlasLine(PNGDRAW*d){   // 8-bit RGBA row -> RGB565 + alpha
   SkinDec*k=(SkinDec*)d->pUser;
@@ -2627,18 +2643,8 @@ static bool skinLoad(const String&name,String&err){
   if(!buf){ f.close(); return fail("not enough memory"); }
   size_t got=f.read(buf,sz); f.close();
   if(got!=sz)return fail("could not read the SD card");
-  gts::View v; gts::Err e=gts::parse(buf,sz,v);
-  if(e!=gts::OK)return fail(gts::errText(e));
-  if(v.slotVer!=skin::SLOT_VER)return fail(String("slot version ")+v.slotVer+", this firmware takes "+skin::SLOT_VER);
-  String j; j.reserve(v.manifest.n); for(uint32_t i=0;i<v.manifest.n;i++)j+=(char)v.manifest.p[i];
-  Theme t=g_custom;
-  if(!themeFromStyle(j,t))return fail("no #RRGGBB colours in the manifest");
-  int aw,ah,ab,at,al;
-  if(!skinPngHead(v.atlas.p,v.atlas.n,aw,ah,ab,at,al))return fail("atlas PNG header unreadable");
-  if(aw!=skin::ATLAS_W||ah!=skin::ATLAS_H)return fail(String("atlas is ")+aw+"x"+ah+", expected "+skin::ATLAS_W+"x"+skin::ATLAS_H);
-  if(at!=PNG_PIXEL_TRUECOLOR_ALPHA||ab!=8)return fail("atlas is not 8-bit RGBA");
-  if(al)return fail("atlas is interlaced, save it without interlacing");
-  if(!skinRowFits(aw,ab,at))return fail("atlas rows too wide for the PNG decoder");
+  gts::View v; Theme t=g_custom; int aw,ah; String why;
+  if(!skinCheck(buf,sz,v,t,aw,ah,why))return fail(why);
   // Memory guard: what stays allocated after the load must leave the runtime reserve free (same floor the
   // library build keeps, LIB_RUNTIME_RESERVE). The file buffer is freed again; a loaded skin's buffers go.
   const size_t atlasBytes=(size_t)aw*ah*3;
@@ -2676,11 +2682,14 @@ static bool skinLoad(const String&name,String&err){
 }
 // A skin's colours from its manifest only (the 8 header bytes + the manifest, never the atlas): the THEME page
 // and the boot config read this; skinSync decodes the atlas when the skin is shown.
-static bool skinPeek(const String&n,Theme&t){
+static bool skinManifest(const String&n,String&j){   // the manifest JSON text (also the web editor's style)
   File f=SD_MMC.open(skinPath(n).c_str(),FILE_READ); if(!f)return false;
   uint8_t h[8]; int ml=(f.read(h,8)==8)?skin::manifestLen(h,8):-1;
-  String j; if(ml>0){ j.reserve(ml); while(ml-->0&&f.available())j+=(char)f.read(); }
-  f.close(); return j.length()&&themeFromStyle(j,t);
+  j=""; if(ml>0){ j.reserve(ml); while(ml-->0&&f.available())j+=(char)f.read(); }
+  f.close(); return j.length()>0;
+}
+static bool skinPeek(const String&n,Theme&t){
+  String j; return skinManifest(n,j)&&themeFromStyle(j,t);
 }
 // A new orientation (gW x gH) wants another background picture: decode that one from the card, drop the old one
 // first (less PSRAM at the peak). A failure only drops the picture; the draw falls back to the tile or colours.
@@ -2755,6 +2764,7 @@ static bool themeActivate(const String&name){
 static bool themeStyleJson(const String&name,String&out){
   String n=name; n.toUpperCase();
   int ci=(n=="NEO")?NUM_THEMES-1:classicIdx(n);
+  if(ci<0&&themeNameOk(n)&&!themeReserved(n)&&skinManifest(n,out))return true;   // gti-skins: a .gts wins, as in loadCustomTheme
   if(ci<0)return readThemeFile(n,out);
   const Theme&t=THEMES[ci]; char b[200];
   snprintf(b,sizeof(b),"{\"fill\":\"#%06lX\",\"light\":\"#%06lX\",\"dark\":\"#%06lX\",\"text\":\"#%06lX\",\"accent\":\"#%06lX\",\"bevel\":\"flat\",\"bevelW\":1,\"radius\":6,\"scale\":2}",
@@ -2776,6 +2786,86 @@ static String themeListJson(){
   String j="{\"themes\":[\"NEO\""; for(int i=0;i<NUM_THEMES-1;i++){ j+=",\""; j+=THEMES[i].name; j+="\""; }
   String c[8]; int nc=listCustomThemes(c,8); for(int i=0;i<nc;i++){ j+=",\""+c[i]+"\""; }
   j+="],\"active\":\""+themeName()+"\"}"; return j;
+}
+
+// ── gti-skins: the web panel's skin upload / download / delete (web_panel.h /api/skins/<NAME>/...) ──
+// An upload arrives in chunks (max 4096 bytes each) appended to /GTI/THEMES/<NAME>.gts.part; commit checks the
+// whole file as skinLoad would and only then renames it to <NAME>.gts. listCustomThemes ignores .gts.part, so an
+// interrupted upload never shows up. These run from the web handlers, on the loop task like every SD user here.
+static bool skinUpName(const String&n,String&err){
+  if(!themeNameOk(n)){ err="name: A-Z, 0-9 and _ only, max 16, not starting with a digit"; return false; }
+  if(themeReserved(n)){ err="that name belongs to a built-in theme"; return false; }
+  return true;
+}
+static String skinPartPath(const String&n){ return skinPath(n)+".part"; }
+// The active look is this skin (shown, or picked with NEO on top of it).
+static bool skinIsActive(const String&n){ return g_theme_idx==CUSTOM_IDX&&g_custom_gts&&g_custom_name==n; }
+static bool skinWriteChunk(const String&name,uint32_t off,const uint8_t*d,size_t n,String&err){
+  String nm=name; nm.toUpperCase(); if(!skinUpName(nm,err))return false;
+  if((uint64_t)off+(uint64_t)n>(uint64_t)gts::MAX_FILE){ err=String("file is over the limit of ")+(unsigned)gts::MAX_FILE+" bytes"; return false; }
+  const String p=skinPartPath(nm);
+  if(off==0){
+    if(!SD_MMC.exists("/GTI"))SD_MMC.mkdir("/GTI");
+    if(!SD_MMC.exists("/GTI/THEMES"))SD_MMC.mkdir("/GTI/THEMES");
+  } else {
+    File r=SD_MMC.open(p.c_str(),FILE_READ);
+    const bool inOrder=r&&!r.isDirectory()&&(uint32_t)r.size()==off; if(r)r.close();
+    if(!inOrder){ err="out of order"; return false; }
+  }
+  File f=SD_MMC.open(p.c_str(),off==0?FILE_WRITE:FILE_APPEND);
+  if(!f){ err="could not write the SD card"; return false; }
+  const size_t w=n?f.write(d,n):0; f.close();
+  if(w!=n){ err="could not write the SD card"; return false; }
+  return true;
+}
+static bool skinCommit(const String&name,String&err){
+  String nm=name; nm.toUpperCase(); if(!skinUpName(nm,err))return false;
+  const String p=skinPartPath(nm);
+  uint8_t*buf=nullptr;
+  auto fail=[&](String m)->bool{ free(buf); SD_MMC.remove(p.c_str()); err=m; gLog("[skin] upload %s refused: %s\n",nm.c_str(),m.c_str()); return false; };
+  File f=SD_MMC.open(p.c_str(),FILE_READ);
+  if(!f||f.isDirectory()){ if(f)f.close(); err="nothing uploaded for this name"; return false; }
+  const size_t sz=f.size();
+  if(sz==0){ f.close(); return fail("the skin file is empty"); }
+  if(sz>gts::MAX_FILE){ f.close(); return fail(String("file is ")+(unsigned)sz+" bytes, the limit is "+(unsigned)gts::MAX_FILE); }
+  buf=(uint8_t*)ps_malloc(sz);
+  if(!buf){ f.close(); return fail("not enough memory"); }
+  const size_t got=f.read(buf,sz); f.close();
+  if(got!=sz)return fail("could not read the SD card");
+  gts::View v; Theme t=g_custom; int aw,ah; String why;
+  if(!skinCheck(buf,sz,v,t,aw,ah,why))return fail(why);
+  free(buf); buf=nullptr;
+  // FAT rename does not replace: drop the old file first. The checked .part is the only copy for a moment.
+  const String g=skinPath(nm);
+  if(SD_MMC.exists(g.c_str())&&!SD_MMC.remove(g.c_str()))return fail("could not replace the old skin");
+  if(!SD_MMC.rename(p.c_str(),g.c_str()))return fail("could not write the SD card");
+  gLog("[skin] upload %s stored (%u bytes)\n",nm.c_str(),(unsigned)sz);
+  // Replacing the skin on screen: drop the old atlas and load the new file (skinSync falls back to NAVY if it
+  // will not load). With NEO on top nothing is shown, so only the colours are refreshed for later.
+  if(skinIsActive(nm)){
+    if(g_neo_on){ Theme pt=g_custom; if(skinPeek(nm,pt))g_custom=pt; }
+    else { skinUnload(); skinSync(); g_theme_redraw=true; }
+  }
+  return true;
+}
+static bool skinOpenFile(const String&name,fs::File&f){
+  String nm=name; nm.toUpperCase(); String err; if(!skinUpName(nm,err))return false;
+  f=SD_MMC.open(skinPath(nm).c_str(),FILE_READ);
+  if(f&&f.isDirectory()){ f.close(); return false; }
+  return (bool)f;
+}
+// Removes <NAME>.gts and any leftover .part. The active skin falls back to NAVY the way skinSync does when a skin
+// will not load (atlas freed by applyTheme -> skinSync). CONFIG.TXT keeps THEME=<NAME>: at boot that is a missing
+// theme, NAVY with one log line, as for a deleted .json theme.
+static bool skinDelete(const String&name){
+  String nm=name; nm.toUpperCase(); String err; if(!skinUpName(nm,err))return false;
+  const String p=skinPartPath(nm),g=skinPath(nm);
+  bool any=false;
+  if(SD_MMC.exists(p.c_str())){ SD_MMC.remove(p.c_str()); any=true; }
+  if(SD_MMC.exists(g.c_str())){ if(!SD_MMC.remove(g.c_str()))return false; any=true;
+    if(skinIsActive(nm)){ g_custom_gts=false; g_custom_name=""; applyTheme(0); g_theme_redraw=true; }
+    gLog("[skin] %s deleted\n",nm.c_str()); }
+  return any;
 }
 
 // ════════════════════════════════════════════════════════════════════════════

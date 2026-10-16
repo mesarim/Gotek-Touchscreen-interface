@@ -140,7 +140,7 @@ static void hSysInfo() {
   j += "\"dav_enabled\":" + String(g_dav_on ? "true" : "false") + ",";
   j += "\"log_enabled\":false,";
 #if defined(GTI_THEMES)
-  j += "\"has_sd\":false,\"has_display\":true,\"has_ota\":true,\"has_themes\":true,";
+  j += "\"has_sd\":false,\"has_display\":true,\"has_ota\":true,\"has_themes\":true,\"has_skins\":true,";
 #else
   j += "\"has_sd\":false,\"has_display\":true,\"has_ota\":true,\"has_themes\":false,";
 #endif
@@ -678,6 +678,63 @@ static bool hThemesNamed() {
   if (what == "asset" && post) { webPanelHttp.send(200, "application/json", "{\"status\":\"ignored\"}"); return true; }   // no button pictures on this screen
   return false;
 }
+
+// ── gti-skins: skin upload / download / delete (spec 2026-10-16-gti-skins-design.md, "Web panel") ──
+// The sketch provides skinWriteChunk / skinCommit / skinOpenFile / skinDelete. The server reads every non-multipart
+// body into args before a handler runs, so an upload comes as small form posts: off=<decimal>&data=<base64url>,
+// at most 4096 raw bytes each, appended in order to <NAME>.gts.part; commit checks it and makes it <NAME>.gts.
+//   POST /api/skins/<NAME>/chunk   POST /api/skins/<NAME>/commit   GET /api/skins/<NAME>   POST /api/skins/<NAME>/delete
+#include "skin_b64.h"
+static const size_t WP_SKIN_CHUNK = 4096;
+static void wpSkinErr(int code, const String& e) { webPanelHttp.send(code, "application/json", "{\"error\":\"" + wpJsonEscape(e) + "\"}"); }
+// false = not a skin URL. The name is checked (skin::validName) before any path is built.
+static bool hSkinsNamed() {
+  const String u = webPanelHttp.uri();
+  if (!u.startsWith("/api/skins/")) return false;
+  const int sl = u.indexOf('/', 11);
+  String name = (sl < 0) ? u.substring(11) : u.substring(11, sl); name.toUpperCase();
+  const String what = (sl < 0) ? String("") : u.substring(sl + 1);
+  const bool post = (webPanelHttp.method() == HTTP_POST);
+  if (!skin::validName(name.c_str())) { wpSkinErr(400, "bad skin name: A-Z, 0-9 and _ only, max 16, not starting with a digit"); return true; }
+  if (what == "" && !post) {
+    File f;
+    if (!skinOpenFile(name, f)) { wpSkinErr(404, "no such skin"); return true; }
+    webPanelHttp.sendHeader("Content-Disposition", "attachment; filename=\"" + name + ".gts\"");
+    webPanelHttp.streamFile(f, "application/octet-stream");
+    f.close();
+    return true;
+  }
+  if (what == "chunk" && post) {
+    const String so = webPanelHttp.arg("off");
+    const String sd = webPanelHttp.arg("data");
+    bool num = so.length() > 0 && so.length() <= 10;
+    for (unsigned i = 0; num && i < so.length(); i++) num = (so[i] >= '0' && so[i] <= '9');
+    const unsigned long long off = num ? strtoull(so.c_str(), nullptr, 10) : 0;
+    if (!num || off > gts::MAX_FILE) { wpSkinErr(400, "bad off"); return true; }
+    if (sd.length() > (WP_SKIN_CHUNK + 2) / 3 * 4) { wpSkinErr(400, "chunk over 4096 bytes"); return true; }
+    uint8_t* buf = (uint8_t*)malloc(WP_SKIN_CHUNK);
+    if (!buf) { wpSkinErr(500, "not enough memory"); return true; }
+    const int n = skin::b64urlDecode(sd.c_str(), sd.length(), buf, WP_SKIN_CHUNK);
+    String err;
+    if (n < 0) wpSkinErr(400, "data is not base64url or over 4096 bytes");
+    else if (!skinWriteChunk(name, (uint32_t)off, buf, (size_t)n, err)) wpSkinErr(400, err);
+    else webPanelHttp.send(200, "application/json", "{\"status\":\"ok\",\"next\":" + String((uint32_t)off + (uint32_t)n) + "}");
+    free(buf);
+    return true;
+  }
+  if (what == "commit" && post) {
+    String err;
+    if (skinCommit(name, err)) webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}");
+    else wpSkinErr(400, err);
+    return true;
+  }
+  if (what == "delete" && post) {
+    if (skinDelete(name)) webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}");
+    else wpSkinErr(404, "no such skin");
+    return true;
+  }
+  return false;
+}
 #endif
 
 // ── Route table (registered once, after WiFi is up) ────────────────────────
@@ -724,6 +781,7 @@ static void webPanelRegister() {
   webPanelHttp.onNotFound([]() {
 #if defined(GTI_THEMES)
     if (hThemesNamed()) return;   // A600-theme1: /api/themes/<NAME>/...
+    if (hSkinsNamed()) return;    // gti-skins: /api/skins/<NAME>/...
 #endif
     webPanelHttp.send(404, "application/json", "{\"error\":\"Not available on this device\"}"); });
 }
