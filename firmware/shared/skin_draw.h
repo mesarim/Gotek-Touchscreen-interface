@@ -94,4 +94,44 @@ void drawSlice(const Atlas& at, const Slot& s, int dx, int dy, int dw, int dh, P
   }
 }
 
+// Same pixels as drawSlice, but column by column (y inner): on a rotation where the
+// framebuffer's contiguous axis is logical y, writes then run along memory.
+template <class Put>
+void drawSliceColumns(const Atlas& at, const Slot& s, int dx, int dy, int dw, int dh, Put put) {
+  Piece p[9];
+  int n = slice9(s, dw, dh, p);
+  for (int k = 0; k < n; ++k) {
+    for (int x = 0; x < p[k].dw; ++x) {
+      int sx = p[k].sx + (x * p[k].sw) / p[k].dw;
+      for (int y = 0; y < p[k].dh; ++y) {
+        int sy = p[k].sy + (y * p[k].sh) / p[k].dh;
+        size_t i = (size_t)sy * at.w + (size_t)sx;
+        put(dx + p[k].dx + x, dy + p[k].dy + y, at.rgb[i], at.a ? at.a[i] : (uint8_t)255);
+      }
+    }
+  }
+}
+
+// Logical (x, y) -> physical pixel on a pw x ph panel for rotation rot 0..3. A copy of
+// fb_setPixel's switch in Gotek_JC3248.ino (the panel is portrait, rot 0 = landscape).
+inline void mapRot(int rot, int pw, int ph, int x, int y, int& px, int& py) {
+  switch (rot & 3) {
+    case 1: px = x; py = y; break;
+    case 2: px = (pw - 1) - y; py = x; break;
+    case 3: px = (pw - 1) - x; py = (ph - 1) - y; break;
+    default: px = y; py = (ph - 1) - x; break;
+  }
+}
+
+// mapRot as a linear index: framebuffer[base + x*sx + y*sy] is logical pixel (x, y).
+struct RotMap { int base, sx, sy; };
+inline RotMap rotMap(int rot, int pw, int ph) {
+  switch (rot & 3) {
+    case 1: return {0, 1, pw};
+    case 2: return {pw - 1, pw, -1};
+    case 3: return {(ph - 1) * pw + (pw - 1), -1, -pw};
+    default: return {(ph - 1) * pw, -pw, 1};
+  }
+}
+
 }  // namespace skin

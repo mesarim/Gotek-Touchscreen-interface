@@ -139,7 +139,72 @@ static void test_slots_inside_atlas_and_disjoint() {
   CHECK(skin::SLOTS[skin::S_ICONS_2X].y == 128 && skin::SLOTS[skin::S_ICONS_2X].w == 256);
 }
 
+// Copy of fb_setPixel's switch in Gotek_JC3248.ino (physical panel 320x480, portrait).
+static void fbSwitch(int rot, int vx, int vy, int& px, int& py) {
+  const int W = 320, H = 480;
+  switch (rot) {
+    case 1: px = vx; py = vy; break;
+    case 2: px = (W - 1) - vy; py = vx; break;
+    case 3: px = (W - 1) - vx; py = (H - 1) - vy; break;
+    default: px = vy; py = (H - 1) - vx; break;
+  }
+}
+
+static void test_rotMap_bijective_and_matches_firmware() {
+  const int W = 320, H = 480;
+  for (int rot = 0; rot < 4; ++rot) {
+    const int lw = (rot & 1) ? W : H, lh = (rot & 1) ? H : W;
+    const skin::RotMap m = skin::rotMap(rot, W, H);
+    std::vector<int> hit((size_t)W * H, 0);
+    int bad = 0, out = 0;
+    for (int y = 0; y < lh; ++y)
+      for (int x = 0; x < lw; ++x) {
+        int px, py, qx, qy;
+        skin::mapRot(rot, W, H, x, y, px, py);
+        fbSwitch(rot, x, y, qx, qy);
+        if (px != qx || py != qy) ++bad;
+        long i = (long)m.base + (long)x * m.sx + (long)y * m.sy;
+        if (i < 0 || i >= (long)W * H) { ++out; continue; }
+        if (i != (long)qy * W + qx) ++bad;
+        hit[(size_t)i]++;
+      }
+    CHECK(bad == 0);
+    CHECK(out == 0);
+    int notOnce = 0;
+    for (size_t k = 0; k < hit.size(); ++k) if (hit[k] != 1) ++notOnce;
+    CHECK(notOnce == 0);
+    CHECK(m.sx == 1 || m.sx == -1 || m.sy == 1 || m.sy == -1);
+  }
+}
+
+static void test_drawSliceColumns_same_pixels() {
+  std::vector<uint16_t> rgb((size_t)skin::ATLAS_W * skin::ATLAS_H);
+  std::vector<uint8_t> a(rgb.size());
+  for (size_t i = 0; i < rgb.size(); ++i) { rgb[i] = (uint16_t)(i * 2654435761u >> 7); a[i] = (uint8_t)(i * 31); }
+  skin::Atlas at; at.w = skin::ATLAS_W; at.h = skin::ATLAS_H; at.rgb = rgb.data(); at.a = a.data();
+  const int sizes[3][2] = {{100, 30}, {7, 50}, {48, 48}};
+  for (int s = 0; s < 3; ++s) {
+    const int dw = sizes[s][0], dh = sizes[s][1], dx = 3, dy = 5;
+    std::vector<uint32_t> r1((size_t)(dw + dx) * (dh + dy), 0), r2(r1.size(), 0);
+    int c1 = 0, c2 = 0, lastX = -1, colBreaks = 0, lastY = -1;
+    skin::drawSlice(at, skin::SLOTS[skin::S_PANEL], dx, dy, dw, dh, [&](int x, int y, uint16_t c, uint8_t al) {
+      ++c1; r1[(size_t)y * (dw + dx) + x] = ((uint32_t)al << 16 | c) + 1;
+    });
+    skin::drawSliceColumns(at, skin::SLOTS[skin::S_PANEL], dx, dy, dw, dh, [&](int x, int y, uint16_t c, uint8_t al) {
+      ++c2; r2[(size_t)y * (dw + dx) + x] = ((uint32_t)al << 16 | c) + 1;
+      if (x == lastX && y != lastY + 1) ++colBreaks;
+      lastX = x; lastY = y;
+    });
+    CHECK(c1 == dw * dh);
+    CHECK(c2 == dw * dh);
+    CHECK(r1 == r2);
+    CHECK(colBreaks == 0);
+  }
+}
+
 int main() {
+  test_rotMap_bijective_and_matches_firmware();
+  test_drawSliceColumns_same_pixels();
   test_slice9_covers_exactly();
   test_slice9_corners_unscaled();
   test_blend_edges_and_mid();
