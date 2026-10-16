@@ -46,13 +46,19 @@
 #include "esp_heap_caps.h"   // HD test: internal-heap readout
 #include <LittleFS.h>
 #include <Update.h>   // OMEGAWARE: web OTA
+#include "esp_app_format.h"
+#ifndef ESP_CHIP_ID_ESP32S3
+#define ESP_CHIP_ID_ESP32S3 0x0009
+#endif
 #include <WebServer.h>     // WEBBY: built-in (ESP32 core) — no external lib
 #include <ESPmDNS.h>       // WEBBY: gotekomega.local
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
 #include "../shared/webui.h"   // PANEL: the shared SPA, gzipped, straight from firmware/shared (no stale copy per dongle folder)
 
-#define FW_VERSION     "Webby-1.6.4-xiao"   // 1.6.4-xiao: brought level with SuperMini Webby-1.6.4 (DSK/GENERIC keep their extension over wireless, LED HAL + LED=OFF); same number = same features
+#define WEBBY_BOARD    "xiao"
+#define WEBBY_KIND     3     // board kind on the wire (PAIR_REPLY/hello pad[2], status board_id): 1 SuperMini, 2 Zero, 3 XIAO
+#define FW_VERSION     "Webby-1.6.5-xiao"   // 1.6.5-xiao (16 Oct 2026, Dimmy): OTA guard (refuses another chip / flash size / board kind), board id 3 in pair reply/hello/status, OTA replies 400/500/200 | 1.6.4-xiao: brought level with SuperMini Webby-1.6.4 (DSK/GENERIC keep their extension over wireless, LED HAL + LED=OFF); same number = same features
 #define ESPNOW_CHANNEL 6
 // ── Board profile ──────────────────────────────────────────
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -418,7 +424,7 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
     _wavePeer = new XiaoPeer(_wave_mac, ESPNOW_CHANNEL, WIFI_IF_STA, nullptr);
     if (!_wavePeer->add_peer()) { delete _wavePeer; _wavePeer = nullptr; }
     PktHello reply = {}; reply.type = PKT_PAIR_REPLY;
-    WiFi.softAPmacAddress(reply.mac); strncpy(reply.ip, AP_IP, 15); reply.pad[0] = SAVE_PROTO_VER;
+    WiFi.softAPmacAddress(reply.mac); strncpy(reply.ip, AP_IP, 15); reply.pad[0] = SAVE_PROTO_VER; reply.pad[2] = WEBBY_KIND;
     XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
     if (dst) dst->send_pkt((uint8_t*)&reply, sizeof(reply));
     oledStatus("Gotek OMEGA " FW_VERSION, known?"Reconnected":"Owner added", macToStr(_wave_mac), String(_owner_count)+" owner(s)");
@@ -668,6 +674,7 @@ static String statusJson(){
   String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
   String s = "{";
   s += "\"fw\":\""; s += FW_VERSION; s += "\",";
+  s += "\"board\":\""; s += WEBBY_BOARD; s += "\",\"board_id\":"; s += String(WEBBY_KIND); s += ",";   // OTA guard
   s += "\"loaded\":"; s += (g_disk_loaded?"true":"false");
   s += ",\"name\":\""; s += jsonEsc(g_loaded_name); s += "\"";
   s += ",\"size\":"; s += String(g_image_size);
@@ -892,27 +899,85 @@ static void loadTheme(){
 // inactive OTA slot. Uses the WebServer upload stream (Webby is not our
 // client-parser firmware). First byte must be 0xE9 (an ESP32 image).
 static bool g_ota_ok=false, g_ota_run=false, g_ota_first=false;
+// OTA guard (same as SuperMini/Zero 1.6.14): an image is only flashed when it is OUR kind of dongle. (1) From the first 112
+// bytes: byte0 0xE9, chip id = ours, flash size (byte3 high nibble) = this board's (XIAO: 8 MB). (2) Every Webby image carries
+// "GTIKIND:<board>;" (g_kind_mark); the upload is scanned for it and must name OUR board. The inactive slot only becomes
+// bootable at Update.end(), so a refusal at the marker or at the end leaves the dongle as it was.
+static const char g_kind_mark[] = "GTIKIND:" WEBBY_BOARD ";";   // referenced by otaScan, so the linker keeps it in the image
+static uint8_t g_ota_hdr[112]; static size_t g_ota_hdr_n=0;
+static uint8_t g_ota_win[64+1500]; static size_t g_ota_carry=0; static bool g_ota_kind_seen=false;
+static const char* g_ota_err=nullptr; static String g_ota_err_txt;
+static const char* otaCheckHeader(){
+  const uint8_t* h=g_ota_hdr;
+  if (h[0]!=0xE9) return "not a firmware image (an ESP32 image starts with 0xE9)";
+  uint16_t chip = h[12] | (h[13]<<8);
+  if (chip != (uint16_t)ESP_CHIP_ID_ESP32S3) return "wrong chip: this image is not for an ESP32-S3";
+  uint32_t fl=ESP.getFlashChipSize(), nib=0; while ((1u<<20)<<nib < fl) nib++;
+  if ((h[3]>>4) != nib) { g_ota_err_txt = "wrong flash size: this image is built for a " + String(1u<<(h[3]>>4)) + " MB board, this dongle has " + String(fl/(1u<<20)) + " MB"; return g_ota_err_txt.c_str(); }
+  return nullptr;
+}
+// Look for "GTIKIND:<name>;" in the stream (a 63-byte tail is carried over so a marker split over two chunks is found).
+static const char* otaScan(const uint8_t* d, size_t n){
+  const size_t pre = 8, ml = strlen(g_kind_mark);
+  while (n) {
+    size_t take = min(n, sizeof(g_ota_win) - g_ota_carry);
+    memcpy(g_ota_win + g_ota_carry, d, take); d += take; n -= take;
+    size_t tot = g_ota_carry + take;
+    for (size_t i=0; i + pre <= tot; i++) {
+      if (g_ota_win[i]!='G' || memcmp(g_ota_win+i, "GTIKIND:", pre)) continue;
+      size_t e=i+pre; while (e<tot && e-i<40 && ((g_ota_win[e]>='a'&&g_ota_win[e]<='z')||(g_ota_win[e]>='0'&&g_ota_win[e]<='9'))) e++;
+      if (e>=tot && e-i<40) break;   // name not complete yet: the carried tail brings it back with the next chunk
+      if (g_ota_win[e]!=';' || e==i+pre) continue;   // the bare "GTIKIND:" literal of this very check is no marker
+      if (e-i+1==ml && !memcmp(g_ota_win+i, g_kind_mark, ml)) { g_ota_kind_seen=true; continue; }
+      g_ota_err_txt = "wrong board: this image is for '" + String((const char*)g_ota_win+i+pre).substring(0, e-i-pre) + "', this dongle is '" + String(WEBBY_BOARD) + "'";
+      return g_ota_err_txt.c_str();
+    }
+    g_ota_carry = tot < 63 ? tot : 63; memmove(g_ota_win, g_ota_win + tot - g_ota_carry, g_ota_carry);
+  }
+  return nullptr;
+}
 static void onOtaUpload(){
   HTTPUpload& up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
-    g_ota_ok=false; g_ota_first=true;
-    g_ota_run = Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
-  } else if (up.status == UPLOAD_FILE_WRITE && g_ota_run) {
-    if (g_ota_first) { g_ota_first=false; if (up.currentSize>0 && up.buf[0]!=0xE9) { Update.abort(); g_ota_run=false; return; } }
-    if (Update.write(up.buf, up.currentSize) != up.currentSize) { g_ota_run=false; }
+    g_ota_ok=false; g_ota_first=true; g_ota_hdr_n=0; g_ota_err=nullptr; g_ota_carry=0; g_ota_kind_seen=false;
+    if (Update.isRunning()) Update.abort();   // a previous aborted upload must not block this one
+    g_ota_run = false;   // started once the first 112 bytes have passed otaCheckHeader()
+  } else if (up.status == UPLOAD_FILE_WRITE && !g_ota_err) {
+    const uint8_t* d = up.buf; size_t n = up.currentSize;
+    if (g_ota_first) {   // collect the header, then decide; Update.begin only for an image of our chip and flash size
+      size_t take = min(n, sizeof(g_ota_hdr)-g_ota_hdr_n);
+      memcpy(g_ota_hdr+g_ota_hdr_n, d, take); g_ota_hdr_n += take; d += take; n -= take;
+      if (g_ota_hdr_n < sizeof(g_ota_hdr)) return;   // header not complete yet (the next chunk carries on)
+      g_ota_err = otaCheckHeader(); if (g_ota_err) return;
+      g_ota_first=false;
+      g_ota_run = Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
+      if (!g_ota_run) return;
+      g_ota_err = otaScan(g_ota_hdr, g_ota_hdr_n);
+      if (g_ota_err || Update.write(g_ota_hdr, g_ota_hdr_n) != g_ota_hdr_n) { Update.abort(); g_ota_run=false; return; }
+    }
+    if (n) {
+      g_ota_err = otaScan(d, n);
+      if (g_ota_err || Update.write((uint8_t*)d, n) != n) { Update.abort(); g_ota_run=false; }   // release the slot
+    }
   } else if (up.status == UPLOAD_FILE_END && g_ota_run) {
+    if (!g_ota_kind_seen) { g_ota_err = "this image has no board marker (older than the OTA guard, or not a Webby image)"; Update.abort(); g_ota_run=false; return; }
     g_ota_ok = Update.end(true);
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (g_ota_run) Update.abort(); g_ota_run=false; g_ota_ok=false;   // a dropped upload left Update "running" until a power cycle
   }
 }
 static void onOtaDone(){
-  server.send(200, "application/json", g_ota_ok ? "{\"status\":\"ok\"}" : "{\"error\":\"firmware update failed - not an ESP32 image?\"}");
-  if (g_ota_ok) { delay(600); ESP.restart(); }
+  if (g_ota_ok) { server.send(200, "application/json", "{\"ok\":true,\"status\":\"ok\"}"); delay(600); ESP.restart(); return; }
+  if (g_ota_first && !g_ota_err) g_ota_err = "not a firmware image (too short)";   // upload ended before the 112-byte header was complete
+  if (g_ota_err) { server.send(400, "application/json", String("{\"ok\":false,\"error\":\"wrong_image\",\"err\":\"") + jsonEsc(String(g_ota_err)) + "\"}"); return; }
+  server.send(500, "application/json", String("{\"ok\":false,\"error\":\"update_failed\",\"err\":\"") + jsonEsc(String(Update.errorString())) + "\"}");   // too big for the slot, flash write failed, bad checksum
 }
 
 static void apiSystemInfo(){
   String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
   String j = "{";
   j += "\"firmware\":\""; j += FW_VERSION; j += "\",";
+  j += "\"board\":\""; j += WEBBY_BOARD; j += "\",\"board_id\":"; j += String(WEBBY_KIND); j += ",";   // OTA guard
   j += "\"heap_free\":"; j += String((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL)); j += ",";
   j += "\"psram_free\":"; j += String((unsigned)ESP.getFreePsram()); j += ",";
   j += "\"sd_used_mb\":0,\"sd_total_mb\":0,";
@@ -1234,7 +1299,7 @@ static void startEspnowApMode(){
   oledStatus("Gotek OMEGA " FW_VERSION, apline, WiFi.softAPIP().toString(), "Broadcasting...");
   uint32_t t0 = millis();
   while (millis()-t0 < (uint32_t)(_paired ? 8000 : 3000)) {
-    PktHello hello = {}; hello.type = PKT_PAIR_HELLO; WiFi.softAPmacAddress(hello.mac);
+    PktHello hello = {}; hello.type = PKT_PAIR_HELLO; WiFi.softAPmacAddress(hello.mac); hello.pad[2] = WEBBY_KIND;
     strncpy(hello.ip, AP_IP, 15); hello.pad[0] = SAVE_PROTO_VER;
     if (_bcastPeer) _bcastPeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     if (_wavePeer)  _wavePeer->send_pkt((uint8_t*)&hello, sizeof(hello));
