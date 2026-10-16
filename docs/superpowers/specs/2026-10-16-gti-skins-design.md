@@ -53,11 +53,17 @@ One small binary container, written and read by the web page (JS) and the firmwa
 |---|---|
 | 4 | magic `GTS1` (version is part of the magic; a later format is `GTS2`) |
 | 1 | reserved, `0` (no screen class: one skin serves every screen, see "One skin for all screens") |
-| 1 | slot list version the atlas follows (see below) |
+| 1 | slot list version the atlas follows (see below; the slot table in `skin_draw.h` is its definition) |
 | 2 | manifest length N |
 | N | manifest: JSON, the existing style fields (`fill, light, dark, text, accent, ...`) plus `name`, `author` |
 | 4 | PNG length M |
-| M | the atlas, a plain PNG |
+| M | the atlas, a plain PNG (256x192, RGBA) |
+| 1 | number of backgrounds B (0..4; the loader accepts up to 6) |
+| B x | background: 1 byte id (1 = 480x320, 2 = 320x480, 3 = 480x272, 4 = 272x480), 4 byte length, a baseline JPEG of exactly that size |
+
+There is no tile chunk: the tile is the atlas `TILE` slot (64x64), used when no background picture matches the
+screen's size and orientation. Backgrounds are JPEG, not PNG: JPEGDEC decodes any row width, PNGdec 1.1.6 does
+not fit a 480 px row.
 
 Why our own container instead of a zip: no new library on the ESP32; PNGdec is already in the toolchain. Why
 not data inside the PNG: paint programs drop custom chunks when you save, so the manifest would be lost on the
@@ -80,9 +86,9 @@ what the JC3248 draws today**):
   so one picture serves every key size (the part Winamp did not have).
 - `PANEL`: cover/info panel background, 9-slice.
 - `ROW_SEL`: the selected list row, 9-slice.
-- `BG_480x320`, `BG_320x480`, `BG_480x272`, ...: full-screen backgrounds, one optional slot per screen size
-  and orientation (the list grows as screens are added). `BG_TILE`: a small tileable pattern that fits any
-  screen by repeating.
+- `TILE`: a 64x64 tileable pattern in the atlas that fits any screen by repeating. Full-screen backgrounds are
+  not atlas slots: they are JPEG chunks of the container (see "The skin file"), one optional per screen size
+  and orientation (the list grows as screens are added).
 - `ICONS`: a fixed grid of small icons (insert, eject, folder, favourite, settings, battery, wifi...) drawn
   once on a 16x16 pixel grid. Which icons exactly: from the firmware, in the plan.
 
@@ -92,7 +98,7 @@ There is no template per screen size. A skin declares what it supplies, and each
 
 - The 9-slice art (keys, panel, selected row) and the colours apply on every screen.
 - The background: the screen uses the slot for its own size and orientation if the skin has it, else
-  `BG_TILE`, else the colour theme's background.
+  the atlas `TILE` slot, else the colour theme's background.
 - Icons are scaled by whole numbers (1x on the small screens, 2x on the large ones), so they stay sharp.
   A skin may add a second icon set for large screens (`ICONS_2X`); it is used when present.
 - A skin made for one screen therefore looks right on the others, except that a missing background falls back
@@ -113,8 +119,9 @@ slot map (the Skinner Atlas part) is a separate overlay image in the docs, not b
 starter looks right on the screen.
 
 - NEO stays the built-in default (`NEO=ON` as today). The firmware keeps drawing NEO in code; NEO is not
-  loaded from a file. The starter atlas is a **rendering of NEO into the slots**, made once at build time
-  and checked in, so the code-drawn NEO and the starter look the same.
+  loaded from a file. The starter atlas is a **rendering of NEO into the slots**, drawn at runtime in the
+  browser by `gtsDrawStarter` in the web page (not made at build time, not checked in as a binary), so the
+  code-drawn NEO and the starter look the same.
 - NEO is see-through (translucent keys over the background picture). A skin that copies it needs **real
   alpha**, not a colour key: the transparency method is therefore decided as PNG alpha with blending, unless
   the device test shows blending a slot is too slow (then the starter gets pre-blended opaque slots and the
@@ -128,9 +135,8 @@ starter looks right on the screen.
   active. Each slot is then drawn by copying its rectangle (9-slice for keys, panels and the selected row).
 - Maximum atlas size and file size are limits to be **measured on the device**, not guessed. Starting
   proposal: file at most 256 KB; the atlas size follows from free PSRAM. Several full-screen backgrounds
-  will not fit one small atlas, so a skin may carry backgrounds as extra PNGs in the container, loaded
-  only for the screen in use (the plan settles the container change; only the background that applies is
-  decoded). The upload says which limit was hit.
+  will not fit one small atlas, so a skin carries backgrounds as extra JPEG chunks in the container, loaded
+  only for the screen in use (only the background that applies is decoded). The upload says which limit was hit.
 - The colour fields in the manifest still define the 16 screen colours, exactly as the style JSON does today
   (the mapping table in the theme-section spec applies unchanged). A skin therefore always has a complete
   colour theme underneath it.
@@ -157,8 +163,9 @@ starter looks right on the screen.
   only for the active skin. Listing never decodes an atlas.
 - **Preview in the editor:** indicative, not pixel-accurate: it shows the main-screen mock with the atlas
   slots, not every page.
-- **Starter PNG hosting:** the docs site by default; the firmware does not serve it (a labelled 512x512 PNG
-  does not fit the JC4827 headroom). Where the docs site lives is for the plan to find in the repo.
+- **Starter PNG hosting:** none needed: the web page draws the starter and the labelled slot map itself
+  (`gtsDrawStarter`), so it works on a phone without internet. The docs site only holds a saved copy of the
+  overlay and the README (`docs/skins/`).
 - **Size limit:** the 256 KB limit counts the whole `.gts` file. Free PSRAM on the JC3248 with a cover
   decoded is measured first (the firmware already logs `psram=` at scan time); the atlas limit follows from
   that number.
@@ -168,8 +175,8 @@ starter looks right on the screen.
 Same compile switch as the theme API (`GTI_THEMES`), additive only, so other sketches build as before.
 
 - **Starter download:** button in the Themes tab, "Download starter skin". The page builds the `.gts` in JS
-  from a starter PNG and the current colours. The starter PNG is served by the firmware only if size
-  allows; otherwise the docs site hosts it (to decide in the plan after measuring flash).
+  from the starter the page draws itself (256x192) and the current colours; no file is served by the firmware
+  or fetched from the docs site.
 - **Import:** the user picks an edited PNG (and, in the editor, the colours); the page packs a `.gts` and
   POSTs it. Dropping a ready-made `.gts` works too.
 - **Validate on upload, in plain words**, in the page before sending and again in the firmware: for example
@@ -222,12 +229,12 @@ it has one.
 - Container is our own `GTS1` format, not a zip and not data inside the PNG.
 - `.gts` wins over `.json` of the same name.
 - Version 1 slots are keys, panel, selected row, background and icons; the font is left for later.
-- Starting limits (512x512 atlas, 256 KB) are placeholders until measured.
+- Starting limits (256x192 atlas, 256 KB) are as built; the PSRAM numbers are still to be measured on the device.
 - Transparency: PNG alpha with blending (NEO is translucent); colour key only as a fallback after a device test.
-- The starter is a build-time rendering of NEO; NEO itself stays drawn in code.
+- The starter is a rendering of NEO drawn in the browser; NEO itself stays drawn in code.
 - JC3248 only in step 1 (the format is already screen-independent, see "One skin for all screens").
 - The "Drawing details" section: picking a skin switches NEO off, state markers are drawn over the skin,
-  stretching at draw time, indicative preview, starter PNG on the docs site.
+  stretching at draw time, indicative preview, starter drawn in the page.
 
 ## Left to the builder
 
@@ -238,3 +245,20 @@ alpha method, the starter art, limits after measuring, endpoint details, and the
 
 JC4827 / P4 skins, a custom font slot, layout changes, a skin gallery or any online service, signing or
 moderation of shared skins.
+
+## Changes made during the build
+
+Rulings taken while building (16 Oct), which replace the text above where they differ:
+
+- Backgrounds in a `.gts` are baseline JPEG, exactly 480x320, 320x480, 480x272 or 272x480, not PNG.
+- The container carries no tile chunk: the tile is the atlas `TILE` slot (64x64), used when no background
+  matches the screen's size and orientation. The screen picks the background for the orientation current when
+  the skin is loaded and reloads it when the screen is rotated.
+- The starter skin and the slot map are drawn in the web page (`gtsDrawStarter`); nothing is made at build time
+  or hosted. The slot list is version 1 as in `firmware/shared/skin_draw.h`.
+- Icons are parked: the starter has the icon area (`ICONS`, `ICONS_2X`) but the screen does not draw icons from
+  a skin yet; the cells are reserved for a later version.
+- A `.gts` is inspected in the page before anything is sent (sizes, PNG type, baseline JPEG); what can be fixed
+  is re-encoded, the rest is refused in plain words.
+- Skin keys reach every key on the screen.
+- NEO is off while a skin is active.

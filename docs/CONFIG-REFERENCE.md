@@ -77,3 +77,8 @@ An **Advanced (commented)** block was also added to the fresh-card template docu
 
 _Themes present in `5.9.8-JC3248`: NAVY, EMBER, MATRIX, PAPER, SYNTH, GOLD, OMEGA._
 _Languages present: EN, FR, IT, ES, DE, NL._
+
+## `THEME=` can also be a skin (added by hand for gti-skins)
+
+The table above is generated and still shows the numbered themes. On the JC3248 (`A600-skin1-JC3248` and later) `THEME=` also takes the **name** of your own theme in `/GTI/THEMES`, and that name can be a colour theme (`<NAME>.json`) or a skin (`<NAME>.gts`: colours plus a picture of your own keys and panels). Both are made in the web page's **Themes** tab (Theme Editor); skins are explained in [skins/README.md](skins/README.md). If a colour theme and a skin share a name, the skin is used. Choosing a skin switches `NEO` off.
+
