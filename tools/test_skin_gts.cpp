@@ -157,6 +157,39 @@ static void test_errText() {
   CHECK(std::strlen(gts::errText((gts::Err)200)) > 0);
 }
 
+static Buf readFile(const char* path) {
+  Buf b;
+  FILE* f = std::fopen(path, "rb");
+  if (!f) return b;
+  uint8_t tmp[4096];
+  size_t n;
+  while ((n = std::fread(tmp, 1, sizeof tmp, f)) > 0) b.insert(b.end(), tmp, tmp + n);
+  std::fclose(f);
+  return b;
+}
+
+// Fixtures written by tools/make_test_skins.py (run from the repo root).
+static void test_valid_fixture_parses() {
+  Buf b = readFile("tools/test_skins/valid.gts");
+  CHECK(!b.empty());
+  gts::View v;
+  CHECK(gts::parse(b.data(), b.size(), v) == gts::OK);
+  CHECK(v.slotVer == 1);
+  CHECK(v.nBg >= 1);
+}
+
+static void test_bad_fixtures() {
+  gts::View v;
+  Buf w = readFile("tools/test_skins/wide.gts");
+  CHECK(!w.empty() && gts::parse(w.data(), w.size(), v) == gts::OK);  // container is fine, the loader rejects the size
+  Buf p = readFile("tools/test_skins/palette.gts");
+  CHECK(!p.empty() && gts::parse(p.data(), p.size(), v) == gts::OK);  // loader rejects the pixel type
+  Buf t = readFile("tools/test_skins/truncated.gts");
+  CHECK(!t.empty() && gts::parse(t.data(), t.size(), v) == gts::BAD_LENGTH);
+  Buf l = readFile("tools/test_skins/lying.gts");
+  CHECK(!l.empty() && gts::parse(l.data(), l.size(), v) == gts::BAD_LENGTH);
+}
+
 int main() {
   test_roundtrip();
   test_empty_and_short();
@@ -172,6 +205,8 @@ int main() {
   test_trailing_bytes_rejected();
   test_bgIdFor();
   test_errText();
+  test_valid_fixture_parses();
+  test_bad_fixtures();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }
