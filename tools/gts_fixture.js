@@ -99,9 +99,18 @@ if (G.gtsPngInfo && G.gtsJpegInfo) {
   eq(G.gtsPngInfo(un('wide.gts').atlas), { w: 300, h: 192, depth: 8, type: 6, interlace: 0 }, 'gtsPngInfo wide.gts atlas');
   eq(G.gtsPngInfo(jpg), null, 'gtsPngInfo of a JPEG');
   eq(G.gtsPngInfo(valid.atlas.subarray(0, 20)), null, 'gtsPngInfo of a cut PNG');
-  eq(G.gtsJpegInfo(jpg), { w: 480, h: 320, progressive: false }, 'gtsJpegInfo bg.gts');
-  eq(G.gtsJpegInfo(un('bgprog.gts').bg[0].bytes), { w: 480, h: 320, progressive: true }, 'gtsJpegInfo bgprog.gts');
-  eq(G.gtsJpegInfo(un('bgwrong.gts').bg[0].bytes), { w: 100, h: 100, progressive: false }, 'gtsJpegInfo bgwrong.gts');
+  // reencode: true for every JPEG whose first SOFn is not SOF0 (baseline), the only kind the panel decodes.
+  eq(G.gtsJpegInfo(jpg), { w: 480, h: 320, reencode: false }, 'gtsJpegInfo bg.gts');
+  eq(G.gtsJpegInfo(un('bgprog.gts').bg[0].bytes), { w: 480, h: 320, reencode: true }, 'gtsJpegInfo bgprog.gts');
+  eq(G.gtsJpegInfo(un('bgwrong.gts').bg[0].bytes), { w: 100, h: 100, reencode: false }, 'gtsJpegInfo bgwrong.gts');
+  const sofAt = (b) => { for (let p = 2; p + 3 < b.length;) { const m = b[p + 1];
+    if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) return p; p += 2 + (b[p + 2] << 8 | b[p + 3]); } return -1; };
+  const sof1 = jpg.slice(), s0 = sofAt(sof1);
+  check(s0 > 0 && sof1[s0 + 1] === 0xC0, 'bg.gts JPEG starts with SOF0');
+  sof1[s0 + 1] = 0xC1;   // extended sequential (SOF1): same layout, not baseline
+  eq(G.gtsJpegInfo(sof1), { w: 480, h: 320, reencode: true }, 'gtsJpegInfo SOF1 (extended sequential)');
+  const sof3 = jpg.slice(); sof3[s0 + 1] = 0xC3;   // lossless
+  eq(G.gtsJpegInfo(sof3), { w: 480, h: 320, reencode: true }, 'gtsJpegInfo SOF3 (lossless)');
   eq(G.gtsJpegInfo(valid.atlas), null, 'gtsJpegInfo of a PNG');
   eq(G.gtsJpegInfo(jpg.subarray(0, 40)), null, 'gtsJpegInfo of a cut JPEG');
 }

@@ -743,6 +743,7 @@ body.neo .disk-btn:not(.loaded){background:#7BD2F7;color:#080C19}
         <button class="btn" onclick="skinStarter(true)">Download slot map</button>
         <button class="btn" id="sk-imp" onclick="document.getElementById('sk-file').click()">Import skin (PNG or .gts)</button>
         <button class="btn" onclick="skinExport()">Export skin</button>
+        <button class="btn" id="sk-del" style="display:none" onclick="skinDelete()" title="Delete the skin picked under Start from">Delete skin</button>
         <input type="file" id="sk-file" accept=".png,.gts" style="display:none" onchange="skinImport(this)">
         <label style="margin:0">Background</label><input type="file" id="sk-bgfile" accept="image/*" style="width:auto">
         <select id="sk-bgsize" style="width:auto"><option value="1">480x320</option><option value="2">320x480</option><option value="3">480x272</option><option value="4">272x480</option></select>
@@ -1900,6 +1901,7 @@ function gtsCheckBg(id,w,h){
   return !s?'unknown background id '+id:w==s[0]&&h==s[1]?null:'background is '+w+'x'+h+', expected '+s[0]+'x'+s[1];
 }
 // PNG IHDR / JPEG SOFn, read before sending (the panel takes 8-bit RGBA non-interlaced PNG and baseline JPEG). null = unreadable.
+// reencode: the first SOFn is not SOF0 (progressive, extended, lossless, arithmetic): the panel only decodes baseline.
 function gtsPngInfo(b){
   if(!gtsIsPng(b)||b.length<29||String.fromCharCode(b[12],b[13],b[14],b[15])!='IHDR')return null;
   const v=new DataView(b.buffer,b.byteOffset,b.length);
@@ -1911,7 +1913,7 @@ function gtsJpegInfo(b){
     const m=b[p+1];
     if(b[p]!=255||m==0xD9||m==0xDA)return null;   // lost, or image data before any SOFn
     if(m==255||m==1||(m>=0xD0&&m<=0xD8)){p+=m==255?1:2;continue;}
-    if(m>=0xC0&&m<=0xCF&&m!=0xC4&&m!=0xC8&&m!=0xCC)return{w:b[p+7]<<8|b[p+8],h:b[p+5]<<8|b[p+6],progressive:[0xC2,0xC6,0xCA,0xCE].includes(m)};
+    if(m>=0xC0&&m<=0xCF&&m!=0xC4&&m!=0xC8&&m!=0xCC)return{w:b[p+7]<<8|b[p+8],h:b[p+5]<<8|b[p+6],reencode:m!=0xC0};
     p+=2+(b[p+2]<<8|b[p+3]);
   }
   return null;
@@ -1979,7 +1981,7 @@ const skinKnown=new Set();   // names seen as skins on this panel (for the Save 
 function skinDec(b){return createImageBitmap(b instanceof Blob?b:new Blob([b]),{premultiplyAlpha:'none',colorSpaceConversion:'none'});}
 function skinDraw(im,w,h){const cv=gtsCanvas(w,h);cv.getContext('2d').drawImage(im,0,0);return cv;}
 // What the panel would refuse is fixed or refused before sending: the sizes are checked from the files themselves; an
-// atlas that is not 8-bit RGBA non-interlaced and a progressive background are re-encoded; a right file goes as it is.
+// atlas that is not 8-bit RGBA non-interlaced and a background that is not baseline are re-encoded; a right file goes as it is.
 async function skinFix(atlas,bgs){
   const pi=gtsPngInfo(atlas),chk=e=>{if(e)gtsErr(e);},out=[];
   if(!pi)gtsErr('atlas is not a readable PNG');
@@ -1988,7 +1990,7 @@ async function skinFix(atlas,bgs){
   for(const g of bgs){const ji=gtsJpegInfo(g.bytes);
     if(!ji)gtsErr('background '+GTS_BG[g.id].join('x')+' is not a readable JPEG');
     chk(gtsCheckBg(g.id,ji.w,ji.h));
-    out.push(ji.progressive?{id:g.id,bytes:await gtsBytes(skinDraw(await skinDec(g.bytes),ji.w,ji.h),'image/jpeg',.85)}:g);}
+    out.push(ji.reencode?{id:g.id,bytes:await gtsBytes(skinDraw(await skinDec(g.bytes),ji.w,ji.h),'image/jpeg',.85)}:g);}
   return[atlas,out];
 }
 // Send a skin under name. asIs (an imported .gts): its own colours and backgrounds; else the editor's colours and
@@ -2004,7 +2006,7 @@ async function skinSend(name,man,atlas,bgs,activate,asIs,note){
   await skinUpload(name,bytes,(o,n)=>st.textContent=`Uploading skin ${o*100/n|0}%…`);
   st.textContent='';skinKnown.add(name);if(f)bf.value='';
   if(activate){const r=await fetch(`${API}/api/themes/${encodeURIComponent(name)}/activate`,{method:'POST'});   // not api(): one toast on failure
-    if(!r.ok)gtsErr('saved, but activating failed (HTTP '+r.status+')');document.body.classList.remove('neo');applyThemeStyle(teStyle());}
+    if(!r.ok){const d=await r.json().catch(()=>({}));gtsErr('saved, but activating failed: '+(d.error||'HTTP '+r.status));}document.body.classList.remove('neo');applyThemeStyle(teStyle());}
   toast(`Skin "${name}" saved${activate?' and activated':''} (${bytes.length} bytes)${note?'; '+note:''}`);teBuildStartFrom();loadThemes();
 }
 async function skinImport(inp){
@@ -2040,6 +2042,17 @@ async function skinExport(){
       bg.map(g=>gtsLink(g.bytes,name+'_'+GTS_BG[g.id].join('x')+'.jpg','Background '+GTS_BG[g.id].join('x'))).join('');
     toast('Colours loaded into the editor; the parts are below');
   }catch(e){toast('Export failed: '+e.message,'error');}
+}
+// Delete the skin picked under "Start from" (the button shows only for a skin; teSkinNames from /api/themes/list).
+function skinDelSync(){const b=document.getElementById('sk-del'),v=document.getElementById('te-preset').value;b.style.display=skinOn&&teSkinNames.includes(v)?'':'none';}
+async function skinDelete(){
+  const name=document.getElementById('te-preset').value;
+  if(!name||!confirm(`Delete the skin "${name}" from the SD card?`))return;
+  try{const r=await fetch(`${API}/api/skins/${encodeURIComponent(name)}/delete`,{method:'POST'});
+    if(!r.ok){const d=await r.json().catch(()=>({}));gtsErr(d.error||'HTTP '+r.status);}
+    skinKnown.delete(name);delete teSaved[name];toast(`Skin "${name}" deleted`);
+  }catch(e){toast('Delete failed: '+e.message,'error');}
+  await teBuildStartFrom();loadThemes();
 }
 // teSave for a name that is a skin: repack the .gts with the edited colours (a .json would be shadowed by it).
 async function skinSaveIfSkin(name,activate){
@@ -2272,6 +2285,7 @@ let teSaved = {};
 // Theme names present on the card, so a name that is BOTH a preset and a saved
 // theme resolves to the saved one.
 let teThemeNames = [];
+let teSkinNames = [];   // gti-skins: the names in teThemeNames that are skins ("skins" in /api/themes/list)
 
 var teStore = false;     // GTi panel: themes are stored on the panel although has_sd is false
 var teGtiScreen = false; // GTi panel: show the screen preview
@@ -2559,7 +2573,7 @@ async function teInit() {
   const sel = document.getElementById('te-preset');
   if (!sel || sel.options.length) return;    // already built
   await teBuildStartFrom();
-  sel.addEventListener('change', () => teStartFrom(sel.value));
+  sel.addEventListener('change', () => { skinDelSync(); teStartFrom(sel.value); });
   ['te-fill','te-light','te-dark','te-text','te-accent','te-bevel','te-bevelw','te-radius','te-scale']
     .forEach(id => document.getElementById(id).addEventListener('input', teRenderPreview));
   document.getElementById('te-save').addEventListener('click', () => teSave(false));
@@ -2591,6 +2605,7 @@ async function teBuildStartFrom() {
     const d = await api('/api/themes/list');
     mine = d.themes || [];
     teThemeNames = mine.slice();
+    teSkinNames = d.skins || [];
   } catch (e) { /* offline: presets alone still work */ }
 
   // A preset is only offered separately when the card has no theme of that name.
@@ -2602,6 +2617,7 @@ async function teBuildStartFrom() {
     (mine.length ? `<optgroup label="On this card">${mine.map(opt).join('')}</optgroup>` : '') +
     (presets.length ? `<optgroup label="Presets">${presets.map(opt).join('')}</optgroup>` : '');
   if (keep) sel.value = keep;
+  skinDelSync();
 }
 
 function teCanvasToBlob(cv) {
