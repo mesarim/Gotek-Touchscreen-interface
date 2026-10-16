@@ -1,7 +1,9 @@
 // GTS1 skin container: parser and packer. Header-only, no Arduino includes,
 // shared by the firmware and the host tests.
 // Layout (little endian): "GTS1", u8 reserved, u8 slotVer, u16 manifestLen,
-// manifest, u32 atlasLen, atlas PNG, u8 nBg, nBg x (u8 bgId, u32 len, PNG).
+// manifest, u32 atlasLen, atlas PNG, u8 nBg, nBg x (u8 bgId, u32 len, JPEG).
+// Backgrounds are opaque baseline JPEGs (JPEGDEC has no row-width limit; PNGdec
+// tops out near 316 px RGBA); the atlas stays a PNG for its alpha.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -14,7 +16,7 @@ constexpr uint8_t MAX_BG = 6;
 constexpr uint16_t MAX_MANIFEST = 1024;
 
 enum Err : uint8_t { OK, TOO_SHORT, BAD_MAGIC, BAD_SLOTVER, BAD_LENGTH, TOO_BIG,
-                     BAD_PNG, TOO_MANY_BG, BAD_BGID, DUP_BG };
+                     BAD_PNG, TOO_MANY_BG, BAD_BGID, DUP_BG, BAD_JPEG };
 
 struct Chunk { const uint8_t* p; uint32_t n; };
 struct View {
@@ -40,6 +42,7 @@ inline const char* errText(Err e) {
     case TOO_MANY_BG: return "too many backgrounds";
     case BAD_BGID: return "unknown background id";
     case DUP_BG: return "duplicate background id";
+    case BAD_JPEG: return "background is not a JPEG";
   }
   return "unknown error";
 }
@@ -56,6 +59,9 @@ namespace detail {
 inline bool isPng(const Chunk& c) {
   static const uint8_t sig[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
   return c.n >= 8 && memcmp(c.p, sig, 8) == 0;
+}
+inline bool isJpeg(const Chunk& c) {
+  return c.n >= 3 && c.p[0] == 0xFF && c.p[1] == 0xD8 && c.p[2] == 0xFF;
 }
 inline uint16_t rd16(const uint8_t* p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 inline uint32_t rd32(const uint8_t* p) {
@@ -98,7 +104,7 @@ inline Err parse(const uint8_t* d, size_t n, View& v) {
     if (len > rem) return BAD_LENGTH;
     v.bgId[i] = id;
     v.bg[i] = {d + off, len};
-    if (!isPng(v.bg[i])) return BAD_PNG;
+    if (!isJpeg(v.bg[i])) return BAD_JPEG;
     off += len; rem -= len;
     v.nBg = (uint8_t)(i + 1);
   }

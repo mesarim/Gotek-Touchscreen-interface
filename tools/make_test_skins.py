@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Writes the .gts test fixtures to tools/test_skins/ (standard library only).
 
-valid.gts      256x192 8-bit RGBA atlas, NEO-like slots, one BG_TILE background
+valid.gts      256x192 8-bit RGBA atlas, NEO-like slots, no container background
+bg.gts         valid + a 480x320 baseline JPEG background (BG_480x320; needs Pillow)
+bgwrong.gts    valid + a 100x100 JPEG in the BG_480x320 slot (loader drops it; needs Pillow)
 wide.gts       same, but the atlas is 300 px wide (loader: "atlas is 300x192, expected 256x192")
 palette.gts    256x192 8-bit palette atlas (loader: not 8-bit RGBA)
 truncated.gts  valid.gts cut in half (parser: bad chunk length)
@@ -9,6 +11,8 @@ lying.gts      valid.gts with atlasLen raised by 1000 (parser: bad chunk length)
 
 The container layout mirrors gts::pack in firmware/shared/skin_gts.h, and the
 slot rectangles mirror skin::SLOTS in firmware/shared/skin_draw.h.
+Backgrounds are opaque baseline JPEGs (skin_gts.h); the tile is the atlas TILE
+slot. JPEG needs Pillow; without it bg.gts and bgwrong.gts are skipped.
 Run from anywhere: python tools/make_test_skins.py
 """
 import json
@@ -21,7 +25,7 @@ OUT = os.path.join(HERE, "test_skins")
 
 SLOT_VER = 1
 ATLAS_W, ATLAS_H = 256, 192
-BG_TILE = 5
+BG_480x320 = 1
 
 # skin::SLOTS (x, y, w, h, border), slot list version 1
 SLOTS = {
@@ -60,13 +64,6 @@ def png_rgba(w, h, px):
     """px: list of rows, each a list of (r, g, b, a). 8-bit, not interlaced."""
     raw = b"".join(b"\x00" + bytes(v for p in row for v in p) for row in px)
     ihdr = struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)
-    return (b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr)
-            + _chunk(b"IDAT", zlib.compress(raw, 9)) + _chunk(b"IEND", b""))
-
-
-def png_rgb(w, h, px):
-    raw = b"".join(b"\x00" + bytes(v for p in row for v in p[:3]) for row in px)
-    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
     return (b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr)
             + _chunk(b"IDAT", zlib.compress(raw, 9)) + _chunk(b"IEND", b""))
 
@@ -118,9 +115,23 @@ def atlas_pixels(w, h):
     return px
 
 
-def tile_pixels(n):
-    a, b = hexrgb(MANIFEST["dark"]), hexrgb(MANIFEST["fill"])
-    return [[(b if (x + y) % 16 == 0 else a) + (255,) for x in range(n)] for y in range(n)]
+def jpeg_bg(w, h):
+    """Baseline (not progressive) JPEG: a diagonal grid on the dark colour. None without Pillow."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    import io
+    dark, light = hexrgb(MANIFEST["dark"]), hexrgb(MANIFEST["light"])
+    im = Image.new("RGB", (w, h), dark)
+    px = im.load()
+    for y in range(h):
+        for x in range(w):
+            if (x + y) % 24 == 0 or (x - y) % 24 == 0:
+                px[x, y] = light
+    out = io.BytesIO()
+    im.save(out, "JPEG", quality=85, progressive=False, optimize=False)
+    return out.getvalue()
 
 
 # --- Container (mirrors gts::pack) -----------------------------------------
@@ -139,7 +150,7 @@ def pack(manifest, atlas, bgs, slot_ver=SLOT_VER, atlas_len=None):
 def main():
     os.makedirs(OUT, exist_ok=True)
     man = json.dumps(MANIFEST, separators=(",", ":")).encode()
-    bgs = [(BG_TILE, png_rgb(32, 32, tile_pixels(32)))]
+    bgs = []
 
     atlas = png_rgba(ATLAS_W, ATLAS_H, atlas_pixels(ATLAS_W, ATLAS_H))
     valid = pack(man, atlas, bgs)
@@ -155,6 +166,12 @@ def main():
 
     files = {"valid.gts": valid, "wide.gts": wide, "palette.gts": palette,
              "truncated.gts": truncated, "lying.gts": lying}
+    big, small = jpeg_bg(480, 320), jpeg_bg(100, 100)
+    if big is None:
+        print("Pillow not installed: bg.gts and bgwrong.gts skipped")
+    else:
+        files["bg.gts"] = pack(man, atlas, [(BG_480x320, big)])
+        files["bgwrong.gts"] = pack(man, atlas, [(BG_480x320, small)])
     for name, data in files.items():
         with open(os.path.join(OUT, name), "wb") as f:
             f.write(data)

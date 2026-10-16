@@ -18,26 +18,31 @@ static Buf png(size_t extra) {
   for (size_t i = 0; i < extra; ++i) b.push_back((uint8_t)(i * 7 + 1));
   return b;
 }
+static Buf jpg(size_t extra) {
+  Buf b = {0xFF, 0xD8, 0xFF};
+  for (size_t i = 0; i < extra; ++i) b.push_back((uint8_t)(i * 5 + 3));
+  return b;
+}
 static void u16(Buf& b, uint32_t v) { b.push_back(v & 255); b.push_back((v >> 8) & 255); }
 static void u32(Buf& b, uint32_t v) { u16(b, v & 0xFFFF); u16(b, v >> 16); }
 static void app(Buf& b, const Buf& s) { b.insert(b.end(), s.begin(), s.end()); }
 
 // Builds a file by hand: header, manifest, atlas, then nBg entries.
 static Buf build(const Buf& man, const Buf& atlas, const std::vector<uint8_t>& ids,
-                 const Buf& bgpng, uint8_t reserved = 0) {
+                 const Buf& bgjpg, uint8_t reserved = 0) {
   Buf b = {'G', 'T', 'S', '1', reserved, 1};
   u16(b, (uint32_t)man.size()); app(b, man);
   u32(b, (uint32_t)atlas.size()); app(b, atlas);
   b.push_back((uint8_t)ids.size());
-  for (uint8_t id : ids) { b.push_back(id); u32(b, (uint32_t)bgpng.size()); app(b, bgpng); }
+  for (uint8_t id : ids) { b.push_back(id); u32(b, (uint32_t)bgjpg.size()); app(b, bgjpg); }
   return b;
 }
-static Buf simple() { return build(Buf{'{', '}'}, png(10), {1, 3}, png(5)); }
+static Buf simple() { return build(Buf{'{', '}'}, png(10), {1, 3}, jpg(5)); }
 
 static void test_roundtrip() {
   gts::View v = {};
   v.slotVer = 1;
-  Buf man = {'a', 'b', 'c'}, at = png(20), b1 = png(4), b2 = png(9);
+  Buf man = {'a', 'b', 'c'}, at = png(20), b1 = jpg(4), b2 = jpg(9);
   v.manifest = {man.data(), (uint32_t)man.size()};
   v.atlas = {at.data(), (uint32_t)at.size()};
   v.nBg = 2;
@@ -111,24 +116,36 @@ static void test_too_big() {
 }
 
 static void test_bg_count_over_max() {
-  Buf b = build(Buf{'x'}, png(3), {1, 2, 3, 4, 5, 1, 2}, png(1));
+  Buf b = build(Buf{'x'}, png(3), {1, 2, 3, 4, 5, 1, 2}, jpg(1));
   gts::View v;
   CHECK(gts::parse(b.data(), b.size(), v) == gts::TOO_MANY_BG);
   // exactly MAX_BG distinct is not possible (only 5 ids), so 5 must be fine
-  b = build(Buf{'x'}, png(3), {1, 2, 3, 4, 5}, png(1));
+  b = build(Buf{'x'}, png(3), {1, 2, 3, 4, 5}, jpg(1));
   CHECK(gts::parse(b.data(), b.size(), v) == gts::OK && v.nBg == 5);
 }
 
 static void test_bg_unknown_id() {
   gts::View v;
-  Buf b = build(Buf{'x'}, png(3), {0}, png(1));
+  Buf b = build(Buf{'x'}, png(3), {0}, jpg(1));
   CHECK(gts::parse(b.data(), b.size(), v) == gts::BAD_BGID);
-  b = build(Buf{'x'}, png(3), {6}, png(1));
+  b = build(Buf{'x'}, png(3), {6}, jpg(1));
   CHECK(gts::parse(b.data(), b.size(), v) == gts::BAD_BGID);
 }
 
+static void test_bg_not_jpeg() {
+  gts::View v;
+  Buf b = build(Buf{'x'}, png(3), {1}, png(4));  // a PNG background is refused
+  CHECK(gts::parse(b.data(), b.size(), v) == gts::BAD_JPEG);
+  Buf two = {0xFF, 0xD8};
+  b = build(Buf{'x'}, png(3), {1}, two);
+  CHECK(gts::parse(b.data(), b.size(), v) == gts::BAD_JPEG);
+  Buf ok = jpg(0);  // the bare 3-byte signature is enough for the container
+  b = build(Buf{'x'}, png(3), {1}, ok);
+  CHECK(gts::parse(b.data(), b.size(), v) == gts::OK);
+}
+
 static void test_bg_duplicate() {
-  Buf b = build(Buf{'x'}, png(3), {3, 3}, png(1));
+  Buf b = build(Buf{'x'}, png(3), {3, 3}, jpg(1));
   gts::View v;
   CHECK(gts::parse(b.data(), b.size(), v) == gts::DUP_BG);
 }
@@ -154,6 +171,8 @@ static void test_bgIdFor() {
 static void test_errText() {
   CHECK(std::strlen(gts::errText(gts::OK)) > 0);
   CHECK(std::strlen(gts::errText(gts::DUP_BG)) > 0);
+  CHECK(std::strcmp(gts::errText(gts::BAD_JPEG), "unknown error") != 0);
+  CHECK(gts::BAD_JPEG == 10);  // appended, earlier values keep their numbers
   CHECK(std::strlen(gts::errText((gts::Err)200)) > 0);
 }
 
@@ -175,7 +194,13 @@ static void test_valid_fixture_parses() {
   gts::View v;
   CHECK(gts::parse(b.data(), b.size(), v) == gts::OK);
   CHECK(v.slotVer == 1);
-  CHECK(v.nBg >= 1);
+  CHECK(v.nBg == 0);  // the tile comes from the atlas, no container background
+  Buf g = readFile("tools/test_skins/bg.gts");
+  CHECK(!g.empty() && gts::parse(g.data(), g.size(), v) == gts::OK);
+  CHECK(v.nBg == 1 && v.bgId[0] == gts::BG_480x320);
+  Buf w = readFile("tools/test_skins/bgwrong.gts");
+  CHECK(!w.empty() && gts::parse(w.data(), w.size(), v) == gts::OK);  // loader drops the 100x100 picture
+  CHECK(v.nBg == 1);
 }
 
 static void test_bad_fixtures() {
@@ -201,6 +226,7 @@ int main() {
   test_too_big();
   test_bg_count_over_max();
   test_bg_unknown_id();
+  test_bg_not_jpeg();
   test_bg_duplicate();
   test_trailing_bytes_rejected();
   test_bgIdFor();
