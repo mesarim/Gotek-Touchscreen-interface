@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include "skin_gts.h"   // gts::MAX_MANIFEST
 
 namespace skin {
 
@@ -46,11 +47,11 @@ inline int mergeNames(const char* const* a, int na, const char* const* b, int nb
 }
 
 // The manifest length from the first 8 bytes of a .gts ("GTS1", u8, u8 slotVer, u16 LE length),
-// so a list can read just the manifest without the atlas. -1: not a GTS1 header or length over 1024.
+// so a list can read just the manifest without the atlas. -1: not a GTS1 header or length over gts::MAX_MANIFEST.
 inline int manifestLen(const uint8_t* h, size_t n) {
   if (!h || n < 8 || memcmp(h, "GTS1", 4) != 0) return -1;
   int len = h[6] | (h[7] << 8);
-  return len > 1024 ? -1 : len;
+  return len > gts::MAX_MANIFEST ? -1 : len;
 }
 
 }  // namespace skin

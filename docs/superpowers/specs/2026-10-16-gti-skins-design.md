@@ -140,8 +140,8 @@ starter looks right on the screen.
 - The colour fields in the manifest still define the 16 screen colours, exactly as the style JSON does today
   (the mapping table in the theme-section spec applies unchanged). A skin therefore always has a complete
   colour theme underneath it.
-- A slot that is missing, fully transparent, or outside the atlas is drawn the old way (NEO / the colour
-  theme). A `.gts` that does not parse at all is treated like a broken custom theme: fall back to NAVY, log
+- A slot that is missing, fully transparent, or outside the atlas is drawn the classic way (the colour
+  theme and the `BTNSTYLE=` setting). A `.gts` that does not parse at all is treated like a broken custom theme: fall back to NAVY, log
   one line.
 
 ### Drawing details (settled after the builder check)
@@ -153,7 +153,7 @@ starter looks right on the screen.
   actually in use.
 - **Skin and NEO:** picking a skin is picking a theme, exactly as in the theme-section spec: it sets
   `THEME=<name>` and switches NEO off. The skin's slots replace the key/panel shapes; any slot the skin
-  leaves out is drawn the classic way (the `BUTTONS=` pill/flat setting and the colour theme), not the NEO way.
+  leaves out is drawn the classic way (the `BTNSTYLE=` pill/flat setting and the colour theme), not the NEO way.
 - **States:** the state markers the firmware draws today (green edge for on, `> <` for the current choice,
   the INSERT/EJECT colours) are drawn **over** the skin art, so skins cannot remove them and version 1 needs
   only `KEY_UP` and `KEY_DOWN`.
@@ -174,7 +174,7 @@ starter looks right on the screen.
 
 Same compile switch as the theme API (`GTI_THEMES`), additive only, so other sketches build as before.
 
-- **Starter download:** button in the Themes tab, "Download starter skin". The page builds the `.gts` in JS
+- **Starter download:** button in the Theme Editor, "Download starter skin". The page builds the `.gts` in JS
   from the starter the page draws itself (256x192) and the current colours; no file is served by the firmware
   or fetched from the docs site.
 - **Import:** the user picks an edited PNG (and, in the editor, the colours); the page packs a `.gts` and

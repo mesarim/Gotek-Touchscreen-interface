@@ -1,11 +1,16 @@
 #!/bin/sh
 # Skin upload / download / delete against a real GTi screen (JC3248, firmware with /api/skins).
 #   usage: tools/test_skin_upload.sh <ip>        e.g. tools/test_skin_upload.sh 192.168.1.42
-# Needs curl, base64 (GNU, -w0), dd, cmp, tr. Uses the skin names TUPLOAD and THALF; both are deleted at
-# the end. The active theme is not touched (no activate call), so the screen keeps its look.
+# Needs curl, base64 (GNU, -w0), dd, cmp, tr. The active theme is not touched (no activate call), so the
+# screen keeps its look.
+#
+# WARNING: the script DELETES the skins named TUPLOAD, THALF, TLOWER and TBAD on the screen (it uploads, then
+# deletes them). A skin of yours with one of those names is gone afterwards. Every name the script sends:
+#   TUPLOAD, THALF, TBAD, tlower (= TLOWER)   written and deleted
+#   ../TLOWER, ABCDEFGHIJKLMNOPQ, ""          refused before anything is written
 #
 # Each check prints "ok   <what>" or "FAIL <what> (<detail>)"; the last line is "N passed, M failed" and the
-# exit code is the number of failures. Expected output on a correct firmware (20 checks):
+# exit code is the number of failures. Expected output on a correct firmware (21 checks):
 #   ok   has_skins in /api/system/info
 #   ok   upload bg.gts in 4096-byte chunks
 #   ok   commit bg.gts
@@ -14,21 +19,22 @@
 #   ok   style of TUPLOAD is the manifest
 #   ok   replayed chunk -> 400 out of order
 #   ok   out-of-order chunk -> 400 out of order
+#   ok   in-order chunk after the refusals
 #   ok   half upload: THALF not in /api/themes/list
 #   ok   new off=0 starts clean, commit ok
-#   ok   name ../X -> 400 or 404
-#   ok   name x -> taken as X, no skin, not listed
+#   ok   name ../TLOWER -> 400 or 404
+#   ok   name tlower -> taken as TLOWER, no skin, not listed
 #   ok   17-character name -> 400
 #   ok   empty name -> 400 or 404
-#   ok   commit truncated.gts -> 400 with message
-#   ok   commit lying.gts -> 400 with message
+#   ok   commit truncated.gts -> 400 bad chunk length
+#   ok   commit lying.gts -> 400 bad chunk length
 #   ok   commit wide.gts -> 400 atlas is 300x192, expected 256x192
 #   ok   delete TUPLOAD
 #   ok   TUPLOAD gone (GET 404, not listed)
 #   ok   valid.gts single chunk upload + commit + delete
-#   20 passed, 0 failed
+#   21 passed, 0 failed
 # The 400 messages are also printed (indented) so the human can read them; expected:
-#   ../X           {"error":"bad skin name: A-Z, 0-9 and _ only, max 16, not starting with a digit"}
+#   ../TLOWER      {"error":"bad skin name: A-Z, 0-9 and _ only, max 16, not starting with a digit"}
 #   truncated.gts  {"error":"bad chunk length"}      (gts::errText)
 #   lying.gts      {"error":"bad chunk length"}      (gts::errText)
 #   wide.gts       {"error":"atlas is 300x192, expected 256x192"}
@@ -101,7 +107,6 @@ else bad "style of TUPLOAD is the manifest" "$code $(body)"; fi
 
 # ── 3. replayed and out-of-order chunks (THALF: first two chunks sent)
 upload THALF "$SK/bg.gts" 8192 >/dev/null
-cp "$TMP/body" "$TMP/after2"
 code=$(chunk THALF "$SK/bg.gts" 4096 4096)
 if [ "$code" = 400 ] && grep -q 'out of order' "$TMP/body"; then ok "replayed chunk -> 400 out of order"
 else bad "replayed chunk -> 400 out of order" "$code $(body)"; fi
@@ -110,7 +115,7 @@ if [ "$code" = 400 ] && grep -q 'out of order' "$TMP/body"; then ok "out-of-orde
 else bad "out-of-order chunk -> 400 out of order" "$code $(body)"; fi
 # the .part is unchanged: the next in-order chunk (off=8192) is still accepted
 code=$(chunk THALF "$SK/bg.gts" 8192 4096)
-[ "$code" = 200 ] || bad "in-order chunk after the refusals" "$code $(body)"
+if [ "$code" = 200 ]; then ok "in-order chunk after the refusals"; else bad "in-order chunk after the refusals" "$code $(body)"; fi
 
 # ── 4. stopped halfway: never listed; a new off=0 upload starts clean
 if listed THALF; then bad "half upload: THALF not in /api/themes/list" "listed"; else ok "half upload: THALF not in /api/themes/list"; fi
@@ -122,14 +127,14 @@ else bad "new off=0 starts clean, commit ok" "$(body)"; fi
 post "$B/api/skins/THALF/delete" >/dev/null
 
 # ── 5. bad names: nothing is written, nothing listed
-code=$(chunk "../X" "$SK/valid.gts" 0 100)
-case "$code" in 400|404) ok "name ../X -> 400 or 404"; echo "    $(body)";; *) bad "name ../X -> 400 or 404" "$code";; esac
-# lower case is upper-cased first, as /api/themes/<name> does: "x" is the skin X (a .part only, no .gts)
-code=$(chunk "x" "$SK/valid.gts" 0 100)
-c2=$(get "$B/api/skins/X")
-post "$B/api/skins/X/delete" >/dev/null
-case "$code" in 200|400|404) if [ "$c2" = 404 ] && ! listed X && ! listed x; then ok "name x -> taken as X, no skin, not listed"; else bad "name x -> taken as X, no skin, not listed" "GET X $c2"; fi;;
-  *) bad "name x -> taken as X, no skin, not listed" "$code";; esac
+code=$(chunk "../TLOWER" "$SK/valid.gts" 0 100)
+case "$code" in 400|404) ok "name ../TLOWER -> 400 or 404"; echo "    $(body)";; *) bad "name ../TLOWER -> 400 or 404" "$code";; esac
+# lower case is upper-cased first, as /api/themes/<name> does: "tlower" is the skin TLOWER (a .part only, no .gts)
+code=$(chunk "tlower" "$SK/valid.gts" 0 100)
+c2=$(get "$B/api/skins/TLOWER")
+post "$B/api/skins/TLOWER/delete" >/dev/null
+case "$code" in 200|400|404) if [ "$c2" = 404 ] && ! listed TLOWER && ! listed tlower; then ok "name tlower -> taken as TLOWER, no skin, not listed"; else bad "name tlower -> taken as TLOWER, no skin, not listed" "GET TLOWER $c2"; fi;;
+  *) bad "name tlower -> taken as TLOWER, no skin, not listed" "$code";; esac
 code=$(chunk "ABCDEFGHIJKLMNOPQ" "$SK/valid.gts" 0 100)
 if [ "$code" = 400 ]; then ok "17-character name -> 400"; else bad "17-character name -> 400" "$code"; fi
 code=$(post "$B/api/skins//chunk" --data-urlencode "off=0" --data-urlencode "data=QQ")
@@ -141,9 +146,9 @@ for f in truncated lying wide; do
   code=$(post "$B/api/skins/TBAD/commit")
   msg=$(body)
   c2=$(get "$B/api/skins/TBAD")
-  want='"error"'
-  [ "$f" = wide ] && want='atlas is 300x192, expected 256x192'
-  label="commit $f.gts -> 400 with message"
+  want='"error":"bad chunk length"'   # gts::errText(BAD_LENGTH)
+  [ "$f" = wide ] && want='"error":"atlas is 300x192, expected 256x192"'
+  label="commit $f.gts -> 400 bad chunk length"
   [ "$f" = wide ] && label="commit wide.gts -> 400 atlas is 300x192, expected 256x192"
   if [ "$code" = 400 ] && printf '%s' "$msg" | grep -q "$want" && [ "$c2" = 404 ] && ! listed TBAD; then ok "$label"
   else bad "$label" "$code $msg, GET $c2"; fi

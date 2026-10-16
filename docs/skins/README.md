@@ -15,6 +15,8 @@ Firmware: `A600-skin1-JC3248` or later.
 
 To change a skin you already have, enter its name and press **Export skin**: the page gives you the `.gts`, the atlas PNG and each background picture, and loads the colours into the editor.
 
+To remove a skin, pick it under **Start from** and press **Delete skin** (the button shows only for a skin). If it was the active look, the screen goes to NAVY.
+
 Old `CONFIG.TXT` files keep working. `THEME=<NAME>` selects a skin exactly like it selects a colour theme.
 
 ## The slots
@@ -59,7 +61,10 @@ The screen uses the picture that matches its size and the way it is held when th
 
 - A missing or empty slot is drawn the classic way (the colour theme and the `BTNSTYLE=` setting), piece by piece.
 - A file that is damaged or does not fit is refused with a plain message in the web page, and refused again by the screen if it ever got that far. The look stays as it was. At boot a `.gts` that cannot be read falls back to NAVY, with one line in the log.
-- If the screen is short of memory, the skin is refused with "not enough memory" and the look stays as it was. A background that does not fit is dropped alone: the skin still loads, with the tile.
+- If the screen is short of memory, the skin is refused with "not enough memory". What you then see depends on when it happens:
+  - picking the skin (web page or THEME page): the look stays as it was, and the web page shows the reason;
+  - at boot, after a RESCAN, or when the skin on screen is replaced by an upload: NAVY, with one log line ending `- NAVY instead`.
+  A background that does not fit is dropped alone: the skin still loads, with the tile.
 - The state markers the screen draws itself (the green edge for on, the `> <` marks, the INSERT and EJECT colours) are drawn over the skin art, so a skin cannot hide them.
 - A background for the wrong size is skipped, never shown stretched.
 
@@ -82,8 +87,8 @@ In total skins cost 28448 bytes (1989106 against 1960658) of flash (about 1.5 pe
 
 PSRAM: **to be measured on the device.** The device was not available when this was written, so there are no PSRAM numbers here and none were guessed. The firmware logs what is needed. Look for these lines in the log:
 
-- `[skin] NAME loaded: atlas 256x192, background tile 0x0, NEO on` (or `background picture 480x320`, or `background colours 0x0`), followed by `[skin] psram X -> Y`: free PSRAM before and after loading. Expect the atlas to cost about 147 KB and a 480 x 320 background about 300 KB more.
+- `[skin] NAME loaded: atlas 256x192, background tile 0x0, NEO on` (or `background picture 480x320`, or `background colours 0x0`), followed by `[skin] psram X -> Y`: free PSRAM before and after loading. Expect the atlas to cost about 147 KB (256 x 192 x 2 bytes of colour + 256 x 192 bytes of alpha = 147,456 bytes) and a 480 x 320 background about 300 KB more.
 - The same with NEO off, and with no skin active, to compare the three cases.
-- `[skin] NAME: not enough memory - look unchanged` means the memory floor was hit (1088 KB has to stay free for the library, plus the skin).
+- `[skin] NAME: not enough memory - look unchanged` (when picked) or `... - NAVY instead` (at boot, RESCAN or a replace) means the memory floor was hit (1088 KB has to stay free for the library, plus the skin).
 
 Fill in the measured values here after the first run on the device.
