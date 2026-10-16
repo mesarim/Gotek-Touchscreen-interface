@@ -733,6 +733,22 @@ body.neo .disk-btn:not(.loaded){background:#7BD2F7;color:#080C19}
       <button class="btn" id="te-apply" title="Save, then make it the active theme">Save &amp; activate</button>
       <span id="te-status" style="font-size:13px;color:var(--muted)"></span>
     </div>
+    <!-- gti-skins: only when /api/system/info has "has_skins":true -->
+    <div id="te-skin" style="display:none;margin-top:14px;border-top:1px solid var(--line);padding-top:10px">
+      <label>Skin: keys, panels and icons as one 256&times;192 picture</label>
+      <p style="font-size:13px;color:var(--muted);margin:4px 0 8px">Paint over the starter (NEO), keep its size and
+        transparency, import it: saved under the name above, with the colours above and the optional background.</p>
+      <div class="net-row" style="flex-wrap:wrap;gap:8px;align-items:center">
+        <button class="btn" onclick="skinStarter(false)">Download starter skin</button>
+        <button class="btn" onclick="skinStarter(true)">Download slot map</button>
+        <button class="btn" onclick="document.getElementById('sk-file').click()">Import skin (PNG or .gts)</button>
+        <button class="btn" onclick="skinExport()">Export skin</button>
+        <input type="file" id="sk-file" accept=".png,.gts" style="display:none" onchange="skinImport(this)">
+        <label style="margin:0">Background</label><input type="file" id="sk-bgfile" accept="image/*" style="width:auto">
+        <select id="sk-bgsize" style="width:auto"><option value="1">480x320</option><option value="2">320x480</option><option value="3">480x272</option><option value="4">272x480</option></select>
+      </div>
+      <div id="sk-out" class="net-row" style="flex-wrap:wrap;gap:8px;margin-top:8px"></div>
+    </div>
   </div>
 </div>
 
@@ -969,6 +985,7 @@ async function loadDashboard() {
     const w = document.getElementById('te-gti-wrap'); if (w) w.style.display = '';
     const p = document.getElementById('te-preview'); if (p) p.style.display = 'none';   // the GTi screen has no button pictures
   }
+  skinOn = !!d.has_skins; if (skinOn) document.getElementById('te-skin').style.display = '';   // gti-skins
 
   const hasDisplay = (d.has_display === undefined) ? true : !!d.has_display;
   document.body.classList.toggle('no-sd', !hasSD);
@@ -1883,6 +1900,116 @@ function gtsCheckBg(id,w,h){
   return !s?'unknown background id '+id:w==s[0]&&h==s[1]?null:'background is '+w+'x'+h+', expected '+s[0]+'x'+s[1];
 }
 // GTS-END
+var skinOn=false;   // "has_skins":true in /api/system/info; absent = no skin card (OMEGAWARE, other panels)
+// The starter = NEO in the slots (Gotek_JC3248.ino: NEO row of THEMES[], NEO_*): panel colour at 196/255, 1 px edge,
+// radius 10; tile = NEO background + faint trace; icons in COL_LIT. labelled = the slot map (names on grey).
+function gtsDrawStarter(c,labelled){
+  const S={},A=196/255,cells=(s,k,f)=>{for(let i=0;i<s.w*s.h/k/k;i++)f(s.x+i%(s.w/k)*k,s.y+(i/(s.w/k)|0)*k,i);};
+  GTS_SLOTS.forEach(s=>S[s.n]=s);c.clearRect(0,0,256,192);c.lineWidth=1;
+  const box=(s,i)=>c.strokeRect(s.x+i+.5,s.y+i+.5,s.w-2*i-1,s.h-2*i-1);
+  if(labelled){
+    c.fillStyle='#808080';c.fillRect(0,0,256,192);c.font='8px sans-serif';c.textBaseline='top';
+    GTS_SLOTS.forEach((s,i)=>{c.fillStyle=`hsl(${i*51},45%,32%)`;c.fillRect(s.x,s.y,s.w,s.h);c.strokeStyle='#fff';box(s,0);
+      if(s.b){c.setLineDash([2,2]);box(s,s.b);c.setLineDash([]);}});
+    c.strokeStyle='#fff6';cells(S.ICONS,16,(x,y)=>box({x,y,w:16,h:16},0));cells(S.ICONS_2X,32,(x,y)=>box({x,y,w:32,h:32},0));
+    c.fillStyle='#fff';GTS_SLOTS.forEach(s=>c.fillText(s.n,s.x+2,s.y+2));return;
+  }
+  [['KEY_UP',0,10],['KEY_DOWN',1,10],['PANEL',0,10],['ROW_SEL',1,6]].forEach(([n,on,r])=>{const s=S[n],x=s.x+.5,y=s.y+.5,w=s.w-1,h=s.h-1;
+    c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();
+    c.fillStyle=on?`rgba(57,44,16,${A})`:`rgba(16,24,49,${A})`;c.fill();c.strokeStyle=on?'#f7b231':'#42598c';c.stroke();});   // COL_SEL/amber, COL_PANEL/COL_SEP
+  const t=S.TILE;c.fillStyle='#171333';c.fillRect(t.x,t.y,t.w,t.h);c.fillStyle='#21234a';
+  [[0,21,64,1],[40,21,1,30],[9,50,32,1],[52,0,1,12],[52,11,12,1]].forEach(r=>c.fillRect(t.x+r[0],t.y+r[1],r[2],r[3]));
+  c.strokeStyle='#282c58';c.beginPath();c.arc(t.x+9.5,t.y+50.5,3,0,7);c.stroke();
+  const P=(...a)=>{c.beginPath();for(let i=0;i<a.length;i+=2)a[i]<0?(c.moveTo(a[i+1],a[i+2]),i++):c.lineTo(a[i],a[i+1]);},
+    O=(x,y,r,a=0,b=7)=>{c.beginPath();c.arc(x,y,r,a,b);c.stroke();};
+  const icon=[   // INSERT EJECT FOLDER STAR GEAR BATTERY WIFI SEARCH (16x16 grid)
+    ()=>{P(8,2,8,10,-1,4,7,8,11,12,7,-1,3,14,13,14);c.stroke();},
+    ()=>{P(3,10,8,4,13,10);c.fill();c.fillRect(3,12,10,2);},
+    ()=>{P(2,4,6,4,8,6,14,6,14,13,2,13,2,4);c.stroke();},
+    ()=>{c.beginPath();for(let i=0;i<10;i++){const r=i&1?2.6:6.5,a=i*.628-1.571;c.lineTo(8+r*Math.cos(a),8.5+r*Math.sin(a));}c.fill();},
+    ()=>{O(8,8,3);c.lineWidth=3;c.setLineDash([1.9,1.5]);O(8,8,5.5);c.setLineDash([]);},
+    ()=>{c.strokeRect(2,5,11,7);c.fillRect(13,7,2,3);c.fillRect(4,7,6,3);},
+    ()=>{[3,6.5,10].forEach(r=>O(8,13,r,-2.4,-.74));c.fillRect(7,12,2,2);},
+    ()=>{O(7,7,4);P(10,10,14,14);c.stroke();}];
+  c.fillStyle=c.strokeStyle='#eff3ff';
+  [[S.ICONS,1],[S.ICONS_2X,2]].forEach(([s,k])=>cells(s,16*k,(x,y,i)=>{if(icon[i]){c.save();c.translate(x,y);c.scale(k,k);c.lineWidth=1.5;icon[i]();c.restore();}}));
+}
+function gtsCanvas(w,h){const cv=document.createElement('canvas');cv.width=w;cv.height=h;return cv;}
+async function gtsBytes(cv,type,q){return new Uint8Array(await (await new Promise(r=>cv.toBlob(r,type,q))).arrayBuffer());}
+function gtsLink(b,file,t){return `<a class="btn" download="${file}" href="${URL.createObjectURL(new Blob([b]))}">${t}</a>`;}
+async function skinStarter(labelled){
+  const cv=gtsCanvas(256,192),a=document.createElement('a');gtsDrawStarter(cv.getContext('2d'),labelled);
+  a.download=labelled?'GTI_SLOT_MAP.png':'GTI_STARTER.png';a.href=URL.createObjectURL(new Blob([await gtsBytes(cv,'image/png')]));a.click();
+}
+// 4096-byte chunks in series (the panel serves one request at a time), then commit; throws with the panel's words.
+async function skinUpload(name,bytes,onProgress){
+  const post=async(w,body)=>{const r=await fetch(`${API}/api/skins/${encodeURIComponent(name)}/${w}`,
+    {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+    if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||'HTTP '+r.status);}};
+  for(let off=0;off<bytes.length;off+=4096){
+    if(onProgress)onProgress(off,bytes.length);
+    let bin='';bytes.subarray(off,off+4096).forEach(b=>bin+=String.fromCharCode(b));
+    await post('chunk','off='+off+'&data='+btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''));
+  }
+  await post('commit','');
+}
+function skinName(){
+  const n=document.getElementById('te-name').value.toUpperCase().trim();
+  if(!/^[A-Z_][A-Z0-9_]{0,15}$/.test(n))gtsErr('Skin name: A-Z, 0-9 and _ only, max 16, not starting with a digit');
+  return n;
+}
+// Send a skin under name. asIs (an imported .gts): its own colours and backgrounds; else the editor's colours and
+// the picked background (cropped to fill the chosen size, baseline JPEG) replacing the one of that size.
+async function skinSend(name,man,atlas,bgs,activate,asIs){
+  const st=document.getElementById('te-status'),f=asIs?0:document.getElementById('sk-bgfile').files[0];
+  if(f){const id=+document.getElementById('sk-bgsize').value,[w,h]=GTS_BG[id],im=await createImageBitmap(f),cv=gtsCanvas(w,h),k=Math.max(w/im.width,h/im.height);
+    cv.getContext('2d').drawImage(im,(w-im.width*k)/2,(h-im.height*k)/2,im.width*k,im.height*k);
+    const e=gtsCheckBg(id,cv.width,cv.height);if(e)gtsErr(e);
+    bgs=bgs.filter(g=>g.id!=id).concat([{id,bytes:await gtsBytes(cv,'image/jpeg',.85)}]);}
+  const bytes=gtsPack(Object.assign({author:''},man,asIs?{}:teStyle(),{name}),atlas,bgs);
+  await skinUpload(name,bytes,(o,n)=>st.textContent=`Uploading skin ${o*100/n|0}%…`);
+  st.textContent='';
+  if(activate){await api(`/api/themes/${encodeURIComponent(name)}/activate`,{method:'POST'});document.body.classList.remove('neo');applyThemeStyle(teStyle());}
+  toast(`Skin "${name}" saved${activate?' and activated':''} (${bytes.length} bytes)`);teBuildStartFrom();loadThemes();
+}
+async function skinImport(inp){
+  const f=inp.files[0];inp.value='';
+  if(!f)return;
+  try{
+    const name=skinName(),raw=new Uint8Array(await f.arrayBuffer()),sz=b=>createImageBitmap(new Blob([b])),chk=e=>{if(e)gtsErr(e);};
+    if(raw[0]==71&&raw[1]==84){   // "GT": a .gts
+      const u=gtsUnpack(raw),im=await sz(u.atlas);chk(gtsCheckAtlas(im.width,im.height));
+      for(const g of u.bg){const b=await sz(g.bytes);chk(gtsCheckBg(g.id,b.width,b.height));}
+      teLoadStyle(u.manifest);return await skinSend(name,u.manifest,u.atlas,u.bg,false,true);
+    }
+    const im=await sz(raw),cv=gtsCanvas(256,192);chk(gtsCheckAtlas(im.width,im.height));   // checked before anything is sent
+    cv.getContext('2d').drawImage(im,0,0);await skinSend(name,{},await gtsBytes(cv,'image/png'),[]);   // re-encoded: 8-bit RGBA
+  }catch(e){toast('Import failed: '+e.message,'error');}
+}
+async function skinFetch(name){
+  const r=await fetch(`${API}/api/skins/${encodeURIComponent(name)}`);
+  if(r.status==404||r.status==400)return null;
+  if(!r.ok)gtsErr('HTTP '+r.status);
+  return gtsUnpack(await r.arrayBuffer());
+}
+async function skinExport(){
+  try{
+    const name=skinName(),u=await skinFetch(name);
+    if(!u)gtsErr(`"${name}" is not a skin on this panel`);
+    teLoadStyle(u.manifest);
+    document.getElementById('sk-out').innerHTML=gtsLink(gtsPack(u.manifest,u.atlas,u.bg),name+'.gts',name+'.gts')+gtsLink(u.atlas,name+'.png','Atlas PNG')+
+      u.bg.map(g=>gtsLink(g.bytes,name+'_'+GTS_BG[g.id].join('x')+'.jpg','Background '+GTS_BG[g.id].join('x'))).join('');
+    toast('Colours loaded into the editor; the parts are below');
+  }catch(e){toast('Export failed: '+e.message,'error');}
+}
+// teSave for a name that is a skin: repack the .gts with the edited colours (a .json would be shadowed by it).
+async function skinSaveIfSkin(name,activate){
+  const btns=[document.getElementById('te-save'),document.getElementById('te-apply')];
+  try{const u=await skinFetch(name);if(!u)return false;btns.forEach(b=>b.disabled=true);await skinSend(name,u.manifest,u.atlas,u.bg,activate);}
+  catch(e){document.getElementById('te-status').textContent='';toast('Save failed: '+e.message,'error');}
+  finally{btns.forEach(b=>b.disabled=false);}
+  return true;
+}
 
 // The device drops off the network while it reboots. Poll until it answers
 // again rather than leaving the page looking like the update hung.
@@ -2449,6 +2576,7 @@ async function teSave(activate) {
     nameEl.focus();
     return;
   }
+  if (skinOn && await skinSaveIfSkin(name, activate)) return;   // gti-skins: a skin is repacked, a .json would be shadowed
   if (!teGeom) { toast('Panel geometry not loaded yet', 'error'); return; }
 
   const st = teStyle();
