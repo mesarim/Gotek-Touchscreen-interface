@@ -2865,10 +2865,11 @@ static void skinSlot(int id,int x,int y,int w,int h){
   const skin::Slot&s=skin::SLOTS[id];
   if(p.m.sx==1||p.m.sx==-1)skin::drawSlice(g_skin,s,x,y,w,h,p); else skin::drawSliceColumns(g_skin,s,x,y,w,h,p);
 }
-// Background: 1 = the picture (only when it was loaded for this orientation), 2 = the atlas TILE slot, 0 = COL_BG.
+// Background: 1 = the picture (only when it was loaded for this orientation), 2 = a usable atlas TILE slot (also
+// after rotating away from the picture's orientation), 0 = COL_BG.
 static int skinBackKind(){
   if(g_skin_bg&&g_skin_bg_w==gW&&g_skin_bg_h==gH)return 1;
-  if(g_skin_bg_tile&&g_skin.rgb)return 2;
+  if(g_skin.rgb&&skinSlotOk(skin::S_TILE))return 2;
   return 0;
 }
 static void skinBackRect(int vx0,int vy0,int vx1,int vy1){   // logical rect, already clipped
@@ -2913,13 +2914,23 @@ static void skinRow(int x,int y,int w,int h){
   if(skinSlotOk(skin::S_ROW_SEL))skinSlot(skin::S_ROW_SEL,x,y,w,h);
   else { gfx_fillRoundRect(x,y,w,h,4,COL_SEL); gfx_drawRoundRect(x,y,w,h,4,COL_AMBER); }
 }
+static inline bool skinKeys(){ return skinSlotOk(skin::S_KEY_UP); }   // keys are drawn from the skin (BUTTONS= only styles a missing KEY_UP)
+// A skin key plus its role edge (only when the edge is not the default COL_SEP). The ring follows the KEY_UP
+// corner size, not the caller's pill radius r. false = no skin key drawn: the caller draws NEO or classic.
+static bool skinKeyEdge(int x,int y,int w,int h,int r,uint16_t edge){
+  (void)r;
+  if(!g_skin_on||!skinKey(x,y,w,h,false))return false;
+  if(edge!=COL_SEP)neoRing(x,y,w,h,skin::SLOTS[skin::S_KEY_UP].border,edge);
+  return true;
+}
 // One call for a coloured key that turns into a NEO key: returns the text background to print the label with.
 static uint16_t keyFill(int x,int y,int w,int h,int r,uint16_t bc,uint16_t neoEdge){
-  if(g_skin_on&&skinKey(x,y,w,h,false)){ if(neoEdge!=COL_SEP)neoRing(x,y,w,h,r,neoEdge); return COL_BG; }
+  if(skinKeyEdge(x,y,w,h,r,neoEdge))return COL_BG;
   if(g_neo){ neoKey(x,y,w,h,r,neoEdge); return COL_BG; }
   gfx_fillRoundRect(x,y,w,h,r,bc); return bc;
 }
 static inline uint16_t btnInk(uint16_t bc,uint16_t neoInk){ return g_neo?neoInk:inkFor(bc); }
+static inline uint16_t skinKeyInk(uint16_t bc,uint16_t neoInk){ return skinKeys()?COL_LIT:btnInk(bc,neoInk); }   // skin key: the manifest text colour
 
 static void saveConfigKey(const String&key,const String&val){
   uint32_t _t0=millis();   // lab15a2
@@ -4113,7 +4124,8 @@ static void drawCoverPanel(){
     else{gfx_setTextSize(1);gfx_setTextColor(cachedHD?COL_ORANGE:COL_DIM,PB);gfx_setCursor(12,COVER_Y+COVER_H-58);gfx_print(cachedHD?"HD 1.76MB - needs A3000/A4000":g_mode==MODE_ADF?"Single disk  -  ADF 880KB":g_mode==MODE_DSK?"Single disk  -  DSK":"Single disk");}
   }
   // INSERT/EJECT
-  if(g_neo){   // A600-neo2: INSERT = the amber main action, EJECT = a muted red key
+  if(skinKeyEdge(INS_X,INS_Y,INS_W,INS_H,10,isL?(uint16_t)NEO_RED:COL_AMBER)){ gfx_setTextSize(2); gfx_setTextColor(COL_LIT,COL_BG); }
+  else if(g_neo){   // A600-neo2: INSERT = the amber main action, EJECT = a muted red key
     if(isL){ neoKey(INS_X,INS_Y,INS_W,INS_H,10,NEO_RED); gfx_setTextSize(2); gfx_setTextColor(NEO_RED_INK,COL_BG); }
     else   { gfx_fillRoundRect(INS_X,INS_Y,INS_W,INS_H,10,COL_AMBER); gfx_setTextSize(2); gfx_setTextColor(COL_BG,COL_AMBER); }
   } else {
@@ -4250,10 +4262,11 @@ static void drawInfoPanel(){
     // nav/reel bars); FLAT = the original v5.6.7 dim-fill + bright double border.
     uint16_t kc=g_ii[i2].bg, kfill, kink;
     bool dot=false; uint16_t dotc=0; bool dotOn=false;
-    if(g_neo){                                   // A600-neo2: every setting is the same NEO key; the edge + a dot say on/off
+    if(g_neo||skinKeys()){                       // A600-neo2: every setting is the same NEO key; the edge + a dot say on/off
       bool on=(kc==COL_GREEN), off=(kc==COL_BAR), bad=(kc==(uint16_t)0x8000||kc==(uint16_t)0xE8C4);
       uint16_t edge=on?COL_GREEN:bad?(uint16_t)NEO_RED:off?mix565(COL_SEP,COL_PANEL,140):COL_SEP;
-      neoKey(bx,by,colW,bh,10,edge); kfill=COL_BG; kink=on?COL_LIT:bad?(uint16_t)NEO_RED_INK:off?COL_DIM:COL_LIT;
+      if(!skinKeyEdge(bx,by,colW,bh,10,edge))neoKey(bx,by,colW,bh,10,edge);
+      kfill=COL_BG; kink=on?COL_LIT:bad?(uint16_t)NEO_RED_INK:off?COL_DIM:COL_LIT;
       if((on||off)&&g_ii[i2].act!=IA_NONE&&g_ii[i2].act!=IA_MODE&&g_ii[i2].act!=IA_DONGLE&&g_ii[i2].act<IA_PICKBACK){ dot=true; dotOn=on; dotc=on?COL_GREEN:COL_DIM; }   // neo2g: no dot on MODE / dongle / pick rows
     } else if(g_btn_pill){
       kfill=kc; kink=inkFor(kc);                 // inkFor (not the row's fg) so every theme stays readable
@@ -4294,7 +4307,7 @@ static void drawModeBar(){
     { uint16_t tb=keyFill(LIST_X+4,STATUS_H+2,104,14,7,COL_ACCENT,COL_AMBER); gfx_setTextColor(COL_AMBER,tb); }   // A600-neo2
     gfx_setCursor(LIST_X+4+(104-gfx_textWidth(nm))/2,STATUS_H+6);gfx_print(nm); }
   }
-  { uint16_t tb=keyFill(LIST_X+112,STATUS_H+2,62,14,7,COL_BLUE,COL_SEP); gfx_setTextColor(g_neo?COL_LIT:TFT_WHITE,tb); } gfx_setCursor(LIST_X+118,STATUS_H+6);gfx_print("USR-DSK");   // v4.9.7 user-disk manager
+  { uint16_t tb=keyFill(LIST_X+112,STATUS_H+2,62,14,7,COL_BLUE,COL_SEP); gfx_setTextColor((g_neo||skinKeys())?COL_LIT:TFT_WHITE,tb); } gfx_setCursor(LIST_X+118,STATUS_H+6);gfx_print("USR-DSK");   // v4.9.7 user-disk manager
   gfx_setTextColor(COL_MID,COL_BAR);String gt=String(g_games.size())+" "+gamesWord();gfx_setCursor(mbR-gfx_textWidth(gt)-6,STATUS_H+6);gfx_print(gt);
 }
 
@@ -4347,11 +4360,12 @@ static void drawFileList(){
 static void drawNowPlayingBar(){
   if(!NOW_ON)return;
   int y=NOW_Y;
-  if(g_loaded&&g_loaded_name.length()){NeoScope _ns; const uint16_t nb=g_neo?COL_BG:COL_NOW;   // A600-neo2: a NEO key with a green edge
-    if(g_neo){fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);neoKey(LIST_X+2,y,LIST_W-4,NOW_PLAY_H,6,COL_GREEN);}
+  if(g_loaded&&g_loaded_name.length()){NeoScope _ns; const uint16_t nb=(g_neo||skinKeys())?COL_BG:COL_NOW;   // A600-neo2: a NEO key with a green edge
+    if(skinKeys()){fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);skinKeyEdge(LIST_X+2,y,LIST_W-4,NOW_PLAY_H,6,COL_GREEN);}
+    else if(g_neo){fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);neoKey(LIST_X+2,y,LIST_W-4,NOW_PLAY_H,6,COL_GREEN);}
     else{gfx_fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_NOW);gfx_drawRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_GREEN);}
     gfx_fillCircle(LIST_X+8,y+NOW_PLAY_H/2,3,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(COL_GREEN,nb);gfx_setCursor(LIST_X+16,y+3);gfx_print(T(L_NOW_PLAYING));
-    gfx_setTextColor(g_neo?COL_LIT:TFT_WHITE,nb);gfx_setCursor(LIST_X+16,y+12);String n=g_loaded_name;while(gfx_textWidth(n)>LIST_W-24&&n.length()>3)n=n.substring(0,n.length()-1);gfx_print(n);}
+    gfx_setTextColor((g_neo||skinKeys())?COL_LIT:TFT_WHITE,nb);gfx_setCursor(LIST_X+16,y+12);String n=g_loaded_name;while(gfx_textWidth(n)>LIST_W-24&&n.length()>3)n=n.substring(0,n.length()-1);gfx_print(n);}
   else{NeoScope _ns;fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);gfx_setTextSize(1);gfx_setTextColor(COL_MID,COL_BG);gfx_setCursor(LIST_X+8,y+NOW_PLAY_H/2-4);gfx_print(tapHint());}   // A600-neo2d: hint only, the count is in the mode bar
 }
 
@@ -4380,7 +4394,7 @@ static void drawAZBar(){
     gfx_setCursor(AZ_X+(AZ_W-6*lsz)/2,ly+(letterH-8*lsz)/2);char lb[2]={letter,0};gfx_print(lb);}
   // Toggle button — taller, fills the strip bottom
   { uint16_t tb=keyFill(AZ_X+1,togY+1,AZ_W-2,azBottom-togY-2,5,COL_ACCENT,COL_SEP);
-  gfx_setTextSize(1);gfx_setTextColor(g_neo?COL_LIT:TFT_WHITE,tb); }
+  gfx_setTextSize(1);gfx_setTextColor((g_neo||skinKeys())?COL_LIT:TFT_WHITE,tb); }
   const char*blbl=g_az_page==0?"N-Z":"A-M";
   gfx_setCursor(AZ_X+(AZ_W-gfx_textWidth(blbl))/2,togY+(AZ_TOG_H-8)/2);gfx_print(blbl);
   int maxOff=(int)g_games.size()-ITEMS_VIS;if(maxOff>0){int thumbH=max(4,barH*ITEMS_VIS/(int)g_games.size());int thumbY=AZ_TOP+(barH-thumbH)*g_scroll/maxOff;gfx_fillRect(AZ_X-2,thumbY,2,thumbH,COL_BLUE);}
@@ -4418,16 +4432,16 @@ static void drawCarouselIcon(int cx,int cy,uint16_t col){
 static void drawBottomBar(){
   const uint16_t bg=TFT_BLACK, ink=TFT_WHITE;
   NeoScope _ns;   // A600-neo2
-  int y=VH-BOTTOM_H;if(g_neo)fillBack(0,y,VW,BOTTOM_H);else gfx_fillRect(0,y,VW,BOTTOM_H,bg);gfx_hline(0,y,VW,COL_SEP);
+  int y=VH-BOTTOM_H;if(g_neo||skinKeys())fillBack(0,y,VW,BOTTOM_H);else gfx_fillRect(0,y,VW,BOTTOM_H,bg);gfx_hline(0,y,VW,COL_SEP);
   const int nb=4;int bw=VW/nb;
   String blbl[4]={String("< ")+T(L_PREV),String(T(L_NEXT))+" >",String(T(L_REEL)),String(T(L_INFO))};
-  if(g_btn_pill||g_neo){                                            // 5.9.x: coloured pill buttons (matches the reel bar); A600-neo2: NEO keys
+  if(g_btn_pill||g_neo||skinKeys()){                                            // 5.9.x: coloured pill buttons (matches the reel bar); A600-neo2: NEO keys
     static const uint16_t cols[4]={COL_BLUE,COL_BLUE,COL_AMBER,COL_GREEN};
     int pad=5, bh=BOTTOM_H-2*pad, r=bh/2, by=y+pad;
     int ts=2; for(int i=0;i<nb;i++){gfx_setTextSize(2); if(gfx_textWidth(blbl[i])>bw-2*pad-18){ts=1;break;}}
     gfx_setTextSize(ts);
     for(int i=0;i<nb;i++){
-      uint16_t bc=cols[i], ic=btnInk(bc,COL_LIT); int bx=i*bw+pad, w=bw-2*pad, tw=gfx_textWidth(blbl[i]), th=8*ts;
+      uint16_t bc=cols[i], ic=skinKeyInk(bc,COL_LIT); int bx=i*bw+pad, w=bw-2*pad, tw=gfx_textWidth(blbl[i]), th=8*ts;
       bc=keyFill(bx,by,w,bh,g_neo?10:r,bc,COL_SEP);
       if(i==2){ int total=16+tw,sx=bx+(w-total)/2; drawCarouselIcon(sx+7,by+bh/2,ic);
         gfx_setTextColor(ic,bc); gfx_setCursor(sx+16,by+(bh-th)/2); gfx_print(blbl[i]); }
@@ -5156,7 +5170,8 @@ static void drawCarousel(){
      g_car_ins_w=170;g_car_ins_h=34;
      g_car_ins_x=(VW-g_car_ins_w)/2;g_car_ins_y=VH-BOTTOM_H-42;
      uint16_t bf=isLd?(uint16_t)0x4000:(uint16_t)0x0340, bb=isLd?(uint16_t)0xE8C4:COL_GREEN, bi=TFT_WHITE;
-     if(g_neo){ if(isLd){ neoKey(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,10,NEO_RED); bf=COL_BG; bi=NEO_RED_INK; }   // A600-neo2: EJECT = muted red key
+     if(skinKeyEdge(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,10,isLd?(uint16_t)NEO_RED:COL_AMBER)){ bf=COL_BG; bi=COL_LIT; }
+     else if(g_neo){ if(isLd){ neoKey(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,10,NEO_RED); bf=COL_BG; bi=NEO_RED_INK; }   // A600-neo2: EJECT = muted red key
                 else { gfx_fillRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,10,COL_AMBER); bf=COL_AMBER; bi=COL_BG; } }   // INSERT = the amber main action
      else {
      gfx_fillRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,8,bf);
@@ -5165,21 +5180,21 @@ static void drawCarousel(){
      const char*lbl=isLd?T(L_EJECT):T(L_INSERT);int tw=gfx_textWidth(lbl);
      gfx_setCursor(g_car_ins_x+(g_car_ins_w-tw)/2,g_car_ins_y+(g_car_ins_h-16)/2);gfx_print(lbl);}
   }
-  if(g_btn_pill||g_neo){                                      // 5.8.3: coloured rounded pill buttons; A600-neo2: NEO keys
+  if(g_btn_pill||g_neo||skinKeys()){                                      // 5.8.3: coloured rounded pill buttons; A600-neo2: NEO keys
     int y=VH-BOTTOM_H; fillBack(0,y,VW,BOTTOM_H); gfx_hline(0,y,VW,COL_SEP);
     int bw=VW/3, pad=5, bh=BOTTOM_H-2*pad, r=bh/2, by=y+pad;
     gfx_setTextSize(2);
     if(g_neo)r=10;
-    { uint16_t bc=COL_BLUE, ic=btnInk(bc,COL_LIT); int bx=0*bw+pad, w=bw-2*pad;
+    { uint16_t bc=COL_BLUE, ic=skinKeyInk(bc,COL_LIT); int bx=0*bw+pad, w=bw-2*pad;
       bc=keyFill(bx,by,w,bh,r,bc,COL_SEP);
       int tw=gfx_textWidth(T(L_LIST)),total=16+tw,sx=bx+(w-total)/2;
       drawListIcon(sx+7,by+bh/2,ic); gfx_setTextColor(ic,bc);
       gfx_setCursor(sx+16,by+(bh-16)/2); gfx_print(T(L_LIST)); }
-    { uint16_t bc=COL_AMBER, ic=btnInk(bc,COL_AMBER); int bx=1*bw+pad, w=bw-2*pad;
+    { uint16_t bc=COL_AMBER, ic=skinKeyInk(bc,COL_AMBER); int bx=1*bw+pad, w=bw-2*pad;
       bc=keyFill(bx,by,w,bh,r,bc,COL_AMBER); String sl=carSrcName(); int ts=2; if(gfx_textWidth(sl)>w-bh){ts=1;gfx_setTextSize(1);}   // lab15q: long words fit the pill
       int tw=gfx_textWidth(sl);
       gfx_setTextColor(ic,bc); gfx_setCursor(bx+(w-tw)/2,by+(bh-8*ts)/2); gfx_print(sl); gfx_setTextSize(2); }
-    { uint16_t bc=COL_GREEN, ic=btnInk(bc,COL_LIT); int bx=2*bw+pad, w=bw-2*pad;
+    { uint16_t bc=COL_GREEN, ic=skinKeyInk(bc,COL_LIT); int bx=2*bw+pad, w=bw-2*pad;
       bc=keyFill(bx,by,w,bh,r,bc,COL_SEP);
       int tw=gfx_textWidth(T(L_ROLL)),ds=16,total=ds+4+tw,sx=bx+(w-total)/2;
       int dx=sx+ds/2,dy2=by+bh/2;
@@ -6829,9 +6844,10 @@ static void doManual(const String& path,const char* title=nullptr){   // lab15j:
       { int pct=ms>0?(int)(scroll*100/ms):100; String s=String(pct)+"%"; gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR); gfx_setCursor(VW/2-gfx_textWidth(s)/2,7); gfx_print(s); }   // v2: % moved to top bar
       { String nm=g_games.empty()?String(""):g_games[g_sel].name; while(gfx_textWidth(nm)>VW/2-24&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
         gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR); gfx_setCursor(VW-gfx_textWidth(nm)-6,7); gfx_print(nm); }
-      int by=VH-botH; if(g_neo)fillBack(0,by,VW,botH); else gfx_fillRect(0,by,VW,botH,COL_BAR); gfx_hline(0,by,VW,COL_SEP);
+      int by=VH-botH; if(g_neo||skinKeys())fillBack(0,by,VW,botH); else gfx_fillRect(0,by,VW,botH,COL_BAR); gfx_hline(0,by,VW,COL_SEP);
       auto btn=[&](int idx,const String& lab,uint16_t bg,uint16_t brd,uint16_t ink){ int x=idx*bw;
-        if(g_neo){ bool red=(bg==(uint16_t)0x8000); neoKey(x+3,by+4,bw-6,botH-8,8,red?(uint16_t)NEO_RED:brd==COL_AMBER?COL_AMBER:COL_SEP); bg=COL_BG; if(red)ink=NEO_RED_INK; else ink=COL_LIT; }
+        if(skinKeyEdge(x+3,by+4,bw-6,botH-8,8,bg==(uint16_t)0x8000?(uint16_t)NEO_RED:brd==COL_AMBER?COL_AMBER:COL_SEP)){ bg=COL_BG; ink=COL_LIT; }
+        else if(g_neo){ bool red=(bg==(uint16_t)0x8000); neoKey(x+3,by+4,bw-6,botH-8,8,red?(uint16_t)NEO_RED:brd==COL_AMBER?COL_AMBER:COL_SEP); bg=COL_BG; if(red)ink=NEO_RED_INK; else ink=COL_LIT; }
         else { gfx_fillRoundRect(x+3,by+4,bw-6,botH-8,6,bg); gfx_drawRoundRect(x+3,by+4,bw-6,botH-8,6,brd); }
         gfx_setTextSize(1); gfx_setTextColor(ink,bg); gfx_setCursor(x+(bw-gfx_textWidth(lab))/2,by+(botH-8)/2); gfx_print(lab); };
       { String sl=String(T(L_CFG_FONT))+": "+fontName(g_font); gfx_setTextSize(1); if(gfx_textWidth(sl)>bw-12)sl=fontName(g_font);   // A600-neo2g: portrait keys are narrow
@@ -7812,14 +7828,14 @@ static void drawInfoBottomBar(){
   struct{const char*l;bool on;}bb[5]={
     {"<",g_info_page>0},{">",g_info_page<g_info_pages-1},   // A600-neo2d: arrows (PAGE n/m is in the header)
     {"",false},{"",false},{T(L_CLOSE),true}};
-  if(g_neo){ NeoScope _ns; fillBack(0,y,VW,BOTTOM_H); gfx_hline(0,y,VW,COL_SEP); }   // A600-neo2: NEO keys on the background
-  if(g_btn_pill||g_neo){   // 5.9.30: this bar was hardcoded flat, so PILL left the settings screen half-styled
+  if(g_neo||skinKeys()){ NeoScope _ns; fillBack(0,y,VW,BOTTOM_H); gfx_hline(0,y,VW,COL_SEP); }   // A600-neo2: NEO keys on the background
+  if(g_btn_pill||g_neo||skinKeys()){   // 5.9.30: this bar was hardcoded flat, so PILL left the settings screen half-styled
     NeoScope _ns;
     static const uint16_t pc[5]={COL_BLUE,COL_BLUE,COL_BG,COL_BG,COL_ACCENT};
     int pad=5, bh2=BOTTOM_H-2*pad, r=bh2/2, by=y+pad;
     for(int i=0;i<5;i++){
       if(!bb[i].l[0])continue;
-      uint16_t bc=bb[i].on?pc[i]:COL_BAR, ic=btnInk(bc,bb[i].on?COL_LIT:COL_DIM);      // inactive PAGE key = dim capsule, not just dim text
+      uint16_t bc=bb[i].on?pc[i]:COL_BAR, ic=skinKeys()?(bb[i].on?COL_LIT:COL_DIM):btnInk(bc,bb[i].on?COL_LIT:COL_DIM);      // inactive PAGE key = dim capsule, not just dim text
       int bx=i*bw+pad, w=bw-2*pad;
       bc=keyFill(bx,by,w,bh2,g_neo?10:r,bc,bb[i].on?COL_SEP:mix565(COL_SEP,COL_PANEL,140));
       int sz=2; gfx_setTextSize(sz); int tw=gfx_textWidth(bb[i].l);
