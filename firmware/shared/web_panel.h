@@ -672,6 +672,7 @@ static bool hThemesNamed() {
   }
   if (what == "activate" && post) {
     if (themeActivate(name)) { g_theme_redraw = true; webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}"); }
+    else if (g_skin_err.length()) webPanelHttp.send(400, "application/json", "{\"error\":\"" + wpJsonEscape(g_skin_err) + "\"}");   // gti-skins: the skin exists, its load was refused
     else webPanelHttp.send(404, "application/json", "{\"error\":\"no such theme\"}");
     return true;
   }
@@ -685,6 +686,8 @@ static bool hThemesNamed() {
 // at most 4096 raw bytes each, appended in order to <NAME>.gts.part; commit checks it and makes it <NAME>.gts.
 //   POST /api/skins/<NAME>/chunk   POST /api/skins/<NAME>/commit   GET /api/skins/<NAME>   POST /api/skins/<NAME>/delete
 #include "skin_b64.h"
+#include "skin_names.h"
+#include "skin_gts.h"
 static const size_t WP_SKIN_CHUNK = 4096;
 static void wpSkinErr(int code, const String& e) { webPanelHttp.send(code, "application/json", "{\"error\":\"" + wpJsonEscape(e) + "\"}"); }
 // false = not a skin URL. The name is checked (skin::validName) before any path is built.

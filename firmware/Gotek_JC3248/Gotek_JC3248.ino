@@ -2519,8 +2519,10 @@ static bool loadCustomTheme(const String&name){   // fills g_custom; false = mis
 // skinLoad reads the file whole, checks it, takes its colours into g_custom and decodes the atlas (RGB565 in
 // host order + an 8-bit alpha plane) and, if the skin has one, the JPEG background for this screen's size and
 // orientation (RGB565 host order). An atlas failure leaves the current look alone, logs one [skin] line and
-// says why in err; a background failure only drops the background. Nothing draws with it yet.
+// says why in err; a background failure only drops the background. fillBack/clearBack and the key code draw from it.
 static bool g_skin_on=false;
+static String g_skin_err="";   // the last skinLoad refusal (cleared by skinLoad / themeActivate): the web activate route answers 400 with it
+static const char* g_skin_fail_tail=" - look unchanged";   // skinSync says " - NAVY instead" while it calls skinLoad
 static skin::Atlas g_skin;
 static uint16_t* g_skin_bg=nullptr;
 static bool g_skin_bg_tile=false;
@@ -2629,8 +2631,9 @@ static bool skinLoad(const String&name,String&err){
   auto fail=[&](String m)->bool{
     if(png){ png->~PNG(); free(png); }
     free(buf); free(rgb); free(alpha);
-    err=m; gLog("[skin] %s: %s - look unchanged\n",n.c_str(),err.c_str()); return false;
+    err=m; g_skin_err=m; gLog("[skin] %s: %s%s\n",n.c_str(),err.c_str(),g_skin_fail_tail); return false;
   };
+  g_skin_err="";
   if(!themeNameOk(n))return fail("name: A-Z, 0-9 and _ only, max 16, not starting with a digit");
   if(themeReserved(n))return fail("that name belongs to a built-in theme");
   const uint32_t psBefore=ESP.getFreePsram();
@@ -2646,11 +2649,12 @@ static bool skinLoad(const String&name,String&err){
   gts::View v; Theme t=g_custom; int aw,ah; String why;
   if(!skinCheck(buf,sz,v,t,aw,ah,why))return fail(why);
   // Memory guard: what stays allocated after the load must leave the runtime reserve free (same floor the
-  // library build keeps, LIB_RUNTIME_RESERVE). The file buffer is freed again; a loaded skin's buffers go.
+  // library build keeps, LIB_RUNTIME_RESERVE) at the peak: the file buffer (already taken), the decoder and the
+  // new atlas are held together, so none of them counts as freed. A loaded skin's buffers go before the new ones.
   const size_t atlasBytes=(size_t)aw*ah*3;
   const size_t oldBytes=(g_skin.rgb?(size_t)g_skin.w*g_skin.h*3:0)+(g_skin_bg?(size_t)g_skin_bg_w*g_skin_bg_h*2:0);
-  const size_t freeAfter=(size_t)ESP.getFreePsram()+sz+oldBytes;
-  if(freeAfter<atlasBytes+(size_t)LIB_RUNTIME_RESERVE)return fail("not enough memory");
+  const size_t freeAfter=(size_t)ESP.getFreePsram()+oldBytes;
+  if(freeAfter<atlasBytes+sizeof(PNG)+(size_t)LIB_RUNTIME_RESERVE)return fail("not enough memory");
   void*pm=ps_malloc(sizeof(PNG)); if(pm)png=new(pm) PNG;   // own decoder: the cover decode keeps the shared pngdec
   rgb=(uint16_t*)ps_malloc((size_t)aw*ah*2); alpha=(uint8_t*)ps_malloc((size_t)aw*ah);
   if(!png||!rgb||!alpha)return fail("not enough memory");
@@ -2726,7 +2730,8 @@ static void skinSync(){
   const bool want=!g_neo_on&&g_theme_idx==CUSTOM_IDX&&g_custom_gts;
   if(!want){ if(g_skin_on)skinUnload(); return; }
   if(g_skin_on&&g_skin_name==g_custom_name){ skinReloadBackground(); return; }
-  String err; if(skinLoad(g_custom_name,err))return;
+  String err; g_skin_fail_tail=" - NAVY instead"; const bool ok=skinLoad(g_custom_name,err); g_skin_fail_tail=" - look unchanged";
+  if(ok)return;
   g_custom_gts=false; g_custom_name=""; applyTheme(0);
 }
 // Names in /GTI/THEMES/*.json and *.gts, each once, sorted, max maxN (8). A .json name is upper-cased as before
@@ -2753,7 +2758,7 @@ static int listCustomThemes(String*out,int maxN){
 static String themeName(){ return g_neo_on?String("NEO"):(g_theme_idx==CUSTOM_IDX?g_custom_name:String(THEMES[g_theme_idx].name)); }
 // Pick one theme by name, live, and remember it in CONFIG.TXT. NEO = the NEO switch on; any other = NEO off.
 static bool themeActivate(const String&name){
-  String n=name; n.toUpperCase();
+  String n=name; n.toUpperCase(); g_skin_err="";
   if(n=="NEO"){ g_neo_on=true; applyTheme(g_theme_idx); saveConfigKey("NEO","ON"); return true; }
   int ci=classicIdx(n);
   if(ci<0&&!loadCustomTheme(n))return false;
@@ -2784,13 +2789,13 @@ static bool themeSaveStyle(const String&name,const String&body,String&err){
 }
 static String themeListJson(){
   String j="{\"themes\":[\"NEO\""; for(int i=0;i<NUM_THEMES-1;i++){ j+=",\""; j+=THEMES[i].name; j+="\""; }
-  String c[8]; int nc=listCustomThemes(c,8); for(int i=0;i<nc;i++){ j+=",\""+c[i]+"\""; }
-  j+="],\"active\":\""+themeName()+"\"}"; return j;
+  String c[8],sk; int nc=listCustomThemes(c,8); for(int i=0;i<nc;i++){ j+=",\""+c[i]+"\""; if(SD_MMC.exists(skinPath(c[i]).c_str()))sk+=String(sk.length()?",\"":"\"")+c[i]+"\""; }
+  j+="],\"skins\":["+sk+"],\"active\":\""+themeName()+"\"}"; return j;   // gti-skins: skins = the custom names that are a .gts (the web Delete skin button)
 }
 
 // ── gti-skins: the web panel's skin upload / download / delete (web_panel.h /api/skins/<NAME>/...) ──
 // An upload arrives in chunks (max 4096 bytes each) appended to /GTI/THEMES/<NAME>.gts.part; commit checks the
-// whole file as skinLoad would and only then renames it to <NAME>.gts. listCustomThemes ignores .gts.part, so an
+// whole file as skinLoad would and only then renames it to <NAME>.gts. listCustomThemes ignores .gts.part and .gts.old, so an
 // interrupted upload never shows up. These run from the web handlers, on the loop task like every SD user here.
 static bool skinUpName(const String&n,String&err){
   if(!themeNameOk(n)){ err="name: A-Z, 0-9 and _ only, max 16, not starting with a digit"; return false; }
@@ -2835,10 +2840,13 @@ static bool skinCommit(const String&name,String&err){
   gts::View v; Theme t=g_custom; int aw,ah; String why;
   if(!skinCheck(buf,sz,v,t,aw,ah,why))return fail(why);
   free(buf); buf=nullptr;
-  // FAT rename does not replace: drop the old file first. The checked .part is the only copy for a moment.
-  const String g=skinPath(nm);
-  if(SD_MMC.exists(g.c_str())&&!SD_MMC.remove(g.c_str()))return fail("could not replace the old skin");
-  if(!SD_MMC.rename(p.c_str(),g.c_str()))return fail("could not write the SD card");
+  // FAT rename does not replace: the old file steps aside as <NAME>.gts.old (never listed) until the .part is in
+  // place, then goes. A failed rename puts the old one back and keeps the .part: there is always a copy.
+  const String g=skinPath(nm),o=g+".old"; const bool had=SD_MMC.exists(g.c_str());
+  auto keep=[&]()->bool{ err="could not write the SD card, upload again"; gLog("[skin] upload %s refused: %s\n",nm.c_str(),err.c_str()); return false; };
+  if(had){ if(SD_MMC.exists(o.c_str()))SD_MMC.remove(o.c_str()); if(!SD_MMC.rename(g.c_str(),o.c_str()))return keep(); }
+  if(!SD_MMC.rename(p.c_str(),g.c_str())){ if(had)SD_MMC.rename(o.c_str(),g.c_str()); return keep(); }
+  if(had)SD_MMC.remove(o.c_str());
   gLog("[skin] upload %s stored (%u bytes)\n",nm.c_str(),(unsigned)sz);
   // Replacing the skin on screen: drop the old atlas and load the new file (skinSync falls back to NAVY if it
   // will not load). With NEO on top nothing is shown, so only the colours are refreshed for later.
@@ -2854,7 +2862,7 @@ static bool skinOpenFile(const String&name,fs::File&f){
   if(f&&f.isDirectory()){ f.close(); return false; }
   return (bool)f;
 }
-// Removes <NAME>.gts and any leftover .part. The active skin falls back to NAVY the way skinSync does when a skin
+// Removes <NAME>.gts and any leftover .part / .gts.old. The active skin falls back to NAVY the way skinSync does when a skin
 // will not load (atlas freed by applyTheme -> skinSync). CONFIG.TXT keeps THEME=<NAME>: at boot that is a missing
 // theme, NAVY with one log line, as for a deleted .json theme.
 static bool skinDelete(const String&name){
@@ -2862,6 +2870,7 @@ static bool skinDelete(const String&name){
   const String p=skinPartPath(nm),g=skinPath(nm);
   bool any=false;
   if(SD_MMC.exists(p.c_str())){ SD_MMC.remove(p.c_str()); any=true; }
+  if(SD_MMC.exists((g+".old").c_str()))SD_MMC.remove((g+".old").c_str());   // a replace cut off by a power loss
   if(SD_MMC.exists(g.c_str())){ if(!SD_MMC.remove(g.c_str()))return false; any=true;
     if(skinIsActive(nm)){ g_custom_gts=false; g_custom_name=""; applyTheme(0); g_theme_redraw=true; }
     gLog("[skin] %s deleted\n",nm.c_str()); }
@@ -4989,6 +4998,7 @@ static void carRuntimeRelease(){
 }
 static void carMicroInit(){
   neoReserve();   // A600-neo2g: NEO's 2 x 300 KB come out of PSRAM first, so the runtime reserve below stays whole
+  if(!g_neo_on){ g_skin_ready=true; skinSync(); }   // gti-skins: likewise the skin (CONFIG.TXT is read by now); a no-op once loaded
   carMicroFree();
   int n=(int)g_games.size(); if(!n)return;
   int dim=(n<=1000)?32:(n<=1800)?24:16;
@@ -7788,7 +7798,7 @@ void setup(){
   MSC.vendorID("ESP32");MSC.productID("RAMDISK");MSC.productRevision("1.0");
   MSC.onRead(onRead);MSC.onWrite(onWrite);MSC.mediaPresent(true);
   MSC.begin(TOTAL_SECTORS,512);g_usb_announced=TOTAL_SECTORS;USB.begin();hardDetach();
-  g_skin_ready=true; skinSync();   // gti-skins: the skin's PSRAM is taken after the RAM disk + library, as NEO's is at its first draw
+  g_skin_ready=true; skinSync();   // gti-skins: a cold build already loaded the skin in carMicroInit, before the micro-thumb budget (as NEO's neoReserve); this loads it on a warm boot, no-op if loaded
   bool bootCar=(g_car_bootmode==1)||(g_car_bootmode==2&&readLastView()==1);   // v4.8.6: CAROUSEL= 0=list / 1=reel / LAST=restore
   if(bootCar&&!g_games.empty())carEnter();else{drawFullUI();gfx_flush();}
   bcSet(BC_READY,(uint32_t)g_games.size());   // lab14e: boot finished - a crash from here on is not a library-load crash
