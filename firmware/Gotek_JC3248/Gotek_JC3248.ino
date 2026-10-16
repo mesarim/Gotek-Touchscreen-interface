@@ -34,6 +34,7 @@
 // gti-skins: the .gts skin container and the atlas slot table (shared with the host tests, no Arduino includes).
 #include "../shared/skin_gts.h"
 #include "../shared/skin_draw.h"
+#include "../shared/skin_names.h"
 #include <new>
 #include <Wire.h>
 #include <vector>
@@ -2441,6 +2442,13 @@ static const int CUSTOM_IDX=NUM_THEMES;
 static Theme g_custom={"CUSTOM",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 static String g_custom_name="";
 static volatile bool g_theme_redraw=false;   // a web theme change: loop() redraws the current screen
+static bool g_custom_gts=false;   // gti-skins: the custom slot is a skin (/GTI/THEMES/<g_custom_name>.gts)
+static void skinSync();           // gti-skins: loads / drops the skin the look calls for (after the theme code)
+static bool g_skin_ready=false;   // gti-skins: false = skinSync waits (boot until the library is built, and during loadConfig)
+struct SkinHold{ bool was; SkinHold():was(g_skin_ready){ g_skin_ready=false; } ~SkinHold(){ g_skin_ready=was; } };
+static String skinPath(const String&n);
+static bool skinLoad(const String&name,String&err);
+static bool skinPeek(const String&n,struct Theme&t);
 static void applyTheme(int idx){
   const int neoIdx=NUM_THEMES-1;                  // NEO is the last entry of THEMES[]
   if(idx!=CUSTOM_IDX&&(idx<0||idx>=neoIdx))idx=0;
@@ -2450,6 +2458,7 @@ static void applyTheme(int idx){
   COL_DIM=t.dim;COL_MID=t.mid;COL_LIT=t.lit;COL_GREEN=t.green;COL_ORANGE=t.orange;
   COL_AMBER=t.amber;COL_BLUE=t.blue;COL_NOW=t.now;COL_ACCENT=t.accent;COL_CIRC=t.circ;COL_CIRC_TEXT=t.circ_text;
   g_neo=g_neo_on; g_txt_key=COL_BG;
+  skinSync();
 }
 
 // ── A600-theme1-JC3248: custom themes (spec 2026-10-07-gti-theme-section-design.md) ──
@@ -2495,8 +2504,15 @@ static bool readThemeFile(const String&n,String&j){
 }
 static bool loadCustomTheme(const String&name){   // fills g_custom; false = missing or no colours (caller falls back)
   String n=name; n.toUpperCase(); String j; Theme t=g_custom;
+  // gti-skins: <NAME>.gts wins over <NAME>.json. Live (g_skin_ready) the skin loads now, so a refusal keeps the
+  // current look (skinLoad logs why); at boot only its colours are read and skinSync loads it once NEO is known.
+  if(themeNameOk(n)&&!themeReserved(n)&&SD_MMC.exists(skinPath(n).c_str())){
+    if(g_skin_ready){ String err; if(!skinLoad(n,err))return false; g_custom_gts=true; return true; }
+    if(!skinPeek(n,t)){ gLog("[theme] skin %s: missing or unreadable - NAVY instead\n",n.c_str()); return false; }
+    g_custom=t; g_custom_name=n; g_custom_gts=true; return true;
+  }
   if(!readThemeFile(n,j)||!themeFromStyle(j,t)){ gLog("[theme] custom theme %s: missing or unreadable - NAVY instead\n",n.c_str()); return false; }
-  g_custom=t; g_custom_name=n; return true;
+  g_custom=t; g_custom_name=n; g_custom_gts=false; return true;
 }
 
 // ── gti-skins: a skin (/GTI/THEMES/<NAME>.gts, spec 2026-10-16-gti-skins-design.md) loaded into PSRAM ──
@@ -2511,6 +2527,7 @@ static bool g_skin_bg_tile=false;
 static uint16_t g_skin_bg_w=0,g_skin_bg_h=0;
 static uint8_t g_skin_slot_ok=0; static bool g_skin_slot_known=false;   // skinSlotOk's per-atlas answer, reset by skinUnload
 static String g_skin_name="";
+static uint8_t g_skin_bg_for=0;   // the gts::BgId (gW x gH) the background was picked for; skinReloadBackground on a change
 static String skinPath(const String&n){ return String("/GTI/THEMES/")+n+".gts"; }
 // IHDR straight from the bytes (gts::parse already checked the PNG signature): size, bit depth, colour type, interlace.
 static bool skinPngHead(const uint8_t*p,uint32_t n,int&w,int&h,int&bits,int&type,int&lace){
@@ -2585,6 +2602,7 @@ static void skinUnload(){
   free(g_skin.rgb); free(g_skin.a); g_skin=skin::Atlas();
   free(g_skin_bg); g_skin_bg=nullptr; g_skin_bg_tile=false; g_skin_bg_w=g_skin_bg_h=0; g_skin_name="";
   g_skin_slot_known=false;
+  g_skin_bg_for=0;
 }
 // The atlas checks are fatal; the background is optional: one that fails is dropped (one [skin] line) and
 // g_skin_bg_tile says "no picture for this screen: tile the atlas TILE slot" (false when that slot is fully
@@ -2651,20 +2669,77 @@ static bool skinLoad(const String&name,String&err){
   g_skin.w=(uint16_t)aw; g_skin.h=(uint16_t)ah; g_skin.rgb=rgb; g_skin.a=alpha;
   g_skin_bg=bgbuf; g_skin_bg_w=(uint16_t)bw; g_skin_bg_h=(uint16_t)bh; g_skin_bg_tile=(bgbuf==nullptr&&tileOk);
   g_custom=t; g_custom_name=n; g_skin_name=n; g_skin_on=true;
+  g_skin_bg_for=want;
   gLog("[skin] %s loaded: atlas %dx%d, background %s %dx%d, NEO %s\n",n.c_str(),aw,ah,bgbuf?"picture":(tileOk?"tile":"colours"),bw,bh,g_neo_on?"on":"off");
   gLog("[skin] psram %u -> %u\n",(unsigned)psBefore,(unsigned)ESP.getFreePsram());
   return true;
 }
-static int listCustomThemes(String*out,int maxN){   // names in /GTI/THEMES/*.json, sorted, max maxN
-  int n=0; File d=SD_MMC.open("/GTI/THEMES"); if(!d||!d.isDirectory())return 0;
-  for(File f=d.openNextFile();f&&n<maxN;f=d.openNextFile()){
+// A skin's colours from its manifest only (the 8 header bytes + the manifest, never the atlas): the THEME page
+// and the boot config read this; skinSync decodes the atlas when the skin is shown.
+static bool skinPeek(const String&n,Theme&t){
+  File f=SD_MMC.open(skinPath(n).c_str(),FILE_READ); if(!f)return false;
+  uint8_t h[8]; int ml=(f.read(h,8)==8)?skin::manifestLen(h,8):-1;
+  String j; if(ml>0){ j.reserve(ml); while(ml-->0&&f.available())j+=(char)f.read(); }
+  f.close(); return j.length()&&themeFromStyle(j,t);
+}
+// A new orientation (gW x gH) wants another background picture: decode that one from the card, drop the old one
+// first (less PSRAM at the peak). A failure only drops the picture; the draw falls back to the tile or colours.
+static void skinReloadBackground(){
+  const uint8_t want=gts::bgIdFor(gW,gH);
+  if(!g_skin_on||want==g_skin_bg_for)return;
+  free(g_skin_bg); g_skin_bg=nullptr; g_skin_bg_w=g_skin_bg_h=0; g_skin_bg_for=want;
+  if(!want)return;
+  String why; uint8_t*buf=nullptr; size_t sz=0;
+  File f=SD_MMC.open(skinPath(g_skin_name).c_str(),FILE_READ);
+  if(!f)why="the skin file is gone";
+  else { sz=f.size();
+    if(!sz||sz>gts::MAX_FILE)why="the skin file changed";
+    else if(!(buf=(uint8_t*)ps_malloc(sz)))why="not enough memory";
+    else if(f.read(buf,sz)!=sz)why="could not read the SD card";
+    f.close(); }
+  gts::View v{}; if(!why.length()&&gts::parse(buf,sz,v)!=gts::OK)why="the skin file changed";
+  int bw=0,bh=0;
+  for(int i=0;!why.length()&&i<v.nBg;i++){
+    if(v.bgId[i]!=want||!skinBgSize(want,bw,bh))continue;
+    if((size_t)ESP.getFreePsram()<(size_t)bw*bh*2+(size_t)LIB_RUNTIME_RESERVE)why="not enough memory";
+    else if((g_skin_bg=skinDecodeBg(v.bg[i],bw,bh,why))){ g_skin_bg_w=(uint16_t)bw; g_skin_bg_h=(uint16_t)bh; }
+    break;
+  }
+  free(buf);
+  if(why.length())gLog("[skin] %s: background dropped (%s) - tile or colours instead\n",g_skin_name.c_str(),why.c_str());
+  else gLog("[skin] %s: background for %dx%d: %s\n",g_skin_name.c_str(),gW,gH,g_skin_bg?"picture":"none in the skin, tile or colours");
+}
+// The look calls for a skin when NEO is off and the custom slot is a .gts: then it is loaded (and its background
+// matches the orientation); any other look has none. A skin that will not load (damaged, too big for the PSRAM
+// left) falls back to NAVY, as a missing JSON theme does; skinLoad logged the one line saying why.
+static void skinSync(){
+  if(!g_skin_ready)return;
+  const bool want=!g_neo_on&&g_theme_idx==CUSTOM_IDX&&g_custom_gts;
+  if(!want){ if(g_skin_on)skinUnload(); return; }
+  if(g_skin_on&&g_skin_name==g_custom_name){ skinReloadBackground(); return; }
+  String err; if(skinLoad(g_custom_name,err))return;
+  g_custom_gts=false; g_custom_name=""; applyTheme(0);
+}
+// Names in /GTI/THEMES/*.json and *.gts, each once, sorted, max maxN (8). A .json name is upper-cased as before
+// skins (old cards keep their list); a .gts name counts only as written: lower case there is not a theme.
+static int listCustomThemes(String*out,int maxN){
+  const int CAP=24; String jn[CAP],gn[CAP]; int nj=0,ng=0;
+  File d=SD_MMC.open("/GTI/THEMES"); if(!d||!d.isDirectory())return 0;
+  for(File f=d.openNextFile();f;f=d.openNextFile()){
     String fn=f.name(); int sl=fn.lastIndexOf('/'); if(sl>=0)fn=fn.substring(sl+1);
     bool dir=f.isDirectory(); f.close(); if(dir)continue;
-    String up=fn; up.toUpperCase(); if(!up.endsWith(".JSON"))continue;
-    String nm=up.substring(0,up.length()-5); if(!themeNameOk(nm)||themeReserved(nm))continue;
-    int k=n; while(k>0&&out[k-1]>nm){ out[k]=out[k-1]; k--; } out[k]=nm; n++;
+    String up=fn; up.toUpperCase();
+    if(up.endsWith(".JSON")){ String nm=up.substring(0,up.length()-5); if(nj<CAP&&themeNameOk(nm)&&!themeReserved(nm))jn[nj++]=nm; }
+    else if(up.endsWith(".GTS")){ String nm=fn.substring(0,fn.length()-4); if(ng<CAP&&themeNameOk(nm)&&!themeReserved(nm))gn[ng++]=nm; }
   }
-  d.close(); return n;
+  d.close();
+  const char*jp[CAP]; const char*gp[CAP];
+  for(int i=0;i<nj;i++)jp[i]=jn[i].c_str();
+  for(int i=0;i<ng;i++)gp[i]=gn[i].c_str();
+  char nm[8][skin::NAME_LEN+1]; if(maxN>8)maxN=8;
+  int n=skin::mergeNames(jp,nj,gp,ng,nm,maxN);
+  for(int i=0;i<n;i++)out[i]=nm[i];
+  return n;
 }
 static String themeName(){ return g_neo_on?String("NEO"):(g_theme_idx==CUSTOM_IDX?g_custom_name:String(THEMES[g_theme_idx].name)); }
 // Pick one theme by name, live, and remember it in CONFIG.TXT. NEO = the NEO switch on; any other = NEO off.
@@ -2694,7 +2769,7 @@ static bool themeSaveStyle(const String&name,const String&body,String&err){
   if(!SD_MMC.exists("/GTI/THEMES"))SD_MMC.mkdir("/GTI/THEMES");
   File f=SD_MMC.open(themePath(n).c_str(),FILE_WRITE); if(!f){ err="could not write the SD card"; return false; }
   f.print(body); f.close();
-  if(!g_neo_on&&g_theme_idx==CUSTOM_IDX&&g_custom_name==n){ loadCustomTheme(n); applyTheme(CUSTOM_IDX); g_theme_redraw=true; }
+  if(!g_neo_on&&g_theme_idx==CUSTOM_IDX&&g_custom_name==n&&!g_custom_gts){ loadCustomTheme(n); applyTheme(CUSTOM_IDX); g_theme_redraw=true; }
   return true;
 }
 static String themeListJson(){
@@ -3497,6 +3572,7 @@ static void sdGuardReport(bool always){
        g_sdg.last_bad[0],g_sdg.last_bad[1],g_sdg.last_bad[2],g_sdg.last_bad[3],g_sdg.last_bad[4],g_sdg.last_bad[5],g_sdg.last_bad[6],g_sdg.last_bad[7]);
 }
 static void loadConfig(){
+  SkinHold _skh;   // gti-skins: NEO=/THEME= settle first; the caller's relayout() runs skinSync
   g_neo_on=true; applyTheme(0);
   bool sawNeo=false, sawTheme=false;   // A600-theme1: a card with THEME= but no NEO= is from before NEO - keep its theme (Mez)
   File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);if(!f)return;
@@ -3623,6 +3699,7 @@ static void relayout(){
     INS_W=(g_portrait?66:80);INS_H=26;INS_X=VW-INS_W-6;INS_Y=STRIP_Y+((STRIP_H-INS_H)/2);
   }
   applyFont(g_font);
+  skinSync();   // gti-skins: after loadConfig and on a rotation (the background follows gW x gH)
 }
 
 // ── Smooth-scroll / A-Z index helpers ──
@@ -4196,7 +4273,7 @@ static void drawInfoPanel(){
         add(String(cur?"> ":"")+THEMES[i].name+(cur?" <":""), THEMES[i].accent, TFT_WHITE, (uint8_t)(IA_PICK0+i)); }   // each theme in its own colour
       g_pick_nc=listCustomThemes(g_pick_custom,8);
       for(int i=0;i<g_pick_nc;i++){ bool cur=(!g_neo_on&&g_theme_idx==CUSTOM_IDX&&g_custom_name==g_pick_custom[i]);
-        Theme t=g_custom; String j; uint16_t col=COL_ACCENT; if(readThemeFile(g_pick_custom[i],j)&&themeFromStyle(j,t))col=t.accent;
+        Theme t=g_custom; String j; uint16_t col=COL_ACCENT; if(SD_MMC.exists(skinPath(g_pick_custom[i]).c_str())?skinPeek(g_pick_custom[i],t):(readThemeFile(g_pick_custom[i],j)&&themeFromStyle(j,t)))col=t.accent;   // gti-skins: a skin's colours from its manifest, no atlas
         add(String(cur?"> ":"")+g_pick_custom[i]+(cur?" <":""), col, TFT_WHITE, (uint8_t)(IA_PICK0+NUM_THEMES-1+i)); } }
   } else {
   // 5.9.12: single 3-way MODE — STANDALONE (radio off) / ESP-NOW (blind dongles, no router) / WiFi (home router).
@@ -7621,6 +7698,7 @@ void setup(){
   MSC.vendorID("ESP32");MSC.productID("RAMDISK");MSC.productRevision("1.0");
   MSC.onRead(onRead);MSC.onWrite(onWrite);MSC.mediaPresent(true);
   MSC.begin(TOTAL_SECTORS,512);g_usb_announced=TOTAL_SECTORS;USB.begin();hardDetach();
+  g_skin_ready=true; skinSync();   // gti-skins: the skin's PSRAM is taken after the RAM disk + library, as NEO's is at its first draw
   bool bootCar=(g_car_bootmode==1)||(g_car_bootmode==2&&readLastView()==1);   // v4.8.6: CAROUSEL= 0=list / 1=reel / LAST=restore
   if(bootCar&&!g_games.empty())carEnter();else{drawFullUI();gfx_flush();}
   bcSet(BC_READY,(uint32_t)g_games.size());   // lab14e: boot finished - a crash from here on is not a library-load crash
