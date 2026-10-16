@@ -2544,7 +2544,7 @@ static bool skinDecodeAtlas(void*kp,const gts::Chunk&c){
   if(ok)ok=k.png->decode(&k,0)==PNG_SUCCESS&&k.rows==k.h;
   k.png->close(); return ok;
 }
-// The size a background id promises (gts::BgId); false for BG_TILE / unknown.
+// The size a background id promises (gts::BgId); false for an unknown id.
 static bool skinBgSize(uint8_t id,int&w,int&h){
   switch(id){ case gts::BG_480x320: w=480;h=320; return true; case gts::BG_320x480: w=320;h=480; return true;
     case gts::BG_480x272: w=480;h=272; return true; case gts::BG_272x480: w=272;h=480; return true; }
@@ -2564,6 +2564,8 @@ static uint16_t* skinDecodeBg(const gts::Chunk&c,int ew,int eh,String&why){
   JPEGDEC*jd=new(jm) JPEGDEC;   // own decoder: the cover decode keeps the shared jpegdec
   uint16_t*out=nullptr;
   if(!jd->openRAM((uint8_t*)c.p,(int)c.n,skinBgBlock)){ why="background is not a baseline JPEG"; }
+  // JPEGDEC opens a progressive file but decodes only an eighth-scale thumbnail of it: refuse it here.
+  else if(jd->getJPEGType()==JPEG_MODE_PROGRESSIVE){ why="background is a progressive JPEG, save it as baseline"; jd->close(); }
   else {
     int jw=jd->getWidth(),jh=jd->getHeight();
     if(jw!=ew||jh!=eh){ why=String("background is ")+jw+"x"+jh+", expected "+ew+"x"+eh; jd->close(); }
@@ -2583,7 +2585,8 @@ static void skinUnload(){
   free(g_skin_bg); g_skin_bg=nullptr; g_skin_bg_tile=false; g_skin_bg_w=g_skin_bg_h=0; g_skin_name="";
 }
 // The atlas checks are fatal; the background is optional: one that fails is dropped (one [skin] line) and
-// g_skin_bg_tile says "no picture for this screen: tile the atlas TILE slot, or the colours if it is empty".
+// g_skin_bg_tile says "no picture for this screen: tile the atlas TILE slot" (false when that slot is fully
+// transparent too: then the colours).
 static bool skinLoad(const String&name,String&err){
   String n=name; n.toUpperCase();
   uint8_t*buf=nullptr; PNG*png=nullptr; uint16_t*rgb=nullptr; uint8_t*alpha=nullptr;
@@ -2633,17 +2636,20 @@ static bool skinLoad(const String&name,String&err){
   for(int i=0;i<v.nBg;i++){
     if(!want||v.bgId[i]!=want||!skinBgSize(want,bw,bh))continue;
     String why;
-    if(freeAfter<atlasBytes+(size_t)bw*bh*2+(size_t)LIB_RUNTIME_RESERVE)why="not enough memory";
+    if((size_t)ESP.getFreePsram()+oldBytes<(size_t)bw*bh*2+(size_t)LIB_RUNTIME_RESERVE)why="not enough memory";
     else bgbuf=skinDecodeBg(v.bg[i],bw,bh,why);
     if(!bgbuf){ gLog("[skin] %s: background dropped (%s) - tile or colours instead\n",n.c_str(),why.c_str()); bw=bh=0; }
     break;
   }
+  // No picture: the atlas TILE slot, unless it is fully transparent (then the colours).
+  bool tileOk=false; const skin::Slot&ts=skin::SLOTS[skin::S_TILE];
+  for(int y=ts.y;y<ts.y+ts.h&&!tileOk;y++)for(int x=ts.x;x<ts.x+ts.w;x++)if(alpha[(size_t)y*aw+x]){ tileOk=true; break; }
   free(buf); buf=nullptr;
   skinUnload();
   g_skin.w=(uint16_t)aw; g_skin.h=(uint16_t)ah; g_skin.rgb=rgb; g_skin.a=alpha;
-  g_skin_bg=bgbuf; g_skin_bg_w=(uint16_t)bw; g_skin_bg_h=(uint16_t)bh; g_skin_bg_tile=(bgbuf==nullptr);
+  g_skin_bg=bgbuf; g_skin_bg_w=(uint16_t)bw; g_skin_bg_h=(uint16_t)bh; g_skin_bg_tile=(bgbuf==nullptr&&tileOk);
   g_custom=t; g_custom_name=n; g_skin_name=n; g_skin_on=true;
-  gLog("[skin] %s loaded: atlas %dx%d, background %s %dx%d, NEO %s\n",n.c_str(),aw,ah,bgbuf?"picture":"tile",bw,bh,g_neo_on?"on":"off");
+  gLog("[skin] %s loaded: atlas %dx%d, background %s %dx%d, NEO %s\n",n.c_str(),aw,ah,bgbuf?"picture":(tileOk?"tile":"colours"),bw,bh,g_neo_on?"on":"off");
   gLog("[skin] psram %u -> %u\n",(unsigned)psBefore,(unsigned)ESP.getFreePsram());
   return true;
 }

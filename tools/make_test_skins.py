@@ -4,6 +4,7 @@
 valid.gts      256x192 8-bit RGBA atlas, NEO-like slots, no container background
 bg.gts         valid + a 480x320 baseline JPEG background (BG_480x320; needs Pillow)
 bgwrong.gts    valid + a 100x100 JPEG in the BG_480x320 slot (loader drops it; needs Pillow)
+bgprog.gts     valid + a 480x320 progressive JPEG (loader drops it; needs Pillow)
 wide.gts       same, but the atlas is 300 px wide (loader: "atlas is 300x192, expected 256x192")
 palette.gts    256x192 8-bit palette atlas (loader: not 8-bit RGBA)
 truncated.gts  valid.gts cut in half (parser: bad chunk length)
@@ -115,8 +116,8 @@ def atlas_pixels(w, h):
     return px
 
 
-def jpeg_bg(w, h):
-    """Baseline (not progressive) JPEG: a diagonal grid on the dark colour. None without Pillow."""
+def jpeg_bg(w, h, progressive=False):
+    """Baseline (or, if asked, progressive) JPEG: a diagonal grid on the dark colour. None without Pillow."""
     try:
         from PIL import Image
     except ImportError:
@@ -130,7 +131,7 @@ def jpeg_bg(w, h):
             if (x + y) % 24 == 0 or (x - y) % 24 == 0:
                 px[x, y] = light
     out = io.BytesIO()
-    im.save(out, "JPEG", quality=85, progressive=False, optimize=False)
+    im.save(out, "JPEG", quality=85, progressive=progressive, optimize=False)
     return out.getvalue()
 
 
@@ -172,6 +173,7 @@ def main():
     else:
         files["bg.gts"] = pack(man, atlas, [(BG_480x320, big)])
         files["bgwrong.gts"] = pack(man, atlas, [(BG_480x320, small)])
+        files["bgprog.gts"] = pack(man, atlas, [(BG_480x320, jpeg_bg(480, 320, True))])
     for name, data in files.items():
         with open(os.path.join(OUT, name), "wb") as f:
             f.write(data)

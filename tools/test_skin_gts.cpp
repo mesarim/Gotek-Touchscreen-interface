@@ -207,6 +207,9 @@ static void test_valid_fixture_parses() {
   Buf w = readFile("tools/test_skins/bgwrong.gts");
   CHECK(!w.empty() && gts::parse(w.data(), w.size(), v) == gts::OK);  // loader drops the 100x100 picture
   CHECK(v.nBg == 1);
+  Buf pr = readFile("tools/test_skins/bgprog.gts");
+  CHECK(!pr.empty() && gts::parse(pr.data(), pr.size(), v) == gts::OK);  // loader drops the progressive JPEG
+  CHECK(v.nBg == 1 && v.bgId[0] == gts::BG_480x320);
 }
 
 static void test_bad_fixtures() {
