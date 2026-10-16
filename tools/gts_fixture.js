@@ -24,7 +24,8 @@ function throws(fn, what) {
 const html = fs.readFileSync(path.join(ROOT, 'firmware', 'shared', 'webui.html'), 'utf8');
 const m = html.match(/\/\/ GTS-BEGIN\r?\n([\s\S]*?)\/\/ GTS-END/);
 if (!m) { console.log('FAIL no // GTS-BEGIN ... // GTS-END block in firmware/shared/webui.html'); process.exit(1); }
-const G = new Function(m[1] + '\nreturn {GTS_SLOTS,GTS_ATLAS_W,GTS_ATLAS_H,GTS_SLOT_VER,gtsPack,gtsUnpack,gtsCheckAtlas,gtsCheckBg};')();
+const G = new Function(m[1] + '\nreturn {GTS_SLOTS,GTS_ATLAS_W,GTS_ATLAS_H,GTS_SLOT_VER,gtsPack,gtsUnpack,gtsCheckAtlas,gtsCheckBg,' +
+  'gtsPngInfo:typeof gtsPngInfo=="function"?gtsPngInfo:null,gtsJpegInfo:typeof gtsJpegInfo=="function"?gtsJpegInfo:null};')();
 
 // (a) JS reads the C tooling's file, then writes one for the C parser.
 const valid = G.gtsUnpack(new Uint8Array(fs.readFileSync(path.join(SK, 'valid.gts'))));
@@ -53,7 +54,8 @@ const cSlots = tbl ? [...tbl[1].matchAll(/\{\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),
 check(cSlots.length === 7, 'skin_draw.h has 7 slots (got ' + cSlots.length + ')');
 check(JSON.stringify(cSlots) === JSON.stringify(lines), 'GTS_SLOTS equals skin::SLOTS\n  C:  ' + cSlots.join(' | ') + '\n  JS: ' + lines.join(' | '));
 const ver = hdr.match(/SLOT_VER\s*=\s*(\d+)/), aw = hdr.match(/ATLAS_W\s*=\s*(\d+)/), ah = hdr.match(/ATLAS_H\s*=\s*(\d+)/);
-check(+ver[1] === G.GTS_SLOT_VER && +aw[1] === G.GTS_ATLAS_W && +ah[1] === G.GTS_ATLAS_H, 'SLOT_VER / ATLAS_W / ATLAS_H');
+check(!!(ver && aw && ah), 'SLOT_VER, ATLAS_W and ATLAS_H found in skin_draw.h');
+if (ver && aw && ah) check(+ver[1] === G.GTS_SLOT_VER && +aw[1] === G.GTS_ATLAS_W && +ah[1] === G.GTS_ATLAS_H, 'SLOT_VER / ATLAS_W / ATLAS_H');
 
 // (c) Negative cases.
 const good = new Uint8Array(fs.readFileSync(path.join(SK, 'valid.gts')));
@@ -76,15 +78,33 @@ check(/chunk length/.test(throws(() => G.gtsUnpack(bl), 'unpack bg length lies')
 const nb = withJ.slice(); nb[idAt - 1] = 7;
 check(/too many/.test(throws(() => G.gtsUnpack(nb), 'unpack nBg 7')), 'nBg 7 refused');
 check(/too big/.test(throws(() => G.gtsUnpack(new Uint8Array(262145)), 'unpack 262145 bytes')), 'file over 262144 refused');
-throws(() => G.gtsPack(man, valid.atlas, [{ id: 0, bytes: jpg }]), 'pack bg id 0');
-throws(() => G.gtsPack(man, valid.atlas, [{ id: 5, bytes: jpg }]), 'pack bg id 5');
-throws(() => G.gtsPack(man, valid.atlas, [{ id: 1, bytes: jpg }, { id: 1, bytes: jpg }]), 'pack duplicate bg');
-throws(() => G.gtsPack(man, valid.atlas, [1, 2, 3, 4, 1].map(id => ({ id, bytes: jpg }))), 'pack 5 backgrounds');
-throws(() => G.gtsPack(man, valid.atlas, [{ id: 1, bytes: valid.atlas }]), 'pack PNG as background');
-throws(() => G.gtsPack(man, jpg, []), 'pack JPEG as atlas');
-throws(() => G.gtsPack(Object.assign({}, man, { author: 'x'.repeat(1100) }), valid.atlas, []), 'pack manifest over 1024');
+const says = (fn, want, what) => { const msg = throws(fn, what); check(want instanceof RegExp ? want.test(msg) : msg === want, what + ': got "' + msg + '"'); };
+says(() => G.gtsPack(man, valid.atlas, [{ id: 0, bytes: jpg }]), 'unknown background id', 'pack bg id 0');
+says(() => G.gtsPack(man, valid.atlas, [{ id: 5, bytes: jpg }]), 'unknown background id', 'pack bg id 5');
+says(() => G.gtsPack(man, valid.atlas, [{ id: 1, bytes: jpg }, { id: 1, bytes: jpg }]), 'duplicate background id', 'pack duplicate bg');
+says(() => G.gtsPack(man, valid.atlas, [1, 2, 3, 4, 1].map(id => ({ id, bytes: jpg }))), 'too many backgrounds', 'pack 5 backgrounds');
+says(() => G.gtsPack(man, valid.atlas, [{ id: 1, bytes: valid.atlas }]), 'background is not a JPEG', 'pack PNG as background');
+says(() => G.gtsPack(man, jpg, []), 'atlas is not a PNG', 'pack JPEG as atlas');
+says(() => G.gtsPack(Object.assign({}, man, { author: 'x'.repeat(1100) }), valid.atlas, []), /^manifest is \d+ bytes, the limit is 1024$/, 'pack manifest over 1024');
 const huge = new Uint8Array(262144); huge.set([0xFF, 0xD8, 0xFF]);
-throws(() => G.gtsPack(man, valid.atlas, [{ id: 1, bytes: huge }]), 'pack file over 262144');
+says(() => G.gtsPack(man, valid.atlas, [{ id: 1, bytes: huge }]), /^skin is \d+ bytes, the limit is 262144$/, 'pack file over 262144');
+
+// Inspection before sending: PNG IHDR and JPEG SOFn.
+check(!!G.gtsPngInfo && !!G.gtsJpegInfo, 'gtsPngInfo and gtsJpegInfo exist');
+if (G.gtsPngInfo && G.gtsJpegInfo) {
+  const un = f => G.gtsUnpack(new Uint8Array(fs.readFileSync(path.join(SK, f))));
+  const eq = (got, want, what) => check(JSON.stringify(got) === JSON.stringify(want), what + ': ' + JSON.stringify(got));
+  eq(G.gtsPngInfo(valid.atlas), { w: 256, h: 192, depth: 8, type: 6, interlace: 0 }, 'gtsPngInfo valid.gts atlas');
+  eq(G.gtsPngInfo(un('palette.gts').atlas), { w: 256, h: 192, depth: 8, type: 3, interlace: 0 }, 'gtsPngInfo palette.gts atlas');
+  eq(G.gtsPngInfo(un('wide.gts').atlas), { w: 300, h: 192, depth: 8, type: 6, interlace: 0 }, 'gtsPngInfo wide.gts atlas');
+  eq(G.gtsPngInfo(jpg), null, 'gtsPngInfo of a JPEG');
+  eq(G.gtsPngInfo(valid.atlas.subarray(0, 20)), null, 'gtsPngInfo of a cut PNG');
+  eq(G.gtsJpegInfo(jpg), { w: 480, h: 320, progressive: false }, 'gtsJpegInfo bg.gts');
+  eq(G.gtsJpegInfo(un('bgprog.gts').bg[0].bytes), { w: 480, h: 320, progressive: true }, 'gtsJpegInfo bgprog.gts');
+  eq(G.gtsJpegInfo(un('bgwrong.gts').bg[0].bytes), { w: 100, h: 100, progressive: false }, 'gtsJpegInfo bgwrong.gts');
+  eq(G.gtsJpegInfo(valid.atlas), null, 'gtsJpegInfo of a PNG');
+  eq(G.gtsJpegInfo(jpg.subarray(0, 40)), null, 'gtsJpegInfo of a cut JPEG');
+}
 check(G.gtsCheckAtlas(300, 192) === 'atlas is 300 px wide, expected 256', 'gtsCheckAtlas 300 wide: ' + G.gtsCheckAtlas(300, 192));
 check(G.gtsCheckAtlas(256, 100) === 'atlas is 100 px high, expected 192', 'gtsCheckAtlas 100 high: ' + G.gtsCheckAtlas(256, 100));
 check(G.gtsCheckAtlas(256, 192) === null, 'gtsCheckAtlas 256x192 ok');

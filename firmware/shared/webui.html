@@ -741,7 +741,7 @@ body.neo .disk-btn:not(.loaded){background:#7BD2F7;color:#080C19}
       <div class="net-row" style="flex-wrap:wrap;gap:8px;align-items:center">
         <button class="btn" onclick="skinStarter(false)">Download starter skin</button>
         <button class="btn" onclick="skinStarter(true)">Download slot map</button>
-        <button class="btn" onclick="document.getElementById('sk-file').click()">Import skin (PNG or .gts)</button>
+        <button class="btn" id="sk-imp" onclick="document.getElementById('sk-file').click()">Import skin (PNG or .gts)</button>
         <button class="btn" onclick="skinExport()">Export skin</button>
         <input type="file" id="sk-file" accept=".png,.gts" style="display:none" onchange="skinImport(this)">
         <label style="margin:0">Background</label><input type="file" id="sk-bgfile" accept="image/*" style="width:auto">
@@ -1899,6 +1899,23 @@ function gtsCheckBg(id,w,h){
   const s=GTS_BG[id];
   return !s?'unknown background id '+id:w==s[0]&&h==s[1]?null:'background is '+w+'x'+h+', expected '+s[0]+'x'+s[1];
 }
+// PNG IHDR / JPEG SOFn, read before sending (the panel takes 8-bit RGBA non-interlaced PNG and baseline JPEG). null = unreadable.
+function gtsPngInfo(b){
+  if(!gtsIsPng(b)||b.length<29||String.fromCharCode(b[12],b[13],b[14],b[15])!='IHDR')return null;
+  const v=new DataView(b.buffer,b.byteOffset,b.length);
+  return{w:v.getUint32(16),h:v.getUint32(20),depth:b[24],type:b[25],interlace:b[28]};
+}
+function gtsJpegInfo(b){
+  if(!gtsIsJpeg(b))return null;
+  for(let p=2;p+9<b.length;){
+    const m=b[p+1];
+    if(b[p]!=255||m==0xD9||m==0xDA)return null;   // lost, or image data before any SOFn
+    if(m==255||m==1||(m>=0xD0&&m<=0xD8)){p+=m==255?1:2;continue;}
+    if(m>=0xC0&&m<=0xCF&&m!=0xC4&&m!=0xC8&&m!=0xCC)return{w:b[p+7]<<8|b[p+8],h:b[p+5]<<8|b[p+6],progressive:[0xC2,0xC6,0xCA,0xCE].includes(m)};
+    p+=2+(b[p+2]<<8|b[p+3]);
+  }
+  return null;
+}
 // GTS-END
 var skinOn=false;   // "has_skins":true in /api/system/info; absent = no skin card (OMEGAWARE, other panels)
 // The starter = NEO in the slots (Gotek_JC3248.ino: NEO row of THEMES[], NEO_*): panel colour at 196/255, 1 px edge,
@@ -1958,54 +1975,78 @@ function skinName(){
   if(!/^[A-Z_][A-Z0-9_]{0,15}$/.test(n))gtsErr('Skin name: A-Z, 0-9 and _ only, max 16, not starting with a digit');
   return n;
 }
+const skinKnown=new Set();   // names seen as skins on this panel (for the Save fall-through note)
+function skinDec(b){return createImageBitmap(b instanceof Blob?b:new Blob([b]),{premultiplyAlpha:'none',colorSpaceConversion:'none'});}
+function skinDraw(im,w,h){const cv=gtsCanvas(w,h);cv.getContext('2d').drawImage(im,0,0);return cv;}
+// What the panel would refuse is fixed or refused before sending: the sizes are checked from the files themselves; an
+// atlas that is not 8-bit RGBA non-interlaced and a progressive background are re-encoded; a right file goes as it is.
+async function skinFix(atlas,bgs){
+  const pi=gtsPngInfo(atlas),chk=e=>{if(e)gtsErr(e);},out=[];
+  if(!pi)gtsErr('atlas is not a readable PNG');
+  chk(gtsCheckAtlas(pi.w,pi.h));
+  if(pi.depth!=8||pi.type!=6||pi.interlace)atlas=await gtsBytes(skinDraw(await skinDec(atlas),256,192),'image/png');
+  for(const g of bgs){const ji=gtsJpegInfo(g.bytes);
+    if(!ji)gtsErr('background '+GTS_BG[g.id].join('x')+' is not a readable JPEG');
+    chk(gtsCheckBg(g.id,ji.w,ji.h));
+    out.push(ji.progressive?{id:g.id,bytes:await gtsBytes(skinDraw(await skinDec(g.bytes),ji.w,ji.h),'image/jpeg',.85)}:g);}
+  return[atlas,out];
+}
 // Send a skin under name. asIs (an imported .gts): its own colours and backgrounds; else the editor's colours and
 // the picked background (cropped to fill the chosen size, baseline JPEG) replacing the one of that size.
-async function skinSend(name,man,atlas,bgs,activate,asIs){
-  const st=document.getElementById('te-status'),f=asIs?0:document.getElementById('sk-bgfile').files[0];
-  if(f){const id=+document.getElementById('sk-bgsize').value,[w,h]=GTS_BG[id],im=await createImageBitmap(f),cv=gtsCanvas(w,h),k=Math.max(w/im.width,h/im.height);
+async function skinSend(name,man,atlas,bgs,activate,asIs,note){
+  const st=document.getElementById('te-status'),bf=document.getElementById('sk-bgfile'),f=asIs?0:bf.files[0];
+  if(f){const id=+document.getElementById('sk-bgsize').value,[w,h]=GTS_BG[id],im=await skinDec(f),cv=gtsCanvas(w,h),k=Math.max(w/im.width,h/im.height);
+    if(!im.width||!im.height)gtsErr('the background picture is empty');
     cv.getContext('2d').drawImage(im,(w-im.width*k)/2,(h-im.height*k)/2,im.width*k,im.height*k);
-    const e=gtsCheckBg(id,cv.width,cv.height);if(e)gtsErr(e);
     bgs=bgs.filter(g=>g.id!=id).concat([{id,bytes:await gtsBytes(cv,'image/jpeg',.85)}]);}
+  [atlas,bgs]=await skinFix(atlas,bgs);
   const bytes=gtsPack(Object.assign({author:''},man,asIs?{}:teStyle(),{name}),atlas,bgs);
   await skinUpload(name,bytes,(o,n)=>st.textContent=`Uploading skin ${o*100/n|0}%…`);
-  st.textContent='';
-  if(activate){await api(`/api/themes/${encodeURIComponent(name)}/activate`,{method:'POST'});document.body.classList.remove('neo');applyThemeStyle(teStyle());}
-  toast(`Skin "${name}" saved${activate?' and activated':''} (${bytes.length} bytes)`);teBuildStartFrom();loadThemes();
+  st.textContent='';skinKnown.add(name);if(f)bf.value='';
+  if(activate){const r=await fetch(`${API}/api/themes/${encodeURIComponent(name)}/activate`,{method:'POST'});   // not api(): one toast on failure
+    if(!r.ok)gtsErr('saved, but activating failed (HTTP '+r.status+')');document.body.classList.remove('neo');applyThemeStyle(teStyle());}
+  toast(`Skin "${name}" saved${activate?' and activated':''} (${bytes.length} bytes)${note?'; '+note:''}`);teBuildStartFrom();loadThemes();
 }
 async function skinImport(inp){
-  const f=inp.files[0];inp.value='';
+  const f=inp.files[0],btn=document.getElementById('sk-imp');inp.value='';
   if(!f)return;
+  btn.disabled=true;
   try{
-    const name=skinName(),raw=new Uint8Array(await f.arrayBuffer()),sz=b=>createImageBitmap(new Blob([b])),chk=e=>{if(e)gtsErr(e);};
-    if(raw[0]==71&&raw[1]==84){   // "GT": a .gts
-      const u=gtsUnpack(raw),im=await sz(u.atlas);chk(gtsCheckAtlas(im.width,im.height));
-      for(const g of u.bg){const b=await sz(g.bytes);chk(gtsCheckBg(g.id,b.width,b.height));}
-      teLoadStyle(u.manifest);return await skinSend(name,u.manifest,u.atlas,u.bg,false,true);
+    const name=skinName(),raw=new Uint8Array(await f.arrayBuffer());
+    if(raw[0]==71&&raw[1]==84){   // "GT": a .gts, checked by skinSend/skinFix before anything is sent
+      const u=gtsUnpack(raw);teLoadStyle(u.manifest);return await skinSend(name,u.manifest,u.atlas,u.bg,false,true);
     }
-    const im=await sz(raw),cv=gtsCanvas(256,192);chk(gtsCheckAtlas(im.width,im.height));   // checked before anything is sent
-    cv.getContext('2d').drawImage(im,0,0);await skinSend(name,{},await gtsBytes(cv,'image/png'),[]);   // re-encoded: 8-bit RGBA
-  }catch(e){toast('Import failed: '+e.message,'error');}
+    const im=await skinDec(raw),e=gtsCheckAtlas(im.width,im.height);if(e)gtsErr(e);   // checked before anything is sent
+    const cv=skinDraw(im,256,192),px=cv.getContext('2d').getImageData(0,0,256,192).data;
+    const empty=GTS_SLOTS.filter(s=>{for(let y=s.y;y<s.y+s.h;y++)for(let x=s.x;x<s.x+s.w;x++)if(px[(y*256+x)*4+3])return false;return true;}).map(s=>s.n);
+    await skinSend(name,{},await gtsBytes(cv,'image/png'),[],false,false,   // re-encoded: 8-bit RGBA
+      empty.length?`slot ${empty.join(', ')} ${empty.length>1?'are':'is'} empty, ${empty.length>1?'they':'it'} will use the default look`:'');
+  }catch(e){document.getElementById('te-status').textContent='';toast('Import failed: '+e.message,'error');}
+  finally{btn.disabled=false;}
 }
 async function skinFetch(name){
   const r=await fetch(`${API}/api/skins/${encodeURIComponent(name)}`);
   if(r.status==404||r.status==400)return null;
   if(!r.ok)gtsErr('HTTP '+r.status);
-  return gtsUnpack(await r.arrayBuffer());
+  const u=gtsUnpack(await r.arrayBuffer());skinKnown.add(name);return u;
 }
 async function skinExport(){
   try{
     const name=skinName(),u=await skinFetch(name);
     if(!u)gtsErr(`"${name}" is not a skin on this panel`);
     teLoadStyle(u.manifest);
-    document.getElementById('sk-out').innerHTML=gtsLink(gtsPack(u.manifest,u.atlas,u.bg),name+'.gts',name+'.gts')+gtsLink(u.atlas,name+'.png','Atlas PNG')+
-      u.bg.map(g=>gtsLink(g.bytes,name+'_'+GTS_BG[g.id].join('x')+'.jpg','Background '+GTS_BG[g.id].join('x'))).join('');
+    const[at,bg]=await skinFix(u.atlas,u.bg);
+    document.getElementById('sk-out').innerHTML=gtsLink(gtsPack(u.manifest,at,bg),name+'.gts',name+'.gts')+gtsLink(at,name+'.png','Atlas PNG')+
+      bg.map(g=>gtsLink(g.bytes,name+'_'+GTS_BG[g.id].join('x')+'.jpg','Background '+GTS_BG[g.id].join('x'))).join('');
     toast('Colours loaded into the editor; the parts are below');
   }catch(e){toast('Export failed: '+e.message,'error');}
 }
 // teSave for a name that is a skin: repack the .gts with the edited colours (a .json would be shadowed by it).
 async function skinSaveIfSkin(name,activate){
   const btns=[document.getElementById('te-save'),document.getElementById('te-apply')];
-  try{const u=await skinFetch(name);if(!u)return false;btns.forEach(b=>b.disabled=true);await skinSend(name,u.manifest,u.atlas,u.bg,activate);}
+  try{const u=await skinFetch(name);
+    if(!u){if(skinKnown.has(name))setTimeout(()=>toast(`"${name}" was saved as a colour theme (not a skin)`,'error'),3100);return false;}   // after teSave's own toast
+    btns.forEach(b=>b.disabled=true);await skinSend(name,u.manifest,u.atlas,u.bg,activate);}
   catch(e){document.getElementById('te-status').textContent='';toast('Save failed: '+e.message,'error');}
   finally{btns.forEach(b=>b.disabled=false);}
   return true;
