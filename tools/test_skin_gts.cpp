@@ -224,6 +224,30 @@ static void test_bad_fixtures() {
   CHECK(!l.empty() && gts::parse(l.data(), l.size(), v) == gts::BAD_LENGTH);
 }
 
+// Written by tools/gts_fixture.js with the web app's gtsPack (run it first): the C parser reads what JS wrote.
+// js_made.txt: manifest length, atlas length, nBg, then "id length" per background.
+static void test_js_made_file_parses() {
+  Buf b = readFile("tools/test_skins/js_made.gts");
+  CHECK(!b.empty());
+  FILE* f = std::fopen("tools/test_skins/js_made.txt", "r");
+  CHECK(f != nullptr);
+  if (!f || b.empty()) { if (f) std::fclose(f); return; }
+  unsigned ml = 0, al = 0, nb = 0;
+  CHECK(std::fscanf(f, "%u %u %u", &ml, &al, &nb) == 3);
+  gts::View v;
+  CHECK(gts::parse(b.data(), b.size(), v) == gts::OK);
+  CHECK(v.slotVer == 1);
+  CHECK(v.manifest.n == ml);
+  CHECK(v.atlas.n == al);
+  CHECK(v.nBg == nb && nb >= 1);
+  for (unsigned i = 0; i < nb && i < gts::MAX_BG; ++i) {
+    unsigned id = 0, len = 0;
+    CHECK(std::fscanf(f, "%u %u", &id, &len) == 2);
+    CHECK(v.bgId[i] == id && v.bg[i].n == len);
+  }
+  std::fclose(f);
+}
+
 int main() {
   test_roundtrip();
   test_empty_and_short();
@@ -242,6 +266,7 @@ int main() {
   test_errText();
   test_valid_fixture_parses();
   test_bad_fixtures();
+  test_js_made_file_parses();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }
