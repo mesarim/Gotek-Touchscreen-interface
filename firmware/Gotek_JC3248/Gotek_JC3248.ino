@@ -2509,6 +2509,7 @@ static skin::Atlas g_skin;
 static uint16_t* g_skin_bg=nullptr;
 static bool g_skin_bg_tile=false;
 static uint16_t g_skin_bg_w=0,g_skin_bg_h=0;
+static uint8_t g_skin_slot_ok=0; static bool g_skin_slot_known=false;   // skinSlotOk's per-atlas answer, reset by skinUnload
 static String g_skin_name="";
 static String skinPath(const String&n){ return String("/GTI/THEMES/")+n+".gts"; }
 // IHDR straight from the bytes (gts::parse already checked the PNG signature): size, bit depth, colour type, interlace.
@@ -2583,6 +2584,7 @@ static void skinUnload(){
   g_skin_on=false;
   free(g_skin.rgb); free(g_skin.a); g_skin=skin::Atlas();
   free(g_skin_bg); g_skin_bg=nullptr; g_skin_bg_tile=false; g_skin_bg_w=g_skin_bg_h=0; g_skin_name="";
+  g_skin_slot_known=false;
 }
 // The atlas checks are fatal; the background is optional: one that fails is dropped (one [skin] line) and
 // g_skin_bg_tile says "no picture for this screen: tile the atlas TILE slot" (false when that slot is fully
@@ -2711,7 +2713,7 @@ static String themeListJson(){
 #define NEO_GRAD_TO_RGB   36,22,64      // purple, bottom right
 #define NEO_TRACE_RGB     90,120,200    // faint circuit traces
 static uint16_t* g_neo_bg=NULL; static int g_neo_bg_rot=-1;
-struct NeoScope{ bool on; NeoScope():on(g_neo){ if(on)g_neo_depth++; } ~NeoScope(){ if(on)g_neo_depth--; } };
+struct NeoScope{ bool on; NeoScope():on(g_neo||g_skin_on){ if(on)g_neo_depth++; } ~NeoScope(){ if(on)g_neo_depth--; } };
 static inline uint16_t rgb565(int r,int g,int b){ return (uint16_t)(((r>>3)<<11)|((g>>2)<<5)|(b>>3)); }
 static inline uint16_t mix565(uint16_t a,uint16_t b,int wa){   // wa 0..256 = weight of a
   int wb=256-wa;
@@ -2764,8 +2766,9 @@ static void gfx_fillBg(int x,int y,int w,int h){        // like gfx_fillRect, bu
   for(int py=py0;py<py1;py++) memcpy(&framebuffer[(size_t)py*LCD_WIDTH+px0],&g_neo_bg[(size_t)py*LCD_WIDTH+px0],(size_t)(px1-px0)*2);
 }
 static inline bool neoBgOk(){ return g_neo&&g_neo_bg&&g_neo_bg_rot==g_rot; }
-static void fillBack(int x,int y,int w,int h){ if(neoBgOk())gfx_fillBg(x,y,w,h); else gfx_fillRect(x,y,w,h,COL_BG); }
-static void clearBack(){ neoBgEnsure(); if(neoBgOk())memcpy(framebuffer,g_neo_bg,(size_t)LCD_WIDTH*LCD_HEIGHT*2); else gfx_fillScreen(COL_BG); }
+static void skinBackFill(int x,int y,int w,int h); static void skinBackAll();   // gti-skins: defined after the NEO keys
+static void fillBack(int x,int y,int w,int h){ if(g_skin_on){ skinBackFill(x,y,w,h); return; } if(neoBgOk())gfx_fillBg(x,y,w,h); else gfx_fillRect(x,y,w,h,COL_BG); }
+static void clearBack(){ if(g_skin_on){ skinBackAll(); return; } neoBgEnsure(); if(neoBgOk())memcpy(framebuffer,g_neo_bg,(size_t)LCD_WIDTH*LCD_HEIGHT*2); else gfx_fillScreen(COL_BG); }
 
 // ── A600-neo2-JC3248: NEO keys - one button/panel look on every screen (Dimmy, 6 Oct) ──
 // A key = the panel colour laid see-through over the background picture (the traces show faintly) + a 1 px edge.
@@ -2836,8 +2839,83 @@ static void neoRing(int x,int y,int w,int h,int r,uint16_t c){   // rounded outl
     gfx_hline(x+b,y+j,len,c); gfx_hline(x+w-b-len,y+j,len,c); gfx_hline(x+b,y+h-1-j,len,c); gfx_hline(x+w-b-len,y+h-1-j,len,c); }
 }
 static void neoKey(int x,int y,int w,int h,int r,uint16_t edge){ neoPanel(x,y,w,h,r); neoRing(x,y,w,h,r,edge); }
+
+// ── gti-skins: drawing from a loaded skin (g_skin_on; NEO is off then) ──
+// Logical (x,y) is framebuffer[m.base+x*m.sx+y*m.sy] (skin::rotMap = fb_setPixel's mapping, host-tested), so
+// no switch per pixel. Atlas pixels are blended over the framebuffer, which holds byte-swapped RGB565.
+static bool skinSlotOk(int id){   // inside the atlas and not fully transparent, worked out once per loaded atlas
+  if(!g_skin_on||!g_skin.rgb||id<0||id>=skin::S_COUNT)return false;
+  if(!g_skin_slot_known){ g_skin_slot_ok=0; g_skin_slot_known=true;
+    for(int k=0;k<skin::S_COUNT;k++){ const skin::Slot&s=skin::SLOTS[k]; if(s.x+s.w>g_skin.w||s.y+s.h>g_skin.h)continue;
+      bool any=!g_skin.a; for(int y=s.y;y<s.y+s.h&&!any;y++)for(int x=s.x;x<s.x+s.w;x++)if(g_skin.a[(size_t)y*g_skin.w+x]){ any=true; break; }
+      if(any)g_skin_slot_ok|=(uint8_t)(1u<<k); } }
+  return (g_skin_slot_ok>>id)&1;
+}
+struct SkinPut { uint16_t* fb; skin::RotMap m; int x0,y0,x1,y1;
+  inline void operator()(int x,int y,uint16_t c,uint8_t a)const{
+    if(!a||x<x0||x>=x1||y<y0||y>=y1)return;
+    uint16_t&d=fb[m.base+x*m.sx+y*m.sy];
+    d=(a==255)?swap16(c):swap16(skin::blend565(c,a,swap16(d)));
+  }
+};
+// One atlas slot 9-sliced over (x,y,w,h), clipped; the loop runs along the framebuffer's contiguous axis.
+static void skinSlot(int id,int x,int y,int w,int h){
+  if(w<=0||h<=0||!framebuffer||!g_skin.rgb)return;
+  SkinPut p={framebuffer,skin::rotMap(g_rot,LCD_WIDTH,LCD_HEIGHT),g_clip_x0,g_clip_y0,g_clip_x1,g_clip_y1};
+  const skin::Slot&s=skin::SLOTS[id];
+  if(p.m.sx==1||p.m.sx==-1)skin::drawSlice(g_skin,s,x,y,w,h,p); else skin::drawSliceColumns(g_skin,s,x,y,w,h,p);
+}
+// Background: 1 = the picture (only when it was loaded for this orientation), 2 = the atlas TILE slot, 0 = COL_BG.
+static int skinBackKind(){
+  if(g_skin_bg&&g_skin_bg_w==gW&&g_skin_bg_h==gH)return 1;
+  if(g_skin_bg_tile&&g_skin.rgb)return 2;
+  return 0;
+}
+static void skinBackRect(int vx0,int vy0,int vx1,int vy1){   // logical rect, already clipped
+  if(vx0>=vx1||vy0>=vy1||!framebuffer)return;
+  const int kind=skinBackKind();
+  if(!kind){ gfx_fillRect(vx0,vy0,vx1-vx0,vy1-vy0,COL_BG); return; }
+  const skin::RotMap m=skin::rotMap(g_rot,LCD_WIDTH,LCD_HEIGHT);
+  auto run=[&](auto px){
+    if(m.sx==1||m.sx==-1){ for(int y=vy0;y<vy1;y++){ uint16_t*d=framebuffer+m.base+vx0*m.sx+y*m.sy; for(int x=vx0;x<vx1;x++,d+=m.sx)*d=px(x,y); } }
+    else { for(int x=vx0;x<vx1;x++){ uint16_t*d=framebuffer+m.base+x*m.sx+vy0*m.sy; for(int y=vy0;y<vy1;y++,d+=m.sy)*d=px(x,y); } }
+  };
+  if(kind==1){ const uint16_t*bg=g_skin_bg; const int bw=gW; run([&](int x,int y){ return swap16(bg[(size_t)y*bw+x]); }); return; }
+  const skin::Slot&ts=skin::SLOTS[skin::S_TILE]; const uint16_t base=COL_BG;
+  const uint16_t*rgb=g_skin.rgb; const uint8_t*al=g_skin.a; const int aw=g_skin.w;
+  run([&](int x,int y){ size_t i=(size_t)(ts.y+y%ts.h)*aw+ts.x+x%ts.w; return swap16(skin::blend565(rgb[i],al?al[i]:(uint8_t)255,base)); });
+}
+static void skinBackFill(int x,int y,int w,int h){
+  skinBackRect(max(g_clip_x0,x),max(g_clip_y0,y),min(g_clip_x1,x+w),min(g_clip_y1,y+h));
+}
+static void skinBackAll(){ if(!skinBackKind())gfx_fillScreen(COL_BG); else skinBackRect(0,0,gW,gH); }
+// The PANEL slot over (x,y,w,h) on a fresh background, drawn only inside (cx,cy,cw,ch) (part of a panel can be
+// restored). No usable slot: the classic COL_PANEL fill.
+static void skinPanelClip(int x,int y,int w,int h,int cx,int cy,int cw,int ch){
+  const int s0=g_clip_x0,s1=g_clip_y0,s2=g_clip_x1,s3=g_clip_y1;
+  g_clip_x0=max(s0,cx); g_clip_y0=max(s1,cy); g_clip_x1=min(s2,cx+cw); g_clip_y1=min(s3,cy+ch);
+  if(skinSlotOk(skin::S_PANEL)){
+    skinBackRect(max(g_clip_x0,x),max(g_clip_y0,y),min(g_clip_x1,x+w),min(g_clip_y1,y+h));
+    skinSlot(skin::S_PANEL,x,y,w,h); }
+  else gfx_fillRect(x,y,w,h,COL_PANEL);
+  g_clip_x0=s0; g_clip_y0=s1; g_clip_x1=s2; g_clip_y1=s3;
+}
+static void skinPanel(int x,int y,int w,int h){ skinPanelClip(x,y,w,h,x,y,w,h); }
+// A key face blended over what the caller cleared. false = no usable KEY_UP: the caller draws the classic key.
+// KEY_DOWN is used for pressed when the skin has it (no screen redraws a key pressed yet).
+static bool skinKey(int x,int y,int w,int h,bool pressed){
+  const int id=(pressed&&skinSlotOk(skin::S_KEY_DOWN))?skin::S_KEY_DOWN:skin::S_KEY_UP;
+  if(!skinSlotOk(id))return false;
+  skinSlot(id,x,y,w,h); return true;
+}
+// The selected list row; without a usable ROW_SEL the classic selected row.
+static void skinRow(int x,int y,int w,int h){
+  if(skinSlotOk(skin::S_ROW_SEL))skinSlot(skin::S_ROW_SEL,x,y,w,h);
+  else { gfx_fillRoundRect(x,y,w,h,4,COL_SEL); gfx_drawRoundRect(x,y,w,h,4,COL_AMBER); }
+}
 // One call for a coloured key that turns into a NEO key: returns the text background to print the label with.
 static uint16_t keyFill(int x,int y,int w,int h,int r,uint16_t bc,uint16_t neoEdge){
+  if(g_skin_on&&skinKey(x,y,w,h,false)){ if(neoEdge!=COL_SEP)neoRing(x,y,w,h,r,neoEdge); return COL_BG; }
   if(g_neo){ neoKey(x,y,w,h,r,neoEdge); return COL_BG; }
   gfx_fillRoundRect(x,y,w,h,r,bc); return bc;
 }
@@ -3963,8 +4041,8 @@ static void drawCoverPanel(){
   g_manual_bw=0;   // v4.9.2: cleared each draw; set below only if this game has a .rtfm
   g_nfo_bw=0;      // lab15j: same for the .nfo text tap area (set only when a description is drawn)
   if(!COVER_ON)return;
-  NeoScope _ns; const uint16_t PB=g_neo?COL_BG:COL_PANEL;   // A600-neo2: see-through panel, labels without a box
-  if(g_neo)neoPanel(COVER_X,COVER_Y,COVER_W,COVER_H,0); else gfx_fillRect(COVER_X,COVER_Y,COVER_W,COVER_H,COL_PANEL);if(g_games.empty())return;
+  NeoScope _ns; const uint16_t PB=(g_neo||skinSlotOk(skin::S_PANEL))?COL_BG:COL_PANEL;   // A600-neo2: see-through panel, labels without a box
+  if(g_skin_on)skinPanel(COVER_X,COVER_Y,COVER_W,COVER_H); else if(g_neo)neoPanel(COVER_X,COVER_Y,COVER_W,COVER_H,0); else gfx_fillRect(COVER_X,COVER_Y,COVER_W,COVER_H,COL_PANEL);if(g_games.empty())return;
   auto&game=g_games[g_sel];
   if(!game.jpg_path.length()){String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg))game.jpg_path=jpg;else game.jpg_path="?";}
   static int lastNfoSel=-1;static String cachedNfoBlurb="";static bool cachedHasSav=false;static bool cachedHD=false;static String cachedManual="";
@@ -3998,7 +4076,7 @@ static void drawCoverPanel(){
          int px,py,pw,ph; tilePicRect(_t,CAR_TILE,px,py,pw,ph);
          int bw=COVER_ART_W-4,bh=COVER_ART_H-4,dw=bw,dh=(ph*bw)/pw; if(dh>bh){dh=bh;dw=(pw*bh)/ph;} if(dw<1)dw=1; if(dh<1)dh=1;
          aw=dw+4;ah=dh+4;ax=COVER_ART_X+(COVER_ART_W-aw)/2;ay=COVER_ART_Y+(COVER_ART_H-ah)/2;
-         if(g_neo)neoPanel(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,0); else gfx_fillRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,COL_PANEL);
+         if(g_skin_on)skinPanelClip(COVER_X,COVER_Y,COVER_W,COVER_H,COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2); else if(g_neo)neoPanel(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,0); else gfx_fillRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,COL_PANEL);
          gfx_fillRoundRect(ax,ay,aw,ah,5,COL_BAR); gfx_drawRoundRect(ax-1,ay-1,aw+2,ah+2,6,COL_ACCENT);
          g_cb_sx0=px;g_cb_sy0=py;g_cb_sw=pw;g_cb_sh=ph;
          carBlit(_t,CAR_TILE,ax+aw/2,ay+ah/2,dw,dh,0);
@@ -4238,6 +4316,7 @@ static void drawFileList(){
     if(neoRows){ fillBack(LIST_X+2,y,LIST_W-4,2); fillBack(LIST_X+2,y+LIST_ITEM_H-2,LIST_W-4,2); }   // the gaps between rows
     if(g_neo){ neoPanel(LIST_X+2,y+2,LIST_W-4,LIST_ITEM_H-4,6,neoRows);   // A600-neo2: see-through rows with a gap, selected = amber edge
       if(sel){ neoRing(LIST_X+2,y+2,LIST_W-4,LIST_ITEM_H-4,6,COL_AMBER); neoRing(LIST_X+3,y+3,LIST_W-6,LIST_ITEM_H-6,5,COL_AMBER); } }
+    else if(sel&&g_skin_on)skinRow(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2);
     else if(sel){gfx_fillRoundRect(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,4,COL_SEL);gfx_drawRoundRect(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,4,COL_AMBER);}
     else gfx_fillRoundRect(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,3,COL_PANEL);
     uint16_t acCol=ld?COL_GREEN:(sel?COL_AMBER:COL_ACCENT);if(!g_neo||ld)gfx_fillRect(LIST_X+(g_neo?5:3),y+(g_neo?8:3),3,LIST_ITEM_H-(g_neo?16:4),acCol);   // NEO: only the loaded game keeps its green bar
@@ -4248,7 +4327,7 @@ static void drawFileList(){
     gfx_setTextSize(g_name_sz);gfx_setTextColor(sel||ld?TFT_BLACK:COL_CIRC_TEXT,sel?COL_AMBER:COL_CIRC);
     char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setCursor(cx-(5*g_name_sz)/2,cy-(7*g_name_sz)/2);gfx_print(ib);   // A600-neo2c: centre the visible 5x7 glyph, not its 6x8 cell
     }
-    int nx=cx+r+6;gfx_setTextSize(g_name_sz);gfx_setTextColor(sel?TFT_WHITE:COL_LIT,g_neo?COL_BG:(sel?COL_SEL:COL_PANEL));
+    int nx=cx+r+6;gfx_setTextSize(g_name_sz);gfx_setTextColor(sel?TFT_WHITE:COL_LIT,(g_neo||(sel&&skinSlotOk(skin::S_ROW_SEL)))?COL_BG:(sel?COL_SEL:COL_PANEL));
     int maxNW=LIST_W-(nx-LIST_X)-8-(game.disk_count>1?36:0);
     if(sel&&gfx_textWidth(game.name)>maxNW){
       // marquee: bounce the full selected name within its lane (offset 0..max), clipped horizontally
@@ -4286,7 +4365,7 @@ static void drawAZBar(){
   int letTop=AZ_TOP+AZ_SRCH_H;                      // v4.8.2: reserve a cell for the search magnifier
   int barH=togY-letTop;
   NeoScope _ns;   // A600-neo2
-  if(g_neo)neoPanel(AZ_X,AZ_TOP,AZ_W,AZ_H,0); else gfx_fillRect(AZ_X,AZ_TOP,AZ_W,AZ_H,COL_PANEL);
+  if(g_skin_on)skinPanel(AZ_X,AZ_TOP,AZ_W,AZ_H); else if(g_neo)neoPanel(AZ_X,AZ_TOP,AZ_W,AZ_H,0); else gfx_fillRect(AZ_X,AZ_TOP,AZ_W,AZ_H,COL_PANEL);
   drawMagnifier(AZ_X+AZ_W/2,AZ_TOP+AZ_SRCH_H/2,COL_AMBER);
   gfx_hline(AZ_X,AZ_TOP+AZ_SRCH_H-1,AZ_W,COL_SEP);
   char p0[27],p1[27];int n0=azHalf(0,p0),n1=azHalf(1,p1);
@@ -4297,7 +4376,7 @@ static void drawAZBar(){
   gfx_setTextSize(lsz);
   for(int i=0;i<hn;i++){char letter=half[i];int ly=letTop+i*letterH;if(ly+letterH>togY)break;
     if(letter==g_active_letter){gfx_fillRect(AZ_X,ly,AZ_W,letterH,COL_AMBER);gfx_setTextColor(TFT_BLACK,COL_AMBER);}
-    else gfx_setTextColor(COL_DIM,g_neo?COL_BG:COL_PANEL);
+    else gfx_setTextColor(COL_DIM,(g_neo||skinSlotOk(skin::S_PANEL))?COL_BG:COL_PANEL);
     gfx_setCursor(AZ_X+(AZ_W-6*lsz)/2,ly+(letterH-8*lsz)/2);char lb[2]={letter,0};gfx_print(lb);}
   // Toggle button — taller, fills the strip bottom
   { uint16_t tb=keyFill(AZ_X+1,togY+1,AZ_W-2,azBottom-togY-2,5,COL_ACCENT,COL_SEP);
