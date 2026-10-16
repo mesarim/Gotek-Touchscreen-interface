@@ -42,6 +42,10 @@ Add to each OTA-able build entry (device keys `supermini`, `zero`, `xiao` stay a
 - `guard: true` = the image carries the `GTIKIND:<board>;` marker, so a 1.6.14+ dongle accepts it. Entries
   without `app` or without `guard` are shown as "needs USB" (below 1.6.14 there is no OTA path: a pre-guard
   image has no marker and is refused at the end of the upload).
+- `tools/webby_versions_entry.py <app.bin> [--app-path ...] [--versions docs/firmware/versions.json --v <entry v> --add]`
+  checks the image like the dongle does and writes `size`, `sha256`, `board_id`, `guard` (and `app`) into an
+  entry that already exists; the file round-trips byte-identical. Keep `full` on Webby entries: `docs/index.html`
+  flashes `full` first and only shows `app` as an extra "update bin" download.
 - The screen takes the newest entry with `ch == "stable"` (or any, if the user picks beta), matching `board_id`,
   `guard`, `app`. "Update available" = that entry's `v` differs from the dongle's `fw`.
 
