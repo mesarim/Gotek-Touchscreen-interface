@@ -31,6 +31,10 @@
 #undef MOTOSHORT
 #undef MOTOLONG
 #include <PNGdec.h>      // cover art may be PNG as well as JPEG (v4.8.4) — needs the "PNGdec" library (Larry Bank) installed
+// gti-skins: the .gts skin container and the atlas slot table (shared with the host tests, no Arduino includes).
+#include "../shared/skin_gts.h"
+#include "../shared/skin_draw.h"
+#include <new>
 #include <Wire.h>
 #include <vector>
 #include <deque>      // 5.9.41-lab14b: g_games (no single multi-MB block needed)
@@ -2493,6 +2497,155 @@ static bool loadCustomTheme(const String&name){   // fills g_custom; false = mis
   String n=name; n.toUpperCase(); String j; Theme t=g_custom;
   if(!readThemeFile(n,j)||!themeFromStyle(j,t)){ gLog("[theme] custom theme %s: missing or unreadable - NAVY instead\n",n.c_str()); return false; }
   g_custom=t; g_custom_name=n; return true;
+}
+
+// ── gti-skins: a skin (/GTI/THEMES/<NAME>.gts, spec 2026-10-16-gti-skins-design.md) loaded into PSRAM ──
+// skinLoad reads the file whole, checks it, takes its colours into g_custom and decodes the atlas (RGB565 in
+// host order + an 8-bit alpha plane) and, if the skin has one, the JPEG background for this screen's size and
+// orientation (RGB565 host order). An atlas failure leaves the current look alone, logs one [skin] line and
+// says why in err; a background failure only drops the background. Nothing draws with it yet.
+static bool g_skin_on=false;
+static skin::Atlas g_skin;
+static uint16_t* g_skin_bg=nullptr;
+static bool g_skin_bg_tile=false;
+static uint16_t g_skin_bg_w=0,g_skin_bg_h=0;
+static String g_skin_name="";
+static String skinPath(const String&n){ return String("/GTI/THEMES/")+n+".gts"; }
+// IHDR straight from the bytes (gts::parse already checked the PNG signature): size, bit depth, colour type, interlace.
+static bool skinPngHead(const uint8_t*p,uint32_t n,int&w,int&h,int&bits,int&type,int&lace){
+  if(n<33||memcmp(p+12,"IHDR",4)!=0)return false;
+  w=(int)(((uint32_t)p[16]<<24)|((uint32_t)p[17]<<16)|((uint32_t)p[18]<<8)|p[19]);
+  h=(int)(((uint32_t)p[20]<<24)|((uint32_t)p[21]<<16)|((uint32_t)p[22]<<8)|p[23]);
+  bits=p[24]; type=p[25]; lace=p[28]; return w>0&&h>0;
+}
+// PNGdec keeps two rows in one fixed buffer (PNG_MAX_BUFFERED_PIXELS bytes): row one at index 15, row two at the
+// next index that is 15 mod 16. open() only checks one row, so a wider picture overruns into the input buffer
+// and stops after two rows. The 256 px RGBA atlas row (1024 bytes) fits; backgrounds are JPEG for this reason.
+static bool skinRowFits(int w,int bits,int type){
+  int ch=(type==2)?3:(type==4)?2:(type==6)?4:1;
+  long pitch=((long)w*ch*bits+7)/8;
+  long second=pitch+16; second+=15-(second&15);
+  return second+pitch+1<=(long)PNG_MAX_BUFFERED_PIXELS;
+}
+struct SkinDec { PNG* png; uint16_t* rgb; uint8_t* a; int w,h,rows; };
+static int skinAtlasLine(PNGDRAW*d){   // 8-bit RGBA row -> RGB565 + alpha
+  SkinDec*k=(SkinDec*)d->pUser;
+  if(d->y<0||d->y>=k->h||d->iWidth!=k->w||d->iPixelType!=PNG_PIXEL_TRUECOLOR_ALPHA||d->iBpp!=8)return 0;
+  const uint8_t*s=d->pPixels; uint16_t*o=k->rgb+(size_t)d->y*k->w; uint8_t*a=k->a+(size_t)d->y*k->w;
+  for(int x=0;x<k->w;x++,s+=4){ o[x]=(uint16_t)(((s[0]&0xF8)<<8)|((s[1]&0xFC)<<3)|(s[2]>>3)); a[x]=s[3]; }
+  k->rows++; return 1;
+}
+// kp is a SkinDec* (void* because the Arduino auto-prototypes land above the struct).
+static bool skinDecodeAtlas(void*kp,const gts::Chunk&c){
+  SkinDec&k=*(SkinDec*)kp;
+  if(k.png->openRAM((uint8_t*)c.p,(int)c.n,skinAtlasLine)!=PNG_SUCCESS)return false;
+  bool ok=k.png->getWidth()==k.w&&k.png->getHeight()==k.h;
+  k.rows=0;
+  if(ok)ok=k.png->decode(&k,0)==PNG_SUCCESS&&k.rows==k.h;
+  k.png->close(); return ok;
+}
+// The size a background id promises (gts::BgId); false for BG_TILE / unknown.
+static bool skinBgSize(uint8_t id,int&w,int&h){
+  switch(id){ case gts::BG_480x320: w=480;h=320; return true; case gts::BG_320x480: w=320;h=480; return true;
+    case gts::BG_480x272: w=480;h=272; return true; case gts::BG_272x480: w=272;h=480; return true; }
+  return false;
+}
+struct SkinJpg { uint16_t* rgb; int w,h; };
+static int skinBgBlock(JPEGDRAW*d){    // one MCU block, RGB565 host order, clipped to the picture
+  SkinJpg*k=(SkinJpg*)d->pUser; if(!k||!k->rgb)return 0;
+  int cw=d->iWidth; if(d->x<0||d->x>=k->w)return 1; if(d->x+cw>k->w)cw=k->w-d->x;
+  for(int yy=0;yy<d->iHeight;yy++){ int row=d->y+yy; if(row<0||row>=k->h)continue;
+    memcpy(&k->rgb[(size_t)row*k->w+d->x],&d->pPixels[(size_t)yy*d->iWidth],(size_t)cw*2); }
+  return 1;
+}
+// Decodes background chunk c (must be exactly ew x eh) into a fresh PSRAM buffer. nullptr + why on failure.
+static uint16_t* skinDecodeBg(const gts::Chunk&c,int ew,int eh,String&why){
+  void*jm=ps_malloc(sizeof(JPEGDEC)); if(!jm){ why="not enough memory"; return nullptr; }
+  JPEGDEC*jd=new(jm) JPEGDEC;   // own decoder: the cover decode keeps the shared jpegdec
+  uint16_t*out=nullptr;
+  if(!jd->openRAM((uint8_t*)c.p,(int)c.n,skinBgBlock)){ why="background is not a baseline JPEG"; }
+  else {
+    int jw=jd->getWidth(),jh=jd->getHeight();
+    if(jw!=ew||jh!=eh){ why=String("background is ")+jw+"x"+jh+", expected "+ew+"x"+eh; jd->close(); }
+    else if(!(out=(uint16_t*)ps_malloc((size_t)ew*eh*2))){ why="not enough memory"; jd->close(); }
+    else {
+      memset(out,0,(size_t)ew*eh*2);
+      SkinJpg k={out,ew,eh}; jd->setUserPointer(&k);
+      int rc=jd->decode(0,0,0); jd->close();
+      if(!rc){ why="background JPEG is damaged"; free(out); out=nullptr; }
+    }
+  }
+  jd->~JPEGDEC(); free(jm); return out;
+}
+static void skinUnload(){
+  g_skin_on=false;
+  free(g_skin.rgb); free(g_skin.a); g_skin=skin::Atlas();
+  free(g_skin_bg); g_skin_bg=nullptr; g_skin_bg_tile=false; g_skin_bg_w=g_skin_bg_h=0; g_skin_name="";
+}
+// The atlas checks are fatal; the background is optional: one that fails is dropped (one [skin] line) and
+// g_skin_bg_tile says "no picture for this screen: tile the atlas TILE slot, or the colours if it is empty".
+static bool skinLoad(const String&name,String&err){
+  String n=name; n.toUpperCase();
+  uint8_t*buf=nullptr; PNG*png=nullptr; uint16_t*rgb=nullptr; uint8_t*alpha=nullptr;
+  auto fail=[&](String m)->bool{
+    if(png){ png->~PNG(); free(png); }
+    free(buf); free(rgb); free(alpha);
+    err=m; gLog("[skin] %s: %s - look unchanged\n",n.c_str(),err.c_str()); return false;
+  };
+  if(!themeNameOk(n))return fail("name: A-Z, 0-9 and _ only, max 16, not starting with a digit");
+  if(themeReserved(n))return fail("that name belongs to a built-in theme");
+  const uint32_t psBefore=ESP.getFreePsram();
+  File f=SD_MMC.open(skinPath(n).c_str(),FILE_READ);
+  if(!f)return fail("no such skin on the SD card");
+  size_t sz=f.size();
+  if(sz==0){ f.close(); return fail("the skin file is empty"); }
+  if(sz>gts::MAX_FILE){ f.close(); return fail(String("file is ")+(unsigned)sz+" bytes, the limit is "+(unsigned)gts::MAX_FILE); }
+  buf=(uint8_t*)ps_malloc(sz);
+  if(!buf){ f.close(); return fail("not enough memory"); }
+  size_t got=f.read(buf,sz); f.close();
+  if(got!=sz)return fail("could not read the SD card");
+  gts::View v; gts::Err e=gts::parse(buf,sz,v);
+  if(e!=gts::OK)return fail(gts::errText(e));
+  if(v.slotVer!=skin::SLOT_VER)return fail(String("slot version ")+v.slotVer+", this firmware takes "+skin::SLOT_VER);
+  String j; j.reserve(v.manifest.n); for(uint32_t i=0;i<v.manifest.n;i++)j+=(char)v.manifest.p[i];
+  Theme t=g_custom;
+  if(!themeFromStyle(j,t))return fail("no #RRGGBB colours in the manifest");
+  int aw,ah,ab,at,al;
+  if(!skinPngHead(v.atlas.p,v.atlas.n,aw,ah,ab,at,al))return fail("atlas PNG header unreadable");
+  if(aw!=skin::ATLAS_W||ah!=skin::ATLAS_H)return fail(String("atlas is ")+aw+"x"+ah+", expected "+skin::ATLAS_W+"x"+skin::ATLAS_H);
+  if(at!=PNG_PIXEL_TRUECOLOR_ALPHA||ab!=8)return fail("atlas is not 8-bit RGBA");
+  if(al)return fail("atlas is interlaced, save it without interlacing");
+  if(!skinRowFits(aw,ab,at))return fail("atlas rows too wide for the PNG decoder");
+  // Memory guard: what stays allocated after the load must leave the runtime reserve free (same floor the
+  // library build keeps, LIB_RUNTIME_RESERVE). The file buffer is freed again; a loaded skin's buffers go.
+  const size_t atlasBytes=(size_t)aw*ah*3;
+  const size_t oldBytes=(g_skin.rgb?(size_t)g_skin.w*g_skin.h*3:0)+(g_skin_bg?(size_t)g_skin_bg_w*g_skin_bg_h*2:0);
+  const size_t freeAfter=(size_t)ESP.getFreePsram()+sz+oldBytes;
+  if(freeAfter<atlasBytes+(size_t)LIB_RUNTIME_RESERVE)return fail("not enough memory");
+  void*pm=ps_malloc(sizeof(PNG)); if(pm)png=new(pm) PNG;   // own decoder: the cover decode keeps the shared pngdec
+  rgb=(uint16_t*)ps_malloc((size_t)aw*ah*2); alpha=(uint8_t*)ps_malloc((size_t)aw*ah);
+  if(!png||!rgb||!alpha)return fail("not enough memory");
+  SkinDec k={png,rgb,alpha,aw,ah,0};
+  if(!skinDecodeAtlas(&k,v.atlas))return fail("atlas PNG is damaged");
+  png->~PNG(); free(png); png=nullptr;
+  // The background for this screen's size and orientation, if the skin has one. Not fatal.
+  uint16_t*bgbuf=nullptr; int bw=0,bh=0; const uint8_t want=gts::bgIdFor(gW,gH);
+  for(int i=0;i<v.nBg;i++){
+    if(!want||v.bgId[i]!=want||!skinBgSize(want,bw,bh))continue;
+    String why;
+    if(freeAfter<atlasBytes+(size_t)bw*bh*2+(size_t)LIB_RUNTIME_RESERVE)why="not enough memory";
+    else bgbuf=skinDecodeBg(v.bg[i],bw,bh,why);
+    if(!bgbuf){ gLog("[skin] %s: background dropped (%s) - tile or colours instead\n",n.c_str(),why.c_str()); bw=bh=0; }
+    break;
+  }
+  free(buf); buf=nullptr;
+  skinUnload();
+  g_skin.w=(uint16_t)aw; g_skin.h=(uint16_t)ah; g_skin.rgb=rgb; g_skin.a=alpha;
+  g_skin_bg=bgbuf; g_skin_bg_w=(uint16_t)bw; g_skin_bg_h=(uint16_t)bh; g_skin_bg_tile=(bgbuf==nullptr);
+  g_custom=t; g_custom_name=n; g_skin_name=n; g_skin_on=true;
+  gLog("[skin] %s loaded: atlas %dx%d, background %s %dx%d, NEO %s\n",n.c_str(),aw,ah,bgbuf?"picture":"tile",bw,bh,g_neo_on?"on":"off");
+  gLog("[skin] psram %u -> %u\n",(unsigned)psBefore,(unsigned)ESP.getFreePsram());
+  return true;
 }
 static int listCustomThemes(String*out,int maxN){   // names in /GTI/THEMES/*.json, sorted, max maxN
   int n=0; File d=SD_MMC.open("/GTI/THEMES"); if(!d||!d.isDirectory())return 0;
