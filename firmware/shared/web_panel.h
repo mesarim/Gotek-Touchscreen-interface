@@ -20,7 +20,9 @@
 
 // Bumped on every change to this file or the embedded page, appended to the
 // reported firmware string so a device tells you WHICH web build it runs.
-#define GTI_WEB_REV "r17"
+#ifndef GTI_WEB_REV
+#define GTI_WEB_REV "r18"   // the sketch may define this first (JC3248 does, so it shows on-screen too); r18 = release-a600-lab2 merge
+#endif
 
 #include <Update.h>
 #include <ESPmDNS.h>
@@ -60,56 +62,11 @@ static String wpArg(const char *k) { return webPanelHttp.hasArg(k) ? webPanelHtt
 
 // ── Page + JSON handlers ──────────────────────────────────────────────────
 
-// A600-neo1: one NEO look for the panel's own pages (landing, /files); same colours as the NEO preset in webui.html.
-// NEO colours are not final (Mez): retune them here only.
-#define WP_NEO_CSS ":root{--bg:#081021;--card:rgba(16,24,49,.82);--line:#42598C;--txt:#EFF3FF;--dim:#94A2BD;--accent:#F7B231;--ok:#52D27B;--ins:#7BD2F7;--btn:#3A4963;--btnh:#4a5a7a;--row:rgba(66,89,140,.35)}" \
-  "body{background:repeating-linear-gradient(90deg,rgba(90,120,200,.10) 0 1px,transparent 1px 46px),repeating-linear-gradient(0deg,rgba(90,120,200,.08) 0 1px,transparent 1px 38px),linear-gradient(160deg,#0A1026 0%,#181a45 55%,#241640 100%) fixed;color:var(--txt)}"
-static const char LANDING_PAGE[] = R"LAND(<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>GOTEK OMEGA</title>
-<style>
-)LAND" WP_NEO_CSS R"LAND(
-*{box-sizing:border-box}
-body{margin:0;font:15px system-ui,-apple-system,sans-serif}
-header{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:12px}
-h1{margin:0;font-size:20px;letter-spacing:.06em;color:var(--accent)}
-header .fw{color:var(--dim);font-size:12px}
-main{max-width:820px;margin:0 auto;padding:20px}
-a.files{display:flex;align-items:center;justify-content:center;gap:10px;background:var(--accent);color:#080C19;text-decoration:none;font-size:20px;font-weight:700;padding:22px;border-radius:14px;margin-bottom:22px;box-shadow:none}
-a.files:hover{filter:brightness(1.1)}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
-.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
-.tile .k{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
-.tile .v{font-size:18px;font-weight:600;margin-top:4px;word-break:break-word}
-.foot{margin-top:20px;text-align:center}
-.foot a{color:var(--dim);font-size:13px;text-decoration:none}.foot a:hover{color:var(--txt)}
-.ok{color:var(--ok)}
-</style></head><body>
-<header><h1>GOTEK&nbsp;OMEGA</h1><span class=fw id=fw></span></header>
-<main>
-<a class=files href="/files">&#128193;&nbsp; FILE ACCESS &mdash; browse the SD card</a>
-<div class=grid id=grid></div>
-<div class=foot><a href="/panel">Full control panel &rarr;</a></div>
-</main>
-<script>
-function tile(k,v,cls){return '<div class=tile><div class=k>'+k+'</div><div class="v '+(cls||'')+'">'+v+'</div></div>'}
-Promise.all([
-  fetch('/api/system/info').then(function(r){return r.json()}).catch(function(){return {}}),
-  fetch('/api/disk/status').then(function(r){return r.json()}).catch(function(){return {}})
-]).then(function(a){
-  var s=a[0]||{}, d=a[1]||{};
-  document.getElementById('fw').textContent=s.firmware||'';
-  var g='';
-  g+=tile('Loaded disk', (d.loaded ? (d.name||'yes') : 'none'));
-  g+=tile('Mode', s.mode||'-');
-  g+=tile('WiFi', s.internet_ssid||'-');
-  g+=tile('IP', s.wifi_ip||s.internet_ip||'-');
-  g+=tile('Free heap', s.heap_free ? Math.round(s.heap_free/1024)+' KB' : '-');
-  g+=tile('Free PSRAM', s.psram_free ? Math.round(s.psram_free/1024)+' KB' : '-');
-  g+=tile('Internet', s.internet ? 'online' : 'offline', s.internet?'ok':'');
-  document.getElementById('grid').innerHTML=g;
-});
-</script>
-</body></html>)LAND";
-static void hRoot() { webPanelHttp.send_P(200, "text/html", LANDING_PAGE); }
+// size-trim: the landing page (/) and the SD file page (/files) live in panel_landing.html and
+// panel_files.html (NEO look since A600-neo1; NEO colours are not final - retune them there);
+// make_webui_header.py stores them gzipped in panel_pages.h (as webui.h).
+#include "panel_pages.h"
+static void hRoot() { webPanelHttp.sendHeader("Content-Encoding", "gzip"); webPanelHttp.send_P(200, "text/html", (PGM_P)panel_landing_gz, panel_landing_gz_len); }
 static void hPanel() {
   webPanelHttp.sendHeader("Cache-Control", "no-cache");
   webPanelHttp.sendHeader("Content-Encoding", "gzip");
@@ -156,6 +113,9 @@ static void hConfigGet() {
   j += "\"WIFI_CLIENT_SSID\":\"" + wpJsonEscape(g_home_ssid) + "\",";
   j += "\"WIFI_CLIENT_PASS\":\"\",";                                       // 5.9.39 (#24): never echo secrets to the LAN; the form shows blank = unchanged
   j += "\"HAS_WIFI_PASS\":\"" + String(g_home_pass.length() ? "1" : "0") + "\",";
+#if defined(GTI_WEB_FLEET)
+  j += "\"MDNS_NAME\":\"" + wpJsonEscape(pfMdnsName()) + "\",";   // pf4: the name in use, GTi-XXXX when none was set
+#endif
   j += "\"DAV_ENABLED\":\"" + String(g_dav_on ? "1" : "0") + "\",";
   j += "\"DAV_HOST\":\"" + wpJsonEscape(g_dav_host) + "\",";
   j += "\"DAV_PORT\":\"" + String(g_dav_port) + "\",";
@@ -209,6 +169,18 @@ static void hConfigPost() {
   if (webPanelHttp.hasArg("DAV_ENABLED")) { g_dav_on = (webPanelHttp.arg("DAV_ENABLED") == "1"); saveConfigKey("DAV", g_dav_on ? "ON" : "OFF"); }
   if (webPanelHttp.hasArg("WIFI_CLIENT_SSID")) { const String v = webPanelHttp.arg("WIFI_CLIENT_SSID"); if (v.length()) { g_home_ssid = v; saveConfigKey("HOME_SSID", v); } }
   if (webPanelHttp.hasArg("WIFI_CLIENT_PASS")) { const String v = webPanelHttp.arg("WIFI_CLIENT_PASS"); if (v.length()) { g_home_pass = v; saveConfigKey("HOME_PASS", v); } }
+#if defined(GTI_WEB_FLEET)
+  // the rename goes through the dirty flag, never through a second MDNS.begin() - two
+  // owners of one responder is exactly what makes <name>.local stop resolving.
+  if (webPanelHttp.hasArg("MDNS_NAME")) {
+    const String v = webPanelHttp.arg("MDNS_NAME");
+    // pf4: the form always posts this field, prefilled with the name in use. Posting our own
+    // GTi-XXXX back unchanged is not a choice to name the screen, so it must not pin it (that
+    // would quietly take the screen out of the gotekomega.local election).
+    // pf4b: nor is the shared name a hostname to pin.
+    if (v.length() && (g_mdns_named || v != pfDefaultHost()) && !v.equalsIgnoreCase(PF_MDNS_ALIAS)) { g_mdns_name = v; g_mdns_named = true; saveConfigKey("MDNS_NAME", v); g_pfMdnsDirty = true; }
+  }
+#endif
   static const char *passThrough[] = {
     "CAROUSEL", "SCREENSAVER", "SSMODE", "SSTIME", "SSFAV", "LANG",
     "FONT", "ROTATE", "COMPACT", "BTNSTYLE", "TAPLOAD", "HOTSWAP",
@@ -264,6 +236,23 @@ static void hWifiStatus() {
   jj += ",\"sta_ip\":\"" + (sta ? WiFi.localIP().toString() : String("")) + "\"";
   jj += ",\"sta_ssid\":\"" + wpJsonEscape(g_home_ssid) + "\"}";
   webPanelHttp.send(200, "application/json", jj);
+}
+
+// P2: the page's Config tab scans via /api/wifi/scan and expects {networks:[{ssid,rssi,encrypted}]}.
+// Nobody served it, so the scan always showed "Scan failed". A blocking scan (~2 s) is fine here.
+static void hWifiScan() {
+  wifi_mode_t pm = WiFi.getMode();
+  if (!(pm & WIFI_MODE_STA)) WiFi.mode((wifi_mode_t)(pm | WIFI_MODE_STA));   // AP-only (GTi_Omega Wi-Fi): a scan needs STA
+  const int n = WiFi.scanNetworks(false, false, false, 200);
+  String jj = "{\"networks\":[";
+  for (int i = 0; i < n && i < 30; i++) {
+    if (i) jj += ",";
+    jj += "{\"ssid\":\"" + wpJsonEscape(WiFi.SSID(i)) + "\",\"rssi\":" + String(WiFi.RSSI(i));
+    jj += ",\"encrypted\":" + String(WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "false" : "true") + "}";
+  }
+  jj += "]}";
+  WiFi.scanDelete();
+  webPanelHttp.send(n < 0 ? 503 : 200, "application/json", n < 0 ? String("{\"error\":\"scan failed\",\"networks\":[]}") : jj);
 }
 
 // ── WebDAV (client) ────────────────────────────────────────────────────────
@@ -341,57 +330,181 @@ static void hDavLoad() {
   }
 }
 
+// ── Fleet (LAN dongle roster + fling) ──────────────────────────────────────
+// Thin queueing layer over panel_fleet.h: a handler never talks TCP itself, it parks the
+// request in a g_pf* slot and pfWorker() drains it from loop(). Keeps the web server
+// responsive while a fling is in flight, and keeps SD writes out of a request handler.
+#if defined(GTI_WEB_FLEET)
+static void hFleet() { webPanelHttp.send(200, "application/json", pfRosterJson()); }
+
+// #standalone: the roster is readable in any mode (it lists this screen and what it holds), but the
+// ACTIONS belong to the mode that drives dongles. In STANDALONE the disk goes to our own USB port,
+// so queueing a fling would contradict the MODE the user set. Say that instead of doing it.
+static bool wpFleetOff() {
+  if (g_wireless_mode && g_link_home) return false;
+  webPanelHttp.send(409, "application/json",
+    "{\"error\":\"this screen is not driving dongles - set MODE to Wireless + WiFi on the screen\"}");
+  return true;
+}
+
+static void hFleetSend() {
+  if (wpFleetOff()) return;
+  const String ip = wpArg("ip");
+  if (ip.length() == 0)                                            webPanelHttp.send(400, "application/json", "{\"error\":\"No ip\"}");
+  else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length())  webPanelHttp.send(409, "application/json", "{\"error\":\"Fleet busy\"}");
+  else {
+    long tcp = wpArg("tcp").toInt(); if (tcp < 1 || tcp > 65535) tcp = PF_TCP_PORT;
+    g_pfSendTcp = (uint16_t)tcp; g_pfSendIp = ip;
+    webPanelHttp.send(200, "application/json", "{\"status\":\"queued\"}");
+  }
+}
+
+static void hFleetCmd() {
+  if (wpFleetOff()) return;
+  const String ip  = wpArg("ip");
+  const long   cmd = wpArg("cmd").toInt();
+  // Only the commands pfSendCommand can actually read back. 0x01 GET_SAVE and 0x02 GET_STATUS
+  // answer with a header and then a stream; pfSendCommand reads ONE byte, so it would report
+  // "refused" on the 'S' of SV1/ST and hang up mid-transfer. Eject and force-eject ack a byte.
+  if (ip.length() == 0 || cmd < 3 || cmd > 4)                      webPanelHttp.send(400, "application/json", "{\"error\":\"Need ip and cmd (3=eject, 4=force)\"}");
+  else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length())  webPanelHttp.send(409, "application/json", "{\"error\":\"Fleet busy\"}");
+  else { g_pfCmd = (uint8_t)cmd; g_pfCmdIp = ip; webPanelHttp.send(200, "application/json", "{\"status\":\"queued\"}"); }
+}
+
+#if defined(GTI_FLEET)   // club-only: the roster, send and cmd stay in every build
+// #lock: the token only ever leaves this screen toward a dongle we can SEE with its BOOT
+// pairing window open - never toward a hand-typed address.
+static void hFleetEnroll() {
+  if (wpFleetOff()) return;
+  const String ip = wpArg("ip");
+  bool pairing = false;
+  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip && g_pfPeers[i].enr) { pairing = true; break; }
+  if (ip.length() == 0)        webPanelHttp.send(400, "application/json", "{\"error\":\"No ip\"}");
+  else if (!pairing)           webPanelHttp.send(403, "application/json", "{\"error\":\"Not pairing - tap BOOT on the dongle first\"}");
+  else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length() || g_pfEnrollIp.length())
+                               webPanelHttp.send(409, "application/json", "{\"error\":\"Fleet busy\"}");
+  else { g_pfEnrollIp = ip; webPanelHttp.send(200, "application/json", "{\"status\":\"queued\"}"); }
+}
+
+// #lock: releases THIS screen's claim only - the dongle refuses a token that is not one of
+// its owners, so this can never open somebody else's lock.
+static void hFleetUnenroll() {
+  if (wpFleetOff()) return;
+  const String ip = wpArg("ip");
+  if (ip.length() == 0)        webPanelHttp.send(400, "application/json", "{\"error\":\"No ip\"}");
+  else if (g_pfBusy || g_pfSendIp.length() || g_pfCmdIp.length() || g_pfUnenrollIp.length())
+                               webPanelHttp.send(409, "application/json", "{\"error\":\"Fleet busy\"}");
+  else { g_pfUnenrollIp = ip; webPanelHttp.send(200, "application/json", "{\"status\":\"queued\"}"); }
+}
+#endif
+#endif
 // ── Firmware OTA (streamed to the inactive slot) ───────────────────────────
 
 static bool   g_otaBad = false, g_otaFail = false;
 static size_t g_otaWrote = 0;
+// S9: writing flash while Wi-Fi is receiving drops the link on the S3 (this core keeps the Wi-Fi/lwIP
+// buffers in PSRAM, and a flash erase/write blocks PSRAM), so a 2 MB image broke off at ~1 MB. When the
+// sketch opts in (GTI_WEB_OTA_VIA_SD) and a card is present, the upload is streamed to the SD card only;
+// the SD bus is separate from flash, so Wi-Fi keeps running. Once it is complete, loop() installs it with
+// the sketch's own SD updater (verified image, inactive slot, then reboot). No card -> direct, as before.
+#if defined(GTI_WEB_OTA_VIA_SD)
+#define WEB_FW_PART "/GTi_web_update.part"
+#define WEB_FW_BIN  "/GTi_web_update.bin"
+static String g_webFwPending = "";   // set when a complete upload is on the card; loop() installs it
+static File   g_otaFile;
+#endif
+static bool   g_otaToSd = false;
 static void otaUpload() {
   HTTPUpload &up = webPanelHttp.upload();
   if (up.status == UPLOAD_FILE_START) {
-    g_otaBad = false; g_otaFail = false; g_otaWrote = 0;
+    g_otaBad = false; g_otaFail = false; g_otaWrote = 0; g_otaToSd = false;
+    if (Update.isRunning()) Update.abort();   // S6: a previous aborted upload must not block this one
+#if defined(GTI_WEB_OTA_VIA_SD)
+    if (SD_MMC.cardType() != CARD_NONE) {
+      SD_MMC.remove(WEB_FW_PART);
+      g_otaFile = SD_MMC.open(WEB_FW_PART, FILE_WRITE);
+      g_otaToSd = (bool)g_otaFile;
+    }
+    if (g_otaToSd) return;
+#endif
     if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) g_otaFail = true;
   } else if (up.status == UPLOAD_FILE_WRITE) {
     if (g_otaFail || g_otaBad) return;
-    if (g_otaWrote == 0 && up.currentSize > 0 && up.buf[0] != 0xE9) { g_otaBad = true; Update.abort(); return; }
+    if (g_otaWrote == 0 && up.currentSize > 0 && up.buf[0] != 0xE9) { g_otaBad = true; if (!g_otaToSd) Update.abort(); return; }
+#if defined(GTI_WEB_OTA_VIA_SD)
+    if (g_otaToSd) { if (g_otaFile.write(up.buf, up.currentSize) != up.currentSize) g_otaFail = true; g_otaWrote += up.currentSize; return; }
+#endif
     if (Update.write(up.buf, up.currentSize) != up.currentSize) g_otaFail = true;
     g_otaWrote += up.currentSize;
   } else if (up.status == UPLOAD_FILE_END) {
+#if defined(GTI_WEB_OTA_VIA_SD)
+    if (g_otaToSd) {
+      g_otaFile.close();
+      if (g_otaBad || g_otaFail || g_otaWrote == 0) { SD_MMC.remove(WEB_FW_PART); return; }
+      SD_MMC.remove(WEB_FW_BIN);
+      if (!SD_MMC.rename(WEB_FW_PART, WEB_FW_BIN)) { g_otaFail = true; SD_MMC.remove(WEB_FW_PART); }
+      return;
+    }
+#endif
     if (!g_otaBad && !g_otaFail) { if (!Update.end(true)) g_otaFail = true; }
+  } else if (up.status == UPLOAD_FILE_ABORTED) {   // S6: browser closed / connection lost - was unhandled, so Update stayed
+#if defined(GTI_WEB_OTA_VIA_SD)
+    if (g_otaToSd) { g_otaFile.close(); SD_MMC.remove(WEB_FW_PART); g_otaFail = true; return; }
+#endif
+    if (Update.isRunning()) Update.abort();        // running and every later begin() failed until a power cycle
+    g_otaFail = true;
   }
 }
 static void otaDone() {
   if (g_otaBad)                      { webPanelHttp.send(400, "application/json", "{\"error\":\"that is not an ESP32 firmware image\"}"); return; }
   if (g_otaFail || g_otaWrote == 0)  { webPanelHttp.send(500, "application/json", "{\"error\":\"firmware update failed\"}"); return; }
+#if defined(GTI_WEB_OTA_VIA_SD)
+  if (g_otaToSd) {   // S9: on the card now; the screen installs it (progress on screen) and reboots by itself
+    webPanelHttp.send(200, "application/json", "{\"status\":\"ok\",\"bytes\":" + String((uint32_t)g_otaWrote) + ",\"stage\":\"saved to the SD card - the screen is installing it and will restart\"}");
+    g_webFwPending = WEB_FW_BIN;
+    return;
+  }
+#endif
   webPanelHttp.send(200, "application/json", "{\"status\":\"ok\",\"bytes\":" + String((uint32_t)g_otaWrote) + "}");
   delay(300); ESP.restart();
 }
 
 // ── Game/image upload (streamed into the RAM disk, then mounted) ────────────
 
-static size_t g_guRecv = 0; static bool g_guOverflow = false; static String g_guName = "";
+static size_t g_guRecv = 0; static bool g_guOverflow = false, g_guAborted = false; static String g_guName = "";
+// S5: after a failed upload. Nothing written yet -> the previous disk is intact: put it back. Some bytes
+// already written over its data area -> it is no longer that disk: say "empty" and leave the drive off,
+// instead of re-attaching the old FAT over overwritten data.
+static void guFail() {
+  if (g_guRecv == 0) { if (g_loaded) hardAttach(); return; }
+  g_loaded = false; g_loaded_name = ""; g_loaded_display = ""; g_loaded_path = ""; g_img_bytes = 0; svDirtyReset();
+}
 static void guUpload() {
   HTTPUpload &up = webPanelHttp.upload();
   if (up.status == UPLOAD_FILE_START) {
-    hardDetach(); g_guRecv = 0; g_guOverflow = false; g_guName = up.filename;
+    hardDetach(); g_guRecv = 0; g_guOverflow = false; g_guAborted = false; g_guName = up.filename;
   } else if (up.status == UPLOAD_FILE_WRITE) {
     uint8_t *dst = g_disk + DATA_LBA * 512;
     if (g_guRecv + up.currentSize <= (size_t)MAX_FILE_BYTES) { memcpy(dst + g_guRecv, up.buf, up.currentSize); g_guRecv += up.currentSize; }
     else g_guOverflow = true;
+  } else if (up.status == UPLOAD_FILE_ABORTED) {   // S5: was unhandled
+    g_guAborted = true; guFail();
   }
 }
 static void guDone() {
-  if (g_guOverflow) { hardAttach(); webPanelHttp.send(400, "application/json", "{\"error\":\"Image is larger than this board's volume\"}"); return; }
-  if (g_guRecv == 0) { hardAttach(); webPanelHttp.send(400, "application/json", "{\"error\":\"Upload was empty\"}"); return; }
+  if (g_guAborted)  { webPanelHttp.send(400, "application/json", "{\"error\":\"Upload was interrupted\"}"); return; }
+  if (g_guOverflow) { guFail(); webPanelHttp.send(413, "application/json", "{\"error\":\"Image is larger than this board's volume\"}"); return; }
+  if (g_guRecv == 0) { guFail(); webPanelHttp.send(400, "application/json", "{\"error\":\"Upload was empty\"}"); return; }
   memset(g_disk, 0, DATA_LBA * 512);
   build_boot_sector(g_disk);
   build_fat(g_disk + RESERVED_SECTORS * 512, (uint32_t)g_guRecv);
   String outn = (g_mode == MODE_GEN) ? g_guName : String(getOutputFilename());
   build_root(g_disk + (RESERVED_SECTORS + SECTORS_PER_FAT) * 512, outn.c_str(), (uint32_t)g_guRecv);
-  g_sv_img_size = 0; svDirtyReset();
+  g_sv_img_size = 0; g_img_bytes = (uint32_t)g_guRecv; svDirtyReset();
   hardAttach();
   g_loaded = true;
   String bn = g_guName; const int d = bn.lastIndexOf('.'); if (d > 0) bn = bn.substring(0, d);
-  g_loaded_name = bn; g_loaded_path = ""; g_webDavLoaded = "";
+  g_loaded_name = bn; g_loaded_display = bn; g_loaded_path = ""; g_webDavLoaded = "";
   webLog("Web upload mounted: " + g_guName + " (" + String((uint32_t)g_guRecv) + " B)");
   webPanelHttp.send(200, "application/json", "{\"name\":\"" + wpJsonEscape(g_guName) + "\",\"bytes\":" + String((uint32_t)g_guRecv) + "}");
 }
@@ -500,128 +613,6 @@ static void hSdDelete() {
   else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not delete\"}");
 }
 
-static const char FILES_PAGE[] = R"FILESPAGE(<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>GTi - SD Files</title>
-<style>
-)FILESPAGE" WP_NEO_CSS R"FILESPAGE(
-body{margin:0;font:15px system-ui,-apple-system,sans-serif}
-header{padding:14px 16px;background:rgba(8,12,25,.85);border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:10px}
-h1{font-size:16px;margin:0;font-weight:600}
-main{padding:16px;max-width:820px;margin:0 auto}
-.crumb{color:var(--dim);font-size:13px;margin:0 0 10px;word-break:break-all}
-.bar{min-height:34px;margin-bottom:4px}
-table{width:100%;border-collapse:collapse}
-td,th{padding:9px 8px;border-bottom:1px solid var(--row);text-align:left}
-th{color:var(--dim);font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
-.sel{width:26px}
-.dir .nm{cursor:pointer;color:var(--accent)}
-.sz{color:var(--dim);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
-.act{text-align:right;white-space:nowrap}
-button,a.btn,label.btn{font:13px system-ui;background:var(--btn);color:var(--txt);border:0;border-radius:6px;padding:6px 10px;cursor:pointer;text-decoration:none;display:inline-block}
-button:hover,a.btn:hover,label.btn:hover{background:var(--btnh)}
-.del{background:#3a2530;color:#ff9db0}
-.up{margin:16px 0;padding:18px;background:var(--card);border:1px dashed var(--line);border-radius:8px}
-.up.drag{border-color:var(--accent);background:rgba(247,178,49,.10)}
-.uf{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.msg{margin:10px 0 0;font-size:13px;color:var(--ok);min-height:18px}
-.err{color:#ff9db0}
-.busy{opacity:.5;pointer-events:none}
-</style></head><body>
-<header><h1>GTi - SD Card</h1><span id=fw style="color:var(--dim);font-size:12px"></span></header>
-<main>
-<p class=crumb id=crumb>/</p>
-<div class=bar><button id=delSel class=del hidden>Delete selected</button></div>
-<table><thead><tr><th class=sel><input type=checkbox id=all title="select all"></th><th>Name</th><th class=sz>Size</th><th class=act></th></tr></thead><tbody id=rows></tbody></table>
-<div class=up id=drop>
-  <form id=uf class=uf>
-    <input type=file id=fi multiple>
-    <button type=submit>Upload files</button>
-    <label class=btn>Upload folder<input type=file id=fd webkitdirectory style="display:none"></label>
-  </form>
-  <div class=msg id=msg>Pick files, pick a folder, or drag files/folders onto this box.</div>
-</div>
-</main>
-<script>
-var cur="/";
-function esc(s){return s.replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
-function human(n){if(n<1024)return n+" B";if(n<1048576)return (n/1024).toFixed(1)+" KB";return (n/1048576).toFixed(2)+" MB"}
-function parent(p){if(p=="/")return null;var q=p.replace(/\/$/,"");var i=q.lastIndexOf("/");return i<=0?"/":q.substring(0,i)}
-function join(d,n){return (d=="/"?"":d)+"/"+n}
-function msg(t,e){var m=document.getElementById('msg');m.textContent=t;m.className='msg'+(e?' err':'')}
-function checks(){return [].slice.call(document.querySelectorAll('.rowchk:checked'))}
-function updateBar(){var n=checks().length;var b=document.getElementById('delSel');b.hidden=(n===0);b.textContent='Delete selected ('+n+')';}
-function load(p){
-  cur=p;document.getElementById('crumb').textContent=p;document.getElementById('all').checked=false;
-  fetch('/api/sd/list?path='+encodeURIComponent(p)).then(function(r){return r.json()}).then(function(d){
-    var rows=document.getElementById('rows');rows.innerHTML='';updateBar();
-    if(d.error){msg(d.error,1);return}
-    var pp=parent(p);
-    if(pp!==null){var tr=document.createElement('tr');tr.className='dir';tr.innerHTML='<td></td><td class=nm>&#8617; ..</td><td></td><td></td>';tr.querySelector('.nm').onclick=function(){load(pp)};rows.appendChild(tr)}
-    (d.entries||[]).sort(function(a,b){return (b.dir-a.dir)||a.name.localeCompare(b.name)}).forEach(function(e){
-      var tr=document.createElement('tr');var full=join(p,e.name);
-      var chk='<td class=sel><input type=checkbox class=rowchk></td>';
-      if(e.dir){tr.className='dir';tr.innerHTML=chk+'<td class=nm>&#128193; '+esc(e.name)+'</td><td></td><td class=act><button class=del>Delete</button></td>';tr.querySelector('.nm').onclick=function(){load(full)};}
-      else{tr.innerHTML=chk+'<td class=nm>&#128196; '+esc(e.name)+'</td><td class=sz>'+human(e.size)+'</td><td class=act><a class=btn href="/api/sd/get?path='+encodeURIComponent(full)+'">Download</a> <button class=del>Delete</button></td>';}
-      tr.querySelector('.del').onclick=function(){delOne(full)};
-      var cb=tr.querySelector('.rowchk');cb.dataset.full=full;cb.onchange=updateBar;
-      rows.appendChild(tr);
-    });
-  }).catch(function(){msg('Could not read that folder',1)});
-}
-document.getElementById('all').onchange=function(){var c=this.checked;[].forEach.call(document.querySelectorAll('.rowchk'),function(cb){cb.checked=c});updateBar();};
-function delPath(full){var b=new URLSearchParams();b.append('path',full);return fetch('/api/sd/delete',{method:'POST',body:b}).then(function(r){return r.json()});}
-function delOne(full){if(!confirm('Delete '+full+'?'))return;delPath(full).then(function(d){if(d.error){msg(d.error,1)}else{msg('Deleted '+full);load(cur)}});}
-document.getElementById('delSel').onclick=function(){
-  var list=checks().map(function(cb){return cb.dataset.full});
-  if(!list.length)return;if(!confirm('Delete '+list.length+' item(s)?'))return;
-  document.body.classList.add('busy');
-  (function next(i){
-    if(i>=list.length){document.body.classList.remove('busy');msg('Deleted '+list.length+' item(s)');load(cur);return;}
-    msg('Deleting '+(i+1)+'/'+list.length+' ...');
-    delPath(list[i]).then(function(){next(i+1)}).catch(function(){next(i+1)});
-  })(0);
-};
-function mkdirp(dir){var b=new URLSearchParams();b.append('path',dir);return fetch('/api/sd/mkdir',{method:'POST',body:b}).then(function(r){return r.json()});}
-function relOf(f){return f._rel||f.webkitRelativePath||f.name;}
-function uploadAll(files){
-  if(!files||!files.length){msg('Pick or drop files first',1);return;}
-  var arr=[].slice.call(files);document.body.classList.add('busy');var made={};
-  (function next(i){
-    if(i>=arr.length){document.body.classList.remove('busy');msg('Uploaded '+arr.length+' item(s)');document.getElementById('fi').value='';load(cur);return;}
-    var f=arr[i];var rel=relOf(f);var sl=rel.lastIndexOf('/');
-    var sub=(sl>=0)?rel.substring(0,sl):'';var name=(sl>=0)?rel.substring(sl+1):rel;
-    var dest=(cur+(sub?('/'+sub):'')).replace(/\/+/g,'/');
-    msg('Uploading '+(i+1)+'/'+arr.length+': '+rel+' ...');
-    var doUp=function(){
-      var fd=new FormData();fd.append('file',f,name);
-      fetch('/api/sd/upload?path='+encodeURIComponent(dest),{method:'POST',body:fd}).then(function(r){return r.json()}).then(function(d){
-        if(d.error){document.body.classList.remove('busy');msg('Stopped at '+rel+': '+d.error,1);load(cur);return;}
-        next(i+1);
-      }).catch(function(){document.body.classList.remove('busy');msg('Upload failed at '+rel,1);load(cur);});
-    };
-    if(sub && !made[dest]){made[dest]=1;mkdirp(dest).then(function(d){if(d&&d.error){document.body.classList.remove('busy');msg('Could not make folder '+dest+': '+d.error,1);load(cur);}else doUp();}).catch(doUp);}
-    else doUp();
-  })(0);
-}
-document.getElementById('uf').onsubmit=function(ev){ev.preventDefault();uploadAll(document.getElementById('fi').files);};
-document.getElementById('fd').onchange=function(){if(this.files&&this.files.length)uploadAll(this.files);};
-function traverseEntry(entry,path,out){return new Promise(function(res){
-  if(entry.isFile){entry.file(function(f){f._rel=path+f.name;out.push(f);res();},function(){res();});}
-  else if(entry.isDirectory){var rd=entry.createReader();var all=[];(function rb(){rd.readEntries(function(e){if(!e.length){Promise.all(all.map(function(x){return traverseEntry(x,path+entry.name+'/',out);})).then(res);}else{all=all.concat(e);rb();}},function(){res();});})();}
-  else res();});}
-function filesFromDrop(dt){
-  var items=dt.items;
-  if(!items||!items.length||!items[0].webkitGetAsEntry){return Promise.resolve([].slice.call(dt.files));}
-  var out=[],ps=[];
-  for(var i=0;i<items.length;i++){var en=items[i].webkitGetAsEntry&&items[i].webkitGetAsEntry();if(en)ps.push(traverseEntry(en,'',out));}
-  return Promise.all(ps).then(function(){return out;});
-}
-var drop=document.getElementById('drop');
-['dragover','dragenter'].forEach(function(ev){drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.add('drag');});});
-['dragleave','dragend'].forEach(function(ev){drop.addEventListener(ev,function(e){e.preventDefault();drop.classList.remove('drag');});});
-drop.addEventListener('drop',function(e){e.preventDefault();drop.classList.remove('drag');if(e.dataTransfer){msg('Reading dropped items...');filesFromDrop(e.dataTransfer).then(function(fs){uploadAll(fs);});}});
-fetch('/api/system/info').then(function(r){return r.json()}).then(function(d){document.getElementById('fw').textContent=d.firmware||''}).catch(function(){});
-load('/');
-</script></body></html>)FILESPAGE";
 
 static void hSdMkdir() {
   if (g_loaded) { webPanelHttp.send(409, "application/json", "{\"error\":\"Unload the mounted disk first\"}"); return; }
@@ -638,7 +629,7 @@ static void hSdMkdir() {
   else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not create folder\"}");
 }
 
-static void hFiles() { webPanelHttp.send_P(200, "text/html", FILES_PAGE); }
+static void hFiles() { webPanelHttp.sendHeader("Content-Encoding", "gzip"); webPanelHttp.send_P(200, "text/html", (PGM_P)panel_files_gz, panel_files_gz_len); }
 #endif  // GTI_WEB_SD_FILES
 
 #if defined(GTI_THEMES)
@@ -755,12 +746,27 @@ static void webPanelRegister() {
   webPanelHttp.on("/api/system/ota", HTTP_POST, otaDone, otaUpload);
   webPanelHttp.on("/api/games/upload", HTTP_POST, guDone, guUpload);
   webPanelHttp.on("/api/wifi/status",HTTP_GET,  hWifiStatus);
+  webPanelHttp.on("/api/wifi/scan",  HTTP_GET,  hWifiScan);    // P2
   webPanelHttp.on("/api/dav/status", HTTP_GET,  hDavStatus);
   webPanelHttp.on("/api/dav/connect",HTTP_POST, hDavConnect);
   webPanelHttp.on("/api/dav/list",   HTTP_GET,  hDavList);
   webPanelHttp.on("/api/dav/rowmeta",HTTP_GET,  hDavRowmeta);
   webPanelHttp.on("/api/dav/nfo",    HTTP_GET,  hDavNfo);
   webPanelHttp.on("/api/dav/load",   HTTP_POST, hDavLoad);
+#if defined(GTI_WEB_SCREENSHOT)
+  webPanelHttp.on("/api/screenshot", HTTP_GET, [](){   // BMP of the current screen, streamed from the framebuffer
+    webPanelHttp.setContentLength(shotBmpSize());
+    webPanelHttp.sendHeader("Content-Disposition", "inline; filename=gti-screen.bmp");
+    webPanelHttp.sendHeader("Cache-Control", "no-store");
+    webPanelHttp.send(200, "image/bmp", "");
+    shotWriteBmp([](const uint8_t*b,size_t n){ webPanelHttp.sendContent((const char*)b, n); });
+  });
+  webPanelHttp.on("/api/touchdbg", HTTP_GET, [](){   // shot2: the last finger press (why a screenshot hold did or did not fire)
+    char j[160]; snprintf(j, sizeof j, "{\"n\":%lu,\"x\":%d,\"y\":%d,\"ms\":%lu,\"drift\":%d,\"fired\":%s,\"zone\":%d}",
+      (unsigned long)g_tdbg.n, g_tdbg.x, g_tdbg.y, (unsigned long)g_tdbg.ms, g_tdbg.drift, g_tdbg.fired?"true":"false", SHOT_ZONE_H);
+    webPanelHttp.send(200, "application/json", j);
+  });
+#endif
 #if defined(GTI_THEMES)
   webPanelHttp.on("/api/themes/list",     HTTP_GET, hThemesList);
   webPanelHttp.on("/api/themes/geometry", HTTP_GET, hThemesGeometry);
@@ -768,6 +774,15 @@ static void webPanelRegister() {
 #endif
 #if defined(GTI_NEO_BENCH)
   webPanelHttp.on("/api/neobench", HTTP_GET, [](){ webPanelHttp.send(200, "application/json", neoBenchJson()); });   // A600-neo2e: NEO vs flat draw times
+#endif
+#if defined(GTI_WEB_FLEET)
+  webPanelHttp.on("/api/fleet",          HTTP_GET,  hFleet);
+  webPanelHttp.on("/api/fleet/send",     HTTP_POST, hFleetSend);
+  webPanelHttp.on("/api/fleet/cmd",      HTTP_POST, hFleetCmd);
+#if defined(GTI_FLEET)
+  webPanelHttp.on("/api/fleet/enroll",   HTTP_POST, hFleetEnroll);
+  webPanelHttp.on("/api/fleet/unenroll", HTTP_POST, hFleetUnenroll);
+#endif
 #endif
 #if defined(GTI_WEB_SD_FILES)
   webPanelHttp.on("/api/sd/list",    HTTP_GET,  hSdList);
@@ -811,6 +826,9 @@ static void webPanelBegin() {
 // 5.9.17: stop serving + free the listener so a live MODE switch re-inits cleanly.
 static void webPanelStop() {
   if (g_web_srv_started) { webPanelHttp.stop(); if (g_web_mdns) MDNS.end(); }
+#if defined(GTI_WEB_FLEET)
+  g_pfMdnsDirty = true;   // the responder is gone; the next bring-up re-registers the elected name
+#endif
   g_web_up = false; g_web_joining = false; g_web_srv_started = false; g_web_ap = false; g_web_mdns = false; g_webPendingUnload = false;
 }
 
@@ -823,23 +841,44 @@ __attribute__((unused)) static void webPanelBeginAP() {   // unused on boards wh
   webLog("[WEB] up on the GTi's own Wi-Fi at http://192.168.4.1/");
 }
 
+// Answer one web client. Safe to call from anywhere, including the blocking modal
+// screens, because it only serves HTTP and never loads a disk - see webPanelService().
+// Without this the web UI simply stops responding while the user sits in a settings
+// page, which is what every screen except the savers and the fleet console used to do.
+static void webPanelPoll() {
+  if (!g_web_up) return;
+  webPanelHttp.handleClient();
+  davClient.dropIdle();
+}
+
 static void webPanelService() {
   if (g_web_joining && !g_web_up) {
     if (WiFi.status() == WL_CONNECTED) {
       davApplyConfig();
       if (!g_web_srv_started) {                     // register + begin exactly once
+#if defined(GTI_WEB_FLEET)
+        if (MDNS.begin(pfMdnsName().c_str())) { MDNS.addService("http", "tcp", 80); g_web_mdns = true; }   // elected: <name> or <name>-<mac>
+#else
         if (MDNS.begin("GTi")) { MDNS.addService("http", "tcp", 80); g_web_mdns = true; }
+#endif
         webPanelRegister();
         webPanelHttp.begin();
         g_web_srv_started = true;
       }
       g_web_up = true; g_web_joining = false;
+#if defined(GTI_WEB_FLEET)
+      webLog("[WEB] up at http://" + WiFi.localIP().toString() + "/ (" + pfMdnsName() + ".local)");
+#else
       webLog("[WEB] up at http://" + WiFi.localIP().toString() + "/ (GTi.local)");
+#endif
     }
     return;
   }
   if (!g_web_up) return;
-  webPanelHttp.handleClient();
+  webPanelPoll();
+  // A queued WebDAV load or a queued eject attaches or detaches a disk on the USB port.
+  // That may only happen from loop(), never from inside a modal screen - which is why
+  // webPanelPoll() answers the client but leaves both of these alone.
   if (g_webPendingUnload) { g_webPendingUnload = false; doUnload(); g_webDavLoaded = ""; }   // lab15p
   if (g_webPendingDav.length() > 0) {
     const String remote = g_webPendingDav;
@@ -847,5 +886,4 @@ static void webPanelService() {
     g_webPendingDav = ""; g_webPendingName = "";
     if (doLoadWebdav(remote, name)) g_webDavLoaded = remote;
   }
-  davClient.dropIdle();
 }

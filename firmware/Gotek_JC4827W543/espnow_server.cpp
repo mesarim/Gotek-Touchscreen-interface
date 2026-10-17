@@ -200,6 +200,20 @@ static void onNewPeer(const esp_now_recv_info_t* info, const uint8_t* data, int 
 }
 
 // ---------- Load saved config ----------
+// size-trim: "aa:bb:cc:dd:ee:ff" -> 6 bytes; returns how many fields it read (stops at the first bad one,
+// like the sscanf("%hhx:...") it replaces, whose libc scanner cost 8.7 KB of flash).
+static int parseMac(const char* s, uint8_t m[6]) {
+  int n = 0;
+  while (n < 6) {
+    char* e; unsigned long v = strtoul(s, &e, 16);
+    if (e == s || v > 255) break;
+    m[n++] = (uint8_t)v;
+    if (*e != ':') break;
+    s = e + 1;
+  }
+  return n;
+}
+
 static void loadConfig() {
   File f = SD_MMC.open("/CONFIG.TXT", FILE_READ);
   if (!f) return;
@@ -208,9 +222,7 @@ static void loadConfig() {
     if (line.startsWith("#")) continue;
     if (line.startsWith("XIAO_MAC=")) {
       String mac = line.substring(9);
-      sscanf(mac.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-             &_xiao_mac[0],&_xiao_mac[1],&_xiao_mac[2],
-             &_xiao_mac[3],&_xiao_mac[4],&_xiao_mac[5]);
+      parseMac(mac.c_str(), _xiao_mac);   // size-trim: was sscanf("%hhx:..."), which pulled in 8.7 KB of libc
       bool isZero = true;
       for (int i=0;i<6;i++) if(_xiao_mac[i]) { isZero=false; break; }
       if (!isZero) g_espnow_paired = true;

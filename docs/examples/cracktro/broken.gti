@@ -1,0 +1,8 @@
+; DELIBERATELY BROKEN -- for testing the fallback rule.
+; The magic line is wrong, so the panel must reject this and show the
+; built-in cracktro instead. It must never show a blank screen.
+; Serial should print: [gti] /cracktro/broken.gti: missing GTICRACK magic
+NOPE 1
+[PATTERN]
+FX=COPPER
+TITLE=YOU SHOULD NEVER SEE THIS

@@ -24,6 +24,9 @@
 //    Owner-lock is NOT always-on here (Webby = home-LAN trust). The base's
 //     owner-lock code is still compiled and usable in ESPNOW mode, but a fresh
 //     Webby is unlocked; locking is meant to be enrolled from the GTi later.
+//     1.6.13: once the dongle HAS an owner the lock also covers the disk path in
+//     ESP-NOW mode (AP, TCP 3333, the page), and the dongle can get its own AP
+//     name/password - see lockActive(), applyApConfig() and the 0x0B-0x0E commands.
 //
 // *** UNTESTED  compiled/flashed by the owner. No external libraries needed. ***
 //
@@ -43,14 +46,16 @@
 #include <WiFiClient.h>
 #include <esp_mac.h>
 #include "esp_wifi.h"
+#include "esp_wifi_ap_get_sta_list.h"   // 1.6.13: station MAC <-> IP on our own AP (not pulled in by esp_wifi.h)
 #include "esp_heap_caps.h"   // HD test: internal-heap readout
 #include <LittleFS.h>
 #include <Update.h>   // OMEGAWARE: web OTA
 #include <WebServer.h>     // WEBBY: built-in (ESP32 core)  no external lib
 #include <ESPmDNS.h>       // WEBBY: gotekomega.local
+#include <mdns.h>          // 1.6.11: mdns_delegate_hostname_add - the leader keeps its own name too
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
-#include "webui.h"       // PANEL: Dimmy's shared SPA (gzipped) + OMEGA_DARK preset
+#include "../shared/webui.h"   // PANEL: the shared SPA, gzipped, straight from firmware/shared (1.6.12: no stale copy per dongle folder)
 
 // 1.6.8: ONE source, TWO builds - the SuperMini and the Waveshare S3-Zero differ only in their status light.
 //   0 = SuperMini  : two plain LEDs, red GPIO1 + blue GPIO2. GPIO21 is never touched.   (THIS sketch)
@@ -68,7 +73,7 @@
 #else
 #define WEBBY_BOARD    "supermini"
 #endif
-#define FW_VERSION     "Webby-1.6.10-" WEBBY_BOARD   // 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
+#define FW_VERSION     "Webby-1.6.13-" WEBBY_BOARD   // 1.6.13 (12 Oct 2026, Dimmy): the owner lock covers the DISK path in ESP-NOW mode (Mez, after Kickstart: the lock only guarded pairing/eject, any screen or phone with gotek1234 could fling) - while the dongle has an owner and its AP password is still the default, only owner stations may join the AP (others are deauthed at the join, and swept every 2 s if they were already on), use TCP 3333 (0x05) or the mutating web routes (403) - a BOOT 5 s / SHARE window (both 2 min now, BOOT was 30 s) opens all of that to anyone for its duration, so a phone can get on and set a password; a dongle that fell back to ESP-NOW because the home join failed (= away from home) no longer enrols the first screen that scans - BOOT 5 s or SHARE opens it; /status and /api/system/info say locked + owners; the dongle gets its OWN AP name and password (its page, Wi-Fi tab, or an owner screen over TCP 0x0B SET_SSID / 0x0C SET_APPASS; also 0x0D LIST_OWNERS / 0x0E REMOVE_OWNER), once a password is set it is the gate and the MAC checks are off; an owner screen learns password + name in the pairing reply (pad[40]=0x5A), never the broadcast hello; BOOT 15 s wipes owners AND restores GotekOMEGA-XXXX / gotek1234; a new AP name/password is applied live (no reboot, the Amiga keeps its disk); WEBBY.TXT has one writer, so the device name survives a creds wipe | 1.6.12 (8 Oct 2026, Dimmy): a fling or browser upload that fails leaves the dongle cleanly EMPTY (no stale dirty map / load_id, nothing is wiped before the first payload byte, a header with no body no longer ejects the Amiga's disk or blocks 30 s) | Config-tab Save keeps the stored password (it used to write PASS= blank and reboot onto the own AP) | an aborted OTA can be retried without a power cycle | a home join that failed at boot is retried every 3 min while the dongle is idle | first fleet election after a full beacon round, peers stale after 5 missed beacons (was: every boot grabbed gotekomega.local for 12 s) | pairing reply says HD-capable + max image bytes (pad[1..6]) | /api/wifi/scan served, /api/wifi/status with the keys the page reads, rssi in /status | the shared page comes straight from firmware/shared (the dongle folders carried a copy from 4 Sep) | 1.6.11: the fleet leader answers to gotekomega.local AND its own gotekomega-xxxx.local | /status has "ap_mac" (the MAC a paired screen knows) | the phone's "sign in to network" window shows a short signpost (keep the network, then open 192.168.4.1 in the browser) instead of the app, which half-worked there - no disk upload, and it closed when you kept the network | 1.6.10: the dongle's page in Polish and Czech (PL, CS in the language bar; a browser set to either gets it automatically) | 1.6.9: the dongle's own page (192.168.4.1) fixed - real version, any disk image up to 1.75 MB, header fits a phone, accents back, every line translated, the real Wi-Fi name, links to the full interface / flasher / help | 1.6.8: SuperMini / S3-Zero builds from one source (WEBBY_ZERO); the Wi-Fi name really is unique now - GotekOMEGA-XXXX came out as GotekOMEGA-0000 on every dongle (the MAC was read before the radio had started) | 1.6.7: take-over check moved to TCP command 0x0A (0x07 is ENROLL in the fleet contract) | 1.6.6: two screens can share this dongle - SHARE from an owner screen opens pairing for one more screen (2 min); the dongle remembers which screen sent the disk, tells scanning screens, and asks before another screen takes it over (refuses while that screen's saves are not handed back, unless forced); save reports go to the screen that sent the disk | 1.6.5: deleting the dongle on its GTi puts it back to "looking for a new owner"; a dongle with no owner always accepts pairing (was: shut after the first pairing, never reopened, and shut 6 min after power-on)
 #define ESPNOW_CHANNEL 6
 //  Board profile 
 // Runs on ANY ESP32-S3 with: >=2MB PSRAM (the RAM disk lives there), the native
@@ -132,6 +137,11 @@
 #define CMD_EJECT_FORCE 0x04
 #define CMD_CLAIM       0x0A   // 1.6.7: was 0x07 = ENROLL in the fleet wire contract (#24). 1.6.6: a screen claims the dongle before sending a disk (mac[6], flags bit0=take over, len, name)
 #define CMD_SET_NAME    0x06   // #24: set the pretty display name for the NEXT flung disk (g_loaded_name only; FAT12 stays DISK.ADF)
+#define CMD_SET_SSID    0x0B   // 1.6.13: owner-only - rename the dongle's AP: len(1) + bytes (1..24 printable ASCII; 0 = back to GotekOMEGA-XXXX)
+#define CMD_SET_APPASS  0x0C   // 1.6.13: owner-only - the AP password: len(1) + bytes (8..32 printable ASCII; 0 = back to gotek1234)
+#define CMD_LIST_OWNERS 0x0D   // 1.6.13: owner-only -> 0x01, n, n x (mac[6], flags: bit0 = that is you)
+#define CMD_REMOVE_OWNER 0x0E  // 1.6.13: owner-only - mac[6] -> 0x01 removed / 0x00 unknown; the last owner out reopens pairing
+// Replies: 0x01 ok, 0x00 bad input, 0x05 = not an owner (the fleet contract's reject). 0x07/0x08/0x09 stay reserved for it.
 //  FLEET: UDP discovery beacon (shared port: dongle, app, JC, browser-master) 
 #define GTI_DISCO_PORT   51703
 #define ALIVE_BEACON_MS  12000   // "I'm alive" cadence, home-WiFi only
@@ -173,7 +183,9 @@ static uint32_t g_next_status_ms = 0;
 static inline bool dGet(const uint8_t*m,uint32_t i){return (m[i>>3]>>(i&7))&1;}
 static inline void dSet(uint8_t*m,uint32_t i){m[i>>3]|=(uint8_t)(1u<<(i&7));}
 static inline void dClr(uint8_t*m,uint32_t i){m[i>>3]&=(uint8_t)~(1u<<(i&7));}
-static void dirtyReset(){memset(g_dirty,0,sizeof(g_dirty));g_dirty_count=0;g_last_write_ms=0;g_next_beacon_ms=0;}
+static inline void wrLE32(uint8_t*p,uint32_t v);   // 1.6.12: used in the pairing reply before its definition
+static portMUX_TYPE g_dirtyMux = portMUX_INITIALIZER_UNLOCKED;   // 1.6.12: g_dirty + g_dirty_count are touched from the USB task (onWrite) and from loop()
+static void dirtyReset(){portENTER_CRITICAL(&g_dirtyMux);memset(g_dirty,0,sizeof(g_dirty));g_dirty_count=0;portEXIT_CRITICAL(&g_dirtyMux);g_last_write_ms=0;g_next_beacon_ms=0;}
 static uint32_t crc32sw(uint32_t crc,const uint8_t*p,size_t n){
   crc=~crc;
   while(n--){crc^=*p++;for(int k=0;k<8;k++)crc=(crc>>1)^(0xEDB88320UL&(uint32_t)(-(int32_t)(crc&1)));}
@@ -264,7 +276,7 @@ static int32_t onWrite(uint32_t lba, uint32_t off, uint8_t* buf, uint32_t n) {
     if(l<DATA_LBA)continue;
     uint32_t i=l-DATA_LBA;
     if(i>=imgSecs)continue;
-    if(!dGet(g_dirty,i)){dSet(g_dirty,i);g_dirty_count=g_dirty_count+1;}
+    portENTER_CRITICAL(&g_dirtyMux); if(!dGet(g_dirty,i)){dSet(g_dirty,i);g_dirty_count=g_dirty_count+1;} portEXIT_CRITICAL(&g_dirtyMux);
   }
   g_last_write_ms=millis();
   return (int32_t)n;
@@ -375,6 +387,11 @@ static uint8_t  _owners[MAX_OWNERS][6] = {{0}};
 static uint8_t  _owner_count   = 0;
 static bool     g_enroll_open  = false;
 static uint32_t g_enroll_until = 0;
+static bool     g_fallback_espnow = false;   // 1.6.13: ESP-NOW because the home join FAILED = we are away from home (club day)
+static String   g_ap_ssid = "", g_ap_pass = "";   // 1.6.13: the dongle's own AP name / password (APSSID= / APPASS= in WEBBY.TXT); empty = GotekOMEGA-XXXX / gotek1234
+static uint32_t g_ap_reapply_ms = 0;              // 1.6.13: re-raise the AP with new settings at this time (after the reply has left)
+static char     g_ap_name[25] = "GotekOMEGA";     // 1.6.9: the real AP name, shown on the page (1.6.13: up here, 24 chars max)
+static void writeWebbyCfg();
 
 // ESP-NOW receive queue
 #define RX_PKT_SIZE 250
@@ -426,7 +443,22 @@ static void wipeOwners(){
   _owner_count=0; _paired=false; memset(_wave_mac,0,6);
   if(_wavePeer){ delete _wavePeer; _wavePeer=nullptr; }
   if(LittleFS.begin(true)) LittleFS.remove("/XIAO_CONFIG.TXT");
+  g_ap_ssid = ""; g_ap_pass = ""; writeWebbyCfg(); g_ap_reapply_ms = millis() + 300;   // 1.6.13: BOOT 15 s also restores GotekOMEGA-XXXX / gotek1234
   oledStatus("Gotek OMEGA " FW_VERSION,"** WIPED **","All owners cleared","Hold BOOT to pair");
+}
+// 1.6.13: forget one owner (UNPAIR over ESP-NOW, REMOVE_OWNER over TCP). The last one out puts the dongle
+// back to "looking for a new owner": 6 minutes of open pairing, exactly like a fresh dongle (1.6.5).
+static bool dropOwner(const uint8_t* mac){
+  if (!removeOwner(mac)) return false;
+  saveOwners();
+  if (memcmp(_wave_mac, mac, 6)==0) {
+    if (_wavePeer) { delete _wavePeer; _wavePeer=nullptr; }
+    if (_owner_count) memcpy(_wave_mac, _owners[0], 6); else memset(_wave_mac,0,6);
+  }
+  _paired = (_owner_count>0);
+  if (_owner_count == 0) { g_enroll_open = true; g_enroll_until = millis() + 6UL*60UL*1000UL; }
+  oledStatus("Gotek OMEGA " FW_VERSION, "Unpaired", String(_owner_count)+" owner(s)", "");
+  return true;
 }
 
 static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
@@ -451,7 +483,9 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
       // unpaired (deleted the dongle), and shut 6 minutes after power-on even with no owner, so
       // the dongle went silent to every scan until it was power-cycled or BOOT was held 5 s.
       // Once an owner exists the door is closed as before: a SECOND screen still needs BOOT 5 s.
-      if (!g_enroll_open && _owner_count > 0) return;
+      // 1.6.13: ...except when we fell back from home WiFi: at a club a fresh scan from ANY screen must not
+      // hand the dongle to the first one that asks. BOOT 5 s (or SHARE from an owner) opens it as before.
+      if (!g_enroll_open && (_owner_count > 0 || g_fallback_espnow)) return;
       if (!addOwner(p->mac)) { oledStatus("Gotek OMEGA " FW_VERSION,"OWNERS FULL","Hold BOOT 15s","to wipe & re-pair"); return; }
       saveOwners();
       if (_owner_count>0) g_enroll_open = false;   // once a real owner exists, close the door
@@ -463,10 +497,17 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
     PktHello reply = {}; reply.type = PKT_PAIR_REPLY;
     WiFi.softAPmacAddress(reply.mac); strncpy(reply.ip, AP_IP, 15); reply.pad[0] = SAVE_PROTO_VER;
     // 1.6.6: who has a disk in me (pad[7] marker 0xA5, [8] loaded, [9..14] screen MAC, [15] len, [16..39] name).
-    // pad[1..6] stay free for the parked HD-capability fields.
+    // 1.6.12: capability - pad[1] = 1 HD-capable (the screen's g_espnow_dongle_board), pad[2] = board (1 SuperMini, 2 Zero), pad[3..6] = max image bytes LE.
+    reply.pad[1] = 1; reply.pad[2] = WEBBY_ZERO ? 2 : 1; wrLE32(reply.pad + 3, MAX_FILE_BYTES);
     reply.pad[7] = 0xA5; reply.pad[8] = g_disk_loaded ? 1 : 0; memcpy(reply.pad+9, g_loader_mac, 6);
     { uint8_t L = (uint8_t)strlen(g_loader_name); if (L > 24) L = 24; reply.pad[15] = L; memcpy(reply.pad+16, g_loader_name, L); }
     XiaoPeer* dst = _wavePeer ? _wavePeer : _bcastPeer;
+    if (dst == _wavePeer) {   // 1.6.13: the AP password + name for an OWNER screen (unicast only, never in a broadcast):
+      // pad[40]=0x5A marker, [41]=password length (0 = default gotek1234), [42..73]=password, [74]=name length, [75..98]=AP name
+      size_t pl = g_ap_pass.length(); if (pl > 32) pl = 32; size_t sl = strlen(g_ap_name); if (sl > 24) sl = 24;
+      reply.pad[40] = 0x5A; reply.pad[41] = (uint8_t)pl; memcpy(reply.pad+42, g_ap_pass.c_str(), pl);
+      reply.pad[74] = (uint8_t)sl; memcpy(reply.pad+75, g_ap_name, sl);
+    }
     if (dst) dst->send_pkt((uint8_t*)&reply, sizeof(reply));
     oledStatus("Gotek OMEGA " FW_VERSION, known?"Reconnected":"Owner added", macToStr(_wave_mac), String(_owner_count)+" owner(s)");
     return;
@@ -483,20 +524,7 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
   if (type == PKT_UNPAIR) {
     PktHello up = {}; memcpy(&up, data, min((size_t)len, sizeof(up)));
     if (haveSrc) memcpy(up.mac, src, 6);   // 1.6.4: a screen can only unpair ITSELF
-    const PktHello* p = &up;
-    if (removeOwner(p->mac)) {
-      saveOwners();
-      if (memcmp(_wave_mac, p->mac, 6)==0) {
-        if (_wavePeer) { delete _wavePeer; _wavePeer=nullptr; }
-        if (_owner_count) memcpy(_wave_mac, _owners[0], 6); else memset(_wave_mac,0,6);
-      }
-      _paired = (_owner_count>0);
-      // 1.6.5: the last owner deleted this dongle -> back to "looking for a new owner", exactly like a
-      // fresh dongle at power-on (pairing open, pairing blink). The rule in PAIR_HELLO keeps it open
-      // for as long as it has no owner, so it never goes silent to a scan.
-      if (_owner_count == 0) { g_enroll_open = true; g_enroll_until = millis() + 6UL*60UL*1000UL; }
-      oledStatus("Gotek OMEGA " FW_VERSION, "Unpaired", String(_owner_count)+" owner(s)", "");
-    }
+    dropOwner(up.mac);   // 1.6.13: shared with REMOVE_OWNER over TCP (1.6.5 rule inside: the last owner out reopens pairing)
     return;
   }
   if (type == PKT_DISK_EJECT) {
@@ -511,6 +539,20 @@ static void handleESPNOW(const uint8_t* data, int len, const uint8_t* src) {
 static void onNewPeer(const esp_now_recv_info_t* info, const uint8_t* data, int len, void* arg) { queuePacket(data, len, info ? info->src_addr : nullptr); }   // 1.6.4: keep src_addr
 
 // Owner config load (base)
+// size-trim: "aa:bb:cc:dd:ee:ff" -> 6 bytes; returns how many fields it read (stops at the first bad one,
+// like the sscanf("%hhx:...") it replaces, whose libc scanner cost 8.7 KB of flash).
+static int parseMac(const char* s, uint8_t m[6]) {
+  int n = 0;
+  while (n < 6) {
+    char* e; unsigned long v = strtoul(s, &e, 16);
+    if (e == s || v > 255) break;
+    m[n++] = (uint8_t)v;
+    if (*e != ':') break;
+    s = e + 1;
+  }
+  return n;
+}
+
 static void loadConfig() {
   if (!LittleFS.begin(true)) return;
   File f = LittleFS.open("/XIAO_CONFIG.TXT", "r"); if (!f) return;
@@ -519,7 +561,7 @@ static void loadConfig() {
     String line = f.readStringUntil('\n'); line.trim();
     if (line.startsWith("WAVE_MAC=")) {
       uint8_t m[6]={0}; String mac = line.substring(9);
-      if (sscanf(mac.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",&m[0],&m[1],&m[2],&m[3],&m[4],&m[5]) == 6) {
+      if (parseMac(mac.c_str(), m) == 6) {   // size-trim: was sscanf, which pulled in 8.7 KB of libc
         bool isZero=true; for(int i=0;i<6;i++) if(m[i]) { isZero=false; break; }
         if (!isZero) addOwner(m);
       }
@@ -552,7 +594,77 @@ static String discoName(){
   char b[24]; snprintf(b,sizeof(b),"gotekomega-%02x%02x",m[4],m[5]); return String(b); }
 static int    g_webmode = 0;
 static bool   g_join_failed = false;   // resolved at boot: 0 = ESPNOW/AP, 1 = WIFI/STA
+static uint32_t g_join_retry_ms = 0;   // 1.6.12: when the boot join gave up
+#define WIFI_RETRY_MS 180000UL           // 1.6.12: retry the home join (by restart) this often while idle
 static String g_loaded_name = "";
+
+// 1.6.13: the owner lock covers the disk path (Mez, 12 Oct 2026, after Kickstart). Until now it only guarded
+// ESP-NOW pairing/eject; the disk itself went over the AP (gotek1234 everywhere) + TCP 3333 / the web page,
+// so any screen or phone in the hall could fling to any dongle. Scope: ESP-NOW mode only - in home-WiFi
+// mode the WiFi access is the lock. The gate is by owner MAC while the AP password is still the default;
+// once a custom AP password is set, the password is the gate and these MAC checks are off.
+// The owner-MAC gate: only while the AP password is still the default, and not during an enrol window - a BOOT
+// hold (2 min) or SHARE from an owner (2 min) opens the whole dongle to anyone for that long, so a phone can
+// get on and set the password.
+static inline bool lockActive(){ return g_webmode == 0 && _owner_count > 0 && g_ap_pass.length() == 0 && !g_enroll_open; }
+// Which station (by MAC) is behind a TCP/HTTP client on our own AP. false = not a station of ours.
+static bool apStationMac(const IPAddress& ip, uint8_t out[6]){
+  wifi_sta_list_t sl; if (esp_wifi_ap_get_sta_list(&sl) != ESP_OK) return false;
+  wifi_sta_mac_ip_list_t il; if (esp_wifi_ap_get_sta_list_with_ip(&sl, &il) != ESP_OK) return false;
+  for (int i = 0; i < il.num; i++) { if (IPAddress(il.sta[i].ip.addr) == ip) { memcpy(out, il.sta[i].mac, 6); return true; } }
+  return false;
+}
+// The access point itself refuses strangers while locked. Runs on the network event task: it only READS
+// the owner list and deauths; nothing is written here. During an enrol window (BOOT 5 s, SHARE) anyone may
+// join, so a phone can reach the setup page.
+// (Re)raise the dongle's own AP: GotekOMEGA-XXXX / gotek1234 unless it has its own name / password. Called at
+// boot and again from loop() when an owner changed either (after the reply has left): every station drops
+// once and reconnects with the new settings - no reboot, the Amiga keeps its disk.
+static void applyApConfig(){
+  if (g_webmode != 0) return;   // home-WiFi mode has no AP of ours; the settings wait in WEBBY.TXT for the next ESP-NOW boot
+  uint8_t apm[6] = {0}; esp_read_mac(apm, ESP_MAC_WIFI_SOFTAP);
+  char apid[24]; snprintf(apid, sizeof(apid), "%s-%02X%02X", AP_SSID, apm[4], apm[5]);
+  strncpy(g_ap_name, g_ap_ssid.length() ? g_ap_ssid.c_str() : apid, sizeof(g_ap_name)-1); g_ap_name[sizeof(g_ap_name)-1] = 0;
+  WiFi.softAP(g_ap_name, g_ap_pass.length() ? g_ap_pass.c_str() : AP_PASS, ESPNOW_CHANNEL);
+  Serial.printf("[AP] %s (%s password)\n", g_ap_name, g_ap_pass.length() ? "own" : "default");
+}
+// Who is on our AP right now (MAC + association id), kept from the connect/disconnect events: the station
+// list IDF hands out has no aid, and esp_wifi_deauth_sta() wants one. Written on the event task, read from
+// loop() - a spinlock keeps the two apart.
+struct ApSta { uint8_t mac[6]; uint16_t aid; };
+static ApSta g_ap_sta[10]; static uint8_t g_ap_sta_n = 0;
+static portMUX_TYPE g_ap_sta_mux = portMUX_INITIALIZER_UNLOCKED;
+static void apStaRemember(const uint8_t* mac, uint16_t aid){
+  portENTER_CRITICAL(&g_ap_sta_mux);
+  uint8_t i = 0; while (i < g_ap_sta_n && memcmp(g_ap_sta[i].mac, mac, 6)) i++;
+  if (i < g_ap_sta_n) g_ap_sta[i].aid = aid;
+  else if (g_ap_sta_n < 10) { memcpy(g_ap_sta[g_ap_sta_n].mac, mac, 6); g_ap_sta[g_ap_sta_n].aid = aid; g_ap_sta_n++; }
+  portEXIT_CRITICAL(&g_ap_sta_mux);
+}
+static void apStaForget(const uint8_t* mac){
+  portENTER_CRITICAL(&g_ap_sta_mux);
+  for (uint8_t i = 0; i < g_ap_sta_n; i++) if (!memcmp(g_ap_sta[i].mac, mac, 6)) { g_ap_sta[i] = g_ap_sta[g_ap_sta_n-1]; g_ap_sta_n--; break; }
+  portEXIT_CRITICAL(&g_ap_sta_mux);
+}
+static void apStationEvent(arduino_event_id_t ev, arduino_event_info_t info){
+  if (ev == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) { apStaForget(info.wifi_ap_stadisconnected.mac); return; }
+  if (ev != ARDUINO_EVENT_WIFI_AP_STACONNECTED) return;
+  const uint8_t* mac = info.wifi_ap_staconnected.mac;
+  apStaRemember(mac, info.wifi_ap_staconnected.aid);
+  if (!lockActive() || isOwner(mac)) return;   // (lockActive is false during an enrol window)
+  esp_wifi_deauth_sta(info.wifi_ap_staconnected.aid);
+  Serial.printf("[LOCK] AP refused %s (not an owner)\n", macToStr(mac).c_str());
+}
+// The lock can turn on while strangers are already associated: the first screen pairs, an enrol window
+// closes, the password goes back to default. Bench 13 Oct: a laptop that joined before the pairing stayed on.
+// So loop() sweeps every 2 s; a dropped station comes back through apStationEvent and is refused there.
+static void apSweepStrangers(){
+  static uint32_t last = 0; if (millis() - last < 2000) return; last = millis();
+  if (!lockActive()) return;
+  ApSta snap[10]; uint8_t n;
+  portENTER_CRITICAL(&g_ap_sta_mux); n = g_ap_sta_n; memcpy(snap, g_ap_sta, sizeof(ApSta) * n); portEXIT_CRITICAL(&g_ap_sta_mux);
+  for (uint8_t i = 0; i < n; i++) if (!isOwner(snap[i].mac)) { esp_wifi_deauth_sta(snap[i].aid); Serial.printf("[LOCK] AP dropped %s (not an owner)\n", macToStr(snap[i].mac).c_str()); }
+}
 
 static void loadWifiCfg() {
   if (!LittleFS.begin(true)) return;
@@ -563,40 +675,31 @@ static void loadWifiCfg() {
     else if (line.startsWith("PASS=")) g_pass    = line.substring(5);
     else if (line.startsWith("MODE=")) g_modeStr = line.substring(5);
     else if (line.startsWith("NAME=")) g_devname = line.substring(5);
+    else if (line.startsWith("APSSID=")) { g_ap_ssid = line.substring(7); g_ap_ssid.trim(); }   // 1.6.13
+    else if (line.startsWith("APPASS=")) { g_ap_pass = line.substring(7); g_ap_pass.trim(); }   // 1.6.13
     else if (line.startsWith("LED="))  { String v=line.substring(4); v.trim(); v.toUpperCase(); g_led_enabled = !(v=="OFF"||v=="0"||v=="NO"); }
   }
   f.close();
 }
-static void saveWifiCfg(const String& ssid, const String& pass) {
+// 1.6.13: ONE writer for WEBBY.TXT, from the globals, so the AP name/password and the device name survive
+// every kind of save (the creds wipe used to drop NAME=).
+static void writeWebbyCfg() {
   if (!LittleFS.begin(true)) return;
-  File f = LittleFS.open("/WEBBY.TXT", "w"); if (!f) return;
-  f.printf("SSID=%s\n", ssid.c_str());
-  f.printf("PASS=%s\n", pass.c_str());
-  f.printf("MODE=WIFI\n");
-  f.printf("NAME=%s\n", g_devname.c_str());   // #name: kept alongside the creds
-  f.close();
-}
-static void setModeEspnow() {
-  if (!LittleFS.begin(true)) return;
-  // keep any saved SSID/PASS, just flip MODE=ESPNOW
   File f = LittleFS.open("/WEBBY.TXT", "w"); if (!f) return;
   f.printf("SSID=%s\n", g_ssid.c_str());
   f.printf("PASS=%s\n", g_pass.c_str());
-  f.printf("MODE=ESPNOW\n");
-  f.printf("NAME=%s\n", g_devname.c_str());   // #name: preserved across a mode flip
+  f.printf("MODE=%s\n", g_modeStr == "WIFI" ? "WIFI" : "ESPNOW");
+  f.printf("NAME=%s\n", g_devname.c_str());   // #name: kept alongside the creds
+  f.printf("APSSID=%s\n", g_ap_ssid.c_str());
+  f.printf("APPASS=%s\n", g_ap_pass.c_str());
+  if (!g_led_enabled) f.printf("LED=OFF\n");   // was read but never written back
   f.close();
 }
+static void saveWifiCfg(const String& ssid, const String& pass) { g_ssid = ssid; g_pass = pass; g_modeStr = "WIFI"; writeWebbyCfg(); }
+static void setModeEspnow() { g_modeStr = "ESPNOW"; writeWebbyCfg(); }   // keep any saved SSID/PASS, just flip the mode
 // WEBBY: full wipe of the saved home-Wi-Fi credentials + force ESP-NOW. Used by the
 // long BOOT-hold; the plain flip (setModeEspnow) keeps SSID/PASS for a one-tap rejoin.
-static void wipeWifiCreds() {
-  if (!LittleFS.begin(true)) return;
-  File f = LittleFS.open("/WEBBY.TXT", "w"); if (!f) return;
-  f.printf("SSID=\n");
-  f.printf("PASS=\n");
-  f.printf("MODE=ESPNOW\n");
-  f.close();
-  g_ssid = ""; g_pass = ""; g_modeStr = "ESPNOW";
-}
+static void wipeWifiCreds() { g_ssid = ""; g_pass = ""; g_modeStr = "ESPNOW"; writeWebbyCfg(); }   // 1.6.13: the AP name/password and the device name stay
 
 //  base TCP save/eject/status handlers (unchanged) 
 static WiFiServer _tcpServer(TCP_PORT);
@@ -632,7 +735,7 @@ static void doGetSave(WiFiClient& client){
   uint8_t cb[4]; wrLE32(cb,crc); client.write(cb,4); client.flush();
   uint32_t t0=millis(); while(!client.available()&&millis()-t0<10000)delay(5);
   bool ok=(client.available()&&client.read()==0x01);
-  if(ok){ for(uint32_t i=0;i<imgSecs;i++) if(dGet(g_snap,i)&&dGet(g_dirty,i)){dClr(g_dirty,i);if(g_dirty_count)g_dirty_count=g_dirty_count-1;} g_next_beacon_ms=0; if(g_dirty_count==0) setLeds(false,g_disk_loaded); }
+  if(ok){ portENTER_CRITICAL(&g_dirtyMux); for(uint32_t i=0;i<imgSecs;i++) if(dGet(g_snap,i)&&dGet(g_dirty,i)){dClr(g_dirty,i);if(g_dirty_count)g_dirty_count=g_dirty_count-1;} portEXIT_CRITICAL(&g_dirtyMux); g_next_beacon_ms=0; if(g_dirty_count==0) setLeds(false,g_disk_loaded); }
 }
 static void sendDirtyBeacon(){
   PktDirty pkt={}; pkt.type=PKT_XIAO_DIRTY; pkt.load_id=g_load_id; pkt.dirty_count=g_dirty_count;
@@ -645,7 +748,38 @@ static void sendStatusBeacon(){
   _wavePeer->send_pkt((uint8_t*)&pkt,sizeof(pkt));
 }
 
+// 1.6.12: a transfer that fails after the old disk was detached must leave the dongle
+// cleanly EMPTY: no stale load_id (the screen would fetch "saves" from a wiped image),
+// no stale dirty map (LED amber, EJECT refused), no old name on the page.
+static void markDiskEmpty(const char* why) {
+  if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
+  dirtyReset(); g_loaded_name = ""; g_image_size = 0; g_load_id++; g_next_name = "";
+  loaderClear(); ledBlue(false); g_next_status_ms = 0;
+  Serial.printf("[DISK] empty: %s\n", why);
+}
+// 1.6.13: the owner-only commands. ESP-NOW mode, over our own AP, from a station whose MAC is an owner -
+// over the home LAN they answer 0x05 (there the fleet contract rules).
+static bool tcpOwnerMac(WiFiClient& c, uint8_t out[6]){ return g_webmode == 0 && apStationMac(c.remoteIP(), out) && isOwner(out); }
+static bool tcpOwnerOk(WiFiClient& c){ uint8_t m[6]; return tcpOwnerMac(c, m); }
+static int  tcpReadLen(WiFiClient& c){ uint32_t t = millis(); while (c.available() < 1 && c.connected() && millis()-t < 2000) delay(1); return c.available() >= 1 ? c.read() : -1; }
+// exactly len bytes into buf (at most cap kept, NUL-terminated); -1 = short read
+static int  tcpReadBytes(WiFiClient& c, char* buf, int len, int cap){
+  if (len < 0) return -1; int got = 0; uint32_t t = millis();
+  while (got < len && millis()-t < 2000) { if (!c.connected()) break; int ch = c.read(); if (ch < 0) { delay(1); continue; } if (got < cap) buf[got] = (char)ch; got++; t = millis(); }
+  buf[got < cap ? got : cap] = 0; return got == len ? got : -1;
+}
+static bool asciiPrintable(const String& v){ for (unsigned i = 0; i < v.length(); i++) { char ch = v[i]; if (ch < 0x20 || ch > 0x7E) return false; } return true; }
 static void handleTCPClient(WiFiClient& client) {
+  if (lockActive()) {   // 1.6.13: a locked dongle talks on 3333 to owner stations only - 0x05 = reject (fleet contract)
+    uint8_t m[6]; bool known = apStationMac(client.remoteIP(), m);
+    if (!known || !isOwner(m)) {
+      Serial.printf("[LOCK] TCP refused %s (%s)\n", client.remoteIP().toString().c_str(), known ? macToStr(m).c_str() : "not a station of ours");
+      // Take the client's bytes first: closing with unread data makes lwIP send RST, and Windows throws the 0x05 away with it.
+      uint32_t tw = millis(); while (!client.available() && millis()-tw < 200) delay(5);
+      while (client.available()) client.read();
+      client.write((uint8_t)0x05); client.flush(); delay(50); client.stop(); return;
+    }
+  }
   oledStatus("Receiving...", "TCP connected", "", "");
   uint32_t t0 = millis();
   while (client.available() < 4 && millis()-t0 < 5000) delay(1);
@@ -691,6 +825,28 @@ static void handleTCPClient(WiFiClient& client) {
       nb[got<128?got:128]=0; g_next_name=String(nb);
       client.write((uint8_t)0x01);
     }
+    else if (cmd == CMD_SET_SSID || cmd == CMD_SET_APPASS) {   // 1.6.13: owner-only; len(1) + bytes
+      if (!tcpOwnerOk(client)) { client.write((uint8_t)0x05); return; }
+      int len = tcpReadLen(client); char nb[33]; if (tcpReadBytes(client, nb, len, 32) < 0) { client.write((uint8_t)0x00); return; }
+      String v(nb);
+      bool ok = (len == 0) || (asciiPrintable(v) && (cmd == CMD_SET_SSID ? (len <= 24 && v[0] != ' ' && v[len-1] != ' ') : (len >= 8 && len <= 32)));
+      if (!ok) { client.write((uint8_t)0x00); return; }
+      if (cmd == CMD_SET_SSID) g_ap_ssid = v; else g_ap_pass = v;
+      writeWebbyCfg(); client.write((uint8_t)0x01); client.flush();
+      g_ap_reapply_ms = millis() + 300;   // once the reply has left: every station drops and rejoins with the new settings
+      Serial.printf("[LOCK] AP %s %s by %s\n", cmd == CMD_SET_SSID ? "name" : "password", len ? "set" : "back to default", client.remoteIP().toString().c_str());
+    }
+    else if (cmd == CMD_LIST_OWNERS) {   // 1.6.13: owner-only -> 0x01, n, n x (mac[6], flags: bit0 = that is you)
+      uint8_t me[6]; if (!tcpOwnerMac(client, me)) { client.write((uint8_t)0x05); return; }
+      uint8_t r[2 + MAX_OWNERS*7]; r[0] = 0x01; r[1] = _owner_count; int n = 2;
+      for (int i = 0; i < _owner_count; i++) { memcpy(r+n, _owners[i], 6); r[n+6] = memcmp(_owners[i], me, 6) == 0 ? 1 : 0; n += 7; }
+      client.write(r, n); client.flush();
+    }
+    else if (cmd == CMD_REMOVE_OWNER) {   // 1.6.13: owner-only; mac[6] -> 0x01 removed / 0x00 unknown
+      if (!tcpOwnerOk(client)) { client.write((uint8_t)0x05); return; }
+      char m[7]; if (tcpReadBytes(client, m, 6, 6) != 6) { client.write((uint8_t)0x00); return; }
+      client.write((uint8_t)(dropOwner((const uint8_t*)m) ? 0x01 : 0x00)); client.flush();
+    }
     else client.write((uint8_t)0x00);
     return;
   }
@@ -703,11 +859,17 @@ static void handleTCPClient(WiFiClient& client) {
   // 1.6.4 (#24): if a disk is already attached, detach FIRST - otherwise the host stays
   // mounted on a volume we are rewriting underneath it for the whole transfer.
   // (The browser-upload path already did this; the TCP path now matches.)
-  if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
-  build_volume(fatName.c_str(), size);
+  // 1.6.12: nothing is touched until the first payload bytes are here. A header with no
+  // body (port scan, a screen that gives up) used to detach the Amiga's disk, zero the
+  // whole ramdisk and block loop() for 30 s. The FAT/root metadata is laid down at the
+  // END (as the browser upload path does), so only the data region is streamed into.
   uint8_t* dst = g_disk + DATA_LBA * SECTOR_SIZE;
   uint32_t received = 0; const size_t BUF = 4096;
   uint8_t* buf = (uint8_t*)malloc(BUF); if (!buf) { client.write((uint8_t)0x00); return; }
+  t0 = millis();
+  while (client.available() <= 0 && client.connected() && millis()-t0 < 5000) delay(1);
+  if (client.available() <= 0) { free(buf); client.write((uint8_t)0x00); client.stop(); oledStatus("No data", "", "", "disk untouched"); return; }
+  if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   t0 = millis();
   while (received < size && millis()-t0 < 30000) {   // 30s = max STALL (no progress), not total  a slow-but-steady fling completes; t0 resets on every read below
     if (!client.connected()) break;
@@ -718,6 +880,7 @@ static void handleTCPClient(WiFiClient& client) {
   }
   free(buf);
   if (received == size) {
+    build_volume_ex(fatName.c_str(), size, false);   // 1.6.12: metadata last, the data is already in place
     g_load_id++; g_image_size = size; dirtyReset();
     { String pretty = g_next_name.length() ? g_next_name : String("DISK.ADF");   // #24/1.6.3: pretty display name (extension stripped)
       int d = pretty.lastIndexOf('.'); if (d > 0) pretty = pretty.substring(0, d);
@@ -740,7 +903,8 @@ static void handleTCPClient(WiFiClient& client) {
     sendSimple(PKT_XIAO_DONE);
   } else {
     client.write((uint8_t)0x00); client.flush(); delay(100); client.stop();
-    oledStatus("TRANSFER ERROR", "", "", ""); sendSimple(PKT_XIAO_ERROR);
+    markDiskEmpty(received ? "fling stalled or dropped" : "fling: no data");
+    oledStatus("TRANSFER ERROR", "", "dongle is empty", "send again"); sendSimple(PKT_XIAO_ERROR);
   }
 }
 
@@ -755,11 +919,21 @@ static bool       g_dns_up = false;
 static uint32_t g_up_recv = 0;
 static bool     g_up_overflow = false;
 static String   g_up_name = "";
+static bool     g_up_refused = false;    // 1.6.13: this upload comes from a station that may not load a disk
+static bool     g_ota_refused = false;   // 1.6.13: same for a firmware upload
+// 1.6.13: the mutating web routes of a locked dongle are for owner stations only (read-only routes stay
+// open, so a page that got through before the lock closed shows "locked" instead of going blank).
+static bool webOwnerOk(){
+  if (!lockActive()) return true;
+  uint8_t m[6]; if (apStationMac(server.client().remoteIP(), m) && isOwner(m)) return true;
+  Serial.printf("[LOCK] web refused %s %s\n", server.client().remoteIP().toString().c_str(), server.uri().c_str());
+  return false;
+}
+static void webRefuse(){ server.send(403, "application/json", "{\"ok\":false,\"error\":\"locked\",\"err\":\"locked - this dongle belongs to another screen; pair this one or hold BOOT 5 s\"}"); }
 
 static String jsonEsc(const String& s){
   String o; for(size_t i=0;i<s.length();i++){ char c=s[i]; if(c=='"'||c=='\\'){o+='\\';o+=c;} else if(c>=32) o+=c; } return o;
 }
-static char g_ap_name[24] = "GotekOMEGA";   // 1.6.9: the real AP name, shown on the page
 static String statusJson(){
   String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
   String s = "{";
@@ -770,13 +944,18 @@ static String statusJson(){
   s += ",\"mode\":\""; s += (g_webmode==1 ? "wifi" : "espnow"); s += "\"";
   s += ",\"ssid\":\""; s += jsonEsc(g_ssid); s += "\"";
   s += ",\"devname\":\""; s += jsonEsc(discoName()); s += "\"";   // #name: current device name (custom or mac-based) for portal pre-fill + the fleet
+  { uint8_t am[6] = {0}; esp_read_mac(am, ESP_MAC_WIFI_SOFTAP); char ab[20]; snprintf(ab, sizeof(ab), "%02x:%02x:%02x:%02x:%02x:%02x", am[0],am[1],am[2],am[3],am[4],am[5]); s += ",\"ap_mac\":\""; s += ab; s += "\""; }   // 1.6.11: the MAC a paired screen knows (PKT_PAIR_REPLY), so it can tell this dongle exactly on home Wi-Fi (#110)
   s += ",\"join_failed\":"; s += (g_join_failed ? "true" : "false");
+  s += ",\"locked\":"; s += (_owner_count > 0 ? "true" : "false");   // 1.6.13: the dongle has owners
+  s += ",\"owners\":"; s += String((unsigned)_owner_count);
+  s += ",\"rssi\":"; s += String((g_webmode==1 && WiFi.status()==WL_CONNECTED) ? WiFi.RSSI() : 0);   // 1.6.12: link margin to the router - slow or stalling flings are a weak link, not the code
   s += ",\"ip\":\""; s += ip; s += "\"";
   s += ",\"heap\":"; s += String((unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));   // HD test
   s += ",\"psram\":"; s += String((unsigned)ESP.getFreePsram());
   s += ",\"disk\":"; s += String((unsigned)((uint32_t)TOTAL_SECTORS*SECTOR_SIZE));
   s += ",\"max\":"; s += String((unsigned)MAX_FILE_BYTES);   // 1.6.9: biggest image the page may send
   s += ",\"ap\":\""; s += jsonEsc(String(g_ap_name)); s += "\"";   // 1.6.9: real AP name for the page
+  s += ",\"ap_custom_pass\":"; s += (g_ap_pass.length() ? "true" : "false");   // 1.6.13: whether it has its own password - never the password itself
   s += "}";
   return s;
 }
@@ -796,30 +975,54 @@ static void handleUpload(){
   HTTPUpload& up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
     g_up_recv = 0; g_up_overflow = false;
+    g_up_refused = !webOwnerOk();   // 1.6.13: decided once, before any byte can touch the disk
     g_up_name = up.filename; if (g_up_name.length()==0) g_up_name = "DISK.ADF";
-    // detach first so the Amiga isn't reading the disk while we rewrite its data region
-    if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; ledBlue(false); }
   } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (g_up_refused) return;   // 1.6.13: swallow the body, the disk stays as it is
+    // 1.6.12: detach on the FIRST data chunk, not at START - an upload that dies before any
+    // data (or a 0-byte file) leaves the Amiga's disk alone
+    if (g_up_recv == 0 && up.currentSize > 0 && g_disk_loaded) { hardDetach(); g_disk_loaded = false; ledBlue(false); }
     if (!g_up_overflow && g_up_recv + up.currentSize <= MAX_FILE_BYTES) {
       memcpy(g_disk + DATA_LBA*SECTOR_SIZE + g_up_recv, up.buf, up.currentSize);
       g_up_recv += up.currentSize;
     } else { g_up_overflow = true; }
   } else if (up.status == UPLOAD_FILE_END) {
     // finalized by the POST responder below
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (g_up_recv > 0) markDiskEmpty("browser upload aborted");   // 1.6.12: the data region is half new, half old
+    g_up_recv = 0; g_up_overflow = false;
   }
 }
 static void handleUploadDone(){
-  if (g_up_overflow) { server.send(413,"application/json","{\"ok\":false,\"err\":\"image too big - this dongle holds up to 1.75 MB\"}"); return; }
+  if (g_up_refused) { g_up_refused = false; g_up_recv = 0; webRefuse(); return; }   // 1.6.13
+  if (g_up_overflow) { markDiskEmpty("browser upload too big"); server.send(413,"application/json","{\"ok\":false,\"err\":\"image too big - this dongle holds up to 1.75 MB\"}"); return; }
   if (g_up_recv == 0) { server.send(400,"application/json","{\"ok\":false,\"err\":\"empty upload\"}"); return; }
   g_loaded_name = g_up_name;
   webFinishLoad();
   server.send(200,"application/json", statusJson());
 }
 static void handleEjectWeb(){
+  if (!webOwnerOk()) { webRefuse(); return; }   // 1.6.13
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   dirtyReset(); g_loaded_name=""; ledBlue(false); loaderClear();
   oledStatus("Gotek OMEGA " FW_VERSION, "Ejected (web)", "", "Ready");
   server.send(200,"application/json", statusJson());
+}
+// 1.6.13: the dongle's own AP name/password from its page (Wi-Fi tab). Gated like every other change: owners
+// while the password is default, and once a password is set whoever is on the AP knows it. The password
+// never comes back out; the page only learns whether a custom one is set.
+static void apiApSave(){
+  if (!webOwnerOk()) { webRefuse(); return; }
+  bool any = false;
+  if (server.hasArg("ssid")) { String v = server.arg("ssid"); v.trim(); if (v.length() > 24 || !asciiPrintable(v)) { server.send(400,"application/json","{\"ok\":false,\"err\":\"name: up to 24 plain characters\"}"); return; } g_ap_ssid = v; any = true; }
+  if (server.hasArg("pass")) { String v = server.arg("pass"); if (v.length() && (v.length() < 8 || v.length() > 32 || !asciiPrintable(v))) { server.send(400,"application/json","{\"ok\":false,\"err\":\"password: 8 to 32 plain characters\"}"); return; } g_ap_pass = v; any = true; }
+  if (!any) { server.send(400,"application/json","{\"ok\":false,\"err\":\"nothing to save\"}"); return; }
+  writeWebbyCfg();
+  { uint8_t apm[6] = {0}; esp_read_mac(apm, ESP_MAC_WIFI_SOFTAP); char apid[24]; snprintf(apid, sizeof(apid), "%s-%02X%02X", AP_SSID, apm[4], apm[5]);
+    String j = "{\"ok\":true,\"ap\":\""; j += jsonEsc(g_ap_ssid.length() ? g_ap_ssid : String(apid)); j += "\",\"custom_pass\":"; j += (g_ap_pass.length() ? "true" : "false"); j += "}";
+    server.send(200,"application/json", j); }
+  g_ap_reapply_ms = millis() + 400;
+  Serial.printf("[LOCK] AP settings from the page (%s)\n", server.client().remoteIP().toString().c_str());
 }
 static void handleScan(){
   // A scan needs the STA interface. In ESP-NOW/AP-only mode there is no
@@ -833,7 +1036,8 @@ static void handleScan(){
     if (i) jj += ",";
     jj += "{\"ssid\":\""; jj += jsonEsc(WiFi.SSID(i));
     jj += "\",\"rssi\":"; jj += String(WiFi.RSSI(i));
-    jj += ",\"enc\":"; jj += (WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "false" : "true");
+    const char* enc = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "false" : "true");
+    jj += ",\"enc\":"; jj += enc; jj += ",\"encrypted\":"; jj += enc;   // 1.6.12: "encrypted" is what the shared page reads
     jj += "}";
     yield();
   }
@@ -843,6 +1047,7 @@ static void handleScan(){
 }
 
 static void handleSaveWifi(){
+  if (!webOwnerOk()) { webRefuse(); return; }   // 1.6.13
   String ssid = server.arg("ssid"); String pass = server.arg("pass");
   if (ssid.length()==0) { server.send(400,"application/json","{\"ok\":false,\"err\":\"no SSID\"}"); return; }
   if (server.hasArg("name")) g_devname = sanitizeName(server.arg("name"));   // #name: set at first setup so it joins already-named (no default-name clash)
@@ -853,134 +1058,16 @@ static void handleSaveWifi(){
   if (saved) { delay(500); ESP.restart(); }
 }
 static void handleEspnowWeb(){
+  if (!webOwnerOk()) { webRefuse(); return; }   // 1.6.13
   setModeEspnow();
   server.send(200,"application/json","{\"ok\":true}");
   delay(400); ESP.restart();
 }
 
 // The page (self-contained; talks to the real endpoints above)
-static const char PAGE_HTML[] PROGMEM = R"HTML(<!doctype html><html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Webby - Gotek OMEGA</title><style>
-:root{--bg:#0f1016;--panel:#181a24;--panel2:#1f2230;--line:#2b2f42;--ink:#e9ecf5;--dim:#8b93ad;--amber:#ffca57;--cyan:#3fe0e8;--green:#54d67e;--red:#ff6b6b}
-*{box-sizing:border-box}html,body{margin:0}body{background:radial-gradient(120% 80% at 50% -10%,#1a1d2b,var(--bg) 60%);color:var(--ink);min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;padding:env(safe-area-inset-top) 0 0}
-.wrap{max-width:460px;margin:0 auto;padding:18px 16px 40px}
-header{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
-.badge{width:38px;height:38px;border-radius:9px;background:linear-gradient(150deg,#2a2e42,#12131b);border:1px solid var(--line);display:grid;place-items:center;flex:none}
-.badge b{font-weight:800;font-size:15px;color:var(--amber)}
-.title h1{margin:0;font-size:15px;letter-spacing:.4px}.title span{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:1.4px}
-.conn{margin-left:auto;display:flex;flex-wrap:wrap;align-items:center;gap:7px;font-size:11.5px;color:var(--dim);background:var(--panel);border:1px solid var(--line);padding:6px 10px;border-radius:20px}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}.dot.ap{background:var(--amber);box-shadow:0 0 8px var(--amber)}
-.tabs{display:flex;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:4px;margin-bottom:16px}
-.tabs button{flex:1;border:0;background:transparent;color:var(--dim);font:inherit;font-weight:600;font-size:13px;padding:9px;border-radius:9px;cursor:pointer}
-.tabs button.on{background:var(--panel2);color:var(--ink)}
-.addr{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 12px;margin-bottom:14px;font-size:12.5px}
-.addr-row{display:flex;justify-content:space-between;align-items:center;gap:10px}
-.addr-row+.addr-row{margin-top:5px;padding-top:6px;border-top:1px solid var(--line)}
-.addr-k{color:var(--dim)}
-.addr b{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--cyan);font-weight:600}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
-.card h2{margin:0 0 12px;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--dim)}
-.drive{display:flex;align-items:center;gap:14px}
-.floppy{width:52px;height:52px;flex:none;display:grid;place-items:center}.floppy svg{width:52px;height:52px;display:block}.floppy.empty svg{filter:grayscale(1) brightness(.85);opacity:.4}
-.drive .name{font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.drive .sub{font-size:12px;color:var(--dim);margin-top:2px}.drive .sub.live{color:var(--cyan)}
-.btn{border:0;border-radius:10px;font:inherit;font-weight:700;font-size:14px;padding:11px 16px;cursor:pointer}
-.btn.ghost{background:var(--panel2);color:var(--ink);border:1px solid var(--line)}.btn.amber{background:linear-gradient(180deg,#ffd06a,#f0a92e);color:#241a02}.btn.wide{width:100%;padding:14px}.btn:disabled{opacity:.4;cursor:default}
-.eject{margin-left:auto;flex:none}
-.drop{display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:4px;border:2px dashed #3a4064;border-radius:14px;padding:26px 16px;text-align:center;cursor:pointer;background:#141626}
-.drop.hot{border-color:var(--amber);background:#1c1a10}.drop .big{font-size:15px;font-weight:700}.drop .small{font-size:12px;color:var(--dim);margin-top:5px}.drop .plus{font-size:26px;color:var(--amber);margin-bottom:6px}
-input[type=file]{display:none}
-.prog{height:8px;background:#0e1120;border-radius:6px;overflow:hidden;margin-top:14px;display:none}.prog i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--cyan),var(--amber));transition:width .12s}
-.field{margin-top:12px}.field label{display:block;font-size:12px;color:var(--dim);margin-bottom:6px}
-.field input{width:100%;background:#0e1120;border:1px solid var(--line);border-radius:10px;color:var(--ink);font:inherit;font-size:15px;padding:12px}
-.hint{font-size:12px;color:var(--dim);margin-top:12px;line-height:1.5}.note{font-size:11.5px;color:var(--dim);text-align:center;margin-top:6px}
-.toast{position:fixed;left:50%;bottom:22px;transform:translate(-50%,20px);opacity:0;pointer-events:none;background:#0c1a12;border:1px solid #2f6b45;color:#c9f5d8;padding:11px 16px;border-radius:11px;font-size:13.5px;font-weight:600;transition:.25s;max-width:90%}
-.toast.show{opacity:1;transform:translate(-50%,0)}.toast.err{background:#1e0f12;border-color:#6b3030;color:#ffd3d3}
-footer{text-align:center;color:#5b6076;font-size:11px;margin-top:22px}
-@media(max-width:600px){.conn{margin-left:0;width:100%;justify-content:space-between}}
-.links a{display:block;padding:11px 12px;margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);color:var(--ink);text-decoration:none;font-weight:700;font-size:14px}.links a small{display:block;font-weight:400;color:var(--dim);font-size:12px;margin-top:2px}.hidden{display:none}
-</style></head><body><div class="wrap">
-<header><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASwAAABKCAYAAAABp2mGAAADwUlEQVR42u3dTW7kIBAG0L7/tbKY/VxoshopUtJp3C6oKniflEXGio3BfoPxD49HYD7+/P038vNYlNHy7P6ze72efHw8iqRSWaY2OrCABSxgtey5AEu9AqsfWBUBXdrIwAIWsIDV6iAFFrCAVR+skoh2bQxYAQtY6104EisHJLAcHz3BSitX94aBFbCAlWPD0VgBC1jA6gXW0rLt0jiwAhawcn04Fqt3KgBWwAIWsNo0EqyABaz8ti+PVdb6726vWn1l7dcpUY+Nweo2vgQsJxqw+tyI26IwwAIWsIC1tDCVtw0sJ5p6rDNctAVWwAIWsIDVbiANWE40YO2LVWgdVmm46AoA1vz/XJ6V6dW/f1322zZG9rnycb/DYw2lylupkoDVC6yryyLXk/E1jxPBKlfm7p81BlZOe/203jvPykWBCSxgla4gYOX3sKJfn7pyKQqsXljdLjewgHW3d/X/92fbu3LZ9xOEV3t6wKqN1a2yAwtYM9psBJPRHtUocMDKPQ+BBawWbbbisu3Z+oFV6xycXn5gAWvGXcJ3BuVf/Z1LQmABC1ghY1ivLt+uDKpn9AaBFVcnU/fBYw3AisRrpJf1KBJgAWv5nYnuYHUfdxztRb37yMPI/lcFq9sH/Nqce12vnbPB2rln8M4Y1oqelVdzgOXlZ2AdmR3e26u83Wn74vMywAIWsFp9QLPjdPLAAhawam+zXC/r5E8kO9GABayGYGXMGQgsYAFrzy9WLL+jkbV+YAELWAeBFYlKx4lUnWg9j5Fd9mP1GPLKcpXvZXWcqh5YwALWnLJN3bddGgdYwAJW3r4ffWlorAdYwOq370eiZXAaWMDq87pQGlgVGtXdNGABq9cL2cei5fY/sIAFrBaN63klYAGr1sPa7dBafSsUWMACFrDSZozu9G1qYAHr5Ieot0QroiJ2PrGBBSxgFQPraiFOOrF33i9gAWsbtERERERERERERERERERERERERERERERKxtPUIjIdl1Forkw/p4ZFJA2sK/Nlql0RSQPr7vJ3yjVj/6IveeEs0gysWV+4nbFvMyedcESJFABrdGLP6PJUAgtSIg3A+m357LkDotcT/VlkR5BIAbC+js9kTnQSCVb0d9wdPSKFwKowjdzM3tXdr4w6ekSagbWil1f1chBcIo3AWrH9u+ucjRWwRAqAtaJnET3G9AymGXcHHTkijcBa1bObsd7I+hGRZLBW9C4yZ2PWuxLZBKyry+9scwSZzN6VHpZIcbSuLLuLVXRvJvrBVoPtIpKCsZr4nk+4r8q1YijKBgAAAABJRU5ErkJggg==" alt="OMEGAWARE" style="height:34px;margin-right:4px"><div class="title"><h1>GOTEK&nbsp;OMEGA</h1><span>Webby dongle</span></div>
-<div class="conn"><span id="langbar" style="display:inline-flex;gap:2px;margin-right:8px"></span><span class="dot" id="condot"></span><span id="conntxt">...</span></div></header>
-<div id="addrbox" class="addr hidden"><div class="addr-row"><span class="addr-k" data-i18n="this_dongle">This dongle</span><b id="addrSelf">-</b></div><div class="addr-row"><span class="addr-k" data-i18n="screen_fleet">Screen / fleet</span><b>gotekomega.local</b></div></div>
-<div class="tabs"><button class="on" id="tabDisk" onclick="view('disk')" data-i18n="disk">Disk</button><button id="tabWifi" onclick="view('wifi')" data-i18n="wifi">Wi-Fi</button></div>
-<section id="vDisk">
- <div class="card"><h2 data-i18n="in_drive">In the drive</h2><div class="drive">
-  <div class="floppy empty" id="floppy"><svg viewBox="0 0 52 52" aria-hidden="true">
-   <path d="M7 5 H40 L46 11 V45 A2 2 0 0 1 44 47 H9 A2 2 0 0 1 7 45 V5 Z" fill="#262e4a" stroke="#3b4570" stroke-width="1"/>
-   <rect x="14" y="5" width="22" height="13" rx="1" fill="#b9c1da"/><rect x="29" y="7" width="5" height="9" rx="1" fill="#2a3150"/>
-   <rect x="11" y="25" width="30" height="19" rx="2" fill="#eef1fb"/><rect x="14" y="30" width="22" height="2.4" rx="1" fill="#aeb7d6"/><rect x="14" y="35" width="15" height="2.4" rx="1" fill="#c3ccec"/></svg></div>
-  <div class="meta" style="min-width:0"><div class="name" id="dname">-- no disk --</div><div class="sub" id="dsub">Load a disk image to insert it</div></div>
-  <button class="btn ghost eject" id="ejectBtn" onclick="ejectDisk()" disabled data-i18n="eject">Eject</button></div></div>
- <div class="card"><h2 data-i18n="load_img">Load image</h2>
-  <label class="drop" id="drop" for="file"><div class="plus">+</div><div class="big" data-i18n="tap_choose">Tap to choose a disk image</div><div class="small"><span data-i18n="drag_hint">or drag a file here</span> &middot; ADF DSK HFE ST IMG &hellip;</div></label>
-  <input type="file" id="file" onchange="picked(this.files[0])">
-  <div class="prog" id="prog"><i id="bar"></i></div><div class="note" data-i18n="dd_note">Up to 1.75 MB (an Amiga HD disk) &middot; one disk at a time</div></div>
-</section>
-<section id="vWifi" class="hidden">
- <div class="card"><h2 data-i18n="home_wifi">Home Wi-Fi</h2>
-  <div id="joinmsg"></div>
-  <div class="field"><label data-i18n="dev_name">Device name</label><input id="devname" data-i18n-ph="dev_name_ph" placeholder="e.g. amiga-desk" maxlength="24"></div>
-  <div class="field"><label data-i18n="net_ssid">Network (SSID)</label><input id="ssid" data-i18n-ph="ssid_ph" placeholder="your home wifi name"></div>
-  <button class="btn wide" style="margin-top:8px" onclick="scanWifi()" data-i18n="scan_btn">Scan for networks</button>
-  <div id="scanlist" style="margin-top:8px"></div>
-  <div class="field"><label data-i18n="password">Password</label><input id="pass" type="password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;"></div>
-  <button class="btn amber wide" style="margin-top:16px" onclick="joinWifi()" data-i18n="save_join">Save &amp; Join</button>
-  <div class="hint" data-i18n="wifi_hint">Saves and reboots onto your home Wi-Fi. Then open <b>gotekomega.local</b> for the screen or fleet leader, or reach this dongle directly at its own <b>name.local</b> (shown after saving).</div></div>
- <div class="card"><h2 data-i18n="espnow_t">ESP-NOW / GTi mode</h2>
-  <div class="hint" style="margin-top:0"><span data-i18n="ap_back1">Switch back to the dongle's own access point + ESP-NOW so a GTi screen can drive it. Reconnect to the</span> <b class="apname">GotekOMEGA</b> <span data-i18n="ap_back2">Wi-Fi afterwards to return here.</span></div>
-  <button class="btn ghost wide" style="margin-top:14px" onclick="toEspnow()" data-i18n="espnow_b">Disconnect Wi-Fi &rarr; ESP-NOW</button></div>
-</section>
-<div class="card links"><h2 data-i18n="more_t">More</h2>
- <a href="/app"><span data-i18n="full_ui">Full web interface</span><small data-i18n="full_ui_s">Themes, firmware update, fleet</small></a>
- <a href="https://mesarim.github.io/Gotek-Touchscreen-interface/" target="_blank" rel="noopener"><span data-i18n="flasher">GTi web flasher</span><small data-i18n="flasher_s">Firmware for every board - needs internet</small></a>
- <a href="https://mesarim.github.io/Gotek-Touchscreen-interface/help.html" target="_blank" rel="noopener"><span data-i18n="help">Help &amp; guide</span><small data-i18n="help_s">Setup, pairing, saves - needs internet</small></a></div>
-<footer>)HTML" FW_VERSION R"HTML( &middot; OMEGAWARE</footer></div>
-<div class="toast" id="toast"></div>
-<script>var I18N={"this_dongle":{"en":"This dongle","fr":"Ce dongle","it":"Questo dongle","es":"Este dongle","de":"Dieser Dongle","nl":"Deze dongle"},"screen_fleet":{"en":"Screen / fleet","fr":"Ecran / flotte","it":"Schermo / flotta","es":"Pantalla / flota","de":"Bildschirm / Fleet","nl":"Scherm / fleet"},"dev_name":{"en":"Device name","fr":"Nom appareil","it":"Nome dispositivo","es":"Nombre del dispositivo","de":"Geraetename","nl":"Apparaatnaam"},"dev_name_ph":{"en":"e.g. amiga-desk","fr":"ex. amiga-bureau","it":"es. amiga-scrivania","es":"ej. amiga-mesa","de":"z.B. amiga-tisch","nl":"bijv. amiga-bureau"},"disk":{"en":"Disk","fr":"Disque","it":"Disco","es":"Disco","de":"Diskette","nl":"Disk"},"wifi":{"en":"Wi-Fi","fr":"Wi-Fi","it":"Wi-Fi","es":"Wi-Fi","de":"WLAN","nl":"Wi-Fi"},"in_drive":{"en":"In the drive","fr":"Dans le lecteur","it":"Nel drive","es":"En la unidad","de":"Im Laufwerk","nl":"In het station"},"no_disk":{"en":"-- no disk --","fr":"-- aucun disque --","it":"-- nessun disco --","es":"-- sin disco --","de":"-- keine Diskette --","nl":"-- geen disk --"},"load_ins":{"en":"Load an ADF to insert it","fr":"Chargez un ADF pour l’inserer","it":"Carica un ADF per inserirlo","es":"Carga un ADF para insertarlo","de":"ADF laden zum Einlegen","nl":"Laad een ADF om hem te plaatsen"},"eject":{"en":"Eject","fr":"Ejecter","it":"Espelli","es":"Expulsar","de":"Auswerfen","nl":"Uitwerpen"},"load_img":{"en":"Load image","fr":"Charger une image","it":"Carica immagine","es":"Cargar imagen","de":"Abbild laden","nl":"Image laden"},"tap_choose":{"en":"Tap to choose an ADF","fr":"Touchez pour choisir un ADF","it":"Tocca per scegliere un ADF","es":"Toca para elegir un ADF","de":"Zum Auswahlen eines ADF tippen","nl":"Tik om een ADF te kiezen"},"drag_hint":{"en":"or drag a file here","fr":"ou glissez un fichier ici","it":"o trascina un file qui","es":"o arrastra un archivo aqui","de":"oder Datei hierher ziehen","nl":"of sleep hier een bestand"},"dd_note":{"en":"DD image up to ~880 KB, one disk at a time","fr":"Image DD jusqu’a ~880 Ko, un disque a la fois","it":"Immagine DD fino a ~880 KB, un disco alla volta","es":"Imagen DD hasta ~880 KB, un disco a la vez","de":"DD-Abbild bis ~880 KB, eine Diskette","nl":"DD-image tot ~880 KB, een disk tegelijk"},"home_wifi":{"en":"Home Wi-Fi","fr":"Wi-Fi domestique","it":"Wi-Fi di casa","es":"Wi-Fi de casa","de":"Heim-WLAN","nl":"Thuis-Wi-Fi"},"net_ssid":{"en":"Network (SSID)","fr":"Reseau (SSID)","it":"Rete (SSID)","es":"Red (SSID)","de":"Netzwerk (SSID)","nl":"Netwerk (SSID)"},"ssid_ph":{"en":"your home wifi name","fr":"nom de votre wifi","it":"nome del tuo wifi","es":"nombre de tu wifi","de":"Name deines WLAN","nl":"naam van je wifi"},"scan_btn":{"en":"Scan for networks","fr":"Rechercher des reseaux","it":"Cerca reti","es":"Buscar redes","de":"Netzwerke suchen","nl":"Netwerken zoeken"},"password":{"en":"Password","fr":"Mot de passe","it":"Password","es":"Contrasena","de":"Passwort","nl":"Wachtwoord"},"save_join":{"en":"Save & Join","fr":"Enregistrer & rejoindre","it":"Salva & connetti","es":"Guardar y unir","de":"Speichern & verbinden","nl":"Opslaan & verbinden"},"wifi_hint":{"en":"Saves and reboots onto your home Wi-Fi. Then open gotekomega.local for the screen or fleet leader, or reach this dongle directly at its own name.local (shown after saving).","fr":"Enregistre et redemarre sur votre Wi-Fi. Ouvrez ensuite gotekomega.local pour l’ecran ou le chef de flotte, ou ce dongle a sa propre adresse nom.local (affichee apres l’enregistrement).","it":"Salva e riavvia sul tuo Wi-Fi. Poi apri gotekomega.local per lo schermo o il capo flotta, oppure raggiungi questo dongle al suo indirizzo nome.local (mostrato dopo il salvataggio).","es":"Guarda y reinicia en tu Wi-Fi. Luego abre gotekomega.local para la pantalla o el lider, o accede a este dongle en su propia direccion nombre.local (mostrada tras guardar).","de":"Speichert und startet ins Heim-WLAN neu. Dann gotekomega.local fuer den Bildschirm oder Fleet-Leader oeffnen, oder diesen Dongle direkt unter seinem eigenen name.local erreichen (nach dem Speichern angezeigt).","nl":"Slaat op en herstart op je Wi-Fi. Open daarna gotekomega.local voor het scherm of de fleet-leider, of bereik deze dongle direct op zijn eigen naam.local (getoond na opslaan)."},"espnow_t":{"en":"ESP-NOW / GTi mode","fr":"Mode ESP-NOW / GTi","it":"Modalita ESP-NOW / GTi","es":"Modo ESP-NOW / GTi","de":"ESP-NOW / GTi-Modus","nl":"ESP-NOW / GTi-modus"},"espnow_h":{"en":"Switch back to the dongle’s own access point + ESP-NOW so a GTi screen can drive it. Reconnect to the GotekOMEGA Wi-Fi afterwards to return here.","fr":"Revenir au point d’acces du dongle + ESP-NOW pour qu’un ecran GTi le pilote. Reconnectez-vous ensuite au Wi-Fi GotekOMEGA.","it":"Torna all’access point del dongle + ESP-NOW cosi uno schermo GTi puo guidarlo. Poi riconnettiti al Wi-Fi GotekOMEGA.","es":"Vuelve al punto de acceso del dongle + ESP-NOW para que una pantalla GTi lo controle. Luego reconecta al Wi-Fi GotekOMEGA.","de":"Zurueck zum eigenen Access Point + ESP-NOW, damit ein GTi-Bildschirm steuern kann. Danach mit dem GotekOMEGA-WLAN verbinden.","nl":"Terug naar de eigen access point + ESP-NOW zodat een GTi-scherm hem aanstuurt. Verbind daarna weer met het GotekOMEGA-Wi-Fi."},"espnow_b":{"en":"Disconnect Wi-Fi → ESP-NOW","fr":"Deconnecter Wi-Fi → ESP-NOW","it":"Disconnetti Wi-Fi → ESP-NOW","es":"Desconectar Wi-Fi → ESP-NOW","de":"WLAN trennen → ESP-NOW","nl":"Wi-Fi loskoppelen → ESP-NOW"},"scanning":{"en":"Scanning...","fr":"Recherche...","it":"Ricerca...","es":"Buscando...","de":"Suche...","nl":"Zoeken..."},"no_nets":{"en":"No networks found","fr":"Aucun reseau trouve","it":"Nessuna rete trovata","es":"No se hallaron redes","de":"Keine Netzwerke gefunden","nl":"Geen netwerken gevonden"},"scan_fail":{"en":"Scan failed, try again","fr":"Echec du scan, reessayez","it":"Scansione fallita, riprova","es":"Fallo el escaneo, reintenta","de":"Suche fehlgeschlagen, erneut","nl":"Scan mislukt, opnieuw"},"save_fail":{"en":"SAVE FAILED - not stored","fr":"ECHEC - non enregistre","it":"SALVATAGGIO FALLITO","es":"ERROR - no guardado","de":"SPEICHERN FEHLGESCHLAGEN","nl":"OPSLAAN MISLUKT"},"cant_conn":{"en":"Could not connect to","fr":"Impossible de se connecter a","it":"Impossibile connettersi a","es":"No se pudo conectar a","de":"Keine Verbindung zu","nl":"Kon niet verbinden met"},"wrong_pw":{"en":"Wrong password? Check it and try again.","fr":"Mauvais mot de passe ? Verifiez et reessayez.","it":"Password errata? Controlla e riprova.","es":"Contrasena incorrecta? Revisa y reintenta.","de":"Falsches Passwort? Pruefen und erneut.","nl":"Verkeerd wachtwoord? Check en probeer opnieuw."},"saved_join":{"en":"Saved, joining","fr":"Enregistre, connexion a","it":"Salvato, connessione a","es":"Guardado, uniendo a","de":"Gespeichert, verbinde mit","nl":"Opgeslagen, verbindt met"},"enter_net":{"en":"enter a network","fr":"saisissez un reseau","it":"inserisci una rete","es":"ingresa una red","de":"Netzwerk eingeben","nl":"voer een netwerk in"},"saving":{"en":"Saving...","fr":"Enregistrement...","it":"Salvataggio...","es":"Guardando...","de":"Speichern...","nl":"Opslaan..."}};var LANG=(localStorage.getItem("lang")||(navigator.language||"en")).slice(0,2).toLowerCase();if(!I18N.disk[LANG])LANG="en";// 1.6.9: new and corrected strings (override the table above)
-I18N["tap_choose"]={"en": "Tap to choose a disk image", "fr": "Touchez pour choisir une image disque", "it": "Tocca per scegliere un'immagine disco", "es": "Toca para elegir una imagen de disco", "de": "Tippen, um ein Disk-Image zu wählen", "nl": "Tik om een disk-image te kiezen"};I18N["dd_note"]={"en": "Up to 1.75 MB (an Amiga HD disk) · one disk at a time", "fr": "Jusqu’à 1,75 Mo (disque HD Amiga) · un disque à la fois", "it": "Fino a 1,75 MB (disco HD Amiga) · un disco alla volta", "es": "Hasta 1,75 MB (disco HD de Amiga) · un disco a la vez", "de": "Bis 1,75 MB (Amiga-HD-Diskette) · eine Diskette auf einmal", "nl": "Tot 1,75 MB (Amiga HD-disk) · één disk tegelijk"};I18N["load_ins"]={"en": "Load a disk image to insert it", "fr": "Chargez une image disque pour l’insérer", "it": "Carica un'immagine disco per inserirla", "es": "Carga una imagen de disco para insertarla", "de": "Disk-Image laden zum Einlegen", "nl": "Laad een disk-image om hem te plaatsen"};I18N["inserted"]={"en": "Inserted", "fr": "Inséré", "it": "Inserito", "es": "Insertado", "de": "Eingelegt", "nl": "Geplaatst"};I18N["not_img"]={"en": "Not a disk image - unpack .adz / .zip on a computer first", "fr": "Ce n’est pas une image disque – décompressez d’abord .adz / .zip sur un ordinateur", "it": "Non è un'immagine disco - decomprimi prima .adz / .zip su un computer", "es": "No es una imagen de disco: descomprime primero .adz / .zip en un ordenador", "de": "Kein Disk-Image – .adz / .zip zuerst am Computer entpacken", "nl": "Geen disk-image – pak .adz / .zip eerst uit op een computer"};I18N["too_big"]={"en": "Too big - this dongle holds up to 1.75 MB", "fr": "Trop grand – ce dongle accepte jusqu’à 1,75 Mo", "it": "Troppo grande - questo dongle accetta fino a 1,75 MB", "es": "Demasiado grande: este dongle admite hasta 1,75 MB", "de": "Zu groß – dieser Dongle fasst bis 1,75 MB", "nl": "Te groot – deze dongle past tot 1,75 MB"};I18N["ejected"]={"en": "Ejected", "fr": "Éjecté", "it": "Espulso", "es": "Expulsado", "de": "Ausgeworfen", "nl": "Uitgeworpen"};I18N["up_fail"]={"en": "Upload failed", "fr": "Échec de l’envoi", "it": "Caricamento non riuscito", "es": "Error al subir", "de": "Hochladen fehlgeschlagen", "nl": "Uploaden mislukt"};I18N["switching"]={"en": "Switching...", "fr": "Changement...", "it": "Cambio...", "es": "Cambiando...", "de": "Wechsle...", "nl": "Wisselen..."};I18N["more_t"]={"en": "More", "fr": "Plus", "it": "Altro", "es": "Más", "de": "Mehr", "nl": "Meer"};I18N["full_ui"]={"en": "Full web interface", "fr": "Interface web complète", "it": "Interfaccia web completa", "es": "Interfaz web completa", "de": "Vollständige Weboberfläche", "nl": "Volledige webinterface"};I18N["full_ui_s"]={"en": "Themes, firmware update, fleet", "fr": "Thèmes, mise à jour du firmware, flotte", "it": "Temi, aggiornamento firmware, flotta", "es": "Temas, actualización de firmware, flota", "de": "Themes, Firmware-Update, Fleet", "nl": "Thema's, firmware-update, fleet"};I18N["flasher"]={"en": "GTi web flasher", "fr": "Flasheur web GTi", "it": "Flasher web GTi", "es": "Flasheador web GTi", "de": "GTi-Web-Flasher", "nl": "GTi-webflasher"};I18N["flasher_s"]={"en": "Firmware for every board - needs internet", "fr": "Firmware pour chaque carte – nécessite Internet", "it": "Firmware per ogni scheda - serve Internet", "es": "Firmware para cada placa: necesita Internet", "de": "Firmware für jedes Board – braucht Internet", "nl": "Firmware voor elk bord – internet nodig"};I18N["help"]={"en": "Help & guide", "fr": "Aide & guide", "it": "Aiuto e guida", "es": "Ayuda y guía", "de": "Hilfe & Anleitung", "nl": "Hulp & handleiding"};I18N["help_s"]={"en": "Setup, pairing, saves - needs internet", "fr": "Installation, appairage, sauvegardes – nécessite Internet", "it": "Configurazione, abbinamento, salvataggi - serve Internet", "es": "Configuración, emparejamiento, partidas guardadas: necesita Internet", "de": "Einrichtung, Kopplung, Spielstände – braucht Internet", "nl": "Instellen, koppelen, saves – internet nodig"};I18N["ap_back1"]={"en": "Switch back to the dongle's own access point + ESP-NOW so a GTi screen can drive it. Reconnect to the", "fr": "Revenez au point d’accès du dongle + ESP-NOW pour qu’un écran GTi puisse le piloter. Reconnectez-vous ensuite au Wi-Fi", "it": "Torna al punto di accesso del dongle + ESP-NOW così uno schermo GTi può comandarlo. Poi riconnettiti al Wi-Fi", "es": "Vuelve al punto de acceso del dongle + ESP-NOW para que una pantalla GTi pueda controlarlo. Después vuelve a conectarte al Wi-Fi", "de": "Zurück zum eigenen Access Point des Dongles + ESP-NOW, damit ein GTi-Bildschirm ihn steuern kann. Danach wieder mit dem WLAN", "nl": "Terug naar het eigen access point van de dongle + ESP-NOW, zodat een GTi-scherm hem kan bedienen. Maak daarna opnieuw verbinding met de wifi"};I18N["ap_back2"]={"en": "Wi-Fi afterwards to return here.", "fr": "pour revenir ici.", "it": "per tornare qui.", "es": "para volver aquí.", "de": "verbinden, um hierher zurückzukehren.", "nl": "om hier terug te komen."};I18N["back_t"]={"en": "Back to ESP-NOW / AP mode", "fr": "Retour au mode ESP-NOW / AP", "it": "Ritorno alla modalità ESP-NOW / AP", "es": "Volviendo al modo ESP-NOW / AP", "de": "Zurück zum ESP-NOW-/AP-Modus", "nl": "Terug naar ESP-NOW / AP-modus"};I18N["back_p"]={"en": "Rebooting. Reconnect to this Wi-Fi (password gotek1234) and open 192.168.4.1 to return here:", "fr": "Redémarrage. Reconnectez-vous à ce Wi-Fi (mot de passe gotek1234) et ouvrez 192.168.4.1 pour revenir ici :", "it": "Riavvio. Riconnettiti a questo Wi-Fi (password gotek1234) e apri 192.168.4.1 per tornare qui:", "es": "Reiniciando. Vuelve a conectarte a este Wi-Fi (contraseña gotek1234) y abre 192.168.4.1 para volver aquí:", "de": "Neustart. Wieder mit diesem WLAN verbinden (Passwort gotek1234) und 192.168.4.1 öffnen, um hierher zurückzukehren:", "nl": "Herstarten. Maak opnieuw verbinding met deze wifi (wachtwoord gotek1234) en open 192.168.4.1 om hier terug te komen:"};
-// 1.6.10: Polish (PL) and Czech (CS) - a browser set to either gets it automatically. PL text by 8-Bitz (#support, 2 Oct); CS draft by Claude, a Czech speaker to check.
-var I18N_PL={"this_dongle": "Ten dongle", "screen_fleet": "Ekran / flota", "dev_name": "Nazwa urządzenia", "dev_name_ph": "np. amiga-desk", "disk": "Dysk", "wifi": "Wi-Fi", "in_drive": "W napędzie", "no_disk": "-- brak dysku --", "load_ins": "Wczytaj obraz dysku, aby go włożyć", "eject": "Wysuń", "load_img": "Wczytaj obraz", "tap_choose": "Dotknij, aby wybrać obraz dysku", "drag_hint": "lub przeciągnij tu plik", "dd_note": "Do 1,75 MB (dysk HD Amigi) · jeden dysk naraz", "home_wifi": "Domowe Wi-Fi", "net_ssid": "Sieć (SSID)", "ssid_ph": "nazwa Twojej sieci Wi-Fi", "scan_btn": "Szukaj sieci", "password": "Hasło", "save_join": "Zapisz i połącz", "wifi_hint": "Zapisuje i uruchamia się ponownie w Twojej sieci Wi-Fi. Potem otwórz gotekomega.local, aby dostać się do ekranu lub lidera floty, albo wejdź na ten dongle pod jego adresem nazwa.local (pokazanym po zapisaniu).", "espnow_t": "Tryb ESP-NOW / GTi", "espnow_h": "Wróć do własnego punktu dostępu dongla + ESP-NOW, aby ekran GTi mógł nim sterować. Potem połącz się ponownie z Wi-Fi GotekOMEGA, aby tu wrócić.", "espnow_b": "Rozłącz Wi-Fi → ESP-NOW", "scanning": "Szukam...", "no_nets": "Nie znaleziono sieci", "scan_fail": "Skanowanie nieudane, spróbuj ponownie", "save_fail": "ZAPIS NIEUDANY – nie zapisano", "cant_conn": "Nie można połączyć z", "wrong_pw": "Złe hasło? Sprawdź i spróbuj ponownie.", "saved_join": "Zapisano, łączę się z", "enter_net": "wpisz sieć", "saving": "Zapisuję...", "inserted": "Włożono", "not_img": "To nie jest obraz dysku – najpierw rozpakuj .adz / .zip na komputerze", "too_big": "Za duży – ten dongle mieści do 1,75 MB", "ejected": "Wysunięto", "up_fail": "Wysyłanie nieudane", "switching": "Przełączam...", "more_t": "Więcej", "full_ui": "Pełny interfejs WWW", "full_ui_s": "Motywy, aktualizacja firmware'u, flota", "flasher": "Flasher WWW GTi", "flasher_s": "Firmware dla każdej płytki – wymaga internetu", "help": "Pomoc i instrukcja", "help_s": "Konfiguracja, parowanie, zapisy – wymaga internetu", "ap_back1": "Wróć do własnego punktu dostępu dongla + ESP-NOW, aby ekran GTi mógł nim sterować. Potem połącz się ponownie z Wi-Fi", "ap_back2": "i wróć tutaj.", "back_t": "Powrót do trybu ESP-NOW / AP", "back_p": "Restart. Połącz się ponownie z tym Wi-Fi (hasło gotek1234) i otwórz 192.168.4.1, aby tu wrócić:"};for(var k in I18N_PL){if(I18N[k])I18N[k].pl=I18N_PL[k];}var I18N_CS={"this_dongle": "Tento dongle", "screen_fleet": "Obrazovka / flotila", "dev_name": "Název zařízení", "dev_name_ph": "např. amiga-stůl", "disk": "Disk", "wifi": "Wi-Fi", "in_drive": "V mechanice", "no_disk": "-- žádný disk --", "load_ins": "Nahrajte obraz disku a vložte ho", "eject": "Vysunout", "load_img": "Nahrát obraz", "tap_choose": "Klepnutím vyberte obraz disku", "drag_hint": "nebo sem přetáhněte soubor", "dd_note": "Až 1,75 MB (disk HD Amigy) · jeden disk najednou", "home_wifi": "Domácí Wi-Fi", "net_ssid": "Síť (SSID)", "ssid_ph": "název vaší Wi-Fi", "scan_btn": "Hledat sítě", "password": "Heslo", "save_join": "Uložit a připojit", "wifi_hint": "Uloží nastavení a restartuje se do vaší domácí Wi-Fi. Pak otevřete gotekomega.local pro obrazovku nebo vedoucí zařízení flotily, nebo se k tomuto donglu připojte přímo na jeho vlastní adrese název.local (zobrazí se po uložení).", "espnow_t": "Režim ESP-NOW / GTi", "espnow_h": "Přepněte zpět na vlastní přístupový bod donglu + ESP-NOW, aby ho mohla ovládat obrazovka GTi. Pak se znovu připojte k Wi-Fi GotekOMEGA, abyste se sem vrátili.", "espnow_b": "Odpojit Wi-Fi → ESP-NOW", "scanning": "Hledám...", "no_nets": "Nenalezeny žádné sítě", "scan_fail": "Hledání selhalo, zkuste to znovu", "save_fail": "ULOŽENÍ SELHALO - neuloženo", "cant_conn": "Nelze se připojit k", "wrong_pw": "Špatné heslo? Zkontrolujte ho a zkuste to znovu.", "saved_join": "Uloženo, připojuji k", "enter_net": "zadejte síť", "saving": "Ukládám...", "inserted": "Vloženo", "not_img": "Není to obraz disku - nejdřív rozbalte .adz / .zip v počítači", "too_big": "Příliš velký - tento dongle pojme až 1,75 MB", "ejected": "Vysunuto", "up_fail": "Nahrávání selhalo", "switching": "Přepínám...", "more_t": "Více", "full_ui": "Plné webové rozhraní", "full_ui_s": "Motivy, aktualizace firmwaru, flotila", "flasher": "Webový flasher GTi", "flasher_s": "Firmware pro každou desku - vyžaduje internet", "help": "Nápověda a průvodce", "help_s": "Nastavení, párování, uložené hry - vyžaduje internet", "ap_back1": "Přepněte zpět na vlastní přístupový bod donglu + ESP-NOW, aby ho mohla ovládat obrazovka GTi. Pak se znovu připojte k Wi-Fi", "ap_back2": "a vraťte se sem.", "back_t": "Zpět do režimu ESP-NOW / AP", "back_p": "Restartuji. Znovu se připojte k této Wi-Fi (heslo gotek1234) a otevřete 192.168.4.1, abyste se sem vrátili:"};for(var k in I18N_CS){if(I18N[k])I18N[k].cs=I18N_CS[k];}LANG=(localStorage.getItem("lang")||(navigator.language||"en")).slice(0,2).toLowerCase();if(!I18N.disk[LANG])LANG="en";
-function tt(k){var e=I18N[k];return e&&e[LANG]?e[LANG]:(e?e.en:k);}function applyI18n(){document.querySelectorAll("[data-i18n]").forEach(function(el){el.textContent=tt(el.getAttribute("data-i18n"));});document.querySelectorAll("[data-i18n-ph]").forEach(function(el){el.setAttribute("placeholder",tt(el.getAttribute("data-i18n-ph")));});}function setLang(l){LANG=l;try{localStorage.setItem("lang",l);}catch(e){}applyI18n();buildLangBar();if(window.__s)paint(window.__s);}function buildLangBar(){var b=document.getElementById("langbar");if(!b)return;b.innerHTML="";["en","fr","it","es","de","nl","pl","cs"].forEach(function(l){var a=document.createElement("span");a.textContent=l.toUpperCase();a.style.cssText="cursor:pointer;padding:2px 5px;font-size:11px;border-radius:4px;"+(l===LANG?"background:#3b4570;color:#fff":"color:#8b93ad");a.onclick=function(){setLang(l);};b.appendChild(a);});}document.addEventListener("DOMContentLoaded",function(){applyI18n();buildLangBar();});
-function fmt(b){return b>=1048576?(b/1048576).toFixed(2)+' MB':Math.round(b/1024)+' KB';}
-function san(s){var o='',last='';for(var i=0;i<s.length&&o.length<24;i++){var c=s.charAt(i).toLowerCase();if(c>='a'&&c<='z'||c>='0'&&c<='9'){o+=c;last=c;}else if(o.length&&last!=='-'){o+='-';last='-';}}return o.replace(/-+$/,'');}
-function toast(m,e){var t=document.getElementById('toast');t.textContent=m;t.classList.toggle('err',!!e);t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(function(){t.classList.remove('show')},2600);}
-function view(v){document.getElementById('vDisk').classList.toggle('hidden',v!=='disk');document.getElementById('vWifi').classList.toggle('hidden',v!=='wifi');document.getElementById('tabDisk').classList.toggle('on',v==='disk');document.getElementById('tabWifi').classList.toggle('on',v==='wifi');}
-function paint(s){
- window.__s=s; if(s.max)window.__max=s.max; if(s.ap){window.__ap=s.ap;document.querySelectorAll('.apname').forEach(function(e){e.textContent=s.ap;});}
- var pill=document.getElementById('conntxt'),dot=document.getElementById('condot');
- if(s.mode==='wifi'){pill.textContent=s.ip||'gotekomega.local';dot.classList.remove('ap');}else{pill.textContent='ESP-NOW / AP';dot.classList.add('ap');}
- var ab=document.getElementById('addrbox');
- if(ab){if(s.mode==='wifi'){document.getElementById('addrSelf').textContent=(s.devname||'gotekomega')+'.local';ab.classList.remove('hidden');}else{ab.classList.add('hidden');}}
- var f=document.getElementById('floppy');
- if(s.loaded){f.classList.remove('empty');document.getElementById('dname').textContent=s.name||'disk';var d=document.getElementById('dsub');d.textContent=tt('inserted')+' \u00b7 '+fmt(s.size);d.classList.add('live');document.getElementById('ejectBtn').disabled=false;}
- else{f.classList.add('empty');document.getElementById('dname').textContent=tt('no_disk');var d=document.getElementById('dsub');d.textContent=tt('load_ins');d.classList.remove('live');document.getElementById('ejectBtn').disabled=true;}
-}
-function poll(){fetch('/status').then(function(r){return r.json()}).then(paint).catch(function(){});}
-function picked(f){
- if(!f)return;
- if(/\.(adz|zip|gz|dms|lha|lzh|rar|7z|jpe?g|png|gif|txt|nfo|rtfm|pdf)$/i.test(f.name)){toast(tt('not_img'),1);return;}   // 1.6.9: any disk image FlashFloppy reads (ADF DSK HFE ST IMG ...)
- if(f.size>(window.__max||1829376)){toast(tt('too_big'),1);return;}
- var fd=new FormData();fd.append('f',f,f.name);
- var x=new XMLHttpRequest();x.open('POST','/upload');
- var prog=document.getElementById('prog'),bar=document.getElementById('bar');prog.style.display='block';bar.style.width='0';
- x.upload.onprogress=function(e){if(e.lengthComputable)bar.style.width=(e.loaded/e.total*100)+'%';};
- x.onload=function(){prog.style.display='none';if(x.status>=200&&x.status<300){toast(tt('inserted')+' \u2713');poll();}else{try{toast(JSON.parse(x.responseText).err||tt('up_fail'),1)}catch(_){toast(tt('up_fail'),1)}}};
- x.onerror=function(){prog.style.display='none';toast(tt('up_fail'),1);};
- x.send(fd);
-}
-function ejectDisk(){fetch('/eject',{method:'POST'}).then(function(r){return r.json()}).then(function(s){toast(tt('ejected'));paint(s);});}
-function scanWifi(){var L=document.getElementById('scanlist');L.textContent=tt('scanning');fetch('/scan').then(function(r){return r.json();}).then(function(d){L.innerHTML='';if(!d.networks||!d.networks.length){L.textContent=tt('no_nets');return;}d.networks.sort(function(a,b){return b.rssi-a.rssi;});d.networks.forEach(function(n){var row=document.createElement('div');row.style.cssText='padding:9px 11px;border:1px solid #2b2f42;border-radius:9px;margin-bottom:6px;cursor:pointer;display:flex;justify-content:space-between;gap:10px';var q=n.rssi>-50?'████':n.rssi>-65?'███░':n.rssi>-75?'██░░':'█░░░';var a=document.createElement('span');a.textContent=(n.ssid||'')+(n.enc?' 🔒':'');var b=document.createElement('span');b.style.cssText='color:#8b93ad;font-family:monospace';b.textContent=q+' '+n.rssi;row.appendChild(a);row.appendChild(b);row.addEventListener('click',function(){document.getElementById('ssid').value=n.ssid||'';L.innerHTML='';});L.appendChild(row);});}).catch(function(){L.textContent=tt('scan_fail');});}
-(function(){fetch('/status').then(function(r){return r.json();}).then(function(d){if(d&&d.devname){window.__dn=d.devname;}if(d&&d.devname&&d.devname.indexOf('gotekomega-')!==0){var dn=document.getElementById('devname');if(dn&&!dn.value)dn.value=d.devname;}if(d&&d.join_failed&&d.ssid){var m=document.getElementById('joinmsg');if(m){var w=document.createElement('div');w.style.cssText='background:#2a1416;border:1px solid #6b2b2b;color:#ffb3b3;border-radius:9px;padding:10px 12px;margin-bottom:10px;font-size:13px';w.textContent=tt('cant_conn')+' '+String.fromCharCode(34)+d.ssid+String.fromCharCode(34)+'. '+tt('wrong_pw');m.appendChild(w);}var si=document.getElementById('ssid');if(si&&!si.value)si.value=d.ssid;}}).catch(function(){});})();
-function joinWifi(){var s=document.getElementById('ssid').value.trim();if(!s){toast(tt('enter_net'),1);return;}var b=new URLSearchParams();b.append('ssid',s);b.append('pass',document.getElementById('pass').value);var dn=document.getElementById('devname');var nm=dn?dn.value.trim():'';b.append('name',nm);toast(tt('saving'));fetch('/savewifi',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b.toString()}).then(function(r){return r.json();}).then(function(d){if(!d.saved){toast(tt('save_fail'),1);return;}var own=(nm?san(nm):'')||window.__dn||'gotekomega';document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2>'+tt('saved_join')+' '+s+'</h2><p style="color:#8b93ad">Reconnect your device to your home Wi-Fi. This dongle is at <b>'+own+'.local</b>. The screen / fleet leader stays at <b>gotekomega.local</b>.</p></div>';});}
-function toEspnow(){toast(tt('switching'));fetch('/espnow',{method:'POST'}).then(function(){var ap=window.__ap||'GotekOMEGA';document.body.innerHTML='<div style="max-width:460px;margin:60px auto;padding:24px;font-family:system-ui;color:#e9ecf5;text-align:center"><h2></h2><p style="color:#8b93ad"></p><p style="font-weight:700"></p></div>';var d=document.body.firstChild;d.children[0].textContent=tt('back_t');d.children[1].textContent=tt('back_p');d.children[2].textContent=ap;});}
-var drop=document.getElementById('drop');
-['dragenter','dragover'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.add('hot');});});
-['dragleave','drop'].forEach(function(e){drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.remove('hot');});});
-drop.addEventListener('drop',function(ev){if(ev.dataTransfer.files[0])picked(ev.dataTransfer.files[0]);});
-setInterval(poll,1500);poll();
-</script></body></html>)HTML";
+// size-trim: the dongle's own page lives in dongle_page.html; make_dongle_page.py stores it gzipped in
+// dongle_page.h (dongle_page_gz). The footer version is filled in from /status by the page itself.
+#include "dongle_page.h"
 
 //  PANEL: Dimmy shared-UI adapter 
 // Serves webui.h (his single-page app) and answers the /api/* calls its
@@ -1006,15 +1093,20 @@ static void onOtaUpload(){
   HTTPUpload& up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
     g_ota_ok=false; g_ota_first=true;
+    g_ota_refused = !webOwnerOk(); if (g_ota_refused) { g_ota_run = false; return; }   // 1.6.13: no Update.begin for a stranger
+    if (Update.isRunning()) Update.abort();   // 1.6.12: a previous aborted upload must not block this one
     g_ota_run = Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
   } else if (up.status == UPLOAD_FILE_WRITE && g_ota_run) {
     if (g_ota_first) { g_ota_first=false; if (up.currentSize>0 && up.buf[0]!=0xE9) { Update.abort(); g_ota_run=false; return; } }
-    if (Update.write(up.buf, up.currentSize) != up.currentSize) { g_ota_run=false; }
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) { Update.abort(); g_ota_run=false; }   // 1.6.12: release the slot
   } else if (up.status == UPLOAD_FILE_END && g_ota_run) {
     g_ota_ok = Update.end(true);
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (g_ota_run) Update.abort(); g_ota_run=false; g_ota_ok=false;   // 1.6.12: a dropped upload left Update "running" until a power cycle
   }
 }
 static void onOtaDone(){
+  if (g_ota_refused) { g_ota_refused = false; webRefuse(); return; }   // 1.6.13
   server.send(200, "application/json", g_ota_ok ? "{\"status\":\"ok\"}" : "{\"error\":\"firmware update failed - not an ESP32 image?\"}");
   if (g_ota_ok) { delay(600); ESP.restart(); }
 }
@@ -1032,6 +1124,9 @@ static void apiSystemInfo(){
   j += "\"theme\":\""; j += g_active_theme; j += "\",";
   j += "\"wifi_ip\":\""; j += ip; j += "\",";
   j += "\"wifi_clients\":"; j += String((unsigned)WiFi.softAPgetStationNum()); j += ",";
+  j += "\"locked\":"; j += (_owner_count > 0 ? "true" : "false"); j += ",";   // 1.6.13
+  j += "\"owners\":"; j += String((unsigned)_owner_count); j += ",";
+  j += "\"ap_custom_pass\":"; j += (g_ap_pass.length() ? "true" : "false"); j += ",";
   j += "\"internet\":"; j += (g_webmode==1 ? "true" : "false"); j += ",";
   j += "\"internet_ssid\":\""; j += (g_webmode==1 ? jsonEsc(g_ssid) : String("")); j += "\",";
   j += "\"internet_ip\":\""; j += (g_webmode==1 ? ip : String("")); j += "\",";
@@ -1053,12 +1148,14 @@ static void apiDiskStatus(){
   server.send(200,"application/json", j);
 }
 static void apiDiskUnload(){
+  if (!webOwnerOk()) { webRefuse(); return; }   // 1.6.13
   if (g_disk_loaded) { hardDetach(); g_disk_loaded = false; }
   dirtyReset(); g_loaded_name=""; ledBlue(false); loaderClear();
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
 static void apiGamesUploadDone(){
-  if (g_up_overflow) { server.send(413,"application/json","{\"error\":\"image too big for the HD ramdisk\"}"); return; }
+  if (g_up_refused) { g_up_refused = false; g_up_recv = 0; webRefuse(); return; }   // 1.6.13
+  if (g_up_overflow) { markDiskEmpty("browser upload too big"); server.send(413,"application/json","{\"error\":\"image too big for the HD ramdisk\"}"); return; }
   if (g_up_recv == 0) { server.send(400,"application/json","{\"error\":\"empty upload\"}"); return; }
   g_loaded_name = g_up_name;
   webFinishLoad();
@@ -1066,10 +1163,17 @@ static void apiGamesUploadDone(){
   server.send(200,"application/json", j);
 }
 static void apiWifiStatus(){
+  // 1.6.12: the key set the shared page reads (was sta/ip: the page always said "AP: Off" + "Connecting...")
   bool sta = (WiFi.status()==WL_CONNECTED);
-  String ip = (g_webmode==1) ? WiFi.localIP().toString() : String(AP_IP);
-  String j = "{\"sta\":"; j += (sta?"true":"false");
-  j += ",\"ip\":\""; j += ip; j += "\",\"sta_ssid\":\""; j += jsonEsc(g_ssid); j += "\"}";
+  bool ap  = (WiFi.getMode() & WIFI_MODE_AP) != 0;
+  String j = "{\"ap_active\":"; j += (ap?"true":"false");
+  j += ",\"ap_ip\":\""; j += (ap ? WiFi.softAPIP().toString() : String("")); j += "\"";
+  j += ",\"ap_clients\":"; j += String(ap ? (unsigned)WiFi.softAPgetStationNum() : 0u);
+  j += ",\"sta_connected\":"; j += (sta?"true":"false");
+  j += ",\"sta_ip\":\""; j += (sta ? WiFi.localIP().toString() : String("")); j += "\"";
+  j += ",\"sta_ssid\":\""; j += jsonEsc(g_ssid); j += "\"";
+  j += ",\"rssi\":"; j += String(sta ? WiFi.RSSI() : 0);
+  j += "}";
   server.send(200,"application/json", j);
 }
 static void apiConfig(){
@@ -1085,13 +1189,19 @@ static void apiConfig(){
   server.send(200,"application/json", j);
 }
 static void apiConfigSave(){
+  if (!webOwnerOk()) { webRefuse(); return; }   // 1.6.13
   String ssid = server.arg("WIFI_CLIENT_SSID");
   String pass = server.arg("WIFI_CLIENT_PASS");
-  if (ssid.length()) { saveWifiCfg(ssid, pass); server.send(200,"application/json","{\"status\":\"ok\",\"reboot\":true}"); delay(400); ESP.restart(); return; }
+  // 1.6.12: the page posts the whole form with the password MASKED (empty). Empty = keep the
+  // stored one, and only a real change saves + reboots. Save on the Config tab used to write
+  // PASS= blank and strand the dongle on its own AP.
+  if (pass.length() == 0) pass = g_pass;
+  const bool changed = ssid.length() && (ssid != g_ssid || pass != g_pass);
+  if (changed) { saveWifiCfg(ssid, pass); server.send(200,"application/json","{\"status\":\"ok\",\"reboot\":true}"); delay(400); ESP.restart(); return; }
   server.send(200,"application/json","{\"status\":\"ok\"}");
 }
-static void apiReboot(){ server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
-static const char* const THEME_NAMES[] = { "AMIGA_WB2","AMIGA_WB13","PAPER_WHITE","MIDNIGHT","PHOSPHOR","OMEGA_DARK" };   // 1.6.4: one list for /list and /activate
+static void apiReboot(){ if (!webOwnerOk()) { webRefuse(); return; } server.send(200,"application/json","{\"status\":\"ok\"}"); delay(300); ESP.restart(); }
+static const char* const THEME_NAMES[] = { "NEO","AMIGA_WB2","AMIGA_WB13","PAPER_WHITE","MIDNIGHT","PHOSPHOR","OMEGA_DARK" };   // 1.6.4: one list for /list and /activate | 1.6.11: + NEO (the GTi look; needs the shared webui.h with the NEO preset)
 static bool themeKnown(const String& n){ for (auto t : THEME_NAMES) if (n == t) return true; return false; }
 static void apiThemesList(){
   String j = "{\"active\":\""; j += g_active_theme;
@@ -1101,16 +1211,20 @@ static void apiThemesList(){
   server.send(200,"application/json", j);
 }
 
+static void sendDonglePage(){   // size-trim: stored gzipped (dongle_page.h)
+  server.sendHeader("Content-Encoding","gzip");
+  server.send_P(200, "text/html", (PGM_P)dongle_page_gz, dongle_page_gz_len);
+}
 static void handleWebUI(){
   // In AP/setup mode (not yet on home WiFi) serve the focused setup portal
   // with the WiFi scan + feedback, not the rich SPA  the SPA is for once
   // the dongle is on the LAN. Fixes "/" opening the wrong page during setup.
-  if (g_webmode != 1) { server.send_P(200, "text/html", PAGE_HTML); return; }
+  if (g_webmode != 1) { sendDonglePage(); return; }
   server.sendHeader("Content-Encoding","gzip");
   server.send_P(200, "text/html", (PGM_P)webui_gz, webui_gz_len);
 }
 
-static void handleRoot(){ server.send_P(200, "text/html", PAGE_HTML); }
+static void handleRoot(){ sendDonglePage(); }
 
 //  FLEET: per-device identity from the STA MAC 
 static String discoId(){ uint8_t m[6] = {0}; esp_read_mac(m, ESP_MAC_WIFI_STA);   // 1.6.8: same value as WiFi.macAddress(), but valid before the radio starts
@@ -1146,7 +1260,7 @@ struct FleetPeer { String id, name, ip, fw; bool hd; bool loaded; bool isPanel; 
 static FleetPeer g_peers[16]; static int g_peer_n = 0;
 static bool      g_is_master = false;
 static uint32_t  g_next_elect_ms = 0;
-#define FLEET_STALE_MS 40000   // drop a peer unheard for >40 s (~3 missed beacons)
+#define FLEET_STALE_MS 62000   // 1.6.12: drop a peer unheard for >62 s (5 missed beacons; was 3 - a few lost broadcasts on a weak link made two leaders)
 
 static String jf(const String& s, const char* key){   // tiny "key":"val" / "key":val extractor
   String k = String("\"") + key + "\":";
@@ -1174,6 +1288,13 @@ static void pollDisco(){   // read sibling beacons off the discovery socket
     fleetUpsert(id, jf(s,"name"), jf(s,"ip"), jf(s,"fw"), jf(s,"hd")=="true", jf(s,"loaded")=="true", jf(s,"role")=="panel");
   }
 }
+// 1.6.11: the leader answers to gotekomega.local AND keeps its own gotekomega-<mac>.local (a delegated mDNS
+// host on the same IP), so a bookmark or a paired screen's lookup of the own name keeps working.
+static void mdnsKeepOwnName(){
+  if (WiFi.status() != WL_CONNECTED) return;
+  mdns_ip_addr_t a = {}; a.addr.type = ESP_IPADDR_TYPE_V4; a.addr.u_addr.ip4.addr = (uint32_t)WiFi.localIP(); a.next = nullptr;
+  if (mdns_delegate_hostname_add(discoName().c_str(), &a) == ESP_OK) Serial.printf("[FLEET] also %s.local\n", discoName().c_str());
+}
 static void doElection(){   // a screen always leads; otherwise the lowest MAC wears the gotekomega hat
   fleetPrune();
   String me=discoId(); bool master=true;
@@ -1184,6 +1305,7 @@ static void doElection(){   // a screen always leads; otherwise the lowest MAC w
     MDNS.end();
     if(master) MDNS.begin(MDNS_NAME); else MDNS.begin(discoName().c_str());
     MDNS.addService("http","tcp",80);
+    if(master) mdnsKeepOwnName();   // 1.6.11: both names on the leader
     Serial.printf("[FLEET] now %s -> %s.local\n", master?"MASTER":"slave", master?MDNS_NAME:discoName().c_str());
   }
 }
@@ -1202,9 +1324,54 @@ static void apiFleet(){
   server.send(200,"application/json", j);
 }
 
+// 1.6.11: the phone's own "sign in to network" window (captive portal) is a limited browser - no file
+// upload, and it closes as soon as you choose to keep the network. A request for any host other than
+// this dongle (the phone's internet check: generate_204, hotspot-detect, allawnos, msftconnecttest ...)
+// gets a signpost page instead of the app: keep the network, then open 192.168.4.1 in the real browser.
+static const char CAPTIVE_HTML[] PROGMEM = R"CAPHTML(<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gotek OMEGA</title><style>
+body{margin:0;background:#0b0e22;color:#e9ecf5;font-family:system-ui,sans-serif;display:flex;justify-content:center}
+.c{max-width:420px;margin:32px 16px;padding:22px;background:#181c31;border:1px solid #3b4570;border-radius:16px}
+h1{font-size:20px;margin:0 0 4px}.ap{color:#3fe0e8;font-weight:700}p{color:#9aa3c0;line-height:1.45}
+ol{padding-left:20px;line-height:1.6}li{margin:8px 0}
+.u{display:block;margin:14px 0 6px;padding:14px;border-radius:12px;background:#0b0e22;border:1px solid #3fe0e8;
+color:#3fe0e8;font-size:24px;font-weight:700;text-align:center;text-decoration:none;letter-spacing:.5px}
+.n{font-size:12px;color:#7d86a6;text-align:center}
+</style></head><body><div class="c">
+<h1 id="h">Connected</h1><div class="ap" id="ap">GotekOMEGA</div>
+<ol><li id="s1">Tap &#8942; / Menu and choose "Use this network as is" (or "Keep Wi-Fi").</li>
+<li id="s2">Open your normal browser and go to:</li></ol>
+<a class="u" href="http://192.168.4.1/" target="_blank" rel="noopener">192.168.4.1</a>
+<p class="n" id="n">This small sign-in window cannot upload disks. Everything works in the browser.</p>
+</div><script>
+var T={en:["Connected","Tap ⋮ / Menu and choose \"Use this network as is\" (or \"Keep Wi-Fi\").","Open your normal browser and go to:","This small sign-in window cannot upload disks. Everything works in the browser."],
+nl:["Verbonden","Tik op ⋮ / Menu en kies \"Netwerk gebruiken zoals het is\" (of \"Wi-Fi behouden\").","Open je gewone browser en ga naar:","Dit kleine inlogvenster kan geen disks uploaden. In de browser werkt alles."],
+de:["Verbunden","Tippe auf ⋮ / Menü und wähle \"Netzwerk unverändert nutzen\" (oder \"WLAN behalten\").","Öffne deinen normalen Browser und gehe zu:","Dieses kleine Anmeldefenster kann keine Disketten hochladen. Im Browser geht alles."],
+fr:["Connecté","Touchez ⋮ / Menu et choisissez \"Utiliser ce réseau tel quel\" (ou \"Garder le Wi-Fi\").","Ouvrez votre navigateur habituel et allez à :","Cette petite fenêtre de connexion ne peut pas envoyer de disques. Tout marche dans le navigateur."],
+it:["Connesso","Tocca ⋮ / Menu e scegli \"Usa questa rete così com'è\" (o \"Mantieni Wi-Fi\").","Apri il tuo browser e vai a:","Questa piccola finestra di accesso non può caricare dischi. Nel browser funziona tutto."],
+es:["Conectado","Toca ⋮ / Menú y elige \"Usar esta red tal cual\" (o \"Mantener Wi-Fi\").","Abre tu navegador normal y ve a:","Esta pequeña ventana de acceso no puede subir discos. En el navegador funciona todo."],
+pl:["Połączono","Dotknij ⋮ / Menu i wybierz \"Użyj tej sieci bez zmian\" (lub \"Zachowaj Wi-Fi\").","Otwórz zwykłą przeglądarkę i wejdź na:","To małe okno logowania nie wyśle dysków. W przeglądarce działa wszystko."],
+cs:["Připojeno","Klepněte na ⋮ / Menu a zvolte \"Použít síť tak, jak je\" (nebo \"Ponechat Wi-Fi\").","Otevřete běžný prohlížeč a přejděte na:","Toto malé přihlašovací okno neumí nahrát disky. V prohlížeči funguje vše."]};
+var L=(localStorage.getItem("lang")||navigator.language||"en").slice(0,2).toLowerCase();var t=T[L]||T.en;
+document.getElementById("h").textContent=t[0];document.getElementById("s1").textContent=t[1];
+document.getElementById("s2").textContent=t[2];document.getElementById("n").textContent=t[3];
+document.getElementById("ap").textContent="%AP%";
+</script></body></html>)CAPHTML";
+static bool isPortalProbe(){   // AP mode only; our own address and *.local names get the real pages
+  if (!g_dns_up) return false;
+  String h = server.hostHeader(); int c = h.indexOf(':'); if (c >= 0) h = h.substring(0, c);
+  h.toLowerCase();
+  return h.length() && h != "192.168.4.1" && !h.endsWith(".local");
+}
+static void sendCaptive(){
+  String pg = FPSTR(CAPTIVE_HTML); pg.replace("%AP%", g_ap_name);
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "text/html", pg);
+}
+
 static void startWebServer(){
   // PANEL: Dimmy's SPA is the front door; the old simple page stays at /classic.
-  server.on("/", HTTP_GET, handleWebUI);
+  server.on("/", HTTP_GET, [](){ if (isPortalProbe()) { sendCaptive(); return; } handleWebUI(); });   // 1.6.11: signpost in the phone's sign-in window
   server.on("/classic", HTTP_GET, handleRoot);
   server.on("/app", HTTP_GET, [](){ server.sendHeader("Content-Encoding","gzip"); server.send_P(200, "text/html", (PGM_P)webui_gz, webui_gz_len); });   // 1.6.9: the full shared interface in any mode (linked from the setup page)
   // legacy simple endpoints (kept  the /classic page and any old clients use them)
@@ -1214,6 +1381,7 @@ static void startWebServer(){
   server.on("/scan",     HTTP_GET,  handleScan);
   server.on("/savewifi", HTTP_POST, handleSaveWifi);
   server.on("/espnow", HTTP_POST, handleEspnowWeb);
+  server.on("/api/ap", HTTP_POST, apiApSave);   // 1.6.13: own AP name / password
   // PANEL: /api/* shim the SPA calls (has_sd:false dongle surface)
   server.on("/api/system/info",  HTTP_GET,  apiSystemInfo);
   server.on("/api/disk/status",  HTTP_GET,  apiDiskStatus);
@@ -1221,6 +1389,7 @@ static void startWebServer(){
   server.on("/api/games/upload", HTTP_POST, apiGamesUploadDone, handleUpload);
   server.on("/api/games/list",   HTTP_GET,  [](){ server.send(200,"application/json","{\"games\":[]}"); });
   server.on("/api/wifi/status",  HTTP_GET,  apiWifiStatus);
+  server.on("/api/wifi/scan",    HTTP_GET,  handleScan);   // 1.6.12: the page's Scan button (was only /scan)
   server.on("/api/config",       HTTP_GET,  apiConfig);
   server.on("/api/config",       HTTP_POST, apiConfigSave);
   server.on("/api/system/reboot",HTTP_POST, apiReboot);
@@ -1238,10 +1407,12 @@ static void startWebServer(){
       int a = 12; int b = u.lastIndexOf("/activate");   // 12 = strlen("/api/themes/")
       String nm = (b > a) ? u.substring(a, b) : String("");
       if (!themeKnown(nm)) { server.send(400,"application/json","{\"error\":\"unknown theme\"}"); return; }
+      if (!webOwnerOk()) { webRefuse(); return; }   // 1.6.13
       g_active_theme = nm; saveTheme(g_active_theme);   // PANEL: remember across reboots
       server.send(200,"application/json","{\"status\":\"ok\"}"); return;
     }
     if (u.startsWith("/api/")) { server.send(404,"application/json","{\"error\":\"not found\"}"); return; }
+    if (isPortalProbe()) { sendCaptive(); return; }   // 1.6.11: the phone's internet check -> signpost page
     server.sendHeader("Location","/"); server.send(302,"text/plain","");   // captive portal
   });
   server.begin();
@@ -1252,7 +1423,7 @@ static void startWebServer(){
 #define BOOT_WIPE_MS   15000
 #define BOOT_REVERT_MS   3000    // WEBBY: in Wi-Fi mode, hold BOOT >=3s to revert to ESP-NOW (keeps creds)
 #define BOOT_WIFIWIPE_MS 10000   // WEBBY: hold BOOT >=10s to also wipe saved SSID/PASS
-#define ENROLL_WIN_MS  30000
+#define ENROLL_WIN_MS  120000   // WEBBY 1.6.13: 2 min (was 30 s) - the window also lets a phone join the AP and reach the page
 static bool serviceBootButton(){
   uint32_t now = millis();
   static bool held_prev = false; static uint32_t held_t0 = 0; static uint8_t upCount = 8;
@@ -1320,11 +1491,10 @@ static void startEspnowApMode(){
   // start event has run - straight after WiFi.mode() it doesn't yet, the call fails and apm stayed
   // zero, so EVERY dongle was "GotekOMEGA-0000". esp_read_mac() reads the chip's own number and needs
   // no radio. SoftAP MAC = the BSSID the dongle broadcasts = its identity (Wire Protocol Registry).
-  uint8_t apm[6] = {0}; esp_read_mac(apm, ESP_MAC_WIFI_SOFTAP);
-  char apid[24]; snprintf(apid, sizeof(apid), "%s-%02X%02X", AP_SSID, apm[4], apm[5]);
-  strncpy(g_ap_name, apid, sizeof(g_ap_name)-1);
-  char apline[32]; snprintf(apline, sizeof(apline), "AP: %s", apid);
-  WiFi.softAP(apid, AP_PASS, ESPNOW_CHANNEL);
+  WiFi.onEvent(apStationEvent, ARDUINO_EVENT_WIFI_AP_STACONNECTED);   // 1.6.13: the AP gate, registered before the first station can arrive
+  WiFi.onEvent(apStationEvent, ARDUINO_EVENT_WIFI_AP_STADISCONNECTED);
+  applyApConfig();   // 1.6.13: GotekOMEGA-XXXX / gotek1234 unless this dongle got its own name / password
+  char apline[40]; snprintf(apline, sizeof(apline), "AP: %s", g_ap_name);
   delay(300);
   _tcpServer.begin();
   dnsServer.start(53, "*", IPAddress(192,168,4,1)); g_dns_up = true;
@@ -1339,8 +1509,10 @@ static void startEspnowApMode(){
     }
   }
   // Webby is unlocked by default: with no enrolled owner, hold the enrol window
-  // open so a GTi can pair without the BOOT-button dance.
-  if (_owner_count == 0) { g_enroll_open = true; g_enroll_until = millis() + 6UL*60UL*1000UL; }
+  // open so a GTi can pair without the BOOT-button dance. 1.6.13: not after a failed home join - away
+  // from home the first screen that scans must not become the owner (see PAIR_HELLO).
+  if (_owner_count == 0 && !g_fallback_espnow) { g_enroll_open = true; g_enroll_until = millis() + 6UL*60UL*1000UL; }
+  if (g_fallback_espnow) Serial.printf("[LOCK] ESP-NOW by fallback: pairing needs BOOT 5 s (%u owner(s))\n", (unsigned)_owner_count);
 
   // Broadcast hello burst so a GTi can discover us (web stays responsive meanwhile).
   oledStatus("Gotek OMEGA " FW_VERSION, apline, WiFi.softAPIP().toString(), "Broadcasting...");
@@ -1348,6 +1520,7 @@ static void startEspnowApMode(){
   while (millis()-t0 < (uint32_t)(_paired ? 8000 : 3000)) {
     PktHello hello = {}; hello.type = PKT_PAIR_HELLO; WiFi.softAPmacAddress(hello.mac);
     strncpy(hello.ip, AP_IP, 15); hello.pad[0] = SAVE_PROTO_VER;
+    hello.pad[1] = 1; hello.pad[2] = WEBBY_ZERO ? 2 : 1; wrLE32(hello.pad + 3, MAX_FILE_BYTES);   // 1.6.12: same capability fields as the pairing reply
     if (_bcastPeer) _bcastPeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     if (_wavePeer)  _wavePeer->send_pkt((uint8_t*)&hello, sizeof(hello));
     RxPkt pkt; while (xQueueReceive(_rxQueue, &pkt, 0) == pdTRUE) handleESPNOW(pkt.data, pkt.len, pkt.src);
@@ -1397,6 +1570,8 @@ void setup() {
     }
     ledRed(false);
     g_join_failed = (WiFi.status() != WL_CONNECTED);
+    g_fallback_espnow = g_join_failed;   // 1.6.13: creds saved but no router = away from home
+    g_join_retry_ms = millis();
     if (WiFi.status() == WL_CONNECTED) {
       g_webmode = 1;
       g_is_master = false;
@@ -1404,7 +1579,7 @@ void setup() {
       _tcpServer.begin();        // app can reach us over the LAN too
       _disco.begin(GTI_DISCO_PORT);   // FLEET: open discovery socket
       g_next_alive_ms = 0;            // FLEET: beacon on the next loop tick
-      g_next_elect_ms = millis() + 2000;   // FLEET: first election shortly after join
+      g_next_elect_ms = millis() + ALIVE_BEACON_MS + 3000;   // 1.6.12: first election only after a full beacon round - at +2 s the roster was always empty and every boot took gotekomega.local for 12 s
       setLeds(false, true);      // blue = connected/ready
       Serial.printf("[WIFI] joined %s  IP %s  host %s  (gotekomega.local)\n", g_ssid.c_str(), WiFi.localIP().toString().c_str(), discoName().c_str());
     }
@@ -1421,6 +1596,8 @@ void setup() {
 // ============================================================================
 void loop() {
   ledTick();
+  if (g_ap_reapply_ms && millis() > g_ap_reapply_ms) { g_ap_reapply_ms = 0; applyApConfig(); }   // 1.6.13: new AP name/password, after the reply left
+  apSweepStrangers();   // 1.6.13: non-owners already on the AP when the lock turned on
   server.handleClient();
   if (g_dns_up) dnsServer.processNextRequest();
 
@@ -1430,6 +1607,13 @@ void loop() {
   // TCP app transfers (begun in both modes)
   WiFiClient client = _tcpServer.accept();
   if (client) handleTCPClient(client);
+
+  // 1.6.12: a home join that failed at boot (router still coming up after a power cut) is
+  // retried with a clean restart every 3 min - only while nobody is using the dongle. Before:
+  // two 12 s tries, then the own AP for good, which looked like a lost configuration.
+  if (g_join_failed && g_webmode == 0 && !g_disk_loaded && g_dirty_count == 0 && WiFi.softAPgetStationNum() == 0 && (millis() - g_join_retry_ms) > WIFI_RETRY_MS) {
+    Serial.println("[WIFI] home join failed at boot - restarting to try again"); delay(50); ESP.restart();
+  }
 
   bool dirtyWaiting = (g_dirty_count > 0 && g_last_write_ms && (millis()-g_last_write_ms) > SAVE_SETTLE_MS);
   if (dirtyWaiting && millis() > g_next_beacon_ms) { sendDirtyBeacon(); g_next_beacon_ms = millis()+SAVE_BEACON_MS; }

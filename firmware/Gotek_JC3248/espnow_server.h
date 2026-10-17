@@ -44,6 +44,7 @@ extern volatile bool g_espnow_paired;
 extern volatile bool g_espnow_xiao_ready;
 extern volatile bool g_espnow_xiao_done;
 extern volatile bool g_espnow_xiao_error;
+extern volatile bool g_espnow_lock_refused;   // lock-a: last send refused - this screen is not an owner of the dongle
 extern volatile bool g_espnow_link_just_established;
 extern volatile uint32_t g_espnow_xiao_last_seen; // millis() of last packet from XIAO
 extern volatile bool     g_dongle_loaded;         // v5.7.x: dongle's last-reported presented state
@@ -82,7 +83,15 @@ void   espnowScanBegin();
 void   espnowScanEnd();
 int    espnowScanCount();
 String espnowScanGetMac(int i);
-bool   espnowScanSelect(int i);
+bool   espnowScanSelect(int i);                    // lock-a: true only after the dongle answered the pairing request
+int    espnowScanOwnState(int i);
+// lock-b: owner commands to the PAIRED dongle (Webby 1.6.13). Return 1 ok, 0 bad input, 5 not an owner, -1 unreachable.
+int    espnowDongleSetSsid(const String& ssid);       // 1..24 chars
+int    espnowDongleSetPass(const String& pass);       // 8..32 chars, "" = back to the default password
+int    espnowDongleListOwners(uint8_t macs[][6], uint8_t* flags, int maxN, int* n);   // flags bit0 = this screen
+int    espnowDongleRemoveOwner(const uint8_t* mac);
+String espnowDongleSsid();                            // "" = default / unknown
+bool   espnowDongleHasKey();                          // true = the dongle has its own password                  // lock-a: 1 mine, 2 open, 0 locked to others, 0xFF unknown (pre-1.6.13)
 void   espnowSetScanCap(int n);   // runtime cap on discovered dongles (CONFIG.TXT CAP=)
 void   espnowScanMacBytes(int i, uint8_t* out);   // raw 6-byte MAC of a scanned dongle
 void   espnowSendUnpair(const uint8_t* mac);       // tell a dongle to forget this GTi (unicast)

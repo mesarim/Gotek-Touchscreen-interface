@@ -318,7 +318,7 @@ bool p4disp_init(void)
     s_vsync = xSemaphoreCreateBinary();
     esp_lcd_dpi_panel_event_callbacks_t cbs;
     memset(&cbs, 0, sizeof cbs);
-    cbs.on_refresh_done = dpi_refresh_done;
+    cbs.on_frame_buf_complete = dpi_refresh_done;   // same callback slot (a union with the deprecated on_refresh_done)
     esp_lcd_dpi_panel_register_event_callbacks(s_panel, &cbs, NULL);
 
     // Both buffers black (the ring outside the canvas is never drawn again), handed to the driver so it
@@ -352,18 +352,28 @@ static long panelIndex(int px, int py)
 }
 
 // Hand the finished back buffer to the panel (cache write-back + page flip at the next frame) and wait for the flip.
+// lab16j: the wait for the panel to finish switching buffers moved from the END of a flip to the START of the next
+// present (flipWait), so the next frame is drawn (in the compose / round canvas) while the panel is still switching.
+// The buffer we are about to write is the one the panel was showing before the last flip, so it must be free first.
+static bool s_flip_pending = false;
+static void flipWait(void)
+{
+    if (s_flip_pending && s_vsync) xSemaphoreTake(s_vsync, pdMS_TO_TICKS(40));   // safety timeout: liveness over a tear
+    s_flip_pending = false;
+}
 static void flip(int back)
 {
     uint16_t* dst = s_fb[back];
     if (s_vsync) xSemaphoreTake(s_vsync, 0);          // drop a stale "refresh done"
     esp_lcd_panel_draw_bitmap(s_panel, 0, 0, P4DISP_PANEL_W, P4DISP_PANEL_H, dst);   // own buffer = cache write-back + flip
-    if (s_vsync) xSemaphoreTake(s_vsync, pdMS_TO_TICKS(40));   // wait for the flip (safety timeout: liveness over a tear)
+    s_flip_pending = true;                            // lab16j: waited for in flipWait(), before this buffer's twin is written
     s_front = back;
 }
 
 void p4disp_present(const uint16_t* src)
 {
     if (!s_panel || !src || !s_fb[0]) return;
+    flipWait();                                        // lab16j
     int back = s_front ^ 1;
     uint16_t* dst = s_fb[back];
     if (s_ring_dirty[back]) {                          // P4R-2b: the round reel left pixels outside the square canvas
@@ -396,6 +406,7 @@ static long turnedIndex(int X, int Y)
 void p4disp_present_full(const uint16_t* src)
 {
     if (!s_panel || !src || !s_fb[0]) return;
+    flipWait();                                        // lab16j
     int back = s_front ^ 1;
     uint16_t* dst = s_fb[back];
     s_ring_dirty[back] = true;                         // P4R-2b: the next square frame in this buffer clears it first
@@ -428,6 +439,7 @@ void p4disp_touch_unturn(int rx, int ry, int* x, int* y)
 void p4disp_set_turn(int quarter)
 {
     s_turn = ((quarter % 4) + 4) % 4;
+    flipWait();                                        // lab16j: never clear a buffer the panel is still switching from
     if (s_fb[0] && s_fb[1]) {                          // the canvas moves on a 90-degree turn: clear both buffers
         memset(s_fb[0], 0, (size_t)P4DISP_PANEL_W * P4DISP_PANEL_H * 2);
         memset(s_fb[1], 0, (size_t)P4DISP_PANEL_W * P4DISP_PANEL_H * 2);

@@ -71,10 +71,25 @@ keep this trustworthy:
   fixed by adding its `#` explanation to the firmware's CONFIG template (so it
   self-documents next time), not only by describing it in a side file. Surface
   these to the user; propose the template line.
+- **Hidden extras stay hidden.** The special cracktros `DENISE`, `WRANGLER`
+  and `RETRONAUT` are deliberately undocumented (Mez's rule). The firmware
+  accepts them by name, but they must never appear in the CONFIG template,
+  `CONFIG-REFERENCE.md`, `features.html`, the guide/help pages, the README or
+  any pick list. Do not treat them as drift. (Contributor credits and the
+  bounce-sprite tributes are fine; they don't reveal the cracktro settings.)
 
 For a full, current key reference, generate `CONFIG-REFERENCE.md` from
 `config_keys` (a table of key / default / meaning, in template order). This
 is the single doc that most repays being generated rather than typed.
+
+Do the same for the endpoint surface with
+`scripts/render_api_reference.py`, which builds `docs/API-REFERENCE.md` from
+the `endpoints` block (HTTP routes per surface with the lock gate each handler
+actually calls, the TCP escape opcodes, the UDP beacons and their cadence, and
+the protocol-facing constants). Name each surface's facts file and sketch on
+the command line — both worktrees hold every sketch and the branches disagree
+about some of them, so the renderer stamps the branch and commit it read
+rather than guessing which is authoritative. See the doc-map for the rest.
 
 ### 4. Flag what only a human can make
 The skill cannot screenshot a running device or photograph hardware. When a

@@ -53,7 +53,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "5.9.41-lab16h-P4R"   // P4R-7e: DSK art - the rainbow stripe left of centre below INSERT, the colour keys right of centre, same height | P4R-7d: the DSK rainbow stripe moved inside the circle (16f showed only a red sliver), colour keys 40 px left | P4R-7c: AMIGA theme with the DSK library: a Spectrum-style rainbow stripe and CPC-style colour keys in the background (the ball stays ADF) | P4R-6h: INSERT on the round screens: "Loading" (and too big / failed / multicast) and the dongle take-over question are round cards in the middle of the reel/list/Settings instead of the square panel | P4R-7b: the AMIGA theme's background ball is a solid red/white Boing ball (no blue tint), resting low on the right with its floor shadow | P4R-5: ROUND READER - the .nfo/manual reader uses the round glass (text column in the middle, title + % round the top, a dotted page arc on the right rim, TOP/CLOSE/SIZE/JUMP rim buttons); the last Settings option tapped has a red outline; AMIGA theme blue calmer (#1E3A5F) | P4R-7: AMIGA THEME (Workbench blue/white/black/orange); with the ADF library the round reel, list and Settings sit on a big faint Boing ball, and the screensaver is the Boing demo (spinning ball bouncing in the purple-grid room, with its shadow) | P4R-6g: the boot screen (OMEGAWARE / GTi) shows the firmware version small under GTi, on the round glass | P4R-6f: rim button labels CURVE along the rim (each letter turned to the circle, tops to the centre, edges smoothed) - they fit their buttons at 3x | P4R-6e: rim button labels back to crisp 3x letters, set 2 px apart instead of 3 (CONFIG 7% narrower, even strokes; 2.7x looked uneven) | P4R-6d: rim button labels 10% smaller (2.7x, new fractional text size) - CONFIG no longer spills past its button; Settings hides COMPACT, REEL BORDER and LIST TILE while ROUND UI is on (they only change the square screens) | P4R-6c: the reel's rim buttons in the same places and colours as the list's - from 6 o'clock round to 9: action (ROLL / INSERT), view (LIST / REEL), CONFIG, filter (ALL-FAV-MOST / ADF-DSK-GEN) | P4R-6b (from Mez's photos): round list side rows get a visible pill on every theme (the background lifted towards the text colour), rim button labels size 3, the NDSK badge size 2 | P4R-6a: ROUND SCREENSAVER + ROUND SCAN/BUILD SCREENS - SCANNING, BUILDING and "Preparing covers" (a library switch, a rescan, boot) use the whole round glass; all three savers use the whole round glass: the bounce bounces off the circle's edge (bigger pictures and names), MATRIX rain fills the circle, the SLIDES pictures sit in the middle, decoded bigger | P4R-4b: ROUND LIST AS PILLS - every row a pill with a small cover (like Settings), dimmer away from the middle, widths follow the circle; the loaded game green | P4R-4: ROUND SETTINGS - the Settings rows as pills down the middle of the glass (as wide as the circle allows), < > page circles at 9 and 3 o'clock, CLOSE on the rim at 6, title round the top; toasts and "Loading library" show on the round screens | P4R-3: ROUND LIST - the games as a wheel (middle row selected, rows follow the edge), A-Z round the right rim (tap or slide), rim INSERT/REEL/CONFIG/LIB; everything that used to fall back to the square list (leaving Settings, rescan, library switch) comes home to the round reel/list | P4R-2c: the round reel stays round - save toasts, "dongle linked", SAVING GAME, the end of a disk load/eject (also from the web UI) and the dongle take-over question now come back to (or show on) the round reel instead of leaving the square list on screen | P4R-2b: FIX - a square screen shown after the round reel (Settings, list) no longer keeps the reel's leftovers round the edge | P4R-2: ROUND REEL - the reel uses the whole round glass (800x800): REELSTYLE=MOON (covers on an arc across the top, default) or FLAT, status round the rim, LIST/CONFIG/source/ROLL as curved rim buttons, boots into the reel (ROUNDHOME=LIST for the old list), ROUNDUI=OFF = the square reel; Settings: REEL STYLE, ROUND UI; TEST TOOLS: RIM TOUCH TEST | P4R: Waveshare 3.4C ROUND 800x800 bring-up (4.3" P4 15n + JD9365 panel, GT9271 touch, 4-bit SD; square UI inside the circle) | lab15n (P4 only): bigger disk buttons on the list page (86x34, text size 2; were the 3.5"'s 44x20) + bigger page button | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j (from the 3.5"): tap the game text in the list = the whole .nfo full-screen in the manual reader | P4 port-sync: the 3.5" 5.9.41-lab15i (lab14 walker, SD guard, never-format, compact library, safe saves + SD lock, per-dongle saves, one LIBRARY button, wireless offset 13, take-over check over TCP) + the P4 board layer (ST7701 DSI, GT911, C6 radio + self-update, 800x480 layout) | was 5.9.13-P4
+#define FW_VERSION "5.9.41-lab16j-P4R"   // lab16j (Mez, 8 Oct: "round scrolling is slow, DIAG-DISP does not show"): the curved rim labels are worked out once and then only copied (they were re-smoothed 16 samples a pixel every frame), the next frame is drawn while the panel is still switching to the last one (no more waiting for the flip), the background fill writes 2 pixels at a time; DIAG-DISP sits inside the circle (left of centre, bigger text) on the round screens; REEL PROF logs "[round]" lines (reel/list: fps, draw = clear + rim + rest, flush) | lab16i (Mez, 8 Oct): Settings ROTATE turns the WHOLE round picture (and touch) in 90-degree steps, live - "ROTATE: 0 / 90 / 180 / 270" - for mounting the round screen any way up; saved as PANELTURN= (now in CONFIG.TXT). ROUND UI off = ROTATE as before (portrait / landscape) | P4R-7e: DSK art - the rainbow stripe left of centre below INSERT, the colour keys right of centre, same height | P4R-7d: the DSK rainbow stripe moved inside the circle (16f showed only a red sliver), colour keys 40 px left | P4R-7c: AMIGA theme with the DSK library: a Spectrum-style rainbow stripe and CPC-style colour keys in the background (the ball stays ADF) | P4R-6h: INSERT on the round screens: "Loading" (and too big / failed / multicast) and the dongle take-over question are round cards in the middle of the reel/list/Settings instead of the square panel | P4R-7b: the AMIGA theme's background ball is a solid red/white Boing ball (no blue tint), resting low on the right with its floor shadow | P4R-5: ROUND READER - the .nfo/manual reader uses the round glass (text column in the middle, title + % round the top, a dotted page arc on the right rim, TOP/CLOSE/SIZE/JUMP rim buttons); the last Settings option tapped has a red outline; AMIGA theme blue calmer (#1E3A5F) | P4R-7: AMIGA THEME (Workbench blue/white/black/orange); with the ADF library the round reel, list and Settings sit on a big faint Boing ball, and the screensaver is the Boing demo (spinning ball bouncing in the purple-grid room, with its shadow) | P4R-6g: the boot screen (OMEGAWARE / GTi) shows the firmware version small under GTi, on the round glass | P4R-6f: rim button labels CURVE along the rim (each letter turned to the circle, tops to the centre, edges smoothed) - they fit their buttons at 3x | P4R-6e: rim button labels back to crisp 3x letters, set 2 px apart instead of 3 (CONFIG 7% narrower, even strokes; 2.7x looked uneven) | P4R-6d: rim button labels 10% smaller (2.7x, new fractional text size) - CONFIG no longer spills past its button; Settings hides COMPACT, REEL BORDER and LIST TILE while ROUND UI is on (they only change the square screens) | P4R-6c: the reel's rim buttons in the same places and colours as the list's - from 6 o'clock round to 9: action (ROLL / INSERT), view (LIST / REEL), CONFIG, filter (ALL-FAV-MOST / ADF-DSK-GEN) | P4R-6b (from Mez's photos): round list side rows get a visible pill on every theme (the background lifted towards the text colour), rim button labels size 3, the NDSK badge size 2 | P4R-6a: ROUND SCREENSAVER + ROUND SCAN/BUILD SCREENS - SCANNING, BUILDING and "Preparing covers" (a library switch, a rescan, boot) use the whole round glass; all three savers use the whole round glass: the bounce bounces off the circle's edge (bigger pictures and names), MATRIX rain fills the circle, the SLIDES pictures sit in the middle, decoded bigger | P4R-4b: ROUND LIST AS PILLS - every row a pill with a small cover (like Settings), dimmer away from the middle, widths follow the circle; the loaded game green | P4R-4: ROUND SETTINGS - the Settings rows as pills down the middle of the glass (as wide as the circle allows), < > page circles at 9 and 3 o'clock, CLOSE on the rim at 6, title round the top; toasts and "Loading library" show on the round screens | P4R-3: ROUND LIST - the games as a wheel (middle row selected, rows follow the edge), A-Z round the right rim (tap or slide), rim INSERT/REEL/CONFIG/LIB; everything that used to fall back to the square list (leaving Settings, rescan, library switch) comes home to the round reel/list | P4R-2c: the round reel stays round - save toasts, "dongle linked", SAVING GAME, the end of a disk load/eject (also from the web UI) and the dongle take-over question now come back to (or show on) the round reel instead of leaving the square list on screen | P4R-2b: FIX - a square screen shown after the round reel (Settings, list) no longer keeps the reel's leftovers round the edge | P4R-2: ROUND REEL - the reel uses the whole round glass (800x800): REELSTYLE=MOON (covers on an arc across the top, default) or FLAT, status round the rim, LIST/CONFIG/source/ROLL as curved rim buttons, boots into the reel (ROUNDHOME=LIST for the old list), ROUNDUI=OFF = the square reel; Settings: REEL STYLE, ROUND UI; TEST TOOLS: RIM TOUCH TEST | P4R: Waveshare 3.4C ROUND 800x800 bring-up (4.3" P4 15n + JD9365 panel, GT9271 touch, 4-bit SD; square UI inside the circle) | lab15n (P4 only): bigger disk buttons on the list page (86x34, text size 2; were the 3.5"'s 44x20) + bigger page button | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j (from the 3.5"): tap the game text in the list = the whole .nfo full-screen in the manual reader | P4 port-sync: the 3.5" 5.9.41-lab15i (lab14 walker, SD guard, never-format, compact library, safe saves + SD lock, per-dongle saves, one LIBRARY button, wireless offset 13, take-over check over TCP) + the P4 board layer (ST7701 DSI, GT911, C6 radio + self-update, 800x480 layout) | was 5.9.13-P4
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -229,6 +229,7 @@ static uint16_t g_rbg_key=0;             //   ...so text whose background is thi
 static int  g_rTouchX=0,g_rTouchY=0;    // last touch in round (upright panel) coordinates
 static int  g_rRawX=0,g_rRawY=0;        // ...and as the digitizer reported it (for the rim test log)
 static int  g_rt_saveW=0,g_rt_saveH=0;
+static int  g_panelturn=0;              // lab16i: PANELTURN= 0/90/180/270 - the whole picture + touch, quarter turns (Settings ROTATE with ROUND UI on)
 static bool g_roundui=true;             // ROUNDUI=ON (default) - the reel uses the round layout; OFF = the square reel
 static int  g_reelstyle=1;              // REELSTYLE= 0 FLAT (big cover, neighbours at the sides) / 1 MOON (covers on an arc, default)
 static bool g_roundhome=true;           // ROUNDHOME=REEL (default) boots into the round reel; LIST = the square list
@@ -264,7 +265,7 @@ static void roundEnd(){
   g_rt=false; gW=g_rt_saveW; gH=g_rt_saveH; g_clip_x0=0; g_clip_y0=0; g_clip_x1=gW; g_clip_y1=gH;
 }
 
-static void gfx_fillScreen(uint16_t c){if(g_rt){for(int i=0;i<RW*RW;i++)g_rfb[i]=c;return;}   // P4R-2
+static void gfx_fillScreen(uint16_t c){if(g_rt){uint32_t v=(uint32_t)c|((uint32_t)c<<16);uint32_t*p=(uint32_t*)g_rfb;for(int i=0;i<RW*RW/2;i++)p[i]=v;return;}   // lab16j: 2 pixels a write   // P4R-2
   uint16_t s=swap16(c);for(int i=0;i<LCD_WIDTH*LCD_HEIGHT;i++)framebuffer[i]=s;}
 static void gfx_drawPixel(int x,int y,uint16_t c){if(x>=g_clip_x0&&x<g_clip_x1&&y>=g_clip_y0&&y<g_clip_y1)fb_setPixel(x,y,c);}
 
@@ -303,7 +304,7 @@ static void gfx_drawRoundRect(int x,int y,int w,int h,int r,uint16_t c){gfx_hlin
 static void gfx_setTextColor(uint16_t f,uint16_t b){text_fg=f;text_bg=b;}
 static int text_t10=0;   // P4R-6d: text size in tenths (e.g. 27 = 2.7x) - 0 = the whole-number size
 static void gfx_setTextSize(int s){text_size=s<1?1:s;text_t10=0;}
-static void gfx_setTextSizeT(int t10){if(t10<10)t10=10;text_t10=t10;text_size=t10/10;}   // P4R-6d
+__attribute__((unused)) static void gfx_setTextSizeT(int t10){if(t10<10)t10=10;text_t10=t10;text_size=t10/10;}   // P4R-6d
 static void gfx_setCursor(int x,int y){text_x=x;text_y=y;}
 static int gfx_textWidth(const String&s){return text_t10?(int)s.length()*((6*text_t10+5)/10):s.length()*6*text_size;}
 
@@ -350,32 +351,38 @@ static bool     g_lastused=false;   // LASTUSED= / Settings: ON=on boot, restore
 static uint32_t g_diag_last=0;      // last gfx_flush millis (for FPS)
 static float    g_diag_fps=0;       // smoothed frames/sec
 static void drawDiagOverlay(){
-  int bx=2,by=2,bw=98,bh=60;
+  int bx=2,by=2,bw=98,bh=60,ts=1,ls=10;
+  if(g_rt){ ts=2; ls=20; bw=196; bh=112; bx=26; by=RW/2-bh/2; }   // lab16j: the round glass - (2,2) is outside the circle; left of centre, size 2
   if(bw>gW-4)bw=gW-4; if(bh>gH-4)bh=gH-4;
   // draw at full-screen clip so a scroll/marquee clip left set can't crop us
   int cx0=g_clip_x0,cy0=g_clip_y0,cx1=g_clip_x1,cy1=g_clip_y1;
   g_clip_x0=0;g_clip_y0=0;g_clip_x1=gW;g_clip_y1=gH;
   gfx_fillRect(bx,by,bw,bh,0x0000);
   gfx_drawRect(bx,by,bw,bh,0x07E0);
-  gfx_setTextSize(1);
+  gfx_setTextSize(ts);
   char l[40];
-  gfx_setTextColor(0x07E0,0x0000); snprintf(l,sizeof l,"FPS %.1f",g_diag_fps);                       gfx_setCursor(bx+4,by+4);  gfx_print(l);
-  gfx_setTextColor(0xFFFF,0x0000); snprintf(l,sizeof l,"SRAM %uK",(unsigned)(ESP.getFreeHeap()/1024)); gfx_setCursor(bx+4,by+14); gfx_print(l);
-  snprintf(l,sizeof l,"PSRAM %uK",(unsigned)(ESP.getFreePsram()/1024));                                gfx_setCursor(bx+4,by+24); gfx_print(l);
+  gfx_setTextColor(0x07E0,0x0000); snprintf(l,sizeof l,"FPS %.1f",g_diag_fps);                       gfx_setCursor(bx+4,by+4);       gfx_print(l);
+  gfx_setTextColor(0xFFFF,0x0000); snprintf(l,sizeof l,"SRAM %uK",(unsigned)(ESP.getFreeHeap()/1024)); gfx_setCursor(bx+4,by+4+ls);    gfx_print(l);
+  snprintf(l,sizeof l,"PSRAM %uK",(unsigned)(ESP.getFreePsram()/1024));                                gfx_setCursor(bx+4,by+4+2*ls);  gfx_print(l);
   uint32_t up=millis()/1000;
-  snprintf(l,sizeof l,"UP %02u:%02u:%02u",(unsigned)(up/3600),(unsigned)((up/60)%60),(unsigned)(up%60));gfx_setCursor(bx+4,by+34); gfx_print(l);
-  gfx_setTextColor(0xFD20,0x0000); snprintf(l,sizeof l,"TEMP %.0fC",temperatureRead());                gfx_setCursor(bx+4,by+44); gfx_print(l);
+  snprintf(l,sizeof l,"UP %02u:%02u:%02u",(unsigned)(up/3600),(unsigned)((up/60)%60),(unsigned)(up%60));gfx_setCursor(bx+4,by+4+3*ls);  gfx_print(l);
+  gfx_setTextColor(0xFD20,0x0000); snprintf(l,sizeof l,"TEMP %.0fC",temperatureRead());                gfx_setCursor(bx+4,by+4+4*ls);  gfx_print(l);
   g_clip_x0=cx0;g_clip_y0=cy0;g_clip_x1=cx1;g_clip_y1=cy1;
 }
 
+static uint32_t g_rr_frames=0,g_rr_draw=0,g_rr_clear=0,g_rr_rim=0,g_rr_flush=0,g_rr_t0=0;   // lab16j: REEL PROF on the round screens
+static uint8_t  g_rr_kind=0;                                                                  // 1 = reel, 2 = list (what the counters are for)
+static bool     g_rr_pend=false;                                                              // a reel/list frame was drawn, not yet flushed
 static void gfx_flush(){
   if(!framebuffer)return;
-  uint32_t _fl_t0=micros();
+  uint32_t _fl_t0=micros(); const bool _fl_round=g_rt;   // lab16j
   { uint32_t now=millis(); if(g_diag_last){ float dt=(float)(now-g_diag_last); if(dt>0){ float f=1000.0f/dt; g_diag_fps = g_diag_fps>0 ? g_diag_fps*0.85f+f*0.15f : f; } } g_diag_last=now; }
   if(g_diagdisp) drawDiagOverlay();
   if(g_rt){ p4disp_present_full(g_rfb); g_touch_round=true; roundEnd(); }   // P4R-2: a round screen - show it, back to square drawing
   else { p4disp_present(framebuffer); g_touch_round=false; }   // P4: DSI page-flip of the compose (STRIPROWS=/FLUSHUS= parse but do nothing here)
   g_rp_flush+=micros()-_fl_t0;
+  if(g_reelprof&&g_rr_kind&&_fl_round&&g_rr_pend){ g_rr_flush+=micros()-_fl_t0; g_rr_frames++; }   // lab16j: round reel/list frames only
+  g_rr_pend=false;
 }
 
 // ── JPEG decode via JPEGDEC (from Dimi) ──
@@ -592,7 +599,7 @@ static bool Touch_ReadFrame(){
   uint8_t buf[8]; bool ok=gtRd(0x8150,buf,8); gtWr8(0x814E,0);
   if(!ok){gTouchPts=0;return false;}
   int prx=buf[0]|(buf[1]<<8), pry=buf[2]|(buf[3]<<8);   // P4R: GT9271 raw = round panel coords (0..799)
-  if(g_tlog_n<16){ g_tlog[g_tlog_n][0]=(int16_t)prx; g_tlog[g_tlog_n][1]=(int16_t)pry; g_tlog_n++; }   // bring-up: first 16 raw touches, logged from loop()
+  if(g_tlog_n<16){ g_tlog[g_tlog_n][0]=(int16_t)prx; g_tlog[g_tlog_n][1]=(int16_t)pry; g_tlog_n=g_tlog_n+1; }   // bring-up: first 16 raw touches, logged from loop()
   g_rRawX=prx; g_rRawY=pry; p4disp_touch_unturn(prx,pry,&g_rTouchX,&g_rTouchY);   // P4R-2: round screens use these
   int _cx,_cy; if(!p4disp_touch_to_compose(prx,pry,&_cx,&_cy)){ if(g_touch_round){gTouchPts=1;return true;} gTouchPts=0;return false;}   // outside the square canvas: only a round screen wants it
   uint16_t rx=(uint16_t)_cx, ry=(uint16_t)_cy;          // -> compose-buffer coords, then the P4's usual rotation mapping
@@ -2670,6 +2677,10 @@ FONT=NORMAL
 # Easiest to set with the ROTATE button on the INFO screen (each tap = +90).
 ROTATE=0
 
+# PANELTURN: turns the WHOLE round picture and touch, in degrees: 0, 90, 180 or 270 - for mounting the
+#   round screen any way up. Settings > ROTATE changes it while ROUND UI is on.
+PANELTURN=0
+
 # COMPACT: OFF = cover art + list, ON = maximise the game list (cover collapses to a strip)
 COMPACT=OFF
 
@@ -2914,6 +2925,7 @@ static void selfHealConfig(){
     {"FONT",     "\n# Font size: SMALL, NORMAL, LARGE\nFONT=NORMAL\n"},
     {"LANG",     "\n# Language: EN, FR, IT, ES, DE, NL  (pull the SD and edit this line if you get stuck)\nLANG=EN\n"},
     {"ROTATE",   "\n# Screen rotation in degrees: 0 or 180 = landscape, 90 or 270 = portrait.\nROTATE=0\n"},
+    {"PANELTURN","\n# PANELTURN: turns the WHOLE round picture and touch, in degrees: 0, 90, 180 or 270 - for mounting the\n#   round screen any way up. Settings > ROTATE changes it while ROUND UI is on.\nPANELTURN=0\n"},
     {"COVERMIN", "\n# COVERMIN: hide covers whose short side is under N px (0 = show all) - keeps the reel + panel clean.\nCOVERMIN=140\n"},
     {"REELFILTER", "\n# REELFILTER: ON = the reel (cover carousel) shows only games whose cover passes COVERMIN;\n#             the A-Z list still shows every game. OFF = reel shows all games.\nREELFILTER=OFF\n"},
     {"COMPACT",  "\n# COMPACT: OFF = cover art + list, ON = maximise the game list (cover collapses to a strip)\nCOMPACT=OFF\n"},
@@ -3048,7 +3060,7 @@ static void loadConfig(){
     else if(k=="FONT"){int f=1;if(v=="SMALL")f=0;else if(v=="LARGE")f=2;applyFont(f);}
     else if(k=="LANG"){String lu=v;lu.toUpperCase();for(int i=0;i<LANG_N;i++)if(lu==LANG_NAMES[i]){g_lang=i;break;}}
     else if(k=="ROTATE"){g_rot=((v.toInt()/90)%4+4)%4;}
-    else if(k=="PANELTURN"){p4disp_set_turn(((v.toInt()/90)%4+4)%4);}
+    else if(k=="PANELTURN"){g_panelturn=((v.toInt()/90)%4+4)%4;p4disp_set_turn(g_panelturn);}
     else if(k=="ROUNDUI"){String u=v;u.toUpperCase();g_roundui=!(u=="OFF"||u=="0"||u=="NO");}                // P4R-2
     else if(k=="REELSTYLE"){String u=v;u.toUpperCase();g_reelstyle=(u=="FLAT")?0:1;}                        // P4R-2: FLAT / MOON
     else if(k=="ROUNDHOME"){String u=v;u.toUpperCase();g_roundhome=!(u=="LIST");}                           // P4R-2: REEL / LIST   // P4R hidden key: turn the whole picture + touch 0/90/180/270 if the round panel's "up" is off
@@ -3720,7 +3732,8 @@ static void buildInfoItems(){
   add(String(T(L_CFG_FONT))+": "+fontName(g_font), COL_AMBER, TFT_BLACK, IA_FONT);
   add(String(T(L_THEME))+": "+THEMES[g_theme_idx].name, COL_ACCENT, TFT_WHITE, IA_THEME);   // Vince test: moved off the bottom bar
   add(String(T(L_CFG_LANG))+": "+LANG_NAMES[g_lang], (uint16_t)0x79D6, TFT_WHITE, IA_LANG);
-  add(String(T(L_CFG_ROTATE))+": "+(g_portrait?T(L_PORTRAIT):T(L_LANDSCAPE)), COL_BLUE, TFT_WHITE, IA_ROTATE);
+  if(g_roundui) add(String(T(L_CFG_ROTATE))+": "+String(g_panelturn*90), COL_BLUE, TFT_WHITE, IA_ROTATE);   // lab16i: round = turn the whole picture
+  else add(String(T(L_CFG_ROTATE))+": "+(g_portrait?T(L_PORTRAIT):T(L_LANDSCAPE)), COL_BLUE, TFT_WHITE, IA_ROTATE);
   if(!g_roundui) add(String(T(L_CFG_COMPACT))+": "+(g_compact?T(L_ON):T(L_OFF)), g_compact?COL_GREEN:COL_BAR, g_compact?TFT_BLACK:COL_LIT, IA_COMPACT);
   add(String(T(L_CFG_LIBRARY))+": "+(g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN"), COL_ACCENT, TFT_BLACK, IA_LIBMODE);   // v5.6.0: disk-format mode moved here from the mode bar
   add(String(T(L_CFG_CATEG))+": "+(g_categories?T(L_ON):T(L_OFF)), g_categories?COL_GREEN:COL_BAR, g_categories?TFT_BLACK:COL_LIT, IA_CATEG);   // library/category browse toggle (mirrors CONFIG.TXT CATEGORIES=)
@@ -4162,7 +4175,7 @@ static void buildThumbs(){ if(!g_covers_on){fwLocFree();return;}   // 5.9.32-lab
   // PLUS a gLog, which opens/appends/closes /gti.log on the SAME card the build
   // is reading covers from. Over a 30-minute build that was ~18,000 flushes and
   // ~18,000 file opens competing with the work. Now every 25 games, with an ETA.
-  uint32_t t0=millis(); int lastShown=-1; uint32_t lastDraw=0;
+  uint32_t t0=millis(); uint32_t lastDraw=0;
   for(int i=0;i<n;i++){
     auto&g=g_games[i];
     if(!g.jpg_path.length()){String jpg;if(findJPGFor(g_files[g.first_file_idx],jpg))g.jpg_path=jpg;else g.jpg_path="?";}
@@ -4191,7 +4204,7 @@ static void buildThumbs(){ if(!g_covers_on){fwLocFree();return;}   // 5.9.32-lab
     if((i%200)==0||i==n-1){ g_bc_n=(uint32_t)i; g_bc_psram=(uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM); }
     if((i%1000)==0||i==n-1)gLog("[thumbs] %d/%d %lums int=%u psram=%u\n",i+1,n,(unsigned long)(millis()-t0),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
     if(millis()-lastDraw>=1000||i==n-1){   // lab15f: redraw once a second (was every 25 games: 800 full-screen flushes, ~29 s, on a 20k card with no covers); log every 1000 (was 200)
-      lastShown=i; lastDraw=millis();
+      lastDraw=millis();
       if(g_roundui)roundBegin(); gfx_fillScreen(0x1082);   // P4R-6a: scan/build progress on the whole round glass
       gfx_setTextSize(2);gfx_setTextColor(0xFC60,0x1082);
       {const char*s=T(L_BUILDING);int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH/2-50);gfx_print(s);}
@@ -4350,7 +4363,7 @@ static void carMicroSave(){ if(g_nocache)return;
 static void carMicroBuild(){
   int n=g_car_micro_n; if(!n||!car_micro_block)return;
   uint16_t*tmp=(uint16_t*)ps_malloc((size_t)CAR_TILE*CAR_TILE*2); if(!tmp)return;
-  uint32_t t0=millis(); int lastShown=-1; uint32_t lastDraw=0;   // 5.9.36-lab6: count-driven, was every 120ms; lab15f: once a second
+  uint32_t t0=millis(); uint32_t lastDraw=0;   // 5.9.36-lab6: count-driven, was every 120ms; lab15f: once a second
   gLog("[micro] build start: %d games | int=%u largest-int=%u psram=%u\n",n,(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram());
   uint32_t nTile=0,nDec=0,nNone=0;
   for(int i=0;i<n;i++){
@@ -4368,7 +4381,7 @@ static void carMicroBuild(){
     SD_UNLOCK();
     { uint32_t dt=millis()-tg; if(dt>2000) gLog("[micro] game %d took %lums (%s)\n",i,(unsigned long)dt,g_games[i].name.c_str()); }
     if(ok)carMicroFromTile(i,tmp);
-    if(millis()-lastDraw>=1000||i==n-1){ lastShown=i; lastDraw=millis();   // lab15f: was every 25 games (a ~36 ms full-screen flush each)
+    if(millis()-lastDraw>=1000||i==n-1){ lastDraw=millis();   // lab15f: was every 25 games (a ~36 ms full-screen flush each)
       if(g_roundui)roundBegin(); gfx_fillScreen(0x1082);   // P4R-6a: scan/build progress on the whole round glass
       gfx_setTextSize(2);gfx_setTextColor(0xFC60,0x1082);
       {const char*s="Preparing covers";int tw=gfx_textWidth(s);gfx_setCursor((gW-tw)/2,gH/2-40);gfx_print(s);}
@@ -4563,17 +4576,6 @@ static void rFillRingSeg(int a0,int a1,int r0,int r1,uint16_t c){
 static void rTextC(int cx,int y,const String&t,int sz,uint16_t fg,uint16_t bg){
   gfx_setTextSize(sz); gfx_setTextColor(fg,bg); gfx_setCursor(cx-gfx_textWidth(t)/2,y); gfx_print(t);
 }
-// P4R-6d: the same with a size in tenths (27 = 2.7x); leaves the gfx layer at a whole-number size afterwards.
-static void rTextCT(int cx,int y,const String&t,int t10,uint16_t fg,uint16_t bg){
-  gfx_setTextSizeT(t10); gfx_setTextColor(fg,bg); gfx_setCursor(cx-gfx_textWidth(t)/2,y); gfx_print(t); gfx_setTextSize(2);
-}
-// P4R-6e: whole-size letters (even strokes) set closer together: adv = pixels from one letter to the next
-// (the font's own is 6*sz; 3x with adv 17 leaves 2 px between letters instead of 3 - CONFIG 100 px instead of 108).
-static void rTextCAdv(int cx,int y,const String&t,int sz,int adv,uint16_t fg,uint16_t bg){
-  gfx_setTextSize(sz); gfx_setTextColor(fg,bg); int n=t.length(); if(!n) return;
-  int w=n*adv-(adv-5*sz), x=cx-w/2;
-  for(int k=0;k<n;k++){ gfx_setCursor(x+k*adv,y); gfx_print(String(t[k])); }
-}
 #define RIM_SZ  3    // P4R-6e: rim button labels: 3x letters (even strokes - 2.7x looked uneven on the glass)...
 #define RIM_ADV 18   //   ...normal spacing again - the labels curve along the rim now (P4R-6f), so they fit
 // Text along an arc across the top (upright letters, centred on 12 o'clock). Colour per part.
@@ -4646,7 +4648,39 @@ static void rClearBg(){
 // the circle at its own angle, tops towards the centre, reading left to right. am = the label's middle (radians,
 // clockwise from 3 o'clock, bottom half), r = radius of the letters' middle line. Each screen pixel near a letter is
 // sampled 4x4 inside the (turned) font cell, so edges are smoothed against bg (the button colour).
+// lab16j: the smoothing above costs ~15,000 samples a letter. The rim labels are the same every frame, so each one is
+// worked out ONCE into a pixel list (position + colour, in PSRAM) and later frames only replay that list.
+// Up to RAL_N labels are kept (round robin); a label is found again by everything that changes its pixels.
+#define RAL_N 16
+struct RalEntry { String key; uint32_t* pos; uint16_t* col; int n, cap; };
+static RalEntry g_ral[RAL_N]; static int g_ral_next=0;
+static uint32_t* s_ral_pos=NULL; static uint16_t* s_ral_col=NULL; static int s_ral_n=0, s_ral_cap=0;   // the list being built (NULL = draw straight)
+static inline void rArcPut(int x,int y,uint16_t c){
+  if(s_ral_pos){ if(s_ral_n<s_ral_cap&&(unsigned)x<RW&&(unsigned)y<RW){ s_ral_pos[s_ral_n]=((uint32_t)y<<10)|(uint32_t)x; s_ral_col[s_ral_n]=c; s_ral_n++; } return; }
+  gfx_drawPixel(x,y,c);
+}
+static void rArcLabelDraw(int r,float am,const String& t,int sz,int adv,uint16_t fg,uint16_t bg);
 static void rArcLabel(int r,float am,const String& t,int sz,int adv,uint16_t fg,uint16_t bg){
+  if(!t.length()||r<=0) return;
+  char kb[48]; snprintf(kb,sizeof kb,"%d|%ld|%d|%d|%04X|%04X|",r,lroundf(am*10000.0f),sz,adv,fg,bg);
+  String key=String(kb)+t;
+  for(int i=0;i<RAL_N;i++) if(g_ral[i].pos&&g_ral[i].key==key){   // replay
+    const RalEntry& e=g_ral[i];
+    for(int k=0;k<e.n;k++){ uint32_t q=e.pos[k]; gfx_drawPixel((int)(q&1023),(int)(q>>10),e.col[k]); }
+    return; }
+  int cap=(int)t.length()*(10*sz+1)*(10*sz+1);                        // every pixel of every letter cell, the most there can be
+  RalEntry& e=g_ral[g_ral_next]; g_ral_next=(g_ral_next+1)%RAL_N;
+  if(e.cap<cap){ if(e.pos){ heap_caps_free(e.pos); heap_caps_free(e.col); }
+    e.pos=(uint32_t*)heap_caps_malloc((size_t)cap*4,MALLOC_CAP_SPIRAM); e.col=(uint16_t*)heap_caps_malloc((size_t)cap*2,MALLOC_CAP_SPIRAM);
+    e.cap=(e.pos&&e.col)?cap:0;
+    if(!e.cap){ if(e.pos)heap_caps_free(e.pos); if(e.col)heap_caps_free(e.col); e.pos=NULL; e.col=NULL; } }
+  if(!e.cap){ rArcLabelDraw(r,am,t,sz,adv,fg,bg); return; }           // no memory: draw it the slow way, keep nothing
+  s_ral_pos=e.pos; s_ral_col=e.col; s_ral_n=0; s_ral_cap=e.cap;
+  rArcLabelDraw(r,am,t,sz,adv,fg,bg);
+  e.n=s_ral_n; e.key=key; s_ral_pos=NULL; s_ral_col=NULL;
+  for(int k=0;k<e.n;k++){ uint32_t q=e.pos[k]; gfx_drawPixel((int)(q&1023),(int)(q>>10),e.col[k]); }
+}
+static void rArcLabelDraw(int r,float am,const String& t,int sz,int adv,uint16_t fg,uint16_t bg){
   int n=t.length(); if(!n||r<=0) return;
   float w=(float)(n*adv-(adv-5*sz)), half=5.0f*sz, fsz=(float)sz;
   for(int k=0;k<n;k++){ char c=t[k]; if(c<33||c>126) continue;
@@ -4662,7 +4696,7 @@ static void rArcLabel(int r,float am,const String& t,int sz,int adv,uint16_t fg,
         float u=qx*rx+qy*ry+2.5f*fsz, v=qx*dx_+qy*dy_+4.0f*fsz;
         if(u<0||v<0) continue; int col=(int)(u/fsz), row=(int)(v/fsz);
         if(col<5&&row<8&&(colb[col]>>row&1)) cov++; }
-      if(cov) gfx_drawPixel(px,py,cov>=16?fg:rMix565(bg,fg,cov*16)); }
+      if(cov) rArcPut(px,py,cov>=16?fg:rMix565(bg,fg,cov*16)); }
   }
 }
 // One cover at centre (cx,cy), fitted inside bw x bh, letterbox + black bands trimmed (lab15l/m).
@@ -4682,19 +4716,34 @@ static void rCover(int gi,int cx,int cy,int bw,int bh,int dim,bool moving,bool s
   if(ow)*ow=dw; if(oh)*oh=dh;
 }
 
+// lab16j: REEL PROF on the round screens - every 1.5 s one "[round]" line in gti.log (what the counters measured since).
+static void rrProfTick(uint8_t kind){
+  if(!g_reelprof){ g_rr_kind=0; return; }
+  if(kind!=g_rr_kind){ g_rr_kind=kind; g_rr_frames=g_rr_draw=g_rr_clear=g_rr_rim=g_rr_flush=0; g_rr_t0=millis(); return; }
+  if(g_rr_frames&&millis()-g_rr_t0>=1500){
+    uint32_t f=g_rr_frames, span=millis()-g_rr_t0; unsigned long fps10=span?(unsigned long)((10000UL*f)/span):0UL;
+    gLog("[round] %s %lu frames/%lums = %lu.%lu fps | draw %luus (clear %lu rim %lu) + flush %luus\n",kind==1?"reel":"list",
+         (unsigned long)f,(unsigned long)span,fps10/10,fps10%10,(unsigned long)(g_rr_draw/f),(unsigned long)(g_rr_clear/f),
+         (unsigned long)(g_rr_rim/f),(unsigned long)(g_rr_flush/f));
+    g_rr_frames=g_rr_draw=g_rr_clear=g_rr_rim=g_rr_flush=0; g_rr_t0=millis(); }
+}
+struct RrDrawTimer { uint32_t t0; RrDrawTimer():t0(micros()){} ~RrDrawTimer(){ if(g_reelprof){ g_rr_draw+=micros()-t0; g_rr_pend=true; } } };
 // P4R-6c: the reel's rim buttons - drawn LAST, so the far MOON cover at 8 o'clock tucks under the filter button
 // instead of covering it (the buttons moved to the list's slots).
 static void drawReelRim(){
+  uint32_t _rim0=micros();
   for(int i=0;i<4;i++){ uint8_t id=g_rrim[i].id;
     uint16_t bc=(id==1)?COL_BLUE:(id==2)?COL_ACCENT:(id==3)?COL_AMBER:COL_GREEN;   // P4R-6c: same colour per slot as the list (view blue, CONFIG accent, filter amber, action green)
     rFillRingSeg(g_rrim[i].a0,g_rrim[i].a1,RRIM_R0,RRIM_R1,bc);
     float am=(g_rrim[i].a0+g_rrim[i].a1)*0.5f*0.0174533f;
     String lb=(id==1)?String(T(L_LIST)):(id==2)?String("CONFIG"):(id==3)?String(carSrcName()):String(T(L_ROLL));
     rArcLabel(358,am,lb,RIM_SZ,RIM_ADV,inkFor(bc),bc); }   // P4R-6f: rim labels curve along the rim
+  if(g_reelprof) g_rr_rim+=micros()-_rim0;   // lab16j
 }
 static void drawRoundReel(){
+  rrProfTick(1); RrDrawTimer _rrt;   // lab16j
   const bool moon=(g_reelstyle!=0);
-  rClearBg();   // P4R-7: AMIGA theme ball (ADF) or the plain colour
+  { uint32_t _c0=micros(); rClearBg(); if(g_reelprof) g_rr_clear+=micros()-_c0; }   // P4R-7: AMIGA theme ball (ADF) or the plain colour
   int n=carN();
   // ── status round the top rim ──
   { String p[4]; uint16_t c[4];
@@ -4869,7 +4918,8 @@ static char rlAzAt(int x,int y){
   int k=(int)lroundf((a+50.0f)*25.0f/100.0f); if(k<0)k=0; if(k>25)k=25; return (char)('A'+k);
 }
 static void drawRoundList(){
-  rClearBg();   // P4R-7: AMIGA theme ball (ADF) or the plain colour
+  rrProfTick(2); RrDrawTimer _rrt;   // lab16j
+  { uint32_t _c0=micros(); rClearBg(); if(g_reelprof) g_rr_clear+=micros()-_c0; }   // P4R-7: AMIGA theme ball (ADF) or the plain colour
   int n=rlN(); if(n){ if(g_rl_pos>n-1)g_rl_pos=(float)(n-1); if(g_rl_pos<0)g_rl_pos=0; }
   int ci=(int)lroundf(g_rl_pos); if(ci<0)ci=0; if(n&&ci>n-1)ci=n-1; float frac=g_rl_pos-(float)ci;
   bool moving=(g_rl_touch&&g_rl_moved)||g_rl_coast||g_rl_target>=0;
@@ -4887,6 +4937,7 @@ static void drawRoundList(){
     if(L==cur){ gfx_fillCircle(x,y,14,COL_AMBER); rTextC(x,y-7,String(L),2,inkFor(COL_AMBER),COL_AMBER); }
     else rTextC(x,y-7,String(L),2,has?COL_MID:carDim(COL_DIM,1),COL_BG); }
   // rim buttons
+  uint32_t _rim0=micros();   // lab16j
   for(int i=0;i<4;i++){ uint8_t id=g_rlrim[i].id;
     uint16_t bc=(id==11)?COL_GREEN:(id==12)?COL_BLUE:(id==13)?COL_ACCENT:COL_AMBER;
     bool isLd=(id==11)&&n&&g_loaded&&g_loaded_game_idx==ci; if(isLd) bc=0xC000;
@@ -4894,6 +4945,7 @@ static void drawRoundList(){
     float am=(g_rlrim[i].a0+g_rlrim[i].a1)*0.5f*0.0174533f;
     String lb=(id==11)?String(isLd?T(L_EJECT):T(L_INSERT)):(id==12)?String(T(L_REEL)):(id==13)?String("CONFIG"):String(g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN");
     rArcLabel(358,am,lb,RIM_SZ,RIM_ADV,inkFor(bc),bc); }   // P4R-6f: rim labels curve along the rim
+  if(g_reelprof) g_rr_rim+=micros()-_rim0;   // lab16j
   if(!n){ rTextC(RCX,380,T(L_NO_GAMES),3,COL_LIT,COL_BG); return; }
   // the wheel: far rows first, the middle row last
   for(int pass=0;pass<2;pass++) for(int d=-4;d<=4;d++){
@@ -5946,6 +5998,10 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
 // Merge step 2: the shared web interface + OTA, served over HOME_SSID when
 // WEBUI=ON. Placed here because it calls doLoadWebdav and the disk builders.
 #define GTI_WEB_SD_FILES 1   // 5.9.9: WiFi SD file-access endpoints (JC3.5 only for now)
+// release-a600-lab2 on: the shared web panel writes these two on a web upload (the S3 sketches declare them for the
+// fleet fling). The P4 keeps them so it still compiles against that web_panel.h; unused with the older one.
+__attribute__((unused)) static uint32_t g_img_bytes=0;
+__attribute__((unused)) static String g_loaded_display="";
 #include "../shared/web_panel.h"
 
 static void doUnload(){
@@ -7731,7 +7787,7 @@ static void c6SelfUpdate(){
     gfx_flush();
   };
 
-  char sub[72]; snprintf(sub,sizeof sub,"C6 is v%d.%d.%d  ->  update to 2.12.13  (enables WiFi)", v.major1, v.minor1, v.patch1);
+  char sub[72]; snprintf(sub,sizeof sub,"C6 is v%u.%u.%u  ->  update to 2.12.13  (enables WiFi)", (unsigned)v.major1, (unsigned)v.minor1, (unsigned)v.patch1);
   gfx_fillScreen(COL_BG);
   gfx_setTextSize(2); gfx_setTextColor(COL_AMBER,COL_BG);
   { const char*t="WiFi CO-PROCESSOR UPDATE"; gfx_setCursor((VW-gfx_textWidth(t))/2,VH/2-70); gfx_print(t); }
@@ -8158,7 +8214,8 @@ static void infoAction(uint8_t act){
     case IA_FONT: applyFont((g_font+1)%3);saveConfigKey("FONT",fontKey(g_font));drawInfoFull();break;
     case IA_THEME: applyTheme((g_theme_idx+1)%NUM_THEMES);saveConfigKey("THEME",String(g_theme_idx));drawInfoFull();break;   // Vince test: theme cycling lives in CONFIG now
     case IA_LANG: g_lang=(g_lang+1)%LANG_N;saveConfigKey("LANG",LANG_NAMES[g_lang]);drawInfoFull();break;
-    case IA_ROTATE: g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
+    case IA_ROTATE: if(g_roundui){ g_panelturn=(g_panelturn+1)&3; p4disp_set_turn(g_panelturn); saveConfigKey("PANELTURN",String(g_panelturn*90)); drawInfoFull(); break; }   // lab16i: the whole round picture + touch, live
+      g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_COMPACT: g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
     case IA_DONGLE: doPairNow();drawInfoFull();break;
     case IA_HIVEMIND: g_hivemind=!g_hivemind;saveConfigKey("HIVEMIND",g_hivemind?"ON":"OFF");drawInfoFull();break;

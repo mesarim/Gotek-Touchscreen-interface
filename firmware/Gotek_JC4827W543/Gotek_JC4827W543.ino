@@ -57,7 +57,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-JC4827"  // A600 (4 Oct 2026, pre-Kickstart release): = 5.9.41-lab15m-JC4827 + the 3.5's 15o-15q - Polish + Czech screen text (LANG=PL / CS, CZ accepted), STANDALONE banner centred on the translated word, reel ALL/FAV/MOST word fits its button, ESP-NOW mode: the GTi's own Wi-Fi is GTi_Omega-XXXX / gotekXXXX with the web page at 192.168.4.1 (was an open ESP_xxxxxx network) |   // lab15m: the list cover also trims black borders that are part of the picture itself (PAL screenshots: 320x200 game in a 256-line screen) | lab15l (4.3" S3 only): list cover picture drawn as big as the frame allows (the tile's baked-in letterbox is cut off) and the frame hugs the picture | lab15k (4.3" S3 only): scaled down to the 3.5"'s real-world sizes - bottom bar 40->32 px, INSERT 28->22 px, list cover art 116->96 px (the title + description fit under the cover again, also on multi-disk games) | lab15j (from the 3.5"): tap the game text in the list = the whole .nfo full-screen in the manual reader | 4.3" port-sync: the 3.5" 5.9.41-lab15i (lab14 walker, SD guard, never-format, compact library, safe saves + SD lock, per-dongle saves, one LIBRARY button, wireless offset 13) + the 4827 board layer (NV3041A/GT911, landscape-native rotation, carBlit table, short-panel reel, GTI_NO_DIAG_ADF) | was 5.9.41-lab13-JC4827
+#define FW_VERSION "A600-lab2b-JC4827"  // A600-lab2b (8 Oct 2026): shared web fixes S5/S6 (aborted upload/OTA), P2 (/api/wifi/scan), P6 | A600-lab2 (7 Oct 2026): release candidate = A600 + size-trim (no sscanf, minified + gzipped web pages); no NEO on this board yet | was:  // A600 (4 Oct 2026, pre-Kickstart release): = 5.9.41-lab15m-JC4827 + the 3.5's 15o-15q - Polish + Czech screen text (LANG=PL / CS, CZ accepted), STANDALONE banner centred on the translated word, reel ALL/FAV/MOST word fits its button, ESP-NOW mode: the GTi's own Wi-Fi is GTi_Omega-XXXX / gotekXXXX with the web page at 192.168.4.1 (was an open ESP_xxxxxx network) |   // lab15m: the list cover also trims black borders that are part of the picture itself (PAL screenshots: 320x200 game in a 256-line screen) | lab15l (4.3" S3 only): list cover picture drawn as big as the frame allows (the tile's baked-in letterbox is cut off) and the frame hugs the picture | lab15k (4.3" S3 only): scaled down to the 3.5"'s real-world sizes - bottom bar 40->32 px, INSERT 28->22 px, list cover art 116->96 px (the title + description fit under the cover again, also on multi-disk games) | lab15j (from the 3.5"): tap the game text in the list = the whole .nfo full-screen in the manual reader | 4.3" port-sync: the 3.5" 5.9.41-lab15i (lab14 walker, SD guard, never-format, compact library, safe saves + SD lock, per-dongle saves, one LIBRARY button, wireless offset 13) + the 4827 board layer (NV3041A/GT911, landscape-native rotation, carBlit table, short-panel reel, GTI_NO_DIAG_ADF) | was 5.9.41-lab13-JC4827
 #include "retro_assets.h"
 #include "omega_logo.h"   // the 1991 OMEGAWARE logo (Dimmy)
 #include "espnow_server.h"
@@ -1038,6 +1038,7 @@ static uint32_t g_sv_fseq=0;
 static inline bool svPending(){ return g_sv_wseq!=g_sv_fseq; }
 static void svDirtyReset(){memset(g_sv_dirty,0,sizeof(g_sv_dirty));g_sv_dirty_count=0;g_sv_last_write=0;g_sv_wseq=0;g_sv_fseq=0;}
 static uint32_t g_sv_img_size=0;                         // bytes of the mounted image (standalone tracking)
+static uint32_t g_img_bytes=0;                           // raw bytes of the mounted image (shared web panel writes it)
 
 // ── the read path (5.9.37) ──────────────────────────────────────────────────
 // Standalone mounts are ALIASED: the FAT12 metadata is in g_disk, the data area
@@ -2110,6 +2111,7 @@ static int g_sel=0,g_scroll=0,g_disk_sel=0,g_loaded_game_idx=-1,g_loaded_disk_id
 static int g_disk_page=0;  // current page of disk selector (6 disks/page)
 #define DISKS_PER_PAGE 6
 static String g_loaded_name="";static bool g_loaded=false;
+static String g_loaded_display="";   // pretty name for the mounted disk (shared web panel writes it)
 // ── Smooth list scroll + A-Z index state ──
 static float g_scrollPx=0;                 // pixel scroll offset (source of truth)
 static int   g_az_page=0;                  // 0 = #/A-M, 1 = N-Z
@@ -6832,7 +6834,7 @@ static void clockFromBuild(){
   if(time(nullptr)>1600000000) return;              // something already set a real time
   static const char M[]="JanFebMarAprMayJunJulAugSepOctNovDec";
   char mon[4]={0}; int d=1,y=2026,H=0,Mi=0,S=0;
-  sscanf(__DATE__,"%3s %d %d",mon,&d,&y); sscanf(__TIME__,"%d:%d:%d",&H,&Mi,&S);
+  { const char*D=__DATE__,*Tm=__TIME__; memcpy(mon,D,3); d=atoi(D+4); y=atoi(D+7); H=atoi(Tm); Mi=atoi(Tm+3); S=atoi(Tm+6); }   // size-trim: "Oct  7 2026" / "15:42:16" by hand - sscanf pulled in 8.7 KB of libc
   const char* p=strstr(M,mon); struct tm t={}; t.tm_year=y-1900; t.tm_mon=p?(int)((p-M)/3):0; t.tm_mday=d; t.tm_hour=H; t.tm_min=Mi; t.tm_sec=S;
   time_t e=mktime(&t); if(e<=0) return;
   struct timeval tv={e,0}; settimeofday(&tv,nullptr);
