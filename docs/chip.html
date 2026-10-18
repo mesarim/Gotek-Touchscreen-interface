@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GTi Chip Check — OMEGAWARE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap">
+<style>
+  /* Same look as the GTi Flasher (docs/index.html). */
+  :root{
+    --bg:#12131b; --panel:#191b28; --panel2:#1f2233; --border:#2c2f47;
+    --copper1:#ff8a3c; --copper2:#ffc061; --green:#46d68f; --dim:#9096ba;
+    --text:#e2e4f3; --bright:#fff; --blue:#6aa6ff; --red:#ff6060;
+    --mono:'Share Tech Mono',ui-monospace,monospace; --display:'Orbitron',var(--mono);
+  }
+  *{box-sizing:border-box}
+  [hidden]{display:none!important}
+  html{color-scheme:dark}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);line-height:1.5;-webkit-font-smoothing:antialiased}
+  .copper-top{height:6px;background:linear-gradient(90deg,#f00,#ff6b00,#fa0,#ff0,#0f8,#08f,#80f,#f08,#f00);background-size:200% 100%;animation:cs 3s linear infinite}
+  @keyframes cs{from{background-position:0 0}to{background-position:200% 0}}
+  @media (prefers-reduced-motion:reduce){.copper-top{animation:none}}
+  header{text-align:center;padding:2rem 1rem 1.3rem;border-bottom:1px solid var(--border)}
+  .eyebrow{font-size:.68rem;letter-spacing:.4em;color:var(--copper1);text-transform:uppercase;margin-bottom:.5rem}
+  h1{font-family:var(--display);font-weight:900;font-size:clamp(1.3rem,4.2vw,2.1rem);color:var(--bright);letter-spacing:.04em;line-height:1.1;margin:0}
+  h1 b{color:var(--copper2);font-weight:900}
+  .tagline{margin-top:.55rem;font-size:.72rem;color:var(--dim);letter-spacing:.18em;text-transform:uppercase}
+  main{max-width:720px;margin:0 auto;padding:1.4rem 1rem 4rem}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:5px;padding:1.2rem 1.2rem 1.1rem;margin-bottom:1rem}
+  .card h2{font-family:var(--display);font-weight:700;font-size:1rem;color:var(--bright);margin:0 0 .5rem;letter-spacing:.02em}
+  .card p{margin:.35rem 0;font-size:.85rem}
+  ol{margin:.3rem 0 .2rem;padding-left:1.3rem;font-size:.85rem}
+  ol li{margin:.2rem 0}
+  .btn{font-family:var(--display);font-weight:700;font-size:.9rem;letter-spacing:.04em;color:#1a1200;background:var(--copper2);border:none;border-radius:4px;padding:.7rem 1.3rem;cursor:pointer;margin-top:.6rem}
+  .btn:hover{background:#ffd27f}
+  .btn:disabled{background:var(--border);color:var(--dim);cursor:default}
+  .btn.ghost{background:none;border:1px solid var(--border);color:var(--text);font-size:.75rem;padding:.45rem .8rem}
+  .status{font-size:.8rem;color:var(--dim);margin-top:.6rem;min-height:1.2em}
+  .status.err{color:var(--red)}
+  table{width:100%;border-collapse:collapse;font-size:.85rem;margin:.3rem 0 .4rem}
+  td{padding:.3rem .2rem;border-bottom:1px solid var(--border);vertical-align:top}
+  td:first-child{color:var(--dim);width:9.5rem}
+  td b{color:var(--bright)}
+  .verdict{border-left:4px solid var(--green);background:var(--panel2);padding:.75rem .9rem;border-radius:3px;margin-top:.6rem;font-size:.86rem}
+  .verdict.warn{border-left-color:var(--copper1)}
+  .verdict.bad{border-left-color:var(--red)}
+  .verdict h3{font-family:var(--display);font-size:.9rem;margin:0 0 .3rem;color:var(--bright)}
+  .verdict p{margin:.25rem 0}
+  details{margin-top:.6rem;font-size:.75rem;color:var(--dim)}
+  pre{white-space:pre-wrap;word-break:break-word;background:#0d0e14;border:1px solid var(--border);border-radius:3px;padding:.6rem;max-height:16rem;overflow:auto;color:var(--text)}
+  a{color:var(--blue)}
+  .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
+  footer{text-align:center;font-size:.7rem;color:var(--dim);padding:1rem}
+</style>
+</head>
+<body>
+<div class="copper-top"></div>
+<header>
+  <div class="eyebrow">OMEGAWARE</div>
+  <h1><b>GTi</b> Chip Check</h1>
+  <div class="tagline">which chip is on my board?</div>
+</header>
+<main>
+  <div class="card">
+    <h2>What this does</h2>
+    <p>It asks the board's chip what it is (type and revision) over USB, then tells you which firmware to pick
+       in the <a href="./">GTi Flasher</a>. It only <b>reads</b>: nothing is written to the board. The board
+       restarts normally when it's done.</p>
+    <p>This matters most for ESP32-P4 boards: chips of revision <b>v1.x</b> and <b>v3.x</b> need different
+       firmware, and the boards look the same.</p>
+    <ol>
+      <li>Use Chrome or Edge on a computer (Web Serial is needed).</li>
+      <li>Plug the board in with a data USB cable. On P4 boards use the port you flash with.</li>
+      <li>Close the Arduino serial monitor or anything else using that port.</li>
+      <li>Press <b>Check my chip</b> and pick the port.</li>
+    </ol>
+    <button class="btn" id="go">Check my chip</button>
+    <div class="status" id="status"></div>
+    <p id="noserial" class="status err" hidden>This browser has no Web Serial. Open this page in Chrome or Edge on a computer.</p>
+  </div>
+
+  <div class="card" id="result" hidden>
+    <h2>Your chip</h2>
+    <table id="facts"></table>
+    <div id="verdict"></div>
+    <div class="row">
+      <button class="btn ghost" id="copy">Copy the report</button>
+      <button class="btn ghost" id="again">Check another board</button>
+    </div>
+  </div>
+
+  <details>
+    <summary>Technical log</summary>
+    <pre id="log"></pre>
+  </details>
+</main>
+<footer>GTi by OMEGAWARE · chip read with <a href="https://github.com/espressif/esptool-js">esptool-js</a> 0.7.0</footer>
+
+<script type="module">
+// Reads chip type + revision with Espressif's esptool-js (the library the flasher world uses), read-only:
+// connect (resets the chip into its ROM bootloader), read eFuse/registers, then hard-reset back to the app.
+import { ESPLoader, Transport } from "https://unpkg.com/esptool-js@0.7.0/bundle.js";
+
+const $ = (id) => document.getElementById(id);
+const logEl = $("log");
+const term = {
+  clean() { logEl.textContent = ""; },
+  writeLine(s) { logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight; },
+  write(s) { logEl.textContent += s; },
+};
+let lastReport = "";
+
+if (!("serial" in navigator)) { $("go").disabled = true; $("noserial").hidden = false; }
+
+function setStatus(msg, err = false) { const s = $("status"); s.textContent = msg; s.className = "status" + (err ? " err" : ""); }
+
+// What to flash, in plain words. rev = major*100 + minor (esptool-js convention).
+function verdictFor(name, rev) {
+  const n = (name || "").toUpperCase();
+  if (n.includes("ESP32-P4")) {
+    if (rev >= 300) return { cls: "warn", title: "ESP32-P4, chip v3.x",
+      lines: [
+        "This board needs the <b>chip v3</b> firmware.",
+        "4.3\" JC4880: pick the <b>4.3\" P4 &ndash; chip v3</b> entry in the GTi Flasher (lab).",
+        "7\" JC1060 and the round 3.4\": not supported on chip v3 yet.",
+        "Don't flash the normal P4 entries on this board: it won't start with them (it isn't damaged &ndash; flash the right one and it boots).",
+      ] };
+    return { cls: "", title: "ESP32-P4, chip v1.x",
+      lines: [
+        "Use the normal P4 entries in the GTi Flasher: 4.3\" JC4880, 7\" JC1060 or the round 3.4\".",
+        "Don't flash a <b>chip v3</b> entry on this board: it won't start with it (it isn't damaged &ndash; flash the right one and it boots).",
+      ] };
+  }
+  if (n.includes("ESP32-S3")) return { cls: "", title: "ESP32-S3",
+    lines: [
+      "All S3 GTi boards use this chip: the 3.5\" JC3248, the 4.3\" JC4827, the 7\" S3 boards and the dongles (SuperMini, S3-Zero, XIAO).",
+      "There is no chip-revision split on the S3: pick the GTi Flasher entry for your board.",
+    ] };
+  return { cls: "bad", title: name || "Unknown chip",
+    lines: ["No GTi screen or dongle uses this chip. Check you picked the right port and board."] };
+}
+
+async function check() {
+  let transport = null, loader = null;
+  $("go").disabled = true; $("result").hidden = true; term.clean();
+  try {
+    setStatus("Choose the board's serial port...");
+    const port = await navigator.serial.requestPort();
+    transport = new Transport(port, false);
+    loader = new ESPLoader({ transport, baudrate: 115200, terminal: term, debugLogging: false });
+
+    setStatus("Connecting (the board resets into its loader)...");
+    await loader.detectChip("default_reset");
+
+    setStatus("Reading the chip...");
+    const chip = loader.chip;
+    const desc = await chip.getChipDescription(loader);             // e.g. "ESP32-P4 (revision v3.2)"
+    let rev = null;
+    if (chip.getChipRevision) { try { rev = await chip.getChipRevision(loader); } catch (e) { term.writeLine("revision read failed: " + e); } }
+    let feats = "";  try { feats = (await chip.getChipFeatures(loader)).join(", "); } catch (e) {}
+    let xtal = "";   try { xtal = (await chip.getCrystalFreq(loader)) + " MHz"; } catch (e) {}
+    let mac = "";    try { mac = await chip.readMac(loader); } catch (e) {}
+    let flash = "";
+    try {
+      if (typeof chip.postConnect !== "undefined") await chip.postConnect(loader);   // powers the flash on newer P4 ROMs
+      const id = await loader.readFlashId();
+      const sizeCode = (id >> 16) & 0xff;
+      const known = { 0x12: "256 KB", 0x13: "512 KB", 0x14: "1 MB", 0x15: "2 MB", 0x16: "4 MB", 0x17: "8 MB",
+                      0x18: "16 MB", 0x19: "32 MB", 0x1a: "64 MB", 0x1b: "128 MB", 0x20: "64 MB", 0x21: "128 MB" };
+      flash = (known[sizeCode] || "unknown size") + " (flash ID " + id.toString(16) + ")";
+    } catch (e) { flash = "not read"; term.writeLine("flash ID read failed: " + e); }
+
+    const revTxt = rev === null ? "not reported" : ("v" + Math.floor(rev / 100) + "." + (rev % 100));
+    const rows = [["Chip", desc], ["Revision", revTxt], ["Features", feats], ["Crystal", xtal], ["Flash", flash], ["MAC", mac]];
+    $("facts").innerHTML = rows.filter(r => r[1]).map(r => `<tr><td>${r[0]}</td><td><b>${r[1]}</b></td></tr>`).join("");
+    const v = verdictFor(chip.CHIP_NAME || desc, rev === null ? 0 : rev);
+    $("verdict").innerHTML = `<div class="verdict ${v.cls}"><h3>${v.title}</h3>${v.lines.map(l => `<p>${l}</p>`).join("")}</div>`;
+    lastReport = "GTi Chip Check\n" + rows.filter(r => r[1]).map(r => r[0] + ": " + r[1]).join("\n") + "\nVerdict: " + v.title;
+    $("result").hidden = false;
+    setStatus("Done. The board is restarting.");
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (/No port selected|requestPort/i.test(msg)) setStatus("No port chosen.", true);
+    else setStatus("Couldn't read the chip: " + msg + " - close other programs using the port, replug, and try again. On some boards: hold BOOT while plugging in.", true);
+    term.writeLine("ERROR: " + msg);
+  } finally {
+    try { if (loader) await loader.after("hard_reset"); } catch (e) { term.writeLine("reset: " + e); }
+    try { if (transport) await transport.disconnect(); } catch (e) {}
+    $("go").disabled = !("serial" in navigator);
+  }
+}
+
+$("go").addEventListener("click", check);
+$("again").addEventListener("click", check);
+$("copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(lastReport); $("copy").textContent = "Copied"; setTimeout(() => $("copy").textContent = "Copy the report", 1500); }
+  catch (e) { setStatus("Copy failed - select the table and copy it by hand.", true); }
+});
+</script>
+</body>
+</html>

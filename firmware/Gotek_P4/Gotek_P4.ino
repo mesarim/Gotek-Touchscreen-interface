@@ -5,6 +5,11 @@
 // 16MB Flash | CPU 360MHz (NOT 400 - unstable on v1.3 silicon) | ST7701 480x800 DSI | GT911 touch
 
 #include <Arduino.h>
+// Chip guard (Mez, 18 Oct 2026: one sketch per P4 chip family). This folder is for ESP32-P4 chip v1.x (rev 1.3,
+// every JC4880 so far). v1.x and v3.x chips cannot run the same image, so a wrong Chip Variant stops the compile here.
+#if CONFIG_ESP32P4_REV_MIN_FULL >= 300
+#error "Gotek_P4 is the ESP32-P4 v1.x sketch: set Tools > Chip Variant to 'Before v3.00'. For a v3.x chip open firmware/Gotek_P4_v3 instead."
+#endif
 #include "USB.h"
 #include "USBMSC.h"
 // Merge step 1: the shared WebDAV client (see firmware/shared/README.md).

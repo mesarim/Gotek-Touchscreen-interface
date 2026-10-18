@@ -8,6 +8,11 @@
 // Old glass (no "V2" on the back label)? Set JC1060_OLD_PANEL 1 in p4_display.h.
 
 #include <Arduino.h>
+// Chip guard (Mez, 18 Oct 2026: one sketch per P4 chip family). This folder is for ESP32-P4 chip v1.x (rev 1.3,
+// every JC1060 so far). v1.x and v3.x chips cannot run the same image, so a wrong Chip Variant stops the compile here.
+#if CONFIG_ESP32P4_REV_MIN_FULL >= 300
+#error "Gotek_P4_JC1060 is the ESP32-P4 v1.x sketch: set Tools > Chip Variant to 'Before v3.00'. A v3.x 7in gets its own folder when one turns up."
+#endif
 #include "USB.h"
 #include "USBMSC.h"
 // Merge step 1: the shared WebDAV client (see firmware/shared/README.md).
