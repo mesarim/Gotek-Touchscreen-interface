@@ -40,6 +40,10 @@
 #   wide.gts       {"error":"atlas is 300x192, expected 256x192"}
 # Afterwards the serial log / /gti.log has "[skin] upload TBAD refused: ..." for each of the three.
 set -u
+# Git Bash on Windows rewrites "/GTI/..." form values into "C:/Program Files/Git/GTI/..." before curl sees
+# them, and curl.exe cannot open a /tmp path: turn the rewriting off and keep the temp dir in Windows form.
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
+case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*) [ -n "${TMPDIR:-}" ] || TMPDIR="$(cygpath -w "${TEMP:-/tmp}" 2>/dev/null | tr '\' '/')";; esac
 
 IP="${1:?usage: $0 <ip>}"
 B="http://$IP"

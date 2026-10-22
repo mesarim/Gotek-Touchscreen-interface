@@ -610,7 +610,7 @@ static void hSdDelete() {
   if (f) f.close();
   const bool ok = isDir ? wpSdRmR(want) : SD_MMC.remove(want.c_str());
   if (ok) webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}");
-  else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not delete\"}");
+  else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not delete (" + String(strerror(errno)) + ")\"}");
 }
 
 
@@ -626,7 +626,7 @@ static void hSdMkdir() {
     }
   }
   if (ok) webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}");
-  else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not create folder\"}");
+  else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not create folder (" + String(strerror(errno)) + ")\"}");
 }
 
 static void hFiles() { webPanelHttp.sendHeader("Content-Encoding", "gzip"); webPanelHttp.send_P(200, "text/html", (PGM_P)panel_files_gz, panel_files_gz_len); }

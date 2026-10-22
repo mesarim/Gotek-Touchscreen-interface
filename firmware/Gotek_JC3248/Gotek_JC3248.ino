@@ -2933,9 +2933,9 @@ static bool skinWriteChunk(const String&name,uint32_t off,const uint8_t*d,size_t
     if(!inOrder){ err="out of order"; return false; }
   }
   File f=SD_MMC.open(p.c_str(),off==0?FILE_WRITE:FILE_APPEND);
-  if(!f){ err="could not write the SD card"; return false; }
+  if(!f){ err=String("could not write the SD card (")+strerror(errno)+")"; return false; }
   const size_t w=n?f.write(d,n):0; f.close();
-  if(w!=n){ err="could not write the SD card"; return false; }
+  if(w!=n){ err=String("could not write the SD card (")+strerror(errno)+")"; return false; }
   return true;
 }
 static bool skinCommit(const String&name,String&err){

@@ -85,10 +85,26 @@ Flash, the JC3248 sketch, from the build reports (`huge_app` partition, 3145728 
 
 In total skins cost 28448 bytes (1989106 against 1960658) of flash (about 1.5 percent; the sketch is 63 percent of the partition). About 6 KB of that is the web page: it is stored gzipped, and its source grew by about 16 KB. The JC4827 and P4 sketches share that web page and pick up about the same growth when they are rebuilt; they were not built for skins.
 
-PSRAM: **to be measured on the device.** The device was not available when this was written, so there are no PSRAM numbers here and none were guessed. The firmware logs what is needed. Look for these lines in the log:
+PSRAM, measured on Dimmy's JC3248 (A600-skin1 + the 17 Oct release-a600-lab2 merge, 22 Oct 2026), free bytes from `/api/system/info` and the `[skin] psram` log lines:
 
-- `[skin] NAME loaded: atlas 256x192, background tile 0x0, NEO on` (or `background picture 480x320`, or `background colours 0x0`), followed by `[skin] psram X -> Y`: free PSRAM before and after loading. Expect the atlas to cost about 147 KB (256 x 192 x 2 bytes of colour + 256 x 192 bytes of alpha = 147,456 bytes) and a 480 x 320 background about 300 KB more.
-- The same with NEO off, and with no skin active, to compare the three cases.
-- `[skin] NAME: not enough memory - look unchanged` (when picked) or `... - NAVY instead` (at boot, RESCAN or a replace) means the memory floor was hit (1088 KB has to stay free for the library, plus the skin).
+| Look | Free PSRAM | Cost against NAVY |
+|---|---|---|
+| NAVY (no skin, NEO off) | 5495988 | - |
+| NEO | 5496020 | 0 (NEO's pictures are reserved at boot, with or without NEO) |
+| Skin with a TILE only (`valid.gts`, 1 KB file) | 5345484 | 150504 (atlas 147456 + headers) |
+| Skin with a 480x320 background, landscape (`bg.gts`, 44 KB file), at boot | 6134500 -> 5672664 | 461836 (atlas + 307200 picture) |
+| The same skin held portrait (no 320x480 picture: tile fallback), at boot | 6134500 -> 5983964 | 150536 |
 
-Fill in the measured values here after the first run on the device.
+The memory floor was never reached in these tests; the refusal path was exercised with bad files only (see below).
+
+What the log says on that device:
+
+- `[skin] VALID loaded: atlas 256x192, background tile 0x0, NEO on` then `[skin] psram 5495996 -> 5345460` (the "NEO on" is the state at load time; activation switches NEO off right after).
+- `[skin] BGSKIN loaded: atlas 256x192, background picture 480x320, NEO off` / `[skin] psram 6134500 -> 5672664` at boot in landscape; `background tile 0x0` / `-> 5983964` after a rotation to portrait.
+- One line per refused file, look unchanged: `[skin] WIDE: atlas is 300x192, expected 256x192 - look unchanged`, `[skin] PALETTE: atlas is not 8-bit RGBA - look unchanged`, `[skin] TRUNCATE: bad chunk length - look unchanged`, `[skin] LYING: bad chunk length - look unchanged`.
+
+Flash after the release-a600-lab2 merge (17 Oct: fleet scan, dongle setup, WebDAV client) and the plain-words SD error texts: 2036598 bytes (64 percent of the partition). That growth is the merge, not skins.
+
+Device checks that passed on 22 Oct 2026 (JC3248, home Wi-Fi): `tools/test_skin_upload.sh` 21/21 (also on a card without `/GTI/THEMES`: the firmware creates it); the four bad fixtures dropped on the card are refused with one log line each; all four rotations draw the same skin (picture in landscape, tile in portrait); `THEME=<skin>` survives a reboot; `X.json` next to `X.gts` gives the skin; a lower-case `lower.gts` is ignored; a ninth custom entry pushes the list back to eight (the upload itself is not refused - the alphabetically last entry drops out of the list; worth a plain-words refusal later).
+
+Running `tools/test_skin_upload.sh` from Git Bash on Windows needs `MSYS_NO_PATHCONV=1` and a Windows-style `TMPDIR`: without them Git Bash rewrites every `/GTI/...` form value into `C:/Program Files/Git/GTI/...` and curl cannot read the chunk file, so every POST looks like a device fault (the colon makes FatFs answer "Invalid argument").
