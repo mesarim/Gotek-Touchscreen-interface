@@ -129,9 +129,6 @@ inline int fdPickTarget(int n, const bool* visible, const bool* is_fd, const cha
   return only;
 }
 
-#define FD_SET_NAME_MAX 120u             // pfSendName sends at most this many bytes of a disk's name
-#define FD_NAME_KEEP     95u             // FluxDrive keeps this many characters of it (disk.cpp kNameMax - 1)
-
 inline bool fdNameBlank(char c) { return c == ' ' || c == 9 || c == 10 || c == 13; }   // space, tab, LF, CR
 inline char fdNameLower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c; }
 // The part of a disk name that counts: no blanks around it, no ".adf" at its end (any case).
@@ -154,27 +151,36 @@ inline bool fdSameDiskName(const char* a, const char* b) {
   return true;
 }
 
-// The name a FluxDrive gives a disk the panel flings under `sent` (the SET_NAME name; "" = none was sent): it takes
-// the part after the last dot for an extension and cuts it off ("Workbench 1.3" becomes "Workbench 1"), calls a disk
-// without a name "DISK.ADF", and keeps 95 characters (webby.cpp disk push, disk.cpp set_name). Into out, cut to cap-1.
-inline size_t fdDriveDiskName(const char* sent, char* out, size_t cap) {
-  if (out == nullptr || cap == 0) return 0;
-  const char* s = (sent != nullptr && sent[0]) ? sent : "DISK.ADF";
-  size_t n = strlen(s);
-  if (n > FD_SET_NAME_MAX) n = FD_SET_NAME_MAX;
-  for (size_t i = n; i-- > 1;) if (s[i] == '.') { n = i; break; }   // a dot at 0 is not an extension
-  if (n > FD_NAME_KEEP) n = FD_NAME_KEEP;
-  if (n > cap - 1) n = cap - 1;
-  memcpy(out, s, n);
-  out[n] = 0;
-  return n;
-}
+// A peer is still heard: its last beacon is less than stale_ms old (now and seen are millis(); the wrap is handled).
+inline bool fdHeard(uint32_t now, uint32_t seen, uint32_t stale_ms) { return (uint32_t)(now - seen) < stale_ms; }
 
-// The disk a FluxDrive reports (`disk`, its beacon) is the one the panel sends under `sent`: by that very name (put in
-// another way: its web page, a PC), or by the name FluxDrive made of it (a fling from this panel).
-inline bool fdHoldsSentName(const char* disk, const char* sent) {
-  if (fdSameDiskName(disk, sent)) return true;
-  char kept[FD_NAME_KEEP + 1];
-  fdDriveDiskName(sent, kept, sizeof(kept));
-  return fdSameDiskName(disk, kept);
+// What the screen marks as loaded (green marker, EJECT label), as the panel sees it at one moment:
+//  target: fleet mode with a FluxDrive target (fdPickTarget); tloaded, tdisk: its beacon ("loaded", "disk");
+//  staged: a disk is in this panel's RAM; sgame, sdisk: its game (-1 = none: a USR-DSK disk, the test kit) and disk;
+//  sname: the name it was flung under.
+struct FdUiView { bool target, tloaded; const char* tdisk; bool staged; int sgame, sdisk; const char* sname; };
+
+// Is game gi (flung under gname, gdisks disks) shown as loaded, and which disk (*disk, -1 = not known)?
+// No target: the game staged here, as before. A target: what it holds, by name, staged here or not. When it holds the
+// disk staged here, only the staged game and disk are shown (not every game of that name); otherwise the staging is
+// stale and gives way to the game of the name it reports. Every disk of a game is flung under the game's name, so the
+// disk of a game not staged here is known only when the game has one disk. Names match whole (fdSameDiskName).
+inline bool fdUiLoaded(const FdUiView& v, int gi, const char* gname, int gdisks, int* disk) {
+  int none;
+  if (disk == nullptr) disk = &none;
+  *disk = -1;
+  if (!v.target) {
+    if (!v.staged || v.sgame != gi) return false;
+    *disk = v.sdisk;
+    return true;
+  }
+  if (!v.tloaded) return false;
+  if (v.staged && fdSameDiskName(v.tdisk, v.sname)) {
+    if (v.sgame != gi) return false;
+    *disk = v.sdisk;
+    return true;
+  }
+  if (!fdSameDiskName(v.tdisk, gname)) return false;
+  *disk = gdisks <= 1 ? 0 : -1;
+  return true;
 }

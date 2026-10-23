@@ -29,6 +29,7 @@
          // so it has to match theirs. A screen's own hostname is GTi-XXXX (pfDefaultHost) -
          // unique per screen, so screens never fight over it (Mez, 6 Oct 2026, option d).
 #define PF_CMD_EJECT   0x03
+#define PF_NO_REPLY    "no reply"   // pfSendCommand: connected, nothing came back (a FluxDrive holds it while the Amiga reads)
 #define PF_CMD_SETNAME 0x06   // #24: tell the dongle the pretty display name for the NEXT disk (its FAT12 root stays DISK.ADF)
 // Mainline, not fleet. Webby 1.6.6 remembers which screen put the disk in and asks
 // before another screen takes it over; 1.6.7 moved it here from 0x07 because that is
@@ -501,17 +502,26 @@ static void pfNoteTarget(const String &ip) {   // NOW PLAYING shows where the di
 // The main screen speaks for one FluxDrive in fleet mode (fdPickTarget): where the last disk of this boot went, else the
 // only one heard. Its beacon ("loaded", "disk") is what NOW PLAYING, the loaded marker and EJECT go by.
 static String g_pfLastFlingId;   // beacon id of the peer the last acked disk went to ("" = none yet this boot)
+// The beacons queued while a send or an eject blocked loop() were sent before the ack: the old disk, the empty drive of
+// FluxDrive's 2-s swap. Read after the roster was set from the ack, the last of them would win. Drop them; the beacons
+// that follow the ack rule (FluxDrive sends one right after a mount or an eject).
+static void pfDropQueuedBeacons() {
+  if (!g_pfUdpUp) return;
+  g_pfUdp.flush();   // a datagram still held by the socket object blocks parsePacket()
+  for (int g = 0; g < 32 && g_pfUdp.parsePacket() > 0; g++) g_pfUdp.flush();
+}
 // A disk went to ip and was acked (FluxDrive acks after the mount). A FluxDrive holds it from now on, under the name it
-// gives a disk sent as `sent`, so the screen does not show the old disk until the next beacon; then the beacons rule.
+// was sent with ("DISK.ADF" = "DISK" when none was), so the screen does not show the old disk until the next beacon.
 static void pfNoteFling(const String &ip, const String &sent) {
   for (int i = 0; i < g_pfPeerN; i++) { PfPeer &p = g_pfPeers[i]; if (p.ip != ip) continue;
     g_pfLastFlingId = p.id;
-    if (fdIsFluxDrive(p.board.c_str())) { char k[FD_NAME_KEEP + 1]; fdDriveDiskName(sent.c_str(), k, sizeof(k)); p.loaded = true; p.disk = k; }
+    if (fdIsFluxDrive(p.board.c_str())) { p.loaded = true; p.disk = sent.length() ? sent : String("DISK"); pfDropQueuedBeacons(); }
     return; }
 }
 // An eject was acked: a FluxDrive is empty from now on (its next beacon says so too). Any other board: nothing changes.
 static void pfNoteEject(const String &ip) {
-  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip && fdIsFluxDrive(g_pfPeers[i].board.c_str())) { g_pfPeers[i].loaded = false; g_pfPeers[i].disk = ""; }
+  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip && fdIsFluxDrive(g_pfPeers[i].board.c_str())) {
+    g_pfPeers[i].loaded = false; g_pfPeers[i].disk = ""; pfDropQueuedBeacons(); return; }
 }
 // The FluxDrive target as an index into g_pfPeers, -1 = none or not in fleet mode (WIRELESS + WiFi, home Wi-Fi up).
 // Heard = shown here and not silent past its stale limit (the roster itself is pruned only now and then).
@@ -519,7 +529,7 @@ static int pfFluxTarget() {
   if (!(g_wireless_mode && g_link_home && WiFi.status() == WL_CONNECTED)) return -1;
   bool vis[PF_MAX_PEERS], fd[PF_MAX_PEERS]; const char *ids[PF_MAX_PEERS]; const uint32_t now = millis();
   for (int i = 0; i < g_pfPeerN; i++) { const PfPeer &p = g_pfPeers[i]; const char *bd = p.board.c_str();
-    vis[i] = pfPeerVisible(p) && now - p.seen < fdStaleMs(bd, PF_STALE_MS); fd[i] = fdIsFluxDrive(bd); ids[i] = p.id.c_str(); }
+    vis[i] = pfPeerVisible(p) && fdHeard(now, p.seen, fdStaleMs(bd, PF_STALE_MS)); fd[i] = fdIsFluxDrive(bd); ids[i] = p.id.c_str(); }
   return fdPickTarget(g_pfPeerN, vis, fd, ids, g_pfLastFlingId.c_str());
 }
 static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
@@ -607,7 +617,7 @@ static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &
   c.stop();
   // Only 0x01 is success. The dongle answers 0x02 for "refused, unsaved data", 0x05 for "locked".
   if (a == 0x01) { if (cmd == PF_CMD_EJECT) pfNoteEject(ip); return true; }
-  err = (a < 0) ? "no reply" : (a == 0x02 && fdHasSaves(pfPeerBoard(ip).c_str())) ? "refused - unsaved data (use force)" : (a == 0x05) ? PF_REFUSED_MSG : "refused";
+  err = (a < 0) ? PF_NO_REPLY : (a == 0x02 && fdHasSaves(pfPeerBoard(ip).c_str())) ? "refused - unsaved data (use force)" : (a == 0x05) ? PF_REFUSED_MSG : "refused";
   return false;
 }
 

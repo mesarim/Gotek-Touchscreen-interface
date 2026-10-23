@@ -281,50 +281,80 @@ static void test_an_empty_drive_name_matches_nothing() {
   CHECK(!fdSameDiskName(nullptr, nullptr));
 }
 
-// What FluxDrive keeps as the disk's name for a name the panel sends with SET_NAME (pfSendName cuts it to 120 bytes):
-// it cuts at the last dot (it takes it for an extension), keeps 95 characters, and calls a disk sent without a name
-// "DISK.ADF", so "DISK".
-static void test_the_name_fluxdrive_keeps_for_a_sent_name() {
-  char b[128];
-  CHECK(fdDriveDiskName("Lemmings", b, sizeof(b)) == 8 && std::strcmp(b, "Lemmings") == 0);
-  CHECK(fdDriveDiskName("Workbench 1.3", b, sizeof(b)) == 11 && std::strcmp(b, "Workbench 1") == 0);
-  CHECK(fdDriveDiskName("Monkey.Island.2", b, sizeof(b)) > 0 && std::strcmp(b, "Monkey.Island") == 0);   // the LAST dot
-  CHECK(fdDriveDiskName(".hidden", b, sizeof(b)) > 0 && std::strcmp(b, ".hidden") == 0);                // a dot at 0 stays
-  CHECK(fdDriveDiskName("", b, sizeof(b)) == 4 && std::strcmp(b, "DISK") == 0);
-  CHECK(fdDriveDiskName(nullptr, b, sizeof(b)) == 4 && std::strcmp(b, "DISK") == 0);
+// The target must still be heard: a FluxDrive silent past its stale limit (switched off) stops being the target.
+static void test_a_peer_is_heard_until_its_stale_limit() {
+  CHECK(fdHeard(5000, 5000, 180000));
+  CHECK(fdHeard(5000 + 179999, 5000, 180000));
+  CHECK(!fdHeard(5000 + 180000, 5000, 180000));
+  CHECK(!fdHeard(5000 + 900000, 5000, 180000));
+  CHECK(fdHeard(0x00000100u, 0xFFFFFF00u, 180000));                  // across the millis wrap
+  CHECK(fdHeard(0xFFFFFF80u, 0xFFFFFF00u, 180000));                  // seen + limit wraps, now not yet: still heard
+  CHECK(!fdHeard(0xFFFFFF00u + 180000u, 0xFFFFFF00u, 180000));
 }
 
-static void test_the_kept_name_is_cut_like_fluxdrive_cuts_it() {
-  char sent[200], b[200];
-  std::memset(sent, 'a', 130); sent[130] = 0;                      // no dot: 95 characters are kept
-  CHECK(fdDriveDiskName(sent, b, sizeof(b)) == 95 && std::strlen(b) == 95);
-  std::memset(sent, 'a', 130); sent[125] = '.'; sent[130] = 0;     // the dot is past the 120 the panel sends: not cut there
-  CHECK(fdDriveDiskName(sent, b, sizeof(b)) == 95 && std::strchr(b, '.') == nullptr);
-  std::memset(sent, 'a', 130); sent[100] = '.'; sent[130] = 0;     // cut at the dot (100), then to 95
-  CHECK(fdDriveDiskName(sent, b, sizeof(b)) == 95);
-  std::memset(sent, 'a', 130); sent[40] = '.'; sent[130] = 0;      // cut at the dot
-  CHECK(fdDriveDiskName(sent, b, sizeof(b)) == 40);
-  std::memset(sent, 'a', 130); sent[40] = '.'; sent[125] = '.'; sent[130] = 0;   // the last dot FluxDrive sees is at 40:
-  CHECK(fdDriveDiskName(sent, b, sizeof(b)) == 40);                               // the one at 125 never left the panel
-  char tiny[6];
-  CHECK(fdDriveDiskName("Workbench 1.3", tiny, sizeof(tiny)) == 5 && std::strcmp(tiny, "Workb") == 0);   // never past the end
-  CHECK(fdDriveDiskName("x", tiny, 0) == 0);
-  CHECK(fdDriveDiskName("x", nullptr, 8) == 0);
+// What the screen marks as loaded (green marker, EJECT label), for one game: gi, the name it is flung under, its disks.
+// FdUiView: target = fleet mode with a FluxDrive target, tloaded/tdisk = its beacon; staged = a disk in this panel's
+// RAM, sgame/sdisk = its game (-1 = none) and disk, sname = the name it was flung under.
+static void test_ui_without_a_target_shows_what_is_staged_here() {
+  FdUiView v = { false, false, "", true, 4, 2, "Lemmings" };
+  int d = 9;
+  CHECK(fdUiLoaded(v, 4, "Lemmings", 3, &d) && d == 2);
+  CHECK(!fdUiLoaded(v, 5, "Lemmings", 1, &d) && d == -1);           // another game, even one of the same name
+  v.staged = false;
+  CHECK(!fdUiLoaded(v, 4, "Lemmings", 3, &d));
+  v.tloaded = true; v.tdisk = "Lemmings";                             // a beacon counts only for the target
+  CHECK(!fdUiLoaded(v, 4, "Lemmings", 3, &d));
 }
 
-// Does the disk a FluxDrive reports hold the game the panel sends under `sent`? Either the name as sent (a disk put in
-// another way, under the same name) or the name FluxDrive made of it (a panel fling).
-static void test_the_drive_holds_the_disk_sent_under_a_name() {
-  CHECK(fdHoldsSentName("Workbench 1", "Workbench 1.3"));          // a panel fling of "Workbench 1.3"
-  CHECK(fdHoldsSentName("workbench 1 ", "Workbench 1.3"));
-  CHECK(fdHoldsSentName("Workbench 1.3", "Workbench 1.3"));        // the same disk put in by name, from elsewhere
-  CHECK(fdHoldsSentName("Workbench 1.3.adf", "Workbench 1.3"));    // ... by FluxDrive's web page, with its file name
-  CHECK(fdHoldsSentName("Lemmings", "Lemmings"));
-  CHECK(!fdHoldsSentName("Workbench 1.3", "Workbench 1"));         // the other way round is another disk
-  CHECK(!fdHoldsSentName("Lemmings", "Lemmings 2"));
-  CHECK(!fdHoldsSentName("", "Lemmings"));                         // an empty drive holds nothing
-  CHECK(!fdHoldsSentName(nullptr, "Lemmings"));
-  CHECK(fdHoldsSentName("DISK", ""));                              // a disk sent with no name is "DISK" to FluxDrive
+static void test_ui_an_empty_fluxdrive_shows_nothing_loaded() {
+  FdUiView v = { true, false, "Lemmings", true, 4, 0, "Lemmings" };
+  int d = 9;
+  CHECK(!fdUiLoaded(v, 4, "Lemmings", 1, &d) && d == -1);           // staged here, but the FluxDrive is empty
+  v.tloaded = true; v.tdisk = "";                                     // "loaded" without a name: nothing matches
+  CHECK(!fdUiLoaded(v, 4, "Lemmings", 1, &d));
+  v.tdisk = nullptr;
+  CHECK(!fdUiLoaded(v, 4, "Lemmings", 1, &d));
+}
+
+static void test_ui_the_fluxdrive_holds_the_disk_staged_here() {
+  FdUiView v = { true, true, "lemmings ", true, 4, 2, "Lemmings" };
+  int d = 9;
+  CHECK(fdUiLoaded(v, 4, "Lemmings", 3, &d) && d == 2);             // the staged game, with the staged disk
+  CHECK(!fdUiLoaded(v, 7, "Lemmings", 1, &d));                      // not a second game of the same name
+  FdUiView u = { true, true, "My Disk", true, -1, -1, "My Disk" };    // a USR-DSK disk: staged, but no game
+  CHECK(!fdUiLoaded(u, 5, "My Disk", 1, &d));
+}
+
+static void test_ui_a_stale_staging_gives_way_to_the_fluxdrive() {
+  FdUiView v = { true, true, "Turrican", true, 4, 0, "Lemmings" };    // staged here Lemmings; the FluxDrive holds Turrican
+  int d = 9;
+  CHECK(!fdUiLoaded(v, 4, "Lemmings", 1, &d));                      // the staged game is not shown
+  CHECK(fdUiLoaded(v, 6, "Turrican", 1, &d) && d == 0);             // the one the FluxDrive holds is
+}
+
+static void test_ui_the_fluxdrive_holds_a_disk_not_staged_here() {
+  FdUiView v = { true, true, "Monkey Island", false, -1, -1, "" };    // after a panel restart, a PC push
+  int d = 9;
+  CHECK(fdUiLoaded(v, 3, "monkey island", 1, &d) && d == 0);        // one disk: that one
+  CHECK(fdUiLoaded(v, 3, "Monkey Island", 4, &d) && d == -1);       // four disks, all flung under the game's name
+  CHECK(!fdUiLoaded(v, 2, "Monkey Island 2", 4, &d));
+  v.tdisk = "Monkey Island.adf";                                      // put in by FluxDrive's web page
+  CHECK(fdUiLoaded(v, 3, "Monkey Island", 1, &d));
+  CHECK(fdUiLoaded(v, 3, "Monkey Island", 1, nullptr));
+}
+
+static void test_ui_a_name_is_matched_whole() {
+  FdUiView v = { true, true, "Dr", false, -1, -1, "" };
+  int d = 9;
+  CHECK(!fdUiLoaded(v, 1, "Dr. Mario", 1, &d));
+  CHECK(!fdUiLoaded(v, 2, "Dr. Doom's Revenge", 1, &d));
+  v.tdisk = "Pinball Dreams Vol";
+  CHECK(!fdUiLoaded(v, 3, "Pinball Dreams Vol. 1", 1, &d));
+  v.tdisk = "Workbench 1";
+  CHECK(!fdUiLoaded(v, 4, "Workbench 1.3", 1, &d));
+  v.tdisk = "Dr. Mario";
+  CHECK(fdUiLoaded(v, 1, "Dr. Mario", 1, &d));
+  CHECK(!fdUiLoaded(v, 2, "Dr. Doom's Revenge", 1, &d));
 }
 
 int main() {
@@ -354,9 +384,13 @@ int main() {
   test_no_target_when_it_is_not_clear_which();
   test_the_same_disk_name();
   test_an_empty_drive_name_matches_nothing();
-  test_the_name_fluxdrive_keeps_for_a_sent_name();
-  test_the_kept_name_is_cut_like_fluxdrive_cuts_it();
-  test_the_drive_holds_the_disk_sent_under_a_name();
+  test_a_peer_is_heard_until_its_stale_limit();
+  test_ui_without_a_target_shows_what_is_staged_here();
+  test_ui_an_empty_fluxdrive_shows_nothing_loaded();
+  test_ui_the_fluxdrive_holds_the_disk_staged_here();
+  test_ui_a_stale_staging_gives_way_to_the_fluxdrive();
+  test_ui_the_fluxdrive_holds_a_disk_not_staged_here();
+  test_ui_a_name_is_matched_whole();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }

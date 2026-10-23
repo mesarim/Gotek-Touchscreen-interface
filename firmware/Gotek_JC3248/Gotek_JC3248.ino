@@ -2261,17 +2261,13 @@ static String g_loaded_display="";   // #24: the pretty NFO/meta name we FLING (
 // What the screen marks as loaded (green marker, EJECT label). Fleet mode with a FluxDrive target (pfFluxTarget): the
 // game that FluxDrive holds by its beacon, staged in this panel or not (a panel restart, a PC push, its web page).
 // Anywhere else: the game staged in this panel's RAM, as before. g_loaded / g_img_bytes / g_disk keep meaning "staged
-// here"; the screen asks these two. *disk: the disk of the game that is in, -1 = not known (every disk of a game is
-// flung under the game's name, so for a disk this panel did not stage it is known only when the game has one disk).
+// here"; the screen asks these two. The decision is fdUiLoaded (fluxdrive_peer.h, host-tested); this gathers its inputs.
+// *disk: the disk of the game that is in, -1 = not known.
 static bool uiLoadedAs(int gi,int*disk){ *disk=-1; if(gi<0||gi>=(int)g_games.size()) return false;
-  const int t=pfFluxTarget();
-  if(t<0){ if(!(g_loaded&&g_loaded_game_idx==gi)) return false; *disk=g_loaded_disk_idx; return true; }
-  const PfPeer&p=g_pfPeers[t]; if(!p.loaded) return false;
-  if(g_loaded&&fdHoldsSentName(p.disk.c_str(),(g_loaded_display.length()?g_loaded_display:g_loaded_name).c_str())){   // it holds the disk staged here
-    if(g_loaded_game_idx!=gi) return false; *disk=g_loaded_disk_idx; return true; }
-  const GameEntry&g=g_games[gi]; const String alt=g.name.isEmpty()?basenameNoExt(filenameOnly(g_files[g.first_file_idx])):String();   // the name doLoadSelected flings it under
-  if(!fdHoldsSentName(p.disk.c_str(),g.name.isEmpty()?alt.c_str():g.name.c_str())) return false;
-  *disk=g.disk_count<=1?0:-1; return true;
+  const int t=pfFluxTarget(); const GameEntry&g=g_games[gi];
+  const FdUiView v={t>=0,t>=0&&g_pfPeers[t].loaded,t>=0?g_pfPeers[t].disk.c_str():"",g_loaded,g_loaded_game_idx,g_loaded_disk_idx,(g_loaded_display.length()?g_loaded_display:g_loaded_name).c_str()};
+  const String alt=(t>=0&&g.name.isEmpty())?basenameNoExt(filenameOnly(g_files[g.first_file_idx])):String();   // the name doLoadSelected flings it under
+  return fdUiLoaded(v,gi,g.name.isEmpty()?alt.c_str():g.name.c_str(),g.disk_count,disk);
 }
 static bool uiShowsLoaded(int gi,int d=-1){ int ld; return uiLoadedAs(gi,&ld)&&(d<0||ld==d); }   // d<0: the game; else that disk of it
 // ── Smooth list scroll + A-Z index state ──
@@ -5416,7 +5412,8 @@ static void carHandleTap(uint16_t px,uint16_t py){
     if(d<(int)gm.disk_indices.size()){
       int ld=-1; if(uiLoadedAs(gi,&ld)){
         if(d!=ld){                                   // clean swap: flush saves + eject, then reload the chosen disk (no fleet EJECT: the disk replaces it)
-          doUnload(); g_sel=gi;g_disk_sel=d;g_disk_page=0;
+          if(g_loaded) doUnload();                   // nothing staged here (a FluxDrive game after a restart): no USB detach
+          g_sel=gi;g_disk_sel=d;g_disk_page=0;
           doLoadSelected(g_files[gm.disk_indices[d]]);
         }
       } else { g_disk_sel=d; }                        // not loaded yet — just select; INSERT will mount it
@@ -7471,7 +7468,9 @@ static bool fleetEjectTarget(){
   const String ip=g_pfPeers[t].ip, nm=pfPeerLabel(g_pfPeers[t]); const uint16_t tcp=g_pfPeers[t].tcp;   // copies: the roster may change meanwhile
   hwMsg("Ejecting...",nm.c_str(),COL_ACCENT,1);
   String err; const bool ok=pfSendCommand(ip,tcp,PF_CMD_EJECT,err);
-  hwMsg(ok?"Ejected":"Not ejected",(ok?nm:err).c_str(),COL_AMBER,ok?1200:2200);
+  if(!ok&&err==PF_NO_REPLY) hwMsg("FluxDrive busy","ejects when the Amiga stops",COL_AMBER,2200);   // it holds the eject and runs it then
+  else hwMsg(ok?"Ejected":"Not ejected",(ok?nm:err).c_str(),COL_AMBER,ok?1200:2200);
+  { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }   // a finger held through it must not tap the INSERT it left
   return true;
 }
 
@@ -8519,6 +8518,10 @@ static void handleTap(uint16_t px,uint16_t py){
     }
     return;
   }
+  // ── NOW PLAYING, fleet mode: the FluxDrive target holds a disk -> a tap ejects it, whether or not the library knows
+  //    its name (no game to show an EJECT label on). Otherwise the bar does what it did: nothing.
+  if(NOW_ON&&px>=(uint16_t)LIST_X&&px<(uint16_t)(LIST_X+LIST_W)&&py>=(uint16_t)NOW_Y&&py<(uint16_t)(NOW_Y+NOW_PLAY_H)){
+    const int ft=pfFluxTarget(); if(ft>=0&&g_pfPeers[ft].loaded){ doEject(); return; } }
   // ── v4.9.2: book button on the cover — opens the .rtfm manual full-screen ──
   if(!g_info_showing&&g_manual_bw&&g_manual_path.length()&&px>=(uint16_t)g_manual_bx&&px<(uint16_t)(g_manual_bx+g_manual_bw)&&py>=(uint16_t)g_manual_by&&py<(uint16_t)(g_manual_by+g_manual_bh)){
     doManual(g_manual_path); drawFullUI(); gfx_flush(); return; }
