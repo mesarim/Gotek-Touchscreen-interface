@@ -54,6 +54,16 @@ static void test_a_busy_fluxdrive_gets_two_minutes() {
   CHECK(fdReplyWaitMs(nullptr, 4000) == 4000);
 }
 
+// It sends no beacon while the Amiga's motor runs (12 s apart otherwise), so a game load outlasts the panel's 40 s.
+static void test_a_fluxdrive_stays_listed_through_a_game_load() {
+  CHECK(fdStaleMs("fluxdrive", 40000) == 180000);
+  CHECK(fdStaleMs("fluxdrive", 40000) > fdStallLimitMs("fluxdrive"));
+  CHECK(fdStaleMs("supermini", 40000) == 40000);
+  CHECK(fdStaleMs("zero", 40000) == 40000);
+  CHECK(fdStaleMs("", 40000) == 40000);
+  CHECK(fdStaleMs(nullptr, 40000) == 40000);
+}
+
 static void test_the_busy_text() {
   CHECK(std::strcmp(fdBusyText(), "FluxDrive busy - the Amiga is reading") == 0);
 }
@@ -100,6 +110,7 @@ int main() {
   test_only_a_dd_adf_goes_to_a_fluxdrive();
   test_other_boards_are_never_refused_here();
   test_a_busy_fluxdrive_gets_two_minutes();
+  test_a_fluxdrive_stays_listed_through_a_game_load();
   test_the_busy_text();
   test_a_fluxdrive_has_no_saves();
   test_the_device_word_in_messages();

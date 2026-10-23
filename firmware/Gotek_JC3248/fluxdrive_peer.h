@@ -19,6 +19,7 @@
 #define FD_KIND_FLUXDRIVE 4              // pad[2] of the pairing reply / board_id in /status
 #define FD_DD_ADF_BYTES   901120u        // 80 cylinders x 2 heads x 11 sectors x 512 bytes
 #define FD_BUSY_WAIT_MS   120000u        // longer than any game load the Amiga makes a push wait for
+#define FD_STALE_MS       180000u        // silence a FluxDrive may keep and still be listed: more than the wait above
 
 inline bool fdIsFluxDrive(const char* board) { return board != nullptr && strcmp(board, "fluxdrive") == 0; }
 
@@ -33,6 +34,10 @@ inline uint32_t fdStallLimitMs(const char* board) { return fdIsFluxDrive(board) 
 
 // How long to wait for a reply (the ack, the SET_NAME answer). normal_ms is what the panel waits for a dongle.
 inline uint32_t fdReplyWaitMs(const char* board, uint32_t normal_ms) { return fdIsFluxDrive(board) ? FD_BUSY_WAIT_MS : normal_ms; }
+
+// How long a peer may stay silent before the panel drops it from the fleet (40 s for a dongle, which beacons every 12 s).
+// A FluxDrive sends no beacon while the Amiga's motor runs, so a game load must not make it vanish from the list.
+inline uint32_t fdStaleMs(const char* board, uint32_t normal_ms) { return fdIsFluxDrive(board) ? FD_STALE_MS : normal_ms; }
 
 // What a stalled push means for a FluxDrive: not a broken link, the Amiga is using the drive.
 inline const char* fdBusyText() { return "FluxDrive busy - the Amiga is reading"; }

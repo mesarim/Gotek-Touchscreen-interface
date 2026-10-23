@@ -7,6 +7,9 @@
 // (40 s stale), TCP 3333 = 4-byte BE size + raw bytes, ack 0x01 + 4-byte LE
 // load id; 0xFFFFFFFF escape → 1-byte command (0x03 eject).
 //
+// A FluxDrive (an ESP32-S3 board that IS drive DF0 of an Amiga, beacon "board":"fluxdrive") is a peer like a
+// dongle, on the same wire. What differs for it is decided in fluxdrive_peer.h; no other board is affected.
+//
 // Non-blocking rule (Mez's, non-negotiable): the HTTP handler only QUEUES a
 // fling/command; loop() executes it. A transfer inside a handler serves
 // nothing for its whole duration, including the endpoint you would debug with.
@@ -14,6 +17,7 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <ESPmDNS.h>   // #clubday: the fleet controller re-registers its own mDNS name after the panel-vs-panel election
+#include "fluxdrive_peer.h"
 
 #define PF_DISCO_PORT 51703
 #define PF_TCP_PORT   3333
@@ -39,6 +43,15 @@
 #else
 #define PF_REFUSED_MSG "dongle refused the disk"
 #endif
+// A FluxDrive is not a dongle: the refusal names it. A club build keeps its lock wording for everyone.
+static String pfRefusedMsg(const char *board) {
+#if defined(GTI_FLEET)
+  (void)board;
+  return String(PF_REFUSED_MSG);
+#else
+  return String(fdDeviceWord(board)) + " refused the disk";
+#endif
+}
 
 #if defined(GTI_FLEET)   // club opcodes: the default build never sends these
 #define PF_CMD_ENROLL  0x07   // #lock: enroll this panel's token as an owner (dongle's enroll window must be open)
@@ -47,7 +60,8 @@
 #define PF_TOKEN_LEN   16     // #lock: owner-token length (bytes)
 #endif
 
-struct PfPeer { String id, name, ip, board, fw, disk; uint16_t tcp; bool hd, loaded, lk, lkd, enr; uint32_t seen; };   // #lock: lk=lock-capable, lkd=currently locked, enr=enroll window open
+// amiga: a FluxDrive's beacon says whether the Amiga it is drive DF0 of is powered (a dongle never says; false).
+struct PfPeer { String id, name, ip, board, fw, disk; uint16_t tcp; bool hd, loaded, amiga, lk, lkd, enr; uint32_t seen; };   // #lock: lk=lock-capable, lkd=currently locked, enr=enroll window open
 static PfPeer   g_pfPeers[PF_MAX_PEERS];
 static int      g_pfPeerN = 0;
 static WiFiUDP  g_pfUdp;
@@ -97,6 +111,15 @@ static bool pfPeerVisible(const PfPeer &p){ (void)p; return true; }
 #endif
 static int  pfVisibleCount(){ int n=0; for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])) n++; return n; }
 static int  pfPeerIdx(const String &id){ for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].id==id) return i; return -1; }   // rows are held by id: a prune must not shift one under your finger
+// The line under a fleet row's disk name. A FluxDrive says what it is and whether its Amiga is on;
+// every other peer shows its address, with the lock state in a club build, as before.
+static String pfRowInfo(const PfPeer &p) {
+  String s = fdIsFluxDrive(p.board.c_str()) ? (String("FluxDrive  Amiga ") + (p.amiga ? "on" : "off")) : p.ip;
+#if defined(GTI_FLEET)
+  s += pfIsMine(p.id) ? "  (mine)" : (p.lkd ? "  (locked)" : "");
+#endif
+  return s;
+}
 
 // ── Panel-vs-panel election (#clubday: many screens on one Wi-Fi, one gotekomega.local) ──
 // Every screen beacons role:panel with its MAC id and the mDNS name it currently holds.
@@ -261,7 +284,7 @@ static String pfJf(const String &s, const char *key) {
 static void pfPrune() {
   uint32_t now = millis(); int w = 0;
   for (int i = 0; i < g_pfPeerN; i++)
-    if (now - g_pfPeers[i].seen < PF_STALE_MS) { if (w != i) g_pfPeers[w] = g_pfPeers[i]; w++; }
+    if (now - g_pfPeers[i].seen < fdStaleMs(g_pfPeers[i].board.c_str(), PF_STALE_MS)) { if (w != i) g_pfPeers[w] = g_pfPeers[i]; w++; }
   g_pfPeerN = w;
 }
 static void pfUpsert(const String &j) {
@@ -273,6 +296,7 @@ static void pfUpsert(const String &j) {
   p->fw = pfJf(j, "fw"); p->disk = pfJf(j, "disk");
   const long t = pfJf(j, "tcp").toInt(); p->tcp = (t > 0 && t < 65536) ? (uint16_t)t : PF_TCP_PORT;
   p->hd = pfJf(j, "hd") == "true"; p->loaded = pfJf(j, "loaded") == "true";
+  p->amiga = pfJf(j, "amiga") == "true";
 #if defined(GTI_FLEET)   // a default screen neither reads nor acts on the lock keys
   p->lk = pfJf(j, "lk") == "1"; p->lkd = pfJf(j, "lkd") == "1";   // #lock: lock-capable + currently-locked
   p->enr = pfJf(j, "enr") == "1";                                 // #lock: enroll window open -> the screen offers to CLAIM
@@ -365,6 +389,7 @@ static String pfRosterJson() {
          "\",\"fw\":\"" + pfJesc(p.fw) + "\",\"hd\":" + (p.hd ? "true" : "false") +
          ",\"loaded\":" + (p.loaded ? "true" : "false") +
          ",\"disk\":\"" + pfJesc(p.disk) + "\",\"tcp\":" + String(p.tcp) +
+         (fdIsFluxDrive(p.board.c_str()) ? String(",\"amiga\":") + (p.amiga ? "true" : "false") : String("")) +
 #if defined(GTI_FLEET)   // the roster drops the lock columns
          ",\"lk\":" + (p.lk ? "true" : "false") + ",\"lkd\":" + (p.lkd ? "true" : "false") +
          ",\"mine\":" + (pfIsMine(p.id) ? "true" : "false") +
@@ -395,6 +420,12 @@ static bool pfPeerWantsAuth(const String &ip) {
 static uint16_t pfPeerTcp(const String &ip) {
   for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) return g_pfPeers[i].tcp;
   return PF_TCP_PORT;
+}
+// The board this peer's beacon named ("" for an address the panel has not heard). Held in a String of its own:
+// the roster can change while a blocking send runs.
+static String pfPeerBoard(const String &ip) {
+  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) return g_pfPeers[i].board;
+  return String();
 }
 #if defined(GTI_FLEET)   // the AUTH preamble
 // #lock: write the AUTH preamble. Returns false if the dongle refuses us immediately (0x05).
@@ -446,7 +477,8 @@ static bool pfSendClaim(const String &ip, uint16_t port, bool takeover, String &
   }
   c.stop();
   if (!who.length()) who = "another screen";
-  err = (a == 0x02) ? ("unsaved saves on " + who) : ("in use by " + who);
+  // A FluxDrive has no saves to hand back, so for it 0x02 is the same as 0x03: in use.
+  err = (a == 0x02 && fdHasSaves(pfPeerBoard(ip).c_str())) ? ("unsaved saves on " + who) : ("in use by " + who);
   return false;
 }
 
@@ -459,6 +491,16 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
 #if defined(GTI_FLEET)
   if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
 #endif
+  // What the beacon says this address is. Only a FluxDrive changes anything below.
+  const String board = pfPeerBoard(ip);
+  const char *bd = board.c_str();
+  // A FluxDrive takes one thing, a DD ADF of 901,120 bytes. Say so before any connection, so nothing is
+  // claimed, named or sent for a disk it would only refuse.
+  if (fdIsFluxDrive(bd)) {
+    if (!g_loaded || g_img_bytes == 0) { err = "no disk loaded"; return false; }
+    const char *refuse = fdRefuseImage(bd, g_img_bytes);
+    if (refuse) { err = refuse; return false; }
+  }
   // Mainline: say who is sending before sending. A refusal here is the dongle
   // protecting somebody else's disk or unsaved saves, so it stops the fling.
   if (!pfSendClaim(ip, port, false, err)) return false;
@@ -482,25 +524,27 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
     // A refusal arrives mid-stream: the dongle answers 0x05 and hangs up while we are still
     // writing. Read it, or the caller reports a broken cable when it was actually a locked dongle.
     if (c.available()) { const int r = c.read(); c.stop();
-      err = (r == 0x05) ? PF_REFUSED_MSG : (r == 0x00) ? "dongle refused the disk" : ("refused (0x" + String(r, HEX) + ")");
+      err = (r == 0x05) ? pfRefusedMsg(bd) : (r == 0x00) ? (String(fdDeviceWord(bd)) + " refused the disk") : ("refused (0x" + String(r, HEX) + ")");
       return false; }
     if (!c.connected()) {
-      if (c.available()) { const int r = c.read(); if (r == 0x05) { err = PF_REFUSED_MSG; c.stop(); return false; } }
+      if (c.available()) { const int r = c.read(); if (r == 0x05) { err = pfRefusedMsg(bd); c.stop(); return false; } }
       err = "connection lost at " + String(sent) + "B"; c.stop(); return false; }
     if ((int32_t)(millis() - deadline) > 0) { err = "too slow - " + String(sent*100/size) + "% in 3 min"; c.stop(); return false; }
     uint32_t chunk = size - sent; if (chunk > 8192) chunk = 8192;
     const size_t w = c.write(data + sent, chunk);
-    if (w == 0) { if (millis() - stall > 15000) { err = "send stalled"; c.stop(); return false; } delay(2); continue; }
+    // A FluxDrive does not read while the Amiga's motor runs: the transfer stalls until the load is over.
+    if (w == 0) { if (millis() - stall > fdStallLimitMs(bd)) { err = fdIsFluxDrive(bd) ? fdBusyText() : "send stalled"; c.stop(); return false; } delay(2); continue; }
     sent += w; stall = millis();
   }
   pfNoteTarget(ip);
   g_pfLastMs = millis() - tSend0; g_pfLastBytes = size;
   g_pfLastKbps = g_pfLastMs ? (uint32_t)((uint64_t)size * 1000ULL / g_pfLastMs / 1024ULL) : 0;
   const uint32_t t0 = millis();
-  while (c.available() < 1 && millis() - t0 < 10000) { if (!c.connected()) break; delay(5); }
+  const uint32_t ackWait = fdReplyWaitMs(bd, 10000);
+  while (c.available() < 1 && millis() - t0 < ackWait) { if (!c.connected()) break; delay(5); }
   const int a = c.available() >= 1 ? c.read() : -1;
   c.stop();
-  if (a != 0x01) { err = (a==0x05) ? PF_REFUSED_MSG : (a < 0) ? "no ack" : "dongle refused"; return false; }   // #lock: 0x05 = the dongle rejected us (not an owner)
+  if (a != 0x01) { err = (a==0x05) ? pfRefusedMsg(bd) : (a < 0) ? "no ack" : (String(fdDeviceWord(bd)) + " refused"); return false; }   // #lock: 0x05 = the dongle rejected us (not an owner)
   return true;
 }
 
@@ -524,7 +568,7 @@ static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &
   c.stop();
   // Only 0x01 is success. The dongle answers 0x02 for "refused, unsaved data", 0x05 for "locked".
   if (a == 0x01) return true;
-  err = (a < 0) ? "no reply" : (a == 0x02) ? "refused - unsaved data (use force)" : (a == 0x05) ? PF_REFUSED_MSG : "refused";
+  err = (a < 0) ? "no reply" : (a == 0x02 && fdHasSaves(pfPeerBoard(ip).c_str())) ? "refused - unsaved data (use force)" : (a == 0x05) ? PF_REFUSED_MSG : "refused";
   return false;
 }
 
@@ -535,6 +579,11 @@ static bool pfSendName(const String &ip, uint16_t port, const String &name, Stri
 #if defined(GTI_FLEET)
   if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
 #endif
+  // A FluxDrive that will refuse the disk gets no name: the answer would only wait out a game load,
+  // and the push that follows says why.
+  const String board = pfPeerBoard(ip);
+  const char *bd = board.c_str();
+  if (g_img_bytes != 0) { const char *refuse = fdRefuseImage(bd, g_img_bytes); if (refuse) { err = refuse; return false; } }
   WiFiClient c;
   if (!c.connect(ip.c_str(), port, 4000)) { err = "connect failed"; return false; }
   c.setNoDelay(true);
@@ -548,7 +597,8 @@ static bool pfSendName(const String &ip, uint16_t port, const String &name, Stri
   c.write(hdr, 6);
   if (nm.length()) c.write((const uint8_t *)nm.c_str(), nm.length());
   const uint32_t t0 = millis();
-  while (c.available() < 1 && millis() - t0 < 3000) { if (!c.connected()) break; delay(3); }
+  const uint32_t nameWait = fdReplyWaitMs(bd, 3000);
+  while (c.available() < 1 && millis() - t0 < nameWait) { if (!c.connected()) break; delay(3); }
   const int a = c.available() >= 1 ? c.read() : -1;
   c.stop();
   if (a != 0x01) { err = (a < 0) ? "no ack" : "not supported"; return false; }

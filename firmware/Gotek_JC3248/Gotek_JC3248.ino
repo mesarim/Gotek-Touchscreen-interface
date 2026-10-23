@@ -7482,11 +7482,7 @@ static void doFleetPick(){
         gfx_setTextColor(inkFor(bg),bg);gfx_setCursor(44,y+7);gfx_print(p.name.length()?p.name:("Dongle "+String(i+1)));
         uint16_t sub=(inkFor(bg)==TFT_BLACK)?COL_MID:COL_DIM;
         gfx_setTextColor(p.loaded?COL_GREEN:sub,bg);gfx_setCursor(44,y+23);gfx_print(p.loaded?(String("* ")+(p.disk.length()?p.disk:String("disk"))):String("empty"));
-#if defined(GTI_FLEET)
-        gfx_setTextColor(sub,bg);gfx_setCursor(44,y+35);gfx_print(p.ip+(pfIsMine(p.id)?"  (mine)":(p.lkd?"  (locked)":"")));
-#else
-        gfx_setTextColor(sub,bg);gfx_setCursor(44,y+35);gfx_print(p.ip);
-#endif
+        gfx_setTextColor(sub,bg);gfx_setCursor(44,y+35);gfx_print(pfRowInfo(p));
 #if defined(GTI_FLEET)
         if(p.enr){ gfx_fillRoundRect(actX,y+9,actW,rowH-22,6,COL_GREEN);gfx_setTextColor(TFT_BLACK,COL_GREEN);gfx_setCursor(actX+(actW-gfx_textWidth("CLAIM"))/2,y+rowH/2-8);gfx_print("CLAIM"); }
         else if(pfIsMine(p.id)){ gfx_fillRoundRect(actX,y+9,actW,rowH-22,6,(uint16_t)0x8000);gfx_setTextColor(TFT_WHITE,(uint16_t)0x8000);gfx_setCursor(actX+(actW-gfx_textWidth("UNCLAIM"))/2,y+rowH/2-8);gfx_print("UNCLAIM"); }
