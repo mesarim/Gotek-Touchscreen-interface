@@ -50,7 +50,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-lab2i-JC3248"   // A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-lab2i-fd1-JC3248"   // A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -2258,6 +2258,22 @@ static int g_disk_page=0;  // current page of disk selector (6 disks/page)
 static String g_loaded_name="";static bool g_loaded=false;
 static String g_loaded_display="";   // #24: the pretty NFO/meta name we FLING (FAT12 root stays DISK.ADF)
 #include "panel_fleet.h"             // OMEGAWARE: LAN dongle roster, fling + owner bookkeeping
+// What the screen marks as loaded (green marker, EJECT label). Fleet mode with a FluxDrive target (pfFluxTarget): the
+// game that FluxDrive holds by its beacon, staged in this panel or not (a panel restart, a PC push, its web page).
+// Anywhere else: the game staged in this panel's RAM, as before. g_loaded / g_img_bytes / g_disk keep meaning "staged
+// here"; the screen asks these two. *disk: the disk of the game that is in, -1 = not known (every disk of a game is
+// flung under the game's name, so for a disk this panel did not stage it is known only when the game has one disk).
+static bool uiLoadedAs(int gi,int*disk){ *disk=-1; if(gi<0||gi>=(int)g_games.size()) return false;
+  const int t=pfFluxTarget();
+  if(t<0){ if(!(g_loaded&&g_loaded_game_idx==gi)) return false; *disk=g_loaded_disk_idx; return true; }
+  const PfPeer&p=g_pfPeers[t]; if(!p.loaded) return false;
+  if(g_loaded&&fdHoldsSentName(p.disk.c_str(),(g_loaded_display.length()?g_loaded_display:g_loaded_name).c_str())){   // it holds the disk staged here
+    if(g_loaded_game_idx!=gi) return false; *disk=g_loaded_disk_idx; return true; }
+  const GameEntry&g=g_games[gi]; const String alt=g.name.isEmpty()?basenameNoExt(filenameOnly(g_files[g.first_file_idx])):String();   // the name doLoadSelected flings it under
+  if(!fdHoldsSentName(p.disk.c_str(),g.name.isEmpty()?alt.c_str():g.name.c_str())) return false;
+  *disk=g.disk_count<=1?0:-1; return true;
+}
+static bool uiShowsLoaded(int gi,int d=-1){ int ld; return uiLoadedAs(gi,&ld)&&(d<0||ld==d); }   // d<0: the game; else that disk of it
 // ── Smooth list scroll + A-Z index state ──
 static float g_scrollPx=0;                 // pixel scroll offset (source of truth)
 static int   g_az_page=0;                  // 0 = #/A-M, 1 = N-Z
@@ -2906,6 +2922,8 @@ static bool savBadgeFor(const String&adfPath);   // lab14i: the badge (from the 
 static void drawListAndCover();
 static bool doLoadSelected(const String&p);
 static void doUnload();
+static void doEject();             // EJECT on the touchscreen: doUnload(), and in fleet mode the FluxDrive target first
+static bool fleetEjectTarget();    // defined with the fleet manager
 
 static bool g_espnow_started=false;
 static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=true;}}
@@ -4031,11 +4049,11 @@ static void drawStatusBar(){
     bool alive = wl ? (millis()-g_espnow_xiao_last_seen < 8000UL) : true;
     bool ld, desync=false;
     if(wl){ ld=alive&&g_dongle_loaded; desync=g_loaded&&(!alive||!g_dongle_loaded); }
-    else  { ld=g_loaded; }
+    else  { const int ft=pfFluxTarget(); ld=ft>=0?g_pfPeers[ft].loaded:g_loaded; }   // fleet mode: what the FluxDrive holds (beacon), not what was staged here
     String lw; uint16_t lc; bool fill;
     if(wl&&!alive){ lw="OFFLINE"; lc=0xFD20; fill=false; }
     else if(desync){ lw="DISK?"; lc=0xFD20; fill=false; }
-    else if(ld){ bool multi=(g_loaded&&g_loaded_game_idx>=0&&g_loaded_game_idx<(int)g_games.size()&&g_games[g_loaded_game_idx].disk_count>1);
+    else if(ld){ bool multi=(uiShowsLoaded(g_loaded_game_idx,g_loaded_disk_idx)&&g_games[g_loaded_game_idx].disk_count>1);
                  lw=multi?("DISK "+String(g_loaded_disk_idx+1)):String("DISK"); lc=COL_GREEN; fill=true; }
     else { lw="EMPTY"; lc=COL_DIM; fill=false; }
     gfx_setTextSize(1); int lww=gfx_textWidth(lw); int wx=VW-6-lww, cx=wx-9;
@@ -4055,7 +4073,7 @@ static void drawDiskGrid(int nd){DiskGrid L=diskGrid(nd);
   gfx_setTextSize(1);gfx_setTextColor(COL_DIM,g_neo?COL_BG:COL_PANEL);gfx_setCursor(4,L.labelY);
   gfx_print(L.multiPage?("DISK ("+String(g_disk_page+1)+"/"+String(L.pages)+"):"):"DISK:");
   for(int d=L.pageStart;d<L.pageEnd;d++){int slot=d-L.pageStart,col=slot%L.COLS,row=slot/L.COLS;int bx=L.gx+col*(L.dbw+L.dgap),by=L.gridY+row*(L.dbh+L.dgap);
-    bool isSel=d==g_disk_sel,isLd=(g_loaded_game_idx==g_sel&&g_loaded_disk_idx==d);uint16_t bc=isLd?COL_GREEN:(isSel?COL_AMBER:COL_BAR);
+    bool isSel=d==g_disk_sel,isLd=uiShowsLoaded(g_sel,d);uint16_t bc=isLd?COL_GREEN:(isSel?COL_AMBER:COL_BAR);
     gfx_fillRoundRect(bx,by,L.dbw,L.dbh,4,bc);gfx_drawRoundRect(bx,by,L.dbw,L.dbh,4,isSel?COL_AMBER:COL_DIM);
     gfx_setTextColor(isLd||isSel?TFT_BLACK:COL_LIT,bc);String dl="D"+String(d+1);gfx_setCursor(bx+(L.dbw-gfx_textWidth(dl))/2,by+(L.dbh-8)/2);gfx_print(dl);}
   if(L.multiPage){int pby=L.gridY+L.gridH+L.pageGap;gfx_fillRoundRect(L.gx,pby,L.gridW,L.pageBtnH,4,COL_ACCENT);gfx_setTextColor(TFT_WHITE,COL_ACCENT);
@@ -4168,7 +4186,7 @@ static void drawCoverPanel(){
     gfx_fillRoundRect(g_manual_bx,g_manual_by,g_manual_bw,g_manual_bh,3,COL_ACCENT);gfx_drawRoundRect(g_manual_bx,g_manual_by,g_manual_bw,g_manual_bh,3,COL_AMBER);
     drawBookIcon(g_manual_bx+g_manual_bw/2,g_manual_by+g_manual_bh/2,COL_LIT);
   }
-  bool isL=g_loaded&&g_loaded_game_idx==g_sel;
+  bool isL=uiShowsLoaded(g_sel);
   if(!g_portrait){
     int cb;
     if(game.disk_count>1){DiskGrid L=diskGrid(game.disk_count);cb=L.labelY-2;}
@@ -4199,7 +4217,7 @@ static void drawCoverPanel(){
 
 // Compact action strip (both orientations): thumbnail + selected name + INSERT
 static void drawActionStrip(){
-  if(!STRIP_ON||g_games.empty())return;auto&game=g_games[g_sel];bool isL=g_loaded&&g_loaded_game_idx==g_sel;
+  if(!STRIP_ON||g_games.empty())return;auto&game=g_games[g_sel];bool isL=uiShowsLoaded(g_sel);
   gfx_fillRect(0,STRIP_Y,VW,STRIP_H,COL_PANEL);gfx_hline(0,STRIP_Y,VW,COL_SEP);
   int th=STRIP_H-12;gfx_fillRoundRect(6,STRIP_Y+6,th,th,4,COL_BG);gfx_drawRoundRect(6,STRIP_Y+6,th,th,4,COL_ACCENT);
   char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setTextSize(3);gfx_setTextColor(COL_ACCENT,COL_BG);gfx_setCursor(6+(th-18)/2,STRIP_Y+6+(th-24)/2);gfx_print(ib);
@@ -4295,6 +4313,7 @@ static void drawInfoPanel(){
     if(g_wireless_mode){ pfPrune(); const int vis=pfVisibleCount();   // #standalone: no dongles here, so no fleet row
       String fl=String("FLEET: ")+String(vis); if(vis<g_pfPeerN) fl+=" of "+String(g_pfPeerN);   // the rest is claimed by another screen
       if(g_pfTargetName.length())fl+=" > "+g_pfTargetName;
+      else { const int ft=pfFluxTarget(); if(ft>=0) fl+=" > "+pfPeerLabel(g_pfPeers[ft]); }   // nothing sent from here yet: the FluxDrive the screen shows
       add(fl, vis?COL_GREEN:COL_AMBER, TFT_BLACK, IA_FLEET); }   // #console: dongles we may drive / dongles heard
     add(String("SAVED WIFI: ")+String((int)g_known.size()), COL_BLUE, TFT_WHITE, IA_SAVEDWIFI);   // #clubday: remembered networks
 #if defined(GTI_FLEET)
@@ -4412,7 +4431,7 @@ static void drawFileList(){
   g_clip_y0=LIST_TOP;g_clip_y1=LIST_BOTTOM;         // clip partial rows to the list window
   int yEnd=LIST_TOP-off;                            // A600-neo2f: bottom of the last row drawn
   for(int vi=0;vi<=ITEMS_VIS+1;vi++){int gi=first+vi;if(gi>=(int)g_games.size())break;
-    auto&game=g_games[gi];bool sel=gi==g_sel,ld=g_loaded&&g_loaded_game_idx==gi;
+    auto&game=g_games[gi];bool sel=gi==g_sel,ld=uiShowsLoaded(gi);
     int y=LIST_TOP-off+vi*LIST_ITEM_H;if(y>=LIST_BOTTOM)break;
     yEnd=y+LIST_ITEM_H;
     if(neoRows){ fillBack(LIST_X+2,y,LIST_W-4,2); fillBack(LIST_X+2,y+LIST_ITEM_H-2,LIST_W-4,2); }   // the gaps between rows
@@ -4448,12 +4467,16 @@ static void drawFileList(){
 static void drawNowPlayingBar(){
   if(!NOW_ON)return;
   int y=NOW_Y;
-  if(g_loaded&&g_loaded_name.length()){NeoScope _ns; const uint16_t nb=g_neo?COL_BG:COL_NOW;   // A600-neo2: a NEO key with a green edge
+  // Fleet mode with a FluxDrive target: what that FluxDrive holds, by its beacon (or the disk just sent to it), staged
+  // here or not. Anywhere else the disk staged in this panel, as before.
+  const int ft=pfFluxTarget(); const PfPeer*fp=ft>=0?&g_pfPeers[ft]:nullptr;
+  if(fp?fp->loaded:(g_loaded&&g_loaded_name.length())){NeoScope _ns; const uint16_t nb=g_neo?COL_BG:COL_NOW;   // A600-neo2: a NEO key with a green edge
     if(g_neo){fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);neoKey(LIST_X+2,y,LIST_W-4,NOW_PLAY_H,6,COL_GREEN);}
     else{gfx_fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_NOW);gfx_drawRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_GREEN);}
     gfx_fillCircle(LIST_X+8,y+NOW_PLAY_H/2,3,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(COL_GREEN,nb);gfx_setCursor(LIST_X+16,y+3);gfx_print(T(L_NOW_PLAYING));
-    if(g_wireless_mode&&g_link_home&&g_pfTargetName.length()) gfx_print(" > "+g_pfTargetName);   // #console: which dongle this went to
-    gfx_setTextColor(g_neo?COL_LIT:TFT_WHITE,nb);gfx_setCursor(LIST_X+16,y+12);String n=g_loaded_display.length()?g_loaded_display:g_loaded_name;while(gfx_textWidth(n)>LIST_W-24&&n.length()>3)n=n.substring(0,n.length()-1);gfx_print(n);}
+    if(fp) gfx_print(" > "+pfPeerLabel(*fp));
+    else if(g_wireless_mode&&g_link_home&&g_pfTargetName.length()) gfx_print(" > "+g_pfTargetName);   // #console: which dongle this went to
+    gfx_setTextColor(g_neo?COL_LIT:TFT_WHITE,nb);gfx_setCursor(LIST_X+16,y+12);String n=fp?fp->disk:(g_loaded_display.length()?g_loaded_display:g_loaded_name);while(gfx_textWidth(n)>LIST_W-24&&n.length()>3)n=n.substring(0,n.length()-1);gfx_print(n);}
   else{NeoScope _ns;fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);gfx_setTextSize(1);gfx_setTextColor(COL_MID,COL_BG);gfx_setCursor(LIST_X+8,y+NOW_PLAY_H/2-4);gfx_print(tapHint());}   // A600-neo2d: hint only, the count is in the mode bar
 }
 
@@ -5191,7 +5214,7 @@ static void drawCarousel(){
       }
       g_rp_blit+=micros()-_b0;}
       auto&gm=g_games[gi];
-      bool isLd=(g_loaded&&g_loaded_game_idx==gi);
+      bool isLd=uiShowsLoaded(gi);
       if(g_reelborder){   // MasterTelly CR: REELBORDER=OFF drops the per-cover frame for a clean, frameless reel
         uint16_t bord=(ar<0.5f)?(isLd?COL_GREEN:COL_AMBER):COL_ACCENT;
         gfx_drawRect(x-w/2-1,ccy-h/2-1,w+2,h+2,bord);
@@ -5211,7 +5234,7 @@ static void drawCarousel(){
     auto&game=g_games[gi];
     // v5.7.x: reset the reel disk selection when the centered game changes
     static int carDiskGi=-1;
-    if(carDiskGi!=gi){carDiskGi=gi; g_disk_sel=(g_loaded&&g_loaded_game_idx==gi)?g_loaded_disk_idx:0;}
+    if(carDiskGi!=gi){carDiskGi=gi; int ld=-1; g_disk_sel=(uiLoadedAs(gi,&ld)&&ld>=0)?ld:0;}
     gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);
     String t=game.name;while(gfx_textWidth(t)>VW-24&&t.length()>3)t=t.substring(0,t.length()-1);
     gfx_setCursor((VW-gfx_textWidth(t))/2,190);gfx_print(t);
@@ -5232,7 +5255,7 @@ static void drawCarousel(){
       g_car_disk_n=nd; g_car_disk_x=dx0; g_car_disk_y=dy; g_car_disk_bw=dbw; g_car_disk_h=dh;
       for(int d=0;d<nd;d++){
         int bx=dx0+d*dbw;
-        bool isLd=(g_loaded&&g_loaded_game_idx==gi&&g_loaded_disk_idx==d);
+        bool isLd=uiShowsLoaded(gi,d);
         bool isSel=(d==g_disk_sel);
         uint16_t bc=isLd?COL_GREEN:(isSel?COL_AMBER:COL_BAR);
         uint16_t tc=(isLd||isSel)?TFT_BLACK:COL_LIT;
@@ -5254,7 +5277,7 @@ static void drawCarousel(){
     // INSERT/EJECT — an explicit button under the nfo (v4.7.3: tap-the-cover-to-
     // load removed; in portrait the cover fills the width, so swipes grazed
     // into accidental loads. Mounting is always a deliberate button on the GTi.)
-    {bool isLd=(g_loaded&&g_loaded_game_idx==gi);
+    {bool isLd=uiShowsLoaded(gi);
      g_car_ins_w=170;g_car_ins_h=34;
      g_car_ins_x=(VW-g_car_ins_w)/2;g_car_ins_y=VH-BOTTOM_H-42;
      uint16_t bf=isLd?(uint16_t)0x4000:(uint16_t)0x0340, bb=isLd?(uint16_t)0xE8C4:COL_GREEN, bi=TFT_WHITE;
@@ -5391,8 +5414,8 @@ static void carHandleTap(uint16_t px,uint16_t py){
     int d=(px-g_car_disk_x)/g_car_disk_bw; if(d<0)d=0; if(d>=g_car_disk_n)d=g_car_disk_n-1;
     int gi=g_car_list[ci]; auto&gm=g_games[gi];
     if(d<(int)gm.disk_indices.size()){
-      if(g_loaded&&g_loaded_game_idx==gi){
-        if(d!=g_loaded_disk_idx){                    // clean swap: flush saves + eject, then reload the chosen disk
+      int ld=-1; if(uiLoadedAs(gi,&ld)){
+        if(d!=ld){                                   // clean swap: flush saves + eject, then reload the chosen disk (no fleet EJECT: the disk replaces it)
           doUnload(); g_sel=gi;g_disk_sel=d;g_disk_page=0;
           doLoadSelected(g_files[gm.disk_indices[d]]);
         }
@@ -5406,7 +5429,7 @@ static void carHandleTap(uint16_t px,uint16_t py){
      py>=(uint16_t)g_car_ins_y&&py<(uint16_t)(g_car_ins_y+g_car_ins_h)){
     int gi=g_car_list[ci];
     g_sel=gi;g_disk_page=0;setActiveLetter(bucketOf(g_games[gi].name));
-    if(g_loaded&&g_loaded_game_idx==gi)doUnload();
+    if(uiShowsLoaded(gi))doEject();
     else{auto&gm=g_games[gi];int d=(g_disk_sel>=0&&g_disk_sel<(int)gm.disk_indices.size())?g_disk_sel:0;doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[d]]);}
     if(g_car_active){drawCarousel();gfx_flush();}        // repaint over the list redraw the loader did
     return;
@@ -6031,6 +6054,15 @@ static void doUnload(){
   if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
   hardDetach();g_loaded=false;g_loaded_name="";g_loaded_display="";g_img_bytes=0;g_pfTargetName="";g_loaded_path="";g_loaded_orig="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;svDirtyReset();g_alias=false;   // 5.9.37: drop any alias mapping
   if(g_wireless_mode&&g_espnow_started&&espnowIsPaired())espnowSendEject();drawStatusBar();drawListAndCover();gfx_flush();}
+// EJECT on the touchscreen (cover, action strip, reel, tap-to-load). Fleet mode with a FluxDrive target: that FluxDrive
+// is told first (fleetEjectTarget), whether or not this panel staged its disk; then this panel's staging goes, as before.
+// doUnload() itself stays this panel only: the web page calls it inside a request handler (which must not block), a
+// disk swap sends the next disk right after it, and the test kit's disk is on this panel's own USB port.
+static void doEject(){
+  if(!fleetEjectTarget()){ doUnload(); return; }
+  drawFullUI();                          // the eject was a modal: lay the whole screen back; doUnload repaints its parts over it
+  if(g_loaded) doUnload(); else gfx_flush();   // nothing staged here (a panel restart, a PC push): no USB detach to do
+}
 
 // Expand the zero-RLE embedded ADF straight into the RAM-disk data area. No SD needed.
 static void diagInflate(const uint8_t*src,uint32_t slen,uint8_t*dst){
@@ -7432,6 +7464,16 @@ static void fleetEjectChecked(String* ids, int n){
     String err; if(pfSendCommand(g_pfPeers[pi].ip,g_pfPeers[pi].tcp,PF_CMD_EJECT,err)) ok++; }
   hwMsg("Ejected",("on "+String(ok)+" dongle(s)").c_str(),COL_AMBER,1500);
 }
+// Main-screen EJECT in fleet mode: the FluxDrive target (pfFluxTarget) gets the eject, blocking like the fleet manager's.
+// False = no target: nothing sent, nothing drawn. On success its roster entry reads empty at once (pfSendCommand).
+static bool fleetEjectTarget(){
+  const int t=pfFluxTarget(); if(t<0) return false;
+  const String ip=g_pfPeers[t].ip, nm=pfPeerLabel(g_pfPeers[t]); const uint16_t tcp=g_pfPeers[t].tcp;   // copies: the roster may change meanwhile
+  hwMsg("Ejecting...",nm.c_str(),COL_ACCENT,1);
+  String err; const bool ok=pfSendCommand(ip,tcp,PF_CMD_EJECT,err);
+  hwMsg(ok?"Ejected":"Not ejected",(ok?nm:err).c_str(),COL_AMBER,ok?1200:2200);
+  return true;
+}
 
 #if defined(GTI_FLEET)
 static int pfOrphanCount(){ int n=0; for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].lkd && !pfIsMine(g_pfPeers[i].id)) n++; return n; }
@@ -8496,8 +8538,8 @@ static void handleTap(uint16_t px,uint16_t py){
   // ── INSERT/EJECT (cover button or compact action strip) ──
   {if(!g_games.empty()&&px>=(uint16_t)INS_X&&px<(uint16_t)(INS_X+INS_W)&&py>=(uint16_t)INS_Y&&py<(uint16_t)(INS_Y+INS_H)){
     auto&gm=g_games[g_sel];int idx=gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[min(g_disk_sel,(int)gm.disk_indices.size()-1)];
-    if(g_loaded&&g_loaded_game_idx==g_sel){
-      if(g_loaded_disk_idx==g_disk_sel)doUnload();          // pressing on exactly what's mounted = eject
+    int ld=-1; if(uiLoadedAs(g_sel,&ld)){
+      if(ld<0||ld==g_disk_sel)doEject();                   // pressing on exactly what's mounted (or a disk of it not known here) = eject
       else doLoadSelected(g_files[idx]);                     // a different disk is selected = clean-swap to it
     } else doLoadSelected(g_files[idx]);                     // load the selected game/disk
     return;}}
@@ -8508,14 +8550,14 @@ static void handleTap(uint16_t px,uint16_t py){
       DiskGrid L=diskGrid(game.disk_count);
       if(L.multiPage){int pby=L.gridY+L.gridH+L.pageGap;if(py>=(uint16_t)pby&&py<(uint16_t)(pby+L.pageBtnH)&&px>=(uint16_t)L.gx&&px<(uint16_t)(L.gx+L.gridW)){g_disk_page=(g_disk_page+1)%L.pages;drawCoverPanel();gfx_flush();return;}}
       for(int d=L.pageStart;d<L.pageEnd;d++){int slot=d-L.pageStart,col=slot%L.COLS,row=slot/L.COLS;int bx=L.gx+col*(L.dbw+L.dgap),by=L.gridY+row*(L.dbh+L.dgap);
-        if(px>=(uint16_t)bx&&px<(uint16_t)(bx+L.dbw)&&py>=(uint16_t)by&&py<(uint16_t)(by+L.dbh)){g_disk_sel=d;if(g_hotswap&&g_loaded&&g_loaded_game_idx==g_sel)doLoadSelected(g_files[game.disk_indices[g_disk_sel]]);else{drawCoverPanel();gfx_flush();}return;}}
+        if(px>=(uint16_t)bx&&px<(uint16_t)(bx+L.dbw)&&py>=(uint16_t)by&&py<(uint16_t)(by+L.dbh)){g_disk_sel=d;if(g_hotswap&&uiShowsLoaded(g_sel))doLoadSelected(g_files[game.disk_indices[g_disk_sel]]);else{drawCoverPanel();gfx_flush();}return;}}
     } else if(COVER_ON&&g_portrait&&g_step_on){
       if(px>=(uint16_t)g_step_x&&px<(uint16_t)(g_step_x+g_step_w)&&py>=(uint16_t)(g_step_y-6)&&py<(uint16_t)(g_step_y+g_step_h)){
         if(px<(uint16_t)(g_step_x+g_step_w/2))g_disk_sel=(g_disk_sel-1+game.disk_count)%game.disk_count;   // left half = prev
         else g_disk_sel=(g_disk_sel+1)%game.disk_count;                                                    // right half = next
-        if(g_hotswap&&g_loaded&&g_loaded_game_idx==g_sel)doLoadSelected(g_files[game.disk_indices[g_disk_sel]]);else{drawCoverPanel();gfx_flush();}return;}
+        if(g_hotswap&&uiShowsLoaded(g_sel))doLoadSelected(g_files[game.disk_indices[g_disk_sel]]);else{drawCoverPanel();gfx_flush();}return;}
     } else if(STRIP_ON){
-      if(px<(uint16_t)INS_X&&py>=(uint16_t)STRIP_Y&&py<(uint16_t)(STRIP_Y+STRIP_H)){if(px<(uint16_t)(INS_X/2))g_disk_sel=(g_disk_sel-1+game.disk_count)%game.disk_count;else g_disk_sel=(g_disk_sel+1)%game.disk_count;if(g_hotswap&&g_loaded&&g_loaded_game_idx==g_sel)doLoadSelected(g_files[game.disk_indices[g_disk_sel]]);else{drawActionStrip();gfx_flush();}return;}
+      if(px<(uint16_t)INS_X&&py>=(uint16_t)STRIP_Y&&py<(uint16_t)(STRIP_Y+STRIP_H)){if(px<(uint16_t)(INS_X/2))g_disk_sel=(g_disk_sel-1+game.disk_count)%game.disk_count;else g_disk_sel=(g_disk_sel+1)%game.disk_count;if(g_hotswap&&uiShowsLoaded(g_sel))doLoadSelected(g_files[game.disk_indices[g_disk_sel]]);else{drawActionStrip();gfx_flush();}return;}
     }
   }}
 
@@ -8535,7 +8577,7 @@ static void handleTap(uint16_t px,uint16_t py){
       if(gi==g_sel){
         // Default: tapping the already-selected row does nothing (load only via INSERT).
         // TAPLOAD=ON restores the old tap-again-to-load/eject behaviour.
-        if(g_tapload){if(g_loaded&&g_loaded_game_idx==g_sel)doUnload();else{auto&gm=g_games[g_sel];g_disk_sel=0;g_disk_page=0;doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[0]]);}}
+        if(g_tapload){if(uiShowsLoaded(g_sel))doEject();else{auto&gm=g_games[g_sel];g_disk_sel=0;g_disk_page=0;doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[0]]);}}
         else if(wasInfo){drawFullUI();gfx_flush();}
       }
       else{g_sel=gi;setActiveLetter(bucketOf(g_games[gi].name));g_disk_sel=0;g_disk_page=0;if(wasInfo)drawFullUI();else drawListAndCover();gfx_flush();}}
@@ -8568,6 +8610,12 @@ void loop(){
   if(g_webFwPending.length()){ String fp=g_webFwPending; g_webFwPending=""; doFirmwareUpdateFrom(fp,false); drawFullUI(); gfx_flush(); }   // S9: only returns on failure (success reboots)
   pfService();          // #console: hear dongle beacons so /api/fleet has a roster
   pfWorker();           // #console: run one queued fling/eject/claim per pass (non-blocking)
+  // The FluxDrive target changed (a beacon, a fling or eject, it appeared or went quiet): repaint what shows it, on the
+  // main screen only. Settings and every modal redraw the main screen in full when they leave it.
+  { static char fdShown[256]=""; char now[256]; const int ft=pfFluxTarget();
+    if(ft<0) now[0]=0; else { const PfPeer&p=g_pfPeers[ft]; snprintf(now,sizeof now,"%s|%c|%s|%s|%s",p.id.c_str(),p.loaded?'L':'l',p.name.c_str(),p.ip.c_str(),p.disk.c_str()); }
+    if(strcmp(now,fdShown)){ strcpy(fdShown,now);
+      if(!g_info_showing){ if(g_car_active) drawCarousel(); else { drawStatusBar(); drawListAndCover(); } gfx_flush(); } } }
   { static String mdnsShown; if(pfMdnsName()!=mdnsShown){ mdnsShown=pfMdnsName();
       if(g_info_showing) drawInfoFull(); else { drawStatusBar(); gfx_flush(); } } }   // #clubday: the election renamed us - repaint wherever the address is shown
   // #clubday: the link is gone for a while (moved to another location) -> rejoin the strongest

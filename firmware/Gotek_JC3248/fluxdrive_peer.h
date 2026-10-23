@@ -109,3 +109,72 @@ inline size_t fdRowSig(const char* board, bool amiga, bool loaded, const char* d
   if (n < 0) { out[0] = 0; return 0; }
   return (size_t)n >= cap ? cap - 1 : (size_t)n;
 }
+
+// ---- Sync: the panel shows what the FluxDrive really holds (its beacon), and EJECT reaches it ----------------------
+
+// The FluxDrive the main screen speaks for in fleet mode (NOW PLAYING, the loaded marker, EJECT): the peer the last
+// disk of this boot went to, while it is a FluxDrive still heard; else the only FluxDrive heard; else none (-1).
+// visible[i]: heard and shown; is_fd[i]: its beacon says "fluxdrive"; ids[i]: its beacon id; last_id: "" = no fling yet.
+inline int fdPickTarget(int n, const bool* visible, const bool* is_fd, const char* const* ids, const char* last_id) {
+  if (n <= 0 || visible == nullptr || is_fd == nullptr || ids == nullptr) return -1;
+  if (last_id != nullptr && last_id[0])
+    for (int i = 0; i < n; i++)
+      if (visible[i] && is_fd[i] && ids[i] != nullptr && strcmp(ids[i], last_id) == 0) return i;
+  int only = -1;
+  for (int i = 0; i < n; i++) {
+    if (!visible[i] || !is_fd[i]) continue;
+    if (only >= 0) return -1;
+    only = i;
+  }
+  return only;
+}
+
+#define FD_SET_NAME_MAX 120u             // pfSendName sends at most this many bytes of a disk's name
+#define FD_NAME_KEEP     95u             // FluxDrive keeps this many characters of it (disk.cpp kNameMax - 1)
+
+inline bool fdNameBlank(char c) { return c == ' ' || c == 9 || c == 10 || c == 13; }   // space, tab, LF, CR
+inline char fdNameLower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c; }
+// The part of a disk name that counts: no blanks around it, no ".adf" at its end (any case).
+inline void fdNameCore(const char* s, const char** at, size_t* len) {
+  *at = s ? s : ""; *len = strlen(*at);
+  while (*len && fdNameBlank(**at)) { (*at)++; (*len)--; }
+  while (*len && fdNameBlank((*at)[*len - 1])) (*len)--;
+  if (*len >= 4 && (*at)[*len - 4] == '.' && fdNameLower((*at)[*len - 3]) == 'a' && fdNameLower((*at)[*len - 2]) == 'd' &&
+      fdNameLower((*at)[*len - 1]) == 'f') *len -= 4;
+  while (*len && fdNameBlank((*at)[*len - 1])) (*len)--;
+}
+
+// Two disk names are the same disk: blanks around them, case and one ".adf" at the end do not count. An empty name
+// (a FluxDrive with no disk) is the same as nothing.
+inline bool fdSameDiskName(const char* a, const char* b) {
+  const char *pa, *pb; size_t na, nb;
+  fdNameCore(a, &pa, &na); fdNameCore(b, &pb, &nb);
+  if (na == 0 || na != nb) return false;
+  for (size_t i = 0; i < na; i++) if (fdNameLower(pa[i]) != fdNameLower(pb[i])) return false;
+  return true;
+}
+
+// The name a FluxDrive gives a disk the panel flings under `sent` (the SET_NAME name; "" = none was sent): it takes
+// the part after the last dot for an extension and cuts it off ("Workbench 1.3" becomes "Workbench 1"), calls a disk
+// without a name "DISK.ADF", and keeps 95 characters (webby.cpp disk push, disk.cpp set_name). Into out, cut to cap-1.
+inline size_t fdDriveDiskName(const char* sent, char* out, size_t cap) {
+  if (out == nullptr || cap == 0) return 0;
+  const char* s = (sent != nullptr && sent[0]) ? sent : "DISK.ADF";
+  size_t n = strlen(s);
+  if (n > FD_SET_NAME_MAX) n = FD_SET_NAME_MAX;
+  for (size_t i = n; i-- > 1;) if (s[i] == '.') { n = i; break; }   // a dot at 0 is not an extension
+  if (n > FD_NAME_KEEP) n = FD_NAME_KEEP;
+  if (n > cap - 1) n = cap - 1;
+  memcpy(out, s, n);
+  out[n] = 0;
+  return n;
+}
+
+// The disk a FluxDrive reports (`disk`, its beacon) is the one the panel sends under `sent`: by that very name (put in
+// another way: its web page, a PC), or by the name FluxDrive made of it (a fling from this panel).
+inline bool fdHoldsSentName(const char* disk, const char* sent) {
+  if (fdSameDiskName(disk, sent)) return true;
+  char kept[FD_NAME_KEEP + 1];
+  fdDriveDiskName(sent, kept, sizeof(kept));
+  return fdSameDiskName(disk, kept);
+}

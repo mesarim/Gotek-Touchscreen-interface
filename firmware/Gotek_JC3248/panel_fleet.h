@@ -120,6 +120,7 @@ static String pfRowInfo(const PfPeer &p) {
 #endif
   return s;
 }
+static String pfPeerLabel(const PfPeer &p) { return p.name.length() ? p.name : p.ip; }   // how the screen names a peer
 // What the fleet manager compares to know a row needs repainting besides the id list: empty for every board but a
 // FluxDrive, whose Amiga state and disk change without its id changing.
 static String pfRowSig(const PfPeer &p) {
@@ -497,6 +498,30 @@ static void pfNoteTarget(const String &ip) {   // NOW PLAYING shows where the di
   g_pfTargetName = ip;
   for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip && g_pfPeers[i].name.length()) { g_pfTargetName = g_pfPeers[i].name; return; }
 }
+// The main screen speaks for one FluxDrive in fleet mode (fdPickTarget): where the last disk of this boot went, else the
+// only one heard. Its beacon ("loaded", "disk") is what NOW PLAYING, the loaded marker and EJECT go by.
+static String g_pfLastFlingId;   // beacon id of the peer the last acked disk went to ("" = none yet this boot)
+// A disk went to ip and was acked (FluxDrive acks after the mount). A FluxDrive holds it from now on, under the name it
+// gives a disk sent as `sent`, so the screen does not show the old disk until the next beacon; then the beacons rule.
+static void pfNoteFling(const String &ip, const String &sent) {
+  for (int i = 0; i < g_pfPeerN; i++) { PfPeer &p = g_pfPeers[i]; if (p.ip != ip) continue;
+    g_pfLastFlingId = p.id;
+    if (fdIsFluxDrive(p.board.c_str())) { char k[FD_NAME_KEEP + 1]; fdDriveDiskName(sent.c_str(), k, sizeof(k)); p.loaded = true; p.disk = k; }
+    return; }
+}
+// An eject was acked: a FluxDrive is empty from now on (its next beacon says so too). Any other board: nothing changes.
+static void pfNoteEject(const String &ip) {
+  for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip && fdIsFluxDrive(g_pfPeers[i].board.c_str())) { g_pfPeers[i].loaded = false; g_pfPeers[i].disk = ""; }
+}
+// The FluxDrive target as an index into g_pfPeers, -1 = none or not in fleet mode (WIRELESS + WiFi, home Wi-Fi up).
+// Heard = shown here and not silent past its stale limit (the roster itself is pruned only now and then).
+static int pfFluxTarget() {
+  if (!(g_wireless_mode && g_link_home && WiFi.status() == WL_CONNECTED)) return -1;
+  bool vis[PF_MAX_PEERS], fd[PF_MAX_PEERS]; const char *ids[PF_MAX_PEERS]; const uint32_t now = millis();
+  for (int i = 0; i < g_pfPeerN; i++) { const PfPeer &p = g_pfPeers[i]; const char *bd = p.board.c_str();
+    vis[i] = pfPeerVisible(p) && now - p.seen < fdStaleMs(bd, PF_STALE_MS); fd[i] = fdIsFluxDrive(bd); ids[i] = p.id.c_str(); }
+  return fdPickTarget(g_pfPeerN, vis, fd, ids, g_pfLastFlingId.c_str());
+}
 static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
 #if defined(GTI_FLEET)
   if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
@@ -558,6 +583,7 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
   const int a = c.available() >= 1 ? c.read() : -1;
   c.stop();
   if (a != 0x01) { err = (a==0x05) ? pfRefusedMsg(bd) : (a < 0) ? "no ack" : (String(fdDeviceWord(bd)) + " refused"); return false; }   // #lock: 0x05 = the dongle rejected us (not an owner)
+  pfNoteFling(ip, g_loaded_display.length() ? g_loaded_display : g_loaded_name);   // the name every caller sent with SET_NAME
   return true;
 }
 
@@ -580,7 +606,7 @@ static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &
   const int a = c.available() >= 1 ? c.read() : -1;
   c.stop();
   // Only 0x01 is success. The dongle answers 0x02 for "refused, unsaved data", 0x05 for "locked".
-  if (a == 0x01) return true;
+  if (a == 0x01) { if (cmd == PF_CMD_EJECT) pfNoteEject(ip); return true; }
   err = (a < 0) ? "no reply" : (a == 0x02 && fdHasSaves(pfPeerBoard(ip).c_str())) ? "refused - unsaved data (use force)" : (a == 0x05) ? PF_REFUSED_MSG : "refused";
   return false;
 }

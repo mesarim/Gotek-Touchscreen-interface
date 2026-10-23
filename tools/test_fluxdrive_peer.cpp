@@ -217,6 +217,116 @@ static void test_the_row_signature_fits_its_buffer() {
   CHECK(fdRowSig("fluxdrive", true, true, "x", tiny, 0) == 0);    // no buffer: nothing written
 }
 
+// The FluxDrive the main screen speaks for (NOW PLAYING, the loaded marker, EJECT): the one the last disk of this boot
+// went to while it is still heard, else the only FluxDrive heard, else none. Peers are identified by their beacon id.
+static void test_the_target_is_where_the_last_disk_went() {
+  const bool vis[] = { true, true, true };
+  const bool fd[]  = { true, false, true };
+  const char *ids[] = { "AA01", "BB02", "CC03" };
+  CHECK(fdPickTarget(3, vis, fd, ids, "CC03") == 2);              // two FluxDrives heard: the one the disk went to
+  CHECK(fdPickTarget(3, vis, fd, ids, "AA01") == 0);
+}
+
+static void test_without_a_usable_last_fling_the_only_fluxdrive_is_the_target() {
+  const bool vis[] = { false, true, true };
+  const bool fd[]  = { true, false, true };
+  const char *ids[] = { "AA01", "BB02", "CC03" };
+  CHECK(fdPickTarget(3, vis, fd, ids, "AA01") == 2);              // the last one went silent; one other FluxDrive is heard
+  CHECK(fdPickTarget(3, vis, fd, ids, "") == 2);                  // no fling yet this boot
+  CHECK(fdPickTarget(3, vis, fd, ids, nullptr) == 2);
+  CHECK(fdPickTarget(3, vis, fd, ids, "BB02") == 2);              // the last disk went to a Webby: the FluxDrive
+  CHECK(fdPickTarget(3, vis, fd, ids, "DD04") == 2);              // an id no longer in the roster
+}
+
+static void test_no_target_when_it_is_not_clear_which() {
+  const bool vis2[] = { true, true, true };
+  const bool fd2[]  = { true, false, true };
+  const char *ids[] = { "AA01", "BB02", "CC03" };
+  CHECK(fdPickTarget(3, vis2, fd2, ids, "") == -1);               // two FluxDrives and no fling: none
+  CHECK(fdPickTarget(3, vis2, fd2, ids, "BB02") == -1);           // ... nor after a fling to the Webby
+  const bool visGone[] = { false, true, true };
+  const bool fd3[]     = { true, false, false };
+  CHECK(fdPickTarget(3, visGone, fd3, ids, "AA01") == -1);        // its FluxDrive went silent, only Webbies left
+  const bool visWebby[] = { false, true, false };
+  CHECK(fdPickTarget(3, visWebby, fd2, ids, "BB02") == -1);       // only a Webby heard
+  CHECK(fdPickTarget(0, nullptr, nullptr, nullptr, "AA01") == -1);
+  const bool fdBoth[]  = { true, false, true };
+  const bool visNone[] = { false, false, false };
+  CHECK(fdPickTarget(3, visNone, fdBoth, ids, "AA01") == -1);     // nothing heard at all
+}
+
+// The beacon's "disk" against a name in the panel's library: blanks around it, case and an ".adf" at the end do not count.
+static void test_the_same_disk_name() {
+  CHECK(fdSameDiskName("Lemmings", "Lemmings"));
+  CHECK(fdSameDiskName("LEMMINGS", "lemmings"));
+  CHECK(fdSameDiskName("  Lemmings ", "Lemmings"));
+  CHECK(fdSameDiskName("Lemmings", "\tLemmings  "));
+  CHECK(fdSameDiskName("Lemmings.adf", "Lemmings"));               // a disk put in by FluxDrive's web page keeps its file name
+  CHECK(fdSameDiskName("Lemmings", "lemmings.ADF "));
+  CHECK(!fdSameDiskName("Lemmings", "Lemmings 2"));
+  CHECK(!fdSameDiskName("Lemmings 2", "Lemmings"));
+  CHECK(!fdSameDiskName("Lemmings", "Lemming"));
+  CHECK(!fdSameDiskName("Lemmings.adf.adf", "Lemmings"));          // one extension, not any number
+  CHECK(!fdSameDiskName("Workbench 1.3", "Workbench 1"));
+}
+
+static void test_an_empty_drive_name_matches_nothing() {
+  CHECK(!fdSameDiskName("", "Lemmings"));
+  CHECK(!fdSameDiskName("   ", "Lemmings"));
+  CHECK(!fdSameDiskName("", ""));
+  CHECK(!fdSameDiskName(" ", "  "));
+  CHECK(!fdSameDiskName(".adf", ""));
+  CHECK(!fdSameDiskName(nullptr, "Lemmings"));
+  CHECK(!fdSameDiskName("Lemmings", nullptr));
+  CHECK(!fdSameDiskName(nullptr, nullptr));
+}
+
+// What FluxDrive keeps as the disk's name for a name the panel sends with SET_NAME (pfSendName cuts it to 120 bytes):
+// it cuts at the last dot (it takes it for an extension), keeps 95 characters, and calls a disk sent without a name
+// "DISK.ADF", so "DISK".
+static void test_the_name_fluxdrive_keeps_for_a_sent_name() {
+  char b[128];
+  CHECK(fdDriveDiskName("Lemmings", b, sizeof(b)) == 8 && std::strcmp(b, "Lemmings") == 0);
+  CHECK(fdDriveDiskName("Workbench 1.3", b, sizeof(b)) == 11 && std::strcmp(b, "Workbench 1") == 0);
+  CHECK(fdDriveDiskName("Monkey.Island.2", b, sizeof(b)) > 0 && std::strcmp(b, "Monkey.Island") == 0);   // the LAST dot
+  CHECK(fdDriveDiskName(".hidden", b, sizeof(b)) > 0 && std::strcmp(b, ".hidden") == 0);                // a dot at 0 stays
+  CHECK(fdDriveDiskName("", b, sizeof(b)) == 4 && std::strcmp(b, "DISK") == 0);
+  CHECK(fdDriveDiskName(nullptr, b, sizeof(b)) == 4 && std::strcmp(b, "DISK") == 0);
+}
+
+static void test_the_kept_name_is_cut_like_fluxdrive_cuts_it() {
+  char sent[200], b[200];
+  std::memset(sent, 'a', 130); sent[130] = 0;                      // no dot: 95 characters are kept
+  CHECK(fdDriveDiskName(sent, b, sizeof(b)) == 95 && std::strlen(b) == 95);
+  std::memset(sent, 'a', 130); sent[125] = '.'; sent[130] = 0;     // the dot is past the 120 the panel sends: not cut there
+  CHECK(fdDriveDiskName(sent, b, sizeof(b)) == 95 && std::strchr(b, '.') == nullptr);
+  std::memset(sent, 'a', 130); sent[100] = '.'; sent[130] = 0;     // cut at the dot (100), then to 95
+  CHECK(fdDriveDiskName(sent, b, sizeof(b)) == 95);
+  std::memset(sent, 'a', 130); sent[40] = '.'; sent[130] = 0;      // cut at the dot
+  CHECK(fdDriveDiskName(sent, b, sizeof(b)) == 40);
+  std::memset(sent, 'a', 130); sent[40] = '.'; sent[125] = '.'; sent[130] = 0;   // the last dot FluxDrive sees is at 40:
+  CHECK(fdDriveDiskName(sent, b, sizeof(b)) == 40);                               // the one at 125 never left the panel
+  char tiny[6];
+  CHECK(fdDriveDiskName("Workbench 1.3", tiny, sizeof(tiny)) == 5 && std::strcmp(tiny, "Workb") == 0);   // never past the end
+  CHECK(fdDriveDiskName("x", tiny, 0) == 0);
+  CHECK(fdDriveDiskName("x", nullptr, 8) == 0);
+}
+
+// Does the disk a FluxDrive reports hold the game the panel sends under `sent`? Either the name as sent (a disk put in
+// another way, under the same name) or the name FluxDrive made of it (a panel fling).
+static void test_the_drive_holds_the_disk_sent_under_a_name() {
+  CHECK(fdHoldsSentName("Workbench 1", "Workbench 1.3"));          // a panel fling of "Workbench 1.3"
+  CHECK(fdHoldsSentName("workbench 1 ", "Workbench 1.3"));
+  CHECK(fdHoldsSentName("Workbench 1.3", "Workbench 1.3"));        // the same disk put in by name, from elsewhere
+  CHECK(fdHoldsSentName("Workbench 1.3.adf", "Workbench 1.3"));    // ... by FluxDrive's web page, with its file name
+  CHECK(fdHoldsSentName("Lemmings", "Lemmings"));
+  CHECK(!fdHoldsSentName("Workbench 1.3", "Workbench 1"));         // the other way round is another disk
+  CHECK(!fdHoldsSentName("Lemmings", "Lemmings 2"));
+  CHECK(!fdHoldsSentName("", "Lemmings"));                         // an empty drive holds nothing
+  CHECK(!fdHoldsSentName(nullptr, "Lemmings"));
+  CHECK(fdHoldsSentName("DISK", ""));                              // a disk sent with no name is "DISK" to FluxDrive
+}
+
 int main() {
   test_fluxdrive_is_told_apart_by_its_beacon_board();
   test_only_a_dd_adf_goes_to_a_fluxdrive();
@@ -239,6 +349,14 @@ int main() {
   test_every_other_board_keeps_its_message_as_before();
   test_the_row_signature_follows_a_fluxdrive_only();
   test_the_row_signature_fits_its_buffer();
+  test_the_target_is_where_the_last_disk_went();
+  test_without_a_usable_last_fling_the_only_fluxdrive_is_the_target();
+  test_no_target_when_it_is_not_clear_which();
+  test_the_same_disk_name();
+  test_an_empty_drive_name_matches_nothing();
+  test_the_name_fluxdrive_keeps_for_a_sent_name();
+  test_the_kept_name_is_cut_like_fluxdrive_cuts_it();
+  test_the_drive_holds_the_disk_sent_under_a_name();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }
