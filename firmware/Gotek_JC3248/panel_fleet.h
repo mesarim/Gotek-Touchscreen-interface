@@ -120,6 +120,13 @@ static String pfRowInfo(const PfPeer &p) {
 #endif
   return s;
 }
+// What the fleet manager compares to know a row needs repainting besides the id list: empty for every board but a
+// FluxDrive, whose Amiga state and disk change without its id changing.
+static String pfRowSig(const PfPeer &p) {
+  char b[96];
+  fdRowSig(p.board.c_str(), p.amiga, p.loaded, p.disk.c_str(), b, sizeof(b));
+  return String(b);
+}
 
 // ── Panel-vs-panel election (#clubday: many screens on one Wi-Fi, one gotekomega.local) ──
 // Every screen beacons role:panel with its MAC id and the mDNS name it currently holds.
@@ -427,6 +434,9 @@ static String pfPeerBoard(const String &ip) {
   for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip) return g_pfPeers[i].board;
   return String();
 }
+// A FluxDrive that stayed silent through the whole SET_NAME wait is still busy. pfSendName notes its address here and
+// the pfSendDisk right behind it says "busy" at once, instead of waiting out the same game load a second time.
+static FdBusyMemo g_pfBusyMemo;
 #if defined(GTI_FLEET)   // the AUTH preamble
 // #lock: write the AUTH preamble. Returns false if the dongle refuses us immediately (0x05).
 static bool pfWriteAuth(WiFiClient &c, String &err) {
@@ -500,6 +510,9 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
     if (!g_loaded || g_img_bytes == 0) { err = "no disk loaded"; return false; }
     const char *refuse = fdRefuseImage(bd, g_img_bytes);
     if (refuse) { err = refuse; return false; }
+    // SET_NAME just ran out against this FluxDrive: it is still reading for the Amiga. Say so now; waiting again
+    // would keep the person at the screen another two minutes for the same answer.
+    if (g_pfBusyMemo.take(ip.c_str(), millis(), FD_BUSY_MEMO_MS)) { err = fdBusyText(); return false; }
   }
   // Mainline: say who is sending before sending. A refusal here is the dongle
   // protecting somebody else's disk or unsaved saves, so it stops the fling.
@@ -584,6 +597,7 @@ static bool pfSendName(const String &ip, uint16_t port, const String &name, Stri
   const String board = pfPeerBoard(ip);
   const char *bd = board.c_str();
   if (g_img_bytes != 0) { const char *refuse = fdRefuseImage(bd, g_img_bytes); if (refuse) { err = refuse; return false; } }
+  if (fdIsFluxDrive(bd)) g_pfBusyMemo.clear();
   WiFiClient c;
   if (!c.connect(ip.c_str(), port, 4000)) { err = "connect failed"; return false; }
   c.setNoDelay(true);
@@ -600,7 +614,9 @@ static bool pfSendName(const String &ip, uint16_t port, const String &name, Stri
   const uint32_t nameWait = fdReplyWaitMs(bd, 3000);
   while (c.available() < 1 && millis() - t0 < nameWait) { if (!c.connected()) break; delay(3); }
   const int a = c.available() >= 1 ? c.read() : -1;
+  const bool waitRanOut = (millis() - t0 >= nameWait);
   c.stop();
+  if (fdNameMeansBusy(bd, a >= 0, waitRanOut)) g_pfBusyMemo.note(ip.c_str(), millis());
   if (a != 0x01) { err = (a < 0) ? "no ack" : "not supported"; return false; }
   return true;
 }

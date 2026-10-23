@@ -5927,6 +5927,7 @@ static bool doLoadSelected(const String&adfPath){
     int vn=0,only=-1; for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])){ vn++; only=i; }
     if(vn>=2){ doFleetPick(); }
     else if(vn==1){ PfPeer&p=g_pfPeers[only]; hwMsg("Sending...",p.name.c_str(),COL_ACCENT,1);
+      fleetWaitHint(p.board.c_str());
       String nm=g_loaded_display.length()?g_loaded_display:g_loaded_name; if(nm.length()){String ne;pfSendName(p.ip,p.tcp,nm,ne);}
       String err; bool ok=pfSendDisk(p.ip,p.tcp,err); hwMsg(ok?"Sent":"Not sent",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,ok?1200:2200);
       if(!ok) hardAttach();   // the dongle refused or vanished - keep the disk usable on our own port
@@ -6686,6 +6687,15 @@ static void hwMsg(const char* l1, const char* l2, uint16_t col, uint32_t ms){
     gfx_setCursor((VW - gfx_textWidth(l2))/2, VH/2 + 6); gfx_print(l2); }
   gfx_flush(); delay(ms);
 }
+// While the Amiga reads from a FluxDrive it answers nothing, and the panel waits for it (up to about two minutes) with
+// the touchscreen and the web page unattended. This line under "Sending..." says so, so it does not look hung.
+// Any other board: nothing is drawn.
+static void fleetWaitHint(const char* board){
+  if(!fdIsFluxDrive(board)) return;
+  const char* h="waits while the Amiga reads";
+  gfx_setTextSize(1); gfx_setTextColor(COL_DIM,COL_BG);
+  gfx_setCursor((VW-gfx_textWidth(h))/2,VH/2+20); gfx_print(h); gfx_flush();
+}
 
 // 5.9.13: scan for WiFi networks and let the user TAP one (kills SSID typos and
 // case mismatches). Returns the chosen SSID, or "" if the user picks Type-manually.
@@ -7411,8 +7421,9 @@ static void fleetSendChecked(String* ids, int n){
   for(int k=0;k<n;k++){ int pi=-1; for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].id==ids[k]){pi=i;break;} if(pi<0) continue;
     PfPeer&p=g_pfPeers[pi];
     hwMsg("Sending...",(p.name+"  ("+String(k+1)+"/"+String(n)+")").c_str(),COL_ACCENT,1);
+    fleetWaitHint(p.board.c_str());
     if(nm.length()){ String ne; pfSendName(p.ip,p.tcp,nm,ne); }
-    String err; if(pfSendDisk(p.ip,p.tcp,err)) ok++; else { fail++; lastErr=p.name+": "+err; }
+    String err; if(pfSendDisk(p.ip,p.tcp,err)) ok++; else { fail++; gfx_setTextSize(1); lastErr=fdKeepNamePrefix(p.board.c_str(),n,gfx_textWidth(p.name+": "+err),VW)?(p.name+": "+err):err; }
   }
   hwMsg(fail?"Some refused":"Sent", (fail?lastErr:("to "+String(ok)+" dongle(s)")).c_str(), fail?COL_AMBER:COL_GREEN, 2400);
 }
@@ -7454,6 +7465,8 @@ static void doFleetPick(){
     // dongle appearing/vanishing between frames can never move a row under a finger already down.
     int cand[PF_MAX_PEERS], cn=0; String sig;
     for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])){ cand[cn++]=i; sig+=g_pfPeers[i].id; sig+=','; }   // #console: hide locked-not-mine
+    // A FluxDrive's Amiga state and disk change without its id changing; they repaint its row. Other boards add nothing.
+    for(int k=0;k<cn;k++) sig+=pfRowSig(g_pfPeers[cand[k]]);
     if(sig!=drawnSig) dirty=true;
     if(dirty){ dirty=false;
       vn=0; for(int k=0;k<cn;k++) visId[vn++]=g_pfPeers[cand[k]].id; drawnSig=sig;

@@ -14,6 +14,8 @@
 // Every other board gets exactly the answer the panel gave before this file existed.
 #pragma once
 #include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 
 #define FD_KIND_FLUXDRIVE 4              // pad[2] of the pairing reply / board_id in /status
@@ -53,3 +55,57 @@ inline const char* fdBoardForKind(uint8_t kind) { return kind == FD_KIND_FLUXDRI
 
 // The mDNS name of a paired device is <prefix>-<mac bytes 4 and 5>.local: a Webby is gotekomega-, a FluxDrive fluxdrive-.
 inline const char* fdHostPrefix(uint8_t kind) { return kind == FD_KIND_FLUXDRIVE ? "fluxdrive" : "gotekomega"; }
+
+// ---- Fix round 1: what the person at the touchscreen sees while a FluxDrive is busy -------------------------------
+
+#define FD_BUSY_MEMO_MS   10000u         // how long "it did not answer SET_NAME" is remembered for the push right behind it
+
+// SET_NAME is the first thing sent for a disk. A FluxDrive that stayed silent for the WHOLE wait (not one whose
+// connection closed early) is still busy, so the push behind it would only wait out the same game load again.
+inline bool fdNameMeansBusy(const char* board, bool got_reply, bool wait_ran_out) {
+  return fdIsFluxDrive(board) && !got_reply && wait_ran_out;
+}
+
+// One remembered address. note() when SET_NAME ran out; take() in the push to the same address says "busy" at once,
+// once, and only while the note is fresh. clear() starts a new send. now is millis(); the wrap is handled.
+struct FdBusyMemo {
+  char ip[48];
+  uint32_t at;
+  bool set;
+  FdBusyMemo() : at(0), set(false) { ip[0] = 0; }
+  void clear() { set = false; ip[0] = 0; }
+  void note(const char* addr, uint32_t now) {
+    strncpy(ip, addr ? addr : "", sizeof(ip) - 1);
+    ip[sizeof(ip) - 1] = 0;
+    at = now;
+    set = true;
+  }
+  bool take(const char* addr, uint32_t now, uint32_t ttl_ms) {
+    if (!set) return false;
+    if ((uint32_t)(now - at) > ttl_ms) { clear(); return false; }
+    if (addr == nullptr || ip[0] == 0 || strncmp(ip, addr, sizeof(ip) - 1) != 0) return false;
+    clear();
+    return true;
+  }
+};
+
+// Multi-select result line: "<name>: <text>" is centred without wrapping, so it clips at both ends when too wide.
+// A FluxDrive's refusal is 44 characters; the name in front makes it about 60. For a FluxDrive the name is dropped
+// when there is one target, or when the full line does not fit the screen (8 px margin each side).
+// Every other board keeps "<name>: <text>" exactly as before.
+inline bool fdKeepNamePrefix(const char* board, int targets, int full_text_px, int screen_px) {
+  if (!fdIsFluxDrive(board)) return true;
+  return targets > 1 && full_text_px <= screen_px - 8;
+}
+
+// What the fleet manager compares to decide whether to repaint: for a FluxDrive the Amiga's power, whether it holds a
+// disk and the disk's name; for any other board nothing (its row repaints when its id list changes, as before).
+// Writes "" or "|<A|a><L|l><disk>;" into out (cut to cap-1) and returns the length.
+inline size_t fdRowSig(const char* board, bool amiga, bool loaded, const char* disk, char* out, size_t cap) {
+  if (out == nullptr || cap == 0) return 0;
+  out[0] = 0;
+  if (!fdIsFluxDrive(board)) return 0;
+  const int n = snprintf(out, cap, "|%c%c%s;", amiga ? 'A' : 'a', loaded ? 'L' : 'l', disk ? disk : "");
+  if (n < 0) { out[0] = 0; return 0; }
+  return (size_t)n >= cap ? cap - 1 : (size_t)n;
+}
