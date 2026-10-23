@@ -55,6 +55,7 @@ bool espnowXiaoOnline(); // true if heard from XIAO in last 30s
 
 // ── Save writeback (v4.8.0) ─────────────────────────────────────────────────
 extern volatile uint8_t  g_espnow_dongle_caps;   // pad[0] of PAIR_REPLY: save proto version (0 = old dongle)
+extern volatile uint8_t  g_espnow_dongle_kind;   // pad[2] of PAIR_REPLY: board kind, 1 SuperMini, 2 Zero, 3 XIAO, 4 FluxDrive; 0 = unknown (old dongle or old pairing)
 extern volatile uint8_t  g_espnow_dongle_board;  // pad[1] of PAIR_REPLY: 1 = HD-capable (XIAO 8MB, 2MB ramdisk); 0 = DD-only / old dongle
 extern volatile uint32_t g_espnow_load_id;       // load_id from the last FLING's TCP ack (0 = old dongle)
 extern volatile bool     g_espnow_dirty;         // dongle beaconed unsaved writes

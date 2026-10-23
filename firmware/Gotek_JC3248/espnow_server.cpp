@@ -10,6 +10,7 @@
 #include <SD_MMC.h>
 #include <WiFiClient.h>
 #include <ESPmDNS.h>   // home-WiFi transport: resolve the dongle's gotek.local
+#include "fluxdrive_peer.h"
 bool cfgWriteAll(const String& text);   // S8: defined in Gotek_JC3248.ino
 
 #define ESPNOW_CHANNEL 6
@@ -54,6 +55,7 @@ bool espnowXiaoOnline() {
 // ── Save writeback state (v4.8.0) ──
 volatile uint8_t  g_espnow_dongle_caps  = 0;
 volatile uint8_t  g_espnow_dongle_board = 0;
+volatile uint8_t  g_espnow_dongle_kind  = 0;   // pad[2] of the pairing reply: 1 SuperMini, 2 Zero, 3 XIAO, 4 FluxDrive (fluxdrive_peer.h)
 volatile uint32_t g_espnow_load_id      = 0;
 volatile bool     g_espnow_dirty        = false;
 volatile uint32_t g_espnow_dirty_loadid = 0;
@@ -160,6 +162,7 @@ static void handleIncoming(const uint8_t* data, int len) {
     g_espnow_xiao_last_seen = millis();
     g_espnow_dongle_caps  = p->pad[0];   // v3.2.0+ dongles advertise the save protocol here
     g_espnow_dongle_board = p->pad[1];   // v5.x: 1 = HD-capable dongle (XIAO 8MB); 0 = DD-only / old dongle
+    g_espnow_dongle_kind  = p->pad[2];   // Webby 1.6.12+: which board it is; a FluxDrive says 4
 
     // Register XIAO as direct peer
     if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
@@ -179,6 +182,7 @@ static void handleIncoming(const uint8_t* data, int len) {
         if (line.startsWith("XIAO_MAC=")) { lines += "XIAO_MAC=" + String(macStr) + "\n"; written = true; }
         else if (line.startsWith("XIAO_IP=")) { lines += "XIAO_IP=" + _xiao_ip + "\n"; }
         else if (line.startsWith("XIAO_HD=")) { }   // S11: rewritten below
+        else if (line.startsWith("XIAO_KIND=")) { }   // rewritten below
         else if (line.startsWith("XIAO_KEY=") || line.startsWith("XIAO_SSID=")) { }   // lock-a: rewritten below
         else { lines += line + "\n"; }
       }
@@ -186,6 +190,7 @@ static void handleIncoming(const uint8_t* data, int len) {
     }
     if (!written) lines += "XIAO_MAC=" + String(macStr) + "\n";
     lines += "XIAO_HD=" + String((int)g_espnow_dongle_board) + "\n";   // S11: survives a reboot (was reset to 0, so HD flings were refused)
+    lines += "XIAO_KIND=" + String((int)g_espnow_dongle_kind) + "\n";
     if (_xiao_key.length())  lines += "XIAO_KEY="  + _xiao_key  + "\n";   // lock-a
     if (_xiao_ssid.length()) lines += "XIAO_SSID=" + _xiao_ssid + "\n";   // lock-a
     cfgWriteAll(lines);   // S8: tmp + rename (Gotek_JC3248.ino)
@@ -252,6 +257,7 @@ static void loadConfig() {
     }
     if (line.startsWith("XIAO_IP=")) _xiao_ip = line.substring(8);
     if (line.startsWith("XIAO_HD=")) g_espnow_dongle_board = (uint8_t)line.substring(8).toInt();   // S11
+    if (line.startsWith("XIAO_KIND=")) g_espnow_dongle_kind = (uint8_t)line.substring(10).toInt();
     if (line.startsWith("XIAO_KEY="))  _xiao_key  = line.substring(9);    // lock-a
     if (line.startsWith("XIAO_SSID=")) _xiao_ssid = line.substring(10);   // lock-a
   }
@@ -389,9 +395,10 @@ void espnowForgetActive(const uint8_t* mac){
   if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
   String lines=""; File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
   if(fr){ while(fr.available()){ String line=fr.readStringUntil('\n'); line.trim();
-    if(line.startsWith("XIAO_MAC=")||line.startsWith("XIAO_IP=")||line.startsWith("XIAO_HD=")||line.startsWith("XIAO_KEY=")||line.startsWith("XIAO_SSID=")) continue; lines+=line+"\n"; } fr.close(); }
+    if(line.startsWith("XIAO_MAC=")||line.startsWith("XIAO_IP=")||line.startsWith("XIAO_HD=")||line.startsWith("XIAO_KIND=")||line.startsWith("XIAO_KEY=")||line.startsWith("XIAO_SSID=")) continue; lines+=line+"\n"; } fr.close(); }
   _xiao_key = ""; _xiao_ssid = "";   // lock-a
   g_espnow_dongle_board = 0;   // S11
+  g_espnow_dongle_kind = 0;
   cfgWriteAll(lines);   // S8: tmp + rename (Gotek_JC3248.ino)
 }
 
@@ -517,6 +524,8 @@ static bool tcpClaim(const char* ip){          // true = go ahead and send
     c.write(esc, 5); c.write(my, 6); c.write(&fl, 1); c.write(&L, 1); c.write((const uint8_t*)nm.c_str(), L);
     uint32_t t0 = millis(); while (!c.available() && millis()-t0 < 1500) delay(5);
     int r = c.available() ? c.read() : -1;
+    // A FluxDrive writes no disk, so it has no saves to lose: its 0x02 is "in use", the same as 0x03.
+    if (r == 0x02 && !fdHasSaves(fdBoardForKind(g_espnow_dongle_kind))) r = 0x03;
     if (r == 0x05) { c.stop(); delay(20); g_espnow_lock_refused = true; _claimCancelled = true; Serial.println("[TCP] dongle: not an owner (0x05)"); return false; }   // lock-a
     if (r != 0x02 && r != 0x03) { c.stop(); delay(20); return true; }
     char who[25] = {0}; t0 = millis(); while (!c.available() && millis()-t0 < 500) delay(2);
@@ -722,7 +731,8 @@ bool espnowSendDiskHome(const String& ssid, const String& pass, String& ioIp, ui
     String ip = "";                                    // pf4c (#77): only a verified dongle, never a screen
     const bool md = MDNS.begin("gti-remote");
     if (md && g_espnow_paired) {                       // 1. our paired dongle by its own name (it steps aside to this when a screen leads)
-      char h[24]; snprintf(h, sizeof(h), "gotekomega-%02x%02x", _xiao_mac[4], _xiao_mac[5]);
+      // A Webby wears gotekomega-<mac>, a FluxDrive fluxdrive-<mac>; it never answers to the other one.
+      char h[24]; snprintf(h, sizeof(h), "%s-%02x%02x", fdHostPrefix(g_espnow_dongle_kind), _xiao_mac[4], _xiao_mac[5]);
       IPAddress r = MDNS.queryHost(h, 2500);
       if ((uint32_t)r != 0 && homeIsDongle(r.toString())) { ip = r.toString(); Serial.printf("[HOME] %s.local -> %s\n", h, ip.c_str()); }
     }
