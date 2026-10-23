@@ -50,7 +50,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-lab2i-JC3248"   // A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-lab2j-JC3248"   // A600-lab2j (Paul Dean, 23 Oct 2026): AUTO RESCAN - after SD ACCESS the library is rescanned so games copied on from the PC show up (Settings AUTO RESCAN, CONFIG.TXT AUTOSCAN=ON default; OFF keeps the old list until RESCAN SD) | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -354,6 +354,7 @@ static bool     g_diagdisp=false;   // DIAGDISP= / Settings toggle
 //               from cover-decode noise. (The micro block still allocates, greyed — leaving
 //               that path intact avoids NULL-tile handling just for an experiment.)
 static bool     g_nocache=false;
+static bool     g_autoscan=true;   // AUTOSCAN= (Paul Dean): after SD ACCESS, rebuild the library so games added from the PC show up
 static bool     g_covers_on=true;
 static bool     g_reelborder=true;  // REELBORDER= / Settings (MasterTelly CR): ON=frame around reel covers (default), OFF=clean/frameless (the loaded game is still marked green)
 static bool     g_lastused=false;   // LASTUSED= / Settings: ON=on boot, restore the selection to the game you last loaded (remembered in /.gtilastused)
@@ -1271,6 +1272,7 @@ static void IRAM_ATTR bcAllocFailed(size_t size,uint32_t caps,const char*){ if(!
 struct BcPrev { bool crashed=false, valid=false; int reason=0; uint32_t stage=0,n=0,psram=0,intr=0,failsz=0,failcaps=0; };
 static BcPrev g_bc_prev;   // what the LAST boot left behind (read once, first thing in setup)
 #define SDACCESS_MAGIC 0x5DACCE55u
+#define SDRETURN_MAGIC 0x5D2E7042u   // AUTOSCAN: set on the way back from SD ACCESS, consumed by the next boot
 static uint32_t g_sd_sectors=0;                       // real card size, set at SD-access boot
 static volatile uint32_t g_sd_rd=0,g_sd_wr=0;        // sector-op tallies for the activity readout
 static volatile bool g_sd_eject=false;               // set by the SCSI START/STOP (eject) callback
@@ -3092,6 +3094,10 @@ LOOP=0
 #   OFF (default) = always start at the top of the list.
 LASTUSED=OFF
 
+# AUTOSCAN: ON (default) = after SD ACCESS the library is rescanned, so games copied on
+#   from the PC show up. OFF = keep the old list until you press RESCAN SD (faster return).
+AUTOSCAN=ON
+
 
 # ============================================================
 #  LIBRARY      how the game collection is organised
@@ -3300,6 +3306,7 @@ static void selfHealConfig(){
     {"LISTTILE", "\n# LISTTILE: ON (default) = the list's cover panel reuses the reel's cached 45KB\n#   thumbnail. OFF = re-decode the full JPEG on every selection change (the old way,\n#   and much slower on a big library). Same picture either way.\nLISTTILE=ON\n"},
     {"REELPROF", "# REELPROF: ON = print a reel frame-time breakdown to GTI/gti.log every ~1.5s\n#   while the reel is on screen. Diagnostic only.\nREELPROF=OFF\n"},
     {"REELBORDER","\n# REELBORDER: frame drawn around each cover in the reel. ON=framed (default),\n#   OFF=clean/frameless look (the game you have loaded is still marked green).\nREELBORDER=ON\n"},
+    {"AUTOSCAN", "\n# AUTOSCAN: ON (default) = after SD ACCESS the library is rescanned, so games copied on\n#   from the PC show up. OFF = keep the old list until you press RESCAN SD (faster return).\nAUTOSCAN=ON\n"},
     {"LASTUSED", "\n# LASTUSED: ON = on power-up, jump the selection back to the game you last loaded.\n#   OFF (default) = always start at the top of the list.\nLASTUSED=OFF\n"},
     {"FONT",     "\n# Font size: SMALL, NORMAL, LARGE\nFONT=NORMAL\n"},
     {"LANG",     "\n# Language: EN, FR, IT, ES, DE, NL, PL, CS  (pull the SD and edit this line if you get stuck)\nLANG=EN\n"},
@@ -3474,6 +3481,7 @@ static void loadConfig(){
     else if(k=="LISTTILE"){String lv=v;lv.toUpperCase();g_listtile=!(lv=="OFF"||lv=="0"||lv=="NO");}        // 5.9.34-lab4
     else if(k=="BIGDISK"){String bu=v;bu.trim();bu.toUpperCase(); if(!g_disk) g_img_max_kb=(bu=="ON"||bu=="1"||bu=="YES")?DISK_IMG_BIG_KB:DISK_IMG_DEF_KB;}   // lab14m: boot only (the RAM disk is sized once); DISKMAXKB= is no longer read
     else if(k=="REELBORDER"){String rv=v;rv.toUpperCase();g_reelborder=!(rv=="OFF"||rv=="0"||rv=="NO");}   // MasterTelly CR: default ON
+    else if(k=="AUTOSCAN"){String av=v;av.toUpperCase();g_autoscan=!(av=="OFF"||av=="0"||av=="FALSE");}
     else if(k=="LASTUSED"){String lv=v;lv.toUpperCase();g_lastused=(lv=="ON"||lv=="1"||lv=="TRUE");}
     else if(k=="NESTING"){String nv=v;nv.toUpperCase();g_nesting=(nv=="ON"||nv=="1"||nv=="TRUE");}
     else if(k=="LINK"){String lv=v;lv.toUpperCase();g_link_home=(lv=="HOMEWIFI"||lv=="HOME"||lv=="WIFI");}
@@ -4211,7 +4219,7 @@ static void drawActionStrip(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_TESTPAGE, IA_TESTBACK, IA_NEOUI, IA_CRKSTYLE, IA_SAVEDWIFI, IA_FLEET, IA_ORPHAN, IA_DONGLESETUP };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_TESTPAGE, IA_TESTBACK, IA_NEOUI, IA_CRKSTYLE, IA_SAVEDWIFI, IA_FLEET, IA_ORPHAN, IA_DONGLESETUP, IA_AUTOSCAN };
 #if defined(GTI_FLEET)
 static int  pfOrphanCount();     // #lock: locked dongles this screen does not own (defined with the fleet console below)
 static void doReleaseOrphans();  // #lock: offer our token to each of them - only a real owner token releases one
@@ -4324,6 +4332,7 @@ static void drawInfoPanel(){
   {bool diagOn=(g_loaded&&g_loaded_name=="AMIGA TEST KIT");   // v5.6.1: ATK is Amiga-only — hide LOAD DIAG in DSK/GEN (keep EJECT DIAG if somehow still loaded)
    if(g_mode==MODE_ADF||diagOn) add(diagOn?T(L_EJECT_DIAG):T(L_LOAD_DIAG), diagOn?(uint16_t)0xE8C4:COL_ACCENT, diagOn?TFT_BLACK:TFT_WHITE, IA_DIAG);}
   add(T(L_SD_ACCESS), (uint16_t)0x05FF, TFT_BLACK, IA_SDACCESS);
+  add(String("AUTO RESCAN")+": "+(g_autoscan?T(L_ON):T(L_OFF)), g_autoscan?COL_GREEN:COL_BAR, g_autoscan?TFT_BLACK:COL_LIT, IA_AUTOSCAN);   // Paul Dean: rescan after SD ACCESS -> CONFIG.TXT AUTOSCAN=
   add(T(L_FW_UPDATE), COL_AMBER, TFT_BLACK, IA_FWUPDATE);
   }   // lab14k: end of the main Settings list
   int ix=0,iy=STATUS_H,iw=VW,ih=VH-STATUS_H-BOTTOM_H;
@@ -7611,7 +7620,7 @@ static void sdSoakTest(){
 static void sdAccessReboot(){
   gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);
   const char*m="RETURNING...";gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();
-  g_sdaccess_magic=0;delay(400);ESP.restart();
+  g_sdaccess_magic=SDRETURN_MAGIC;delay(400);ESP.restart();   // AUTOSCAN: the next boot decides, once CONFIG.TXT is read
 }
 static void runSDAccessBoot(bool sdok){
   g_sdaccess_magic=0;                                   // consume NOW: a hang can't trap us in this mode
@@ -7999,6 +8008,8 @@ void setup(){
   // v5.1: SD-access is requested only when our NOINIT flag survived a *software* restart
   // (cold power-on => reset reason POWERON => never a false trigger from RTC garbage).
   bool sdAccessReq=(g_sdaccess_magic==SDACCESS_MAGIC && esp_reset_reason()==ESP_RST_SW);
+  bool sdReturned=(g_sdaccess_magic==SDRETURN_MAGIC && esp_reset_reason()==ESP_RST_SW);   // AUTOSCAN: back from SD ACCESS
+  if(sdReturned) g_sdaccess_magic=0;                    // once only: a later soft reset is a normal boot
   if(g_bootMagic!=0xB007C047u){g_bootMagic=0xB007C047u;g_bootCount=1;}else{g_bootCount++;}   // boot-forensics counter
   { // lab14e: read what the LAST boot left in RTC memory before anything overwrites it
     esp_reset_reason_t rr=esp_reset_reason();
@@ -8036,6 +8047,10 @@ void setup(){
     generateDefaultConfig();
     selfHealConfig();           // append any documented keys an older CONFIG.TXT is missing
     loadConfig();
+    if(sdReturned && g_autoscan && !sdAccessReq){   // AUTOSCAN (Paul Dean): the PC may have changed the card - drop the
+      SD_MMC.remove("/ADF/.index");SD_MMC.remove("/DSK/.index");SD_MMC.remove("/GENERIC/.index");               // library caches exactly as RESCAN SD does, so this boot rebuilds them
+      SD_MMC.remove("/ADF/.gamecache");SD_MMC.remove("/DSK/.gamecache");SD_MMC.remove("/GENERIC/.gamecache");
+      gLog("[boot] back from SD ACCESS, AUTOSCAN=ON: library rescanned\n"); }
     battery_begin();            // reads the pack once and seeds the average; no-op without one
 #if defined(GTI_FLEET)
     pfEnsureToken();            // #lock: this screen's owner identity (PANEL_TOKEN in CONFIG.TXT)
@@ -8425,6 +8440,7 @@ static void infoAction(uint8_t act){
     case IA_TESTBACK: g_info_test=false; g_info_page=0; drawInfoFull(); break;   // lab14k: back to the main Settings list
     case IA_DIAGDISP: g_diagdisp=!g_diagdisp; saveConfigKey("DIAGDISP", g_diagdisp?"ON":"OFF"); drawInfoFull(); break;   // live diagnostic overlay ON/OFF
     case IA_REELBORDER: g_reelborder=!g_reelborder; saveConfigKey("REELBORDER", g_reelborder?"ON":"OFF"); drawInfoFull(); break;   // MasterTelly CR: reel cover frame ON/OFF (applies next reel draw)
+    case IA_AUTOSCAN: g_autoscan=!g_autoscan; saveConfigKey("AUTOSCAN", g_autoscan?"ON":"OFF"); drawInfoFull(); break;   // used on the next return from SD ACCESS
     case IA_LASTUSED: g_lastused=!g_lastused; saveConfigKey("LASTUSED", g_lastused?"ON":"OFF"); drawInfoFull(); break;
     case IA_NOCACHE: g_nocache=!g_nocache; saveConfigKey("NOCACHE", g_nocache?"ON":"OFF"); drawInfoFull(); break;   // takes effect on the next boot/rescan
     case IA_COVERS:  g_covers_on=!g_covers_on; saveConfigKey("COVERS", g_covers_on?"ON":"OFF"); drawInfoFull(); break;
