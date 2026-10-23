@@ -518,3 +518,5 @@ bool espnowFetchSave(SavePersistCb persist) {
   WiFi.disconnect(); delay(50);
   return r >= 0;
 }
+
+String espnowDongleSsid(){ return String(_dongle_ssid); }   // Paul Dean: the top bar shows the dongle by name

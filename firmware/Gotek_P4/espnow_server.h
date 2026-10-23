@@ -103,3 +103,4 @@ void   espnowSendEject();
 void   espnowSetSavePersist(SavePersistCb cb);
 extern volatile int  g_p4_eject_result;   // 1 = dongle ejected, 2 = dongle kept the disk (unsaved writes), 0 = no link / no answer, -1 = nothing to eject
 extern volatile int  g_p4_saved_secs;     // sectors written back by the last save pull (0 = none), -1 = the pull failed
+String espnowDongleSsid();   // Paul Dean: the paired dongle's Wi-Fi name ("" = not known yet)

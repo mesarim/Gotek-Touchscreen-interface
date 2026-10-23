@@ -50,7 +50,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-lab2j-JC3248"   // A600-lab2j (Paul Dean, 23 Oct 2026): AUTO RESCAN - after SD ACCESS the library is rescanned so games copied on from the PC show up (Settings AUTO RESCAN, CONFIG.TXT AUTOSCAN=ON default; OFF keeps the old list until RESCAN SD) | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-lab2k-JC3248"   // A600-lab2k (Paul Dean, 23 Oct 2026): the paired dongle by name in the top bar - its 4-character ID (GotekOMEGA-XXXX), or its new name once renamed in DONGLE SETUP | A600-lab2j (Paul Dean, 23 Oct 2026): AUTO RESCAN - after SD ACCESS the library is rescanned so games copied on from the PC show up (Settings AUTO RESCAN, CONFIG.TXT AUTOSCAN=ON default; OFF keeps the old list until RESCAN SD) | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -4019,6 +4019,17 @@ static int drawWrapped(int x,int y,const String&s,int maxW,int lineH,int maxLine
   if(line.length()&&n<maxLines&&y+gh<=bottomY){gfx_setCursor(x,y);gfx_print(line);y+=lineH;}
   return y;
 }
+// Paul Dean: the paired dongle's name for the top bar. A dongle still on its default Wi-Fi name
+// (GotekOMEGA-XXXX) shows the XXXX its own screen shows; a renamed one (DONGLE SETUP) shows its new name.
+// "" = not in dongle mode or not paired.
+static String dongleShowName(){
+  if(!g_wireless_mode||!espnowIsPaired())return "";
+  String n=espnowDongleSsid();
+  if(n.length()&&!n.startsWith("GotekOMEGA"))return n;
+  String m=espnowGetXiaoMac();                            // "AA:BB:CC:DD:EE:FF" -> "EEFF", as in GotekOMEGA-EEFF
+  if(m.length()<17||m=="00:00:00:00:00:00")return "";
+  return m.substring(12,14)+m.substring(15,17);
+}
 static void drawStatusBar(){
   gfx_fillRect(0,0,VW,STATUS_H,COL_BAR);gfx_setTextSize(1);
   gfx_setTextColor(COL_ORANGE,COL_BAR);gfx_setCursor(6,6);gfx_print("OMEGAWARE");
@@ -4030,7 +4041,7 @@ static void drawStatusBar(){
   if(webWanted()){   // #clubday: wherever we serve, the useful thing to show is where to reach this screen
     String ln=pfMdnsName()+".local"; gfx_setTextColor(COL_BLUE==COL_BAR?0x07FF:0x06FF,COL_BAR);
     int tw=gfx_textWidth(ln); gfx_setCursor((VW-tw)/2,6); gfx_print(ln);}
-  else if(g_wireless_mode){gfx_setTextColor(espnowIsPaired()?0x07E0:0xFD20,COL_BAR);gfx_setCursor(VW/2-40,6);gfx_print(espnowIsPaired()?"WIRELESS:PAIRED":"WIRELESS:PAIR");}
+  else if(g_wireless_mode){String dn=dongleShowName();gfx_setTextColor(espnowIsPaired()?0x07E0:0xFD20,COL_BAR);gfx_setCursor(VW/2-40,6);gfx_print(dn.length()?"DONGLE: "+dn:String(espnowIsPaired()?"WIRELESS:PAIRED":"WIRELESS:PAIR"));}   // Paul Dean: the dongle by name
   else{gfx_setTextColor(0x07FF,COL_BAR);int tw=gfx_textWidth(T(L_STANDALONE));gfx_setCursor((VW-tw)/2,6);gfx_print(T(L_STANDALONE));}
   // v5.7.x: load-status indicator (top-right). Standalone reads g_loaded; wireless reads
   // the dongle's heartbeat so it reflects reality. green=disk present, dim=empty,
@@ -4049,6 +4060,10 @@ static void drawStatusBar(){
     gfx_setTextSize(1); int lww=gfx_textWidth(lw); int wx=VW-6-lww, cx=wx-9;
     // battery sits left of that badge, and takes no width when none is fitted
     if(battery_width()) battery_draw(cx-3-6-battery_width(), (STATUS_H-14)/2, COL_MID, COL_AMBER);
+    if(webWanted()){ String dn=dongleShowName();   // Paul Dean: the centre shows GTi-XXXX.local, so the dongle's name sits here
+      if(dn.length()){ int rx=cx-9-(battery_width()?battery_width()+6:0), lx=(VW+gfx_textWidth(pfMdnsName()+".local"))/2+10;
+        while(dn.length()>1&&rx-gfx_textWidth(dn)<lx)dn.remove(dn.length()-1);
+        if(rx-gfx_textWidth(dn)>=lx){ gfx_setTextColor(0x07E0,COL_BAR); gfx_setCursor(rx-gfx_textWidth(dn),6); gfx_print(dn); } } }
     if(fill) gfx_fillCircle(cx,STATUS_H/2,3,lc); else gfx_drawCircle(cx,STATUS_H/2,3,lc);
     gfx_setTextColor(lc,COL_BAR); gfx_setCursor(wx,6); gfx_print(lw);
   }
