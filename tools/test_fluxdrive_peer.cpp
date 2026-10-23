@@ -276,6 +276,8 @@ static void test_an_empty_drive_name_matches_nothing() {
   CHECK(!fdSameDiskName("", ""));
   CHECK(!fdSameDiskName(" ", "  "));
   CHECK(!fdSameDiskName(".adf", ""));
+  CHECK(!fdSameDiskName(".adf", ".adf"));                          // ".adf" alone is no name (FluxDrive calls it "DISK")
+  CHECK(!fdSameDiskName(" .ADF", ".adf "));
   CHECK(!fdSameDiskName(nullptr, "Lemmings"));
   CHECK(!fdSameDiskName("Lemmings", nullptr));
   CHECK(!fdSameDiskName(nullptr, nullptr));
@@ -330,6 +332,8 @@ static void test_ui_a_stale_staging_gives_way_to_the_fluxdrive() {
   int d = 9;
   CHECK(!fdUiLoaded(v, 4, "Lemmings", 1, &d));                      // the staged game is not shown
   CHECK(fdUiLoaded(v, 6, "Turrican", 1, &d) && d == 0);             // the one the FluxDrive holds is
+  FdUiView u = { true, true, "Turrican", false, 4, 0, "Turrican" };   // nothing staged, a game index and name left over
+  CHECK(fdUiLoaded(u, 6, "Turrican", 1, &d) && d == 0);             // the leftovers do not count: the game of that name
 }
 
 static void test_ui_the_fluxdrive_holds_a_disk_not_staged_here() {
@@ -355,6 +359,43 @@ static void test_ui_a_name_is_matched_whole() {
   v.tdisk = "Dr. Mario";
   CHECK(fdUiLoaded(v, 1, "Dr. Mario", 1, &d));
   CHECK(!fdUiLoaded(v, 2, "Dr. Doom's Revenge", 1, &d));
+}
+
+// A tap on NOW PLAYING ejects the FluxDrive target's disk. A drag that starts there must not: the bar sits right under
+// the list, so a flick of the bottom row begun a few px low starts in it. The bar here: LIST_X 150, NOW_Y 258, LIST_W
+// 300, NOW_PLAY_H 22, so x 150..449, y 258..279.
+static void test_a_tap_on_now_playing_ejects() {
+  const FdRect bar = { 150, 258, 300, 22 };
+  CHECK(fdBarEjects(true, 300, 268, bar, true, true, false));
+  CHECK(fdBarEjects(true, 150, 258, bar, true, true, false));       // its top-left pixel
+  CHECK(fdBarEjects(true, 449, 279, bar, true, true, false));       // its bottom-right pixel
+}
+
+static void test_a_tap_beside_now_playing_does_not_eject() {
+  const FdRect bar = { 150, 258, 300, 22 };
+  CHECK(!fdBarEjects(true, 149, 268, bar, true, true, false));      // the cover side
+  CHECK(!fdBarEjects(true, 450, 268, bar, true, true, false));      // the A-Z bar
+  CHECK(!fdBarEjects(true, 300, 257, bar, true, true, false));      // the list's bottom row
+  CHECK(!fdBarEjects(true, 300, 280, bar, true, true, false));      // the bottom bar
+}
+
+static void test_only_a_tap_with_a_loaded_target_ejects() {
+  const FdRect bar = { 150, 258, 300, 22 };
+  CHECK(!fdBarEjects(true, 300, 268, bar, true, true, true));       // the finger moved: a drag, not a tap
+  CHECK(!fdBarEjects(true, 300, 268, bar, false, true, false));     // no FluxDrive target
+  CHECK(!fdBarEjects(true, 300, 268, bar, true, false, false));     // the FluxDrive is empty
+  CHECK(!fdBarEjects(false, 300, 268, bar, true, true, false));     // no bar drawn (COMPACT)
+}
+
+// A FluxDrive holds an eject while the Amiga reads and runs it later: the panel says "busy" for that. Only a reply wait
+// that ran out means it; a connection closed early without a reply is a plain failure, said as one.
+static void test_only_a_full_wait_without_a_reply_is_busy() {
+  CHECK(fdReplyRanOut(false, 3000, 3000));
+  CHECK(fdReplyRanOut(false, 3017, 3000));
+  CHECK(!fdReplyRanOut(false, 2999, 3000));                         // closed just before the end
+  CHECK(!fdReplyRanOut(false, 12, 3000));                           // closed at once
+  CHECK(!fdReplyRanOut(true, 3000, 3000));                          // it answered (a refusal) as the wait ended
+  CHECK(!fdReplyRanOut(true, 5, 3000));
 }
 
 int main() {
@@ -391,6 +432,10 @@ int main() {
   test_ui_a_stale_staging_gives_way_to_the_fluxdrive();
   test_ui_the_fluxdrive_holds_a_disk_not_staged_here();
   test_ui_a_name_is_matched_whole();
+  test_a_tap_on_now_playing_ejects();
+  test_a_tap_beside_now_playing_does_not_eject();
+  test_only_a_tap_with_a_loaded_target_ejects();
+  test_only_a_full_wait_without_a_reply_is_busy();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }

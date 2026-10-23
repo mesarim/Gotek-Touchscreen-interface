@@ -184,3 +184,18 @@ inline bool fdUiLoaded(const FdUiView& v, int gi, const char* gname, int gdisks,
   *disk = gdisks <= 1 ? 0 : -1;
   return true;
 }
+
+// A screen rectangle: x, y its top-left pixel, w x h its size.
+struct FdRect { int x, y, w, h; };
+
+// A touch ends on NOW PLAYING: is it the EJECT of the FluxDrive target's disk? Only a tap (the finger did not move past
+// the drag threshold: the bar sits right under the list, so a flick of its bottom row can start in it), inside the bar
+// as drawn (now_on), with a target (fleet mode) that holds a disk.
+inline bool fdBarEjects(bool now_on, int x, int y, FdRect bar, bool target, bool loaded, bool moved) {
+  if (!now_on || !target || !loaded || moved) return false;
+  return x >= bar.x && x < bar.x + bar.w && y >= bar.y && y < bar.y + bar.h;
+}
+
+// A command got no reply because the wait ran out (waited_ms of wait_ms), not because the connection closed early. A
+// FluxDrive holds a command while the Amiga reads and runs it later: only this case may be called "busy".
+inline bool fdReplyRanOut(bool got_reply, uint32_t waited_ms, uint32_t wait_ms) { return !got_reply && waited_ms >= wait_ms; }

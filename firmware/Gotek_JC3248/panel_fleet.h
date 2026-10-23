@@ -29,7 +29,7 @@
          // so it has to match theirs. A screen's own hostname is GTi-XXXX (pfDefaultHost) -
          // unique per screen, so screens never fight over it (Mez, 6 Oct 2026, option d).
 #define PF_CMD_EJECT   0x03
-#define PF_NO_REPLY    "no reply"   // pfSendCommand: connected, nothing came back (a FluxDrive holds it while the Amiga reads)
+#define PF_NO_REPLY    "no reply"   // pfSendCommand: connected, nothing came back (the wait ran out, or the peer closed)
 #define PF_CMD_SETNAME 0x06   // #24: tell the dongle the pretty display name for the NEXT disk (its FAT12 root stays DISK.ADF)
 // Mainline, not fleet. Webby 1.6.6 remembers which screen put the disk in and asks
 // before another screen takes it over; 1.6.7 moved it here from 0x07 because that is
@@ -597,7 +597,10 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
   return true;
 }
 
-static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &err) {
+// ranOut (optional): the reply wait ran out with nothing read, not an early close (fdReplyRanOut). A FluxDrive holds a
+// command while the Amiga reads, so for it that means "busy, it runs later".
+static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &err, bool *ranOut = nullptr) {
+  if (ranOut) *ranOut = false;
 #if defined(GTI_FLEET)
   if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
 #endif
@@ -614,6 +617,7 @@ static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &
   const uint32_t t0 = millis();
   while (c.available() < 1 && millis() - t0 < 3000) { if (!c.connected()) break; delay(5); }
   const int a = c.available() >= 1 ? c.read() : -1;
+  if (ranOut) *ranOut = fdReplyRanOut(a >= 0, millis() - t0, 3000);
   c.stop();
   // Only 0x01 is success. The dongle answers 0x02 for "refused, unsaved data", 0x05 for "locked".
   if (a == 0x01) { if (cmd == PF_CMD_EJECT) pfNoteEject(ip); return true; }
