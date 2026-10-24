@@ -6,6 +6,7 @@
 // tcp_alloc, tcp_write and tcp_receive store to snd_buf, the last adding acked bytes back with no cap). Re-check them
 // on every core update, or drop this file: a changed layout compiles cleanly and corrupts TCP state at run time.
 #include "sock_sndbuf.h"
+#include <stddef.h>
 #include <string.h>
 #include "lwip/opt.h"
 #include "lwip/tcpip.h"               // LOCK_TCPIP_CORE / UNLOCK_TCPIP_CORE
@@ -15,6 +16,14 @@
 
 // Without core locking LOCK_TCPIP_CORE() is empty (tcpip.h) and a write from this task would race the tcpip thread.
 _Static_assert(LWIP_TCPIP_CORE_LOCKING, "sock_sndbuf.c writes a tcp_pcb from outside the tcpip thread: it needs CONFIG_LWIP_TCPIP_CORE_LOCKING");
+// The layout this file was checked against in liblwip.a of esp32 3.3.12 (objdump of tcp_alloc, tcp_write, tcp_receive,
+// tcp_tcp_get_tcp_addrinfo, lwip_netconn_do_writemore). A core whose headers say otherwise stops the build here instead
+// of writing the wrong field at run time: check the library's own code again and update these numbers, or drop this file.
+_Static_assert(sizeof(struct tcp_pcb) == 240 && offsetof(struct tcp_pcb, state) == 60 &&
+               offsetof(struct tcp_pcb, remote_port) == 68 && offsetof(struct tcp_pcb, mss) == 126 &&
+               offsetof(struct tcp_pcb, snd_buf) == 176, "struct tcp_pcb is not the layout checked against liblwip.a (esp32 3.3.12)");
+_Static_assert(offsetof(struct netconn, pcb) == 8 && offsetof(struct lwip_sock, conn) == 0,
+               "struct netconn / lwip_sock are not the layout checked against liblwip.a (esp32 3.3.12)");
 
 // The socket's tcp_pcb, or NULL. Call with the core lock held.
 static struct tcp_pcb *pcb_of(int fd) {
