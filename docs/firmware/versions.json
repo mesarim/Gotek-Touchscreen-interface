@@ -304,6 +304,35 @@
       }
     ]
   },
+  "p4v3": {
+    "chipFamily": "ESP32-P4",
+    "shared": [
+      {
+        "path": "firmware/_shared/p4v3/bootloader.bin",
+        "offset": 8192
+      },
+      {
+        "path": "firmware/_shared/p4v3/partitions.bin",
+        "offset": 32768
+      },
+      {
+        "path": "firmware/_shared/p4v3/boot_app0.bin",
+        "offset": 57344
+      }
+    ],
+    "appOffset": 65536,
+    "builds": [
+      {
+        "v": "5.9.42-lab5-P4V3",
+        "ch": "lab",
+        "date": "2026-10-19",
+        "full": "firmware/p4v3-lab/manifest-5.9.42-lab5-P4V3.json",
+        "app": "firmware/p4v3-lab/GTi-P4V3-5.9.42-lab5-update.bin",
+        "note": "LAB - the 4.3\" P4 lab5 for P4 chip v3.x (own sketch Gotek_P4_v3): loading over the cable works on a standard Gotek, NEO look with a switch. Its own bootloader (v3). Full image includes the WiFi co-processor (C6) firmware. ONLY for P4 chips revision v3.x (\"v3.00 or after\"); a v1.3 board won't start with it - use the chip v1.3 card. Plug the P4 into the Gotek after the Amiga has started, or use a powered USB hub. After flashing, power it off and on once before saving games.",
+        "latest": true
+      }
+    ]
+  },
   "jc1060": {
     "chipFamily": "ESP32-P4",
     "shared": [
