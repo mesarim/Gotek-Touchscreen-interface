@@ -402,7 +402,7 @@ static void test_only_a_full_wait_without_a_reply_is_busy() {
 // segments in flight: 5744 B per round trip, 58 kB/s on a mesh with ~99 ms RTT. A FluxDrive's receive window takes 16
 // segments. lwIP queues at most TCP_SND_QUEUELEN pbufs per connection (at least one per segment), so the buffer stays
 // within (queuelen - 1) segments. 0 = leave lwIP's default alone, which every other board keeps.
-static void test_a_fluxdrive_push_gets_a_16_segment_send_buffer() {
+static void test_a_fluxdrive_push_gets_up_to_16_segments_of_send_buffer() {
   CHECK(fdSendBufBytes("fluxdrive", 1436, 17) == 22976);            // 16 x 1436, as the brief computed it
   CHECK(fdSendBufBytes("fluxdrive", 1436, 16) == 21540);            // this build: TCP_SND_QUEUELEN (4*5744+1435)/1436 = 16
   CHECK(fdSendBufBytes("fluxdrive", 1436, 40) == 22976);            // never more than the 16 segments it can take in
@@ -425,6 +425,62 @@ static void test_the_send_buffer_fits_what_lwip_can_queue() {
   for (uint32_t q = 0; q < 64; q++) CHECK(fdSendBufBytes("fluxdrive", 1436, q) <= (q ? (q - 1) * 1436 : 0));
   CHECK(fdSendBufBytes("fluxdrive", 9000, 17) <= 0xFFFF);           // snd_buf is 16 bits without window scaling
   CHECK(fdSendBufBytes("fluxdrive", 9000, 17) > 0);
+}
+
+// The guard rails on raising a connection's snd_buf: only a TCP connection that is ESTABLISHED, goes to the port the
+// push was meant for and still sits exactly at lwIP's default (nothing queued yet); then by the difference only.
+static void test_the_send_buffer_is_raised_by_the_difference() {
+  const char *why = "x";
+  CHECK(fdSndBufDelta(21540, true, true, 3333, 3333, 5744, 5744, &why) == 21540 - 5744 && why[0] == 0);
+  CHECK(fdSndBufDelta(22976, true, true, 3333, 3333, 5744, 5744, &why) == 22976 - 5744);
+  CHECK(fdSndBufDelta(21540, true, true, 3333, 3333, 5744, 5744, nullptr) == 15796);   // no reason wanted
+}
+
+static void test_the_send_buffer_is_left_alone_unless_all_is_as_expected() {
+  const char *why = "";
+  CHECK(fdSndBufDelta(21540, false, true, 3333, 3333, 5744, 5744, &why) == 0 && std::strcmp(why, "no TCP socket") == 0);
+  CHECK(fdSndBufDelta(21540, true, false, 3333, 3333, 5744, 5744, &why) == 0 && std::strcmp(why, "not established") == 0);
+  CHECK(fdSndBufDelta(21540, true, true, 80, 3333, 5744, 5744, &why) == 0 && std::strcmp(why, "another port") == 0);
+  CHECK(fdSndBufDelta(21540, true, true, 3333, 3333, 5740, 5744, &why) == 0 && std::strcmp(why, "not at lwIP's default") == 0);  // 4 B queued
+  CHECK(fdSndBufDelta(21540, true, true, 3333, 3333, 21540, 5744, &why) == 0);       // raised already
+  CHECK(fdSndBufDelta(0, true, true, 3333, 3333, 5744, 5744, &why) == 0 && std::strcmp(why, "not wanted") == 0);   // any other board
+  CHECK(fdSndBufDelta(5744, true, true, 3333, 3333, 5744, 5744, &why) == 0 && std::strcmp(why, "not wanted") == 0);
+  CHECK(fdSndBufDelta(4000, true, true, 3333, 3333, 5744, 5744, &why) == 0);         // never lowered
+  CHECK(fdSndBufDelta(70000, true, true, 3333, 3333, 5744, 5744, &why) == 0 && std::strcmp(why, "too large") == 0);   // 16-bit snd_buf
+}
+
+// "[wifi] joined" goes to gti.log at most every 30 s for the same access point; a different one is always logged.
+static void test_a_join_is_logged_once_per_30_s_per_access_point() {
+  const char *ap1 = "7C:10:C9:5A:25:F1", *ap2 = "7C:10:C9:5A:25:F2";
+  CHECK(fdJoinLogDue(false, 1000, 0, "", ap1));                     // the first join of this boot
+  CHECK(!fdJoinLogDue(true, 1000 + 29999, 1000, ap1, ap1));         // a reconnect to the same AP within 30 s
+  CHECK(fdJoinLogDue(true, 1000 + 30000, 1000, ap1, ap1));
+  CHECK(fdJoinLogDue(true, 1000 + 5, 1000, ap1, ap2));              // another AP: at once
+  CHECK(fdJoinLogDue(true, 0x00000010u, 0xFFFFF000u, ap1, ap1) == false);   // across the millis wrap: 4112 ms
+  CHECK(!fdJoinLogDue(true, 0xFFFFF100u, 0xFFFFF000u, ap1, ap1));   // last + 30 s wraps, now not yet: 256 ms
+  CHECK(fdJoinLogDue(true, 1000 + 5, 1000, nullptr, ap1));
+  CHECK(!fdJoinLogDue(true, 1000 + 5, 1000, nullptr, nullptr));
+}
+
+// The A/B switch FD_SNDBUF in CONFIG.TXT, read line by line as loadConfig reads it: KEY=VALUE, blanks around both, '#'
+// for a comment. OFF, 0 and NO (any case) switch it off; any other value leaves it on. -1: the line is not this key.
+static void test_the_send_buffer_switch_is_read_from_config_txt() {
+  CHECK(fdCfgSwitch("FD_SNDBUF=OFF", "FD_SNDBUF") == 0);
+  CHECK(fdCfgSwitch("  FD_SNDBUF = off ", "FD_SNDBUF") == 0);
+  CHECK(fdCfgSwitch("FD_SNDBUF=0", "FD_SNDBUF") == 0);
+  CHECK(fdCfgSwitch("FD_SNDBUF=No", "FD_SNDBUF") == 0);
+  CHECK(fdCfgSwitch("FD_SNDBUF=ON", "FD_SNDBUF") == 1);
+  CHECK(fdCfgSwitch("FD_SNDBUF=1", "FD_SNDBUF") == 1);
+  CHECK(fdCfgSwitch("FD_SNDBUF=", "FD_SNDBUF") == 1);
+  CHECK(fdCfgSwitch("FD_SNDBUF=OFFX", "FD_SNDBUF") == 1);
+  CHECK(fdCfgSwitch("#FD_SNDBUF=OFF", "FD_SNDBUF") == -1);
+  CHECK(fdCfgSwitch(" # FD_SNDBUF=OFF", "FD_SNDBUF") == -1);
+  CHECK(fdCfgSwitch("FD_SNDBUFX=OFF", "FD_SNDBUF") == -1);
+  CHECK(fdCfgSwitch("XFD_SNDBUF=OFF", "FD_SNDBUF") == -1);
+  CHECK(fdCfgSwitch("FD_SNDBUF OFF", "FD_SNDBUF") == -1);
+  CHECK(fdCfgSwitch("", "FD_SNDBUF") == -1);
+  CHECK(fdCfgSwitch(nullptr, "FD_SNDBUF") == -1);
+  CHECK(fdCfgSwitch("FD_SNDBUF=OFF", nullptr) == -1);
 }
 
 int main() {
@@ -465,9 +521,13 @@ int main() {
   test_a_tap_beside_now_playing_does_not_eject();
   test_only_a_tap_with_a_loaded_target_ejects();
   test_only_a_full_wait_without_a_reply_is_busy();
-  test_a_fluxdrive_push_gets_a_16_segment_send_buffer();
+  test_a_fluxdrive_push_gets_up_to_16_segments_of_send_buffer();
   test_every_other_board_keeps_the_default_send_buffer();
   test_the_send_buffer_fits_what_lwip_can_queue();
+  test_the_send_buffer_is_raised_by_the_difference();
+  test_the_send_buffer_is_left_alone_unless_all_is_as_expected();
+  test_a_join_is_logged_once_per_30_s_per_access_point();
+  test_the_send_buffer_switch_is_read_from_config_txt();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }

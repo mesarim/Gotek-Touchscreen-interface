@@ -50,7 +50,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-lab2i-fd1d-JC3248"   // A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (16-segment send buffer) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-lab2i-fd1e-JC3248"   // A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -5957,24 +5957,25 @@ static bool doLoadSelected(const String&adfPath){
   drawStatusBar();drawListAndCover();gfx_flush();return true;
 }
 
+// A home-network join on its strongest access point. Arduino's default join is a fast scan that takes the FIRST access
+// point of the SSID it hears; on a mesh that can be a far node (-81 dBm next to one at -36). An all-channel scan sorted
+// by signal takes the strongest. begin() writes both into the driver's STA config and Arduino's auto-reconnect re-uses
+// that config (STAClass::connect()), so a reconnect after a drop takes the strongest again. Arduino's own setting goes
+// back to its default (fast scan) right after begin(), so a later join with an explicit BSSID and channel (a dongle's
+// own Wi-Fi, espnow_server.cpp) is unchanged. webPanelBeginStrongest wraps the shared webPanelBegin the same way, and
+// espnowSendDiskHome (espnow_server.cpp) has the same three lines.
+static void wifiBeginStrongest(const char*ssid,const char*pass){
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN); WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
+  WiFi.begin(ssid,pass);
+  WiFi.setScanMethod(WIFI_FAST_SCAN);   // the default again: the next begin() with a BSSID scans as before
+}
+
 // ── WebDAV fetch into the RAM disk (merge step 1) ─────────────────────────
 // Minimal wiring, no UI: call it from wherever the menu decides. Joins
 // HOME_SSID, streams the remote file straight into the RAM disk's data
 // region, builds the FAT metadata around the bytes, attaches. Refuses while
 // the wireless dongle link is up — fetch-over-WiFi next to ESP-NOW is the
 // radio-coexistence question deliberately parked for a later step.
-// A home-network join on its strongest access point. Arduino's default join is a fast scan that takes the FIRST access
-// point of the SSID it hears; on a mesh that can be a far node (-81 dBm next to one at -36). An all-channel scan sorted
-// by signal takes the strongest. begin() writes both into the driver's STA config and Arduino's auto-reconnect re-uses
-// that config (STAClass::connect()), so a reconnect after a drop takes the strongest again. Arduino's own setting goes
-// back to its default (fast scan) right after begin(), so a later join with an explicit BSSID and channel (a dongle's
-// own Wi-Fi, espnow_server.cpp) is unchanged. The same three lines are in webPanelBegin (shared/web_panel.h) and
-// espnowSendDiskHome (espnow_server.cpp).
-static void wifiBeginStrongest(const char*ssid,const char*pass){
-  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN); WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
-  WiFi.begin(ssid,pass);
-  WiFi.setScanMethod(WIFI_FAST_SCAN);   // the default again: the next begin() with a BSSID scans as before
-}
 static String g_dav_fail="";   // why the last doLoadWebdav gave up, for on-screen reporting
 static bool doLoadWebdav(const String&remotePath,const String&showName){
   if(!g_dav_on||g_dav_host.length()==0){g_dav_fail="not configured (DAV=ON + DAV_HOST=)";Serial.println("[DAV] "+g_dav_fail);return false;}
@@ -6055,6 +6056,33 @@ static String neoBenchJson(){
 #define GTI_WEB_OTA_VIA_SD 1   // S9: a web firmware upload is saved to the SD card, then installed locally (no Wi-Fi during the flash write)
 static void doFirmwareUpdateFrom(const String& forcePath, bool ask);
 #include "../shared/web_panel.h"
+// webPanelBegin (shared, byte-identical to its twin in the OMEGAWARE tree) joins with Arduino's default fast scan. The
+// sketch sets the strongest-AP scan right before it and puts the default back right after, as wifiBeginStrongest does:
+// webPanelBegin's WiFi.begin() copies the setting into the driver's STA config synchronously (WiFiSTAClass::begin ->
+// STAClass::connect -> esp_wifi_set_config), and WiFi.mode() / setSleep() in front of it do not touch it.
+static void webPanelBeginStrongest(){
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN); WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
+  webPanelBegin();
+  WiFi.setScanMethod(WIFI_FAST_SCAN);   // the default again: a later join with a BSSID (a dongle's own Wi-Fi) scans as before
+}
+// JC3248-only routes, next to web_panel.h's (registered from loop() once that file has started the server):
+//  GET /api/wifi/link - the Wi-Fi link as it is now: SSID, access point, channel, signal (all of the same link);
+//  GET/POST /api/fd/sndbuf[?on=0|1] - the FD_SNDBUF A/B switch of the FluxDrive send buffer (CONFIG.TXT, read at every
+//  push, so a change counts from the next push: no reflash, no restart).
+static void hWifiLink(){
+  const bool up=(WiFi.status()==WL_CONNECTED);
+  String j="{\"sta_connected\":"+String(up?"true":"false")+",\"sta_ssid\":\""+wpJsonEscape(up?WiFi.SSID():String(""))+"\"";
+  j+=",\"sta_bssid\":\""+(up?WiFi.BSSIDstr():String(""))+"\",\"sta_channel\":"+String(up?(int)WiFi.channel():0);
+  j+=",\"sta_rssi\":"+String(up?(int)WiFi.RSSI():0)+",\"sta_ip\":\""+(up?WiFi.localIP().toString():String(""))+"\"}";
+  webPanelHttp.send(200,"application/json",j);
+}
+static void hFdSndBuf(){
+  if(webPanelHttp.method()==HTTP_POST){
+    if(!webPanelHttp.hasArg("on")){ webPanelHttp.send(400,"application/json","{\"error\":\"use on=1 or on=0\"}"); return; }
+    const String v=webPanelHttp.arg("on"); const bool on=!(v=="0"||v.equalsIgnoreCase("off")||v.equalsIgnoreCase("no"));
+    saveConfigKey("FD_SNDBUF",on?"ON":"OFF"); }
+  webPanelHttp.send(200,"application/json",String("{\"fd_sndbuf\":\"")+(pfCfgSwitchOn("FD_SNDBUF",true)?"ON":"OFF")+"\"}");
+}
 
 static void doUnload(){
   // v4.8.0: EJECT is a save point — drain before the disk goes away
@@ -6832,7 +6860,7 @@ static void doHomeWifiSetup(){
   bool ok=wifiJoin(ssid,pass,12000);
   if(!ok && secured){ String p2=pass; if(kbInput((String("Retry password: ")+ssid).c_str(),p2,63)){ pass=p2; hwMsg("Connecting...",ssid.c_str(),COL_ACCENT,1); ok=wifiJoin(ssid,pass,12000); } }
   if(ok){ rememberNet(ssid,pass); g_link_home=true; saveConfigKey("LINK","HOMEWIFI"); g_pfMdnsDirty=true;   // #clubday: new IP -> re-announce mDNS so <name>.local resolves after the switch
-    if(g_web_on) webPanelBegin();   // 5.9.13 (his): re-join with the new creds now, no reboot
+    if(g_web_on) webPanelBeginStrongest();   // 5.9.13 (his): re-join with the new creds now, no reboot
     hwMsg("Connected", (ssid+"  "+WiFi.localIP().toString()).c_str(), COL_GREEN, 1800); }
   else { if(oldSsid.length()&&oldSsid!=ssid) wifiJoin(oldSsid,oldPass,12000);
     hwMsg("Could not join", (oldSsid.length()?("back on "+oldSsid):String("no connection")).c_str(), COL_AMBER, 2200); }
@@ -6880,8 +6908,8 @@ static void applyRadioMode(){
   WiFi.disconnect(true,true); delay(60);
   // #standalone: WEBUI=ON means serve here too - STA, web UI, WebDAV, OTA. No ESP-NOW in this
   // mode, so there is nothing to collide with. WEBUI=OFF (or no creds) still powers the radio down.
-  if(!g_wireless_mode){ if(g_web_cfg && g_home_ssid.length()) webPanelBegin(); else WiFi.mode(WIFI_OFF); }
-  else if(g_link_home){ webPanelBegin(); }                        // WiFi (non-blocking; server comes up in webPanelService)
+  if(!g_wireless_mode){ if(g_web_cfg && g_home_ssid.length()) webPanelBeginStrongest(); else WiFi.mode(WIFI_OFF); }
+  else if(g_link_home){ webPanelBeginStrongest(); }                        // WiFi (non-blocking; server comes up in webPanelService)
   else { ensureEspNow(); webPanelBeginAP(); }                     // ESP-NOW (lab15p: + the web page on the GTi's own Wi-Fi)
   // #console: a disk staged for the fleet is NOT on our own USB port. Changing mode changes who
   // owns it, so hand it over rather than leaving it nowhere: leaving fleet mode mounts it here,
@@ -6956,7 +6984,7 @@ static void doWifiCheck(){
     uint32_t t0=millis();
     while(WiFi.status()!=WL_CONNECTED && millis()-t0<12000) delay(200);
   }
-  if(WiFi.status()==WL_CONNECTED && g_web_on && !g_web_up) webPanelBegin();   // bring the server up now
+  if(WiFi.status()==WL_CONNECTED && g_web_on && !g_web_up) webPanelBeginStrongest();   // bring the server up now
 
   const bool ok=(WiFi.status()==WL_CONNECTED);
   draw(ok?"CONNECTED":"FAILED", ok?COL_GREEN:(uint16_t)0x8000);
@@ -8203,14 +8231,14 @@ void setup(){
       // LINK=HOMEWIFI, so the next boot tries WiFi again and MODE stays the user's call.
       g_link_home=false; g_wifiNotice=1;
       ensureEspNow();
-    } else webPanelBegin();
+    } else webPanelBeginStrongest();
   }
   // #standalone: same surface, no dongles. There is nothing to fall back TO here (ESP-NOW would be
   // a mode change the user did not ask for), so pick the strongest remembered network and join it;
   // if none answers the watchdog below keeps trying and the screen simply works as a local drive.
   else if(!g_wireless_mode && g_web_cfg && !sdAccessReq){
     wifiPickBestKnownInto();   // #clubday: prefer whichever known network is actually here
-    webPanelBegin();
+    webPanelBeginStrongest();
   }
   // Merge step 1 smoke test: DAV_TEST=<remote path> in CONFIG.TXT fetches that
   // file over WebDAV right after boot and mounts it — the whole shared-client
@@ -8628,10 +8656,16 @@ void loop(){
   pfWorker();           // #console: run one queued fling/eject/claim per pass (non-blocking)
   // One gti.log line each time the panel is on a home network (a join, or the auto-reconnect after a drop): which access
   // point of the mesh, which channel, how strong. A dongle's own Wi-Fi (not a known network) is not logged.
-  { static bool staShown=false; const bool up=(WiFi.status()==WL_CONNECTED);
-    if(up&&!staShown){ const String ss=WiFi.SSID(); if(ss==g_home_ssid||netIsKnown(ss))
-      gLog("[wifi] joined %s bssid %s ch %d rssi %d\n",ss.c_str(),WiFi.BSSIDstr().c_str(),(int)WiFi.channel(),(int)WiFi.RSSI()); }
+  // At most every 30 s for the same access point (fdJoinLogDue): a flapping link does not fill the card.
+  { static bool staShown=false, joinLogged=false; static uint32_t joinLogMs=0; static String joinBssid;
+    const bool up=(WiFi.status()==WL_CONNECTED);
+    if(up&&!staShown){ const String ss=WiFi.SSID(), bs=WiFi.BSSIDstr();
+      if((ss==g_home_ssid||netIsKnown(ss))&&fdJoinLogDue(joinLogged,millis(),joinLogMs,joinBssid.c_str(),bs.c_str())){
+        gLog("[wifi] joined %s bssid %s ch %d rssi %d\n",ss.c_str(),bs.c_str(),(int)WiFi.channel(),(int)WiFi.RSSI());
+        joinLogged=true; joinLogMs=millis(); joinBssid=bs; } }
     staShown=up; }
+  { static bool ownRoutes=false; if(!ownRoutes&&g_web_srv_started){ ownRoutes=true;   // the sketch's own routes, once web_panel.h has started the server
+      webPanelHttp.on("/api/wifi/link",HTTP_GET,hWifiLink); webPanelHttp.on("/api/fd/sndbuf",HTTP_ANY,hFdSndBuf); } }
   // The FluxDrive target changed (a beacon, a fling or eject, it appeared or went quiet): repaint what shows it, on the
   // main screen only. Settings and every modal redraw the main screen in full when they leave it.
   { static char fdShown[256]=""; char now[256]; const int ft=pfFluxTarget();

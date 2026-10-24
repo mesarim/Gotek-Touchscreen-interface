@@ -216,3 +216,60 @@ inline uint32_t fdSendBufBytes(const char* board, uint32_t mss, uint32_t queuele
   const uint32_t bytes = segs * mss;
   return bytes > 0xFFFFu ? 0xFFFFu : bytes;
 }
+
+// How much to add to a connection's lwIP send buffer (snd_buf) so it holds `want` bytes (fdSendBufBytes). 0 = leave it,
+// and *why says why. Only a TCP socket (found) that is ESTABLISHED, goes to the port the push was meant for, and still
+// sits exactly at lwIP's default (nothing queued on it yet); never lower, never past the 16 bits of snd_buf. The caller
+// adds the difference, so whatever lwIP holds at that moment stays counted.
+inline uint32_t fdSndBufDelta(uint32_t want, bool found, bool established, uint16_t remote_port, uint16_t port,
+                              uint32_t snd_buf, uint32_t snd_buf_default, const char** why) {
+  const char* w = "";
+  uint32_t delta = 0;
+  if (!found) w = "no TCP socket";
+  else if (!established) w = "not established";
+  else if (remote_port != port) w = "another port";
+  else if (snd_buf != snd_buf_default) w = "not at lwIP's default";
+  else if (want <= snd_buf) w = "not wanted";
+  else if (want > 0xFFFFu) w = "too large";
+  else delta = want - snd_buf;
+  if (why) *why = w;
+  return delta;
+}
+
+// ---- Wi-Fi: one gti.log line per join, not one per flap ---------------------------------------------------------------
+
+#define FD_JOIN_LOG_MS 30000u            // the same access point is logged again only after this long
+
+// Is a join to `bssid` worth a "[wifi] joined" line? The first of this boot, any change of access point, or the same
+// one again after FD_JOIN_LOG_MS (a link that flaps does not fill the card). now / last_ms are millis(); wrap-safe.
+inline bool fdJoinLogDue(bool logged_before, uint32_t now, uint32_t last_ms, const char* last_bssid, const char* bssid) {
+  if (!logged_before) return true;
+  if (strcmp(last_bssid ? last_bssid : "", bssid ? bssid : "") != 0) return true;
+  return (uint32_t)(now - last_ms) >= FD_JOIN_LOG_MS;
+}
+
+// ---- CONFIG.TXT switches read at run time -------------------------------------------------------------------------------
+
+// One CONFIG.TXT line against an on/off key, as loadConfig reads the file: KEY=VALUE, blanks around both, a line that
+// starts with '#' is a comment. Returns -1 when the line is not this key; 0 for OFF, 0 or NO (any case); 1 otherwise
+// (an empty or unknown value leaves the switch on).
+inline int fdCfgSwitch(const char* line, const char* key) {
+  if (line == nullptr || key == nullptr || key[0] == 0) return -1;
+  while (fdNameBlank(*line)) line++;
+  const size_t k = strlen(key);
+  if (strncmp(line, key, k) != 0) return -1;
+  const char* p = line + k;
+  while (fdNameBlank(*p)) p++;
+  if (*p != '=') return -1;
+  p++;
+  while (fdNameBlank(*p)) p++;
+  size_t n = strlen(p);
+  while (n && fdNameBlank(p[n - 1])) n--;
+  const auto is = [&](const char* word) {
+    const size_t m = strlen(word);
+    if (m != n) return false;
+    for (size_t i = 0; i < n; i++) if (fdNameLower(p[i]) != fdNameLower(word[i])) return false;
+    return true;
+  };
+  return (is("off") || is("0") || is("no")) ? 0 : 1;
+}
