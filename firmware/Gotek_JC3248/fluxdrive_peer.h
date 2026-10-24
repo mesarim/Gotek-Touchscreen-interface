@@ -199,3 +199,20 @@ inline bool fdBarEjects(bool now_on, int x, int y, FdRect bar, bool target, bool
 // A command got no reply because the wait ran out (waited_ms of wait_ms), not because the connection closed early. A
 // FluxDrive holds a command while the Amiga reads and runs it later: only this case may be called "busy".
 inline bool fdReplyRanOut(bool got_reply, uint32_t waited_ms, uint32_t wait_ms) { return !got_reply && waited_ms >= wait_ms; }
+
+// ---- Speed: the send buffer of a push to a FluxDrive ------------------------------------------------------------------
+
+#define FD_SEND_SEGMENTS 16u             // FluxDrive's receive window: 16 segments (23,040 B)
+
+// How large lwIP's send buffer (the tcp_pcb's snd_buf) should be for a push to this board, in bytes; 0 = leave lwIP's
+// default alone. The default (TCP_SND_BUF, 5744 B = 4 segments) lets 4 segments be in flight, 5744 B per round trip:
+// 58 kB/s on a mesh with ~99 ms RTT. A FluxDrive takes 16 segments. lwIP queues at most `queuelen` pbufs per connection
+// (TCP_SND_QUEUELEN, one or more per segment), so the buffer stays one pbuf short of that queue, and within the 16 bits
+// of snd_buf (no window scaling in this build). Every other board: 0.
+inline uint32_t fdSendBufBytes(const char* board, uint32_t mss, uint32_t queuelen) {
+  if (!fdIsFluxDrive(board) || mss == 0 || queuelen < 2) return 0;
+  uint32_t segs = queuelen - 1;
+  if (segs > FD_SEND_SEGMENTS) segs = FD_SEND_SEGMENTS;
+  const uint32_t bytes = segs * mss;
+  return bytes > 0xFFFFu ? 0xFFFFu : bytes;
+}

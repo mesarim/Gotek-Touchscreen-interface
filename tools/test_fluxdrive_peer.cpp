@@ -398,6 +398,35 @@ static void test_only_a_full_wait_without_a_reply_is_busy() {
   CHECK(!fdReplyRanOut(true, 5, 3000));
 }
 
+// The send buffer of a push to a FluxDrive. lwIP's default (TCP_SND_BUF, 5744 B = 4 segments of 1436) allows four
+// segments in flight: 5744 B per round trip, 58 kB/s on a mesh with ~99 ms RTT. A FluxDrive's receive window takes 16
+// segments. lwIP queues at most TCP_SND_QUEUELEN pbufs per connection (at least one per segment), so the buffer stays
+// within (queuelen - 1) segments. 0 = leave lwIP's default alone, which every other board keeps.
+static void test_a_fluxdrive_push_gets_a_16_segment_send_buffer() {
+  CHECK(fdSendBufBytes("fluxdrive", 1436, 17) == 22976);            // 16 x 1436, as the brief computed it
+  CHECK(fdSendBufBytes("fluxdrive", 1436, 16) == 21540);            // this build: TCP_SND_QUEUELEN (4*5744+1435)/1436 = 16
+  CHECK(fdSendBufBytes("fluxdrive", 1436, 40) == 22976);            // never more than the 16 segments it can take in
+}
+
+static void test_every_other_board_keeps_the_default_send_buffer() {
+  CHECK(fdSendBufBytes("supermini", 1436, 16) == 0);
+  CHECK(fdSendBufBytes("zero", 1436, 16) == 0);
+  CHECK(fdSendBufBytes("xiao", 1436, 16) == 0);
+  CHECK(fdSendBufBytes("", 1436, 16) == 0);
+  CHECK(fdSendBufBytes(nullptr, 1436, 16) == 0);
+}
+
+static void test_the_send_buffer_fits_what_lwip_can_queue() {
+  CHECK(fdSendBufBytes("fluxdrive", 1436, 4) == 3 * 1436);          // a small queue: one pbuf short of it
+  CHECK(fdSendBufBytes("fluxdrive", 1436, 2) == 1436);
+  CHECK(fdSendBufBytes("fluxdrive", 1436, 1) == 0);                 // no room for even one segment: leave it
+  CHECK(fdSendBufBytes("fluxdrive", 1436, 0) == 0);
+  CHECK(fdSendBufBytes("fluxdrive", 0, 16) == 0);                   // no MSS: leave it
+  for (uint32_t q = 0; q < 64; q++) CHECK(fdSendBufBytes("fluxdrive", 1436, q) <= (q ? (q - 1) * 1436 : 0));
+  CHECK(fdSendBufBytes("fluxdrive", 9000, 17) <= 0xFFFF);           // snd_buf is 16 bits without window scaling
+  CHECK(fdSendBufBytes("fluxdrive", 9000, 17) > 0);
+}
+
 int main() {
   test_fluxdrive_is_told_apart_by_its_beacon_board();
   test_only_a_dd_adf_goes_to_a_fluxdrive();
@@ -436,6 +465,9 @@ int main() {
   test_a_tap_beside_now_playing_does_not_eject();
   test_only_a_tap_with_a_loaded_target_ejects();
   test_only_a_full_wait_without_a_reply_is_busy();
+  test_a_fluxdrive_push_gets_a_16_segment_send_buffer();
+  test_every_other_board_keeps_the_default_send_buffer();
+  test_the_send_buffer_fits_what_lwip_can_queue();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }

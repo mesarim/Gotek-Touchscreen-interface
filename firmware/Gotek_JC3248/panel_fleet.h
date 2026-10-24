@@ -18,6 +18,16 @@
 #include <WiFiUdp.h>
 #include <ESPmDNS.h>   // #clubday: the fleet controller re-registers its own mDNS name after the panel-vs-panel election
 #include "fluxdrive_peer.h"
+#include <esp_wifi.h>                 // esp_wifi_get_ps / esp_wifi_set_ps (PfRadioAwake)
+#pragma push_macro("local")           // PNGdec's zutil.h has `#define local static`; lwip/tcp.h names a parameter `local`
+#undef local
+#include "lwip/tcpip.h"               // LOCK_TCPIP_CORE (pfRaiseSndBuf)
+#include "lwip/tcp.h"                 // struct tcp_pcb, TCP_MSS, TCP_SND_QUEUELEN
+#include "lwip/api.h"                 // struct netconn
+extern "C" {                          // this private header has no C++ guard of its own
+#include "lwip/priv/sockets_priv.h"   // lwip_socket_dbg_get_socket, struct lwip_sock
+}
+#pragma pop_macro("local")
 
 #define PF_DISCO_PORT 51703
 #define PF_TCP_PORT   3333
@@ -532,6 +542,46 @@ static int pfFluxTarget() {
     vis[i] = pfPeerVisible(p) && fdHeard(now, p.seen, fdStaleMs(bd, PF_STALE_MS)); fd[i] = fdIsFluxDrive(bd); ids[i] = p.id.c_str(); }
   return fdPickTarget(g_pfPeerN, vis, fd, ids, g_pfLastFlingId.c_str());
 }
+// ── Speed: a push to a FluxDrive with 16 segments in flight instead of 4 ──
+// lwIP's send buffer is TCP_SND_BUF = 5744 B (4 segments), compiled into the core's liblwip.a; there is no per-socket
+// option for it (no SO_SNDBUF in lwIP). With 60-100 ms round trips on a mesh that caps a push at about 58 kB/s, while a
+// FluxDrive's receive window takes 16 segments. So this reaches into lwIP's own state: the socket's tcp_pcb, under the
+// tcpip core lock (CONFIG_LWIP_TCPIP_CORE_LOCKING), right after connect and before the first byte. It raises snd_buf
+// only (fdSendBufBytes: one pbuf short of TCP_SND_QUEUELEN, at most 16 segments); lwIP adds acked bytes back with
+// TCP_WND_INC (tcp.h, no cap at TCP_SND_BUF), so the raise holds for this connection and dies with it. Any missing
+// piece (no fd, no socket, no netconn, not TCP, no pcb, not ESTABLISHED, already as large): nothing changes.
+// Returns the value set (0 = left alone); *was = what it was, *mss = the connection's MSS.
+static uint32_t pfRaiseSndBuf(WiFiClient &c, const char *board, uint32_t *was, uint32_t *mss) {
+  *was = 0; *mss = 0;
+  const int fd = c.fd();
+  if (fd < 0) return 0;
+  uint32_t set = 0;
+  LOCK_TCPIP_CORE();
+  struct lwip_sock *sock = lwip_socket_dbg_get_socket(fd);
+  struct netconn *nc = sock ? sock->conn : nullptr;
+  struct tcp_pcb *pcb = (nc && NETCONNTYPE_GROUP(netconn_type(nc)) == NETCONN_TCP) ? nc->pcb.tcp : nullptr;
+  if (pcb && pcb->state == ESTABLISHED) {
+    *was = pcb->snd_buf; *mss = pcb->mss;
+    const uint32_t want = fdSendBufBytes(board, pcb->mss, TCP_SND_QUEUELEN);
+    if (want > pcb->snd_buf) { pcb->snd_buf = (tcpwnd_size_t)want; set = want; }
+  }
+  UNLOCK_TCPIP_CORE();
+  return set;
+}
+// A push to a FluxDrive runs with the radio fully awake. In fleet mode the panel already runs without power save
+// (webPanelBegin: WiFi.setSleep(false), applied again at every STA start); this asks the driver itself and, if modem
+// sleep is on after all, lifts it for the push and puts it back after (as DavRadioWake in webdav_client.h does).
+struct PfRadioAwake {
+  wifi_ps_type_t prev = WIFI_PS_NONE;
+  bool known = false, lifted = false;
+  explicit PfRadioAwake(bool want) {
+    if (!want) return;
+    known = esp_wifi_get_ps(&prev) == ESP_OK;
+    if (known && prev != WIFI_PS_NONE) lifted = esp_wifi_set_ps(WIFI_PS_NONE) == ESP_OK;
+  }
+  ~PfRadioAwake() { if (lifted) esp_wifi_set_ps(prev); }
+  const char *was() const { return !known ? "unknown" : prev == WIFI_PS_NONE ? "off" : prev == WIFI_PS_MIN_MODEM ? "min-modem" : "max-modem"; }
+};
 static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
 #if defined(GTI_FLEET)
   if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
@@ -539,6 +589,7 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
   // What the beacon says this address is. Only a FluxDrive changes anything below.
   const String board = pfPeerBoard(ip);
   const char *bd = board.c_str();
+  PfRadioAwake awake(fdIsFluxDrive(bd));   // any other board: nothing is asked or changed
   // A FluxDrive takes one thing, a DD ADF of 901,120 bytes. Say so before any connection, so nothing is
   // claimed, named or sent for a disk it would only refuse.
   if (fdIsFluxDrive(bd)) {
@@ -558,6 +609,11 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
   WiFiClient c;
   if (!c.connect(ip.c_str(), port, 8000)) { err = "connect failed"; return false; }
   c.setNoDelay(true);   // disable Nagle: with the dongle's delayed-ACK, Nagle stalls each window ~200ms and crawls the fling to ~35 KB/s
+  if (fdIsFluxDrive(bd)) {   // 16 segments in flight instead of 4 (pfRaiseSndBuf); one log line says what was set
+    uint32_t was = 0, mss = 0; const uint32_t set = pfRaiseSndBuf(c, bd, &was, &mss);
+    gLog("[fleet] push to FluxDrive %s: send buffer %u B (was %u, mss %u%s), power save %s%s\n", ip.c_str(), (unsigned)(set ? set : was),
+         (unsigned)was, (unsigned)mss, set ? "" : ", left as it was", awake.was(), awake.lifted ? " - lifted for the push" : "");
+  }
 #if defined(GTI_FLEET)
   if (g_panel_token_ok && pfPeerWantsAuth(ip)) {   // #lock: prove ownership before the disk
     if (!pfWriteAuth(c, err)) { c.stop(); return false; }
