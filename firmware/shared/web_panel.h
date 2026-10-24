@@ -234,7 +234,11 @@ static void hWifiStatus() {
     : String("{\"ap_active\":false,\"ap_ip\":\"\",\"ap_clients\":0");
   jj += ",\"sta_connected\":" + String(sta ? "true" : "false");
   jj += ",\"sta_ip\":\"" + (sta ? WiFi.localIP().toString() : String("")) + "\"";
-  jj += ",\"sta_ssid\":\"" + wpJsonEscape(g_home_ssid) + "\"}";
+  jj += ",\"sta_ssid\":\"" + wpJsonEscape(g_home_ssid) + "\"";
+  // The link itself: which access point (a mesh has several under one name), its channel, and the signal.
+  jj += ",\"sta_rssi\":" + String(sta ? (int)WiFi.RSSI() : 0);
+  jj += ",\"sta_bssid\":\"" + (sta ? WiFi.BSSIDstr() : String("")) + "\"";
+  jj += ",\"sta_channel\":" + String(sta ? (int)WiFi.channel() : 0) + "}";
   webPanelHttp.send(200, "application/json", jj);
 }
 
@@ -756,7 +760,14 @@ static void webPanelBegin() {
   WiFi.setSleep(false);            // modem sleep drops incoming connections in pure STA
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
+  // The strongest access point of the home network, not the first one heard: Arduino's default join is a fast scan
+  // that takes the first match, on a mesh possibly a far node. begin() puts an all-channel scan sorted by signal into
+  // the driver's STA config, which the auto-reconnect re-uses. Arduino's own setting goes back to its default right
+  // after, so a later join with an explicit BSSID and channel (a dongle's own Wi-Fi) scans as before.
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
   WiFi.begin(g_home_ssid.c_str(), g_home_pass.c_str());
+  WiFi.setScanMethod(WIFI_FAST_SCAN);
   g_web_joining = true;
   webLog("[WEB] joining " + g_home_ssid + " ...");
 }

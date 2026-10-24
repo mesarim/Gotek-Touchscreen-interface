@@ -611,8 +611,8 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err) {
   c.setNoDelay(true);   // disable Nagle: with the dongle's delayed-ACK, Nagle stalls each window ~200ms and crawls the fling to ~35 KB/s
   if (fdIsFluxDrive(bd)) {   // 16 segments in flight instead of 4 (pfRaiseSndBuf); one log line says what was set
     uint32_t was = 0, mss = 0; const uint32_t set = pfRaiseSndBuf(c, bd, &was, &mss);
-    gLog("[fleet] push to FluxDrive %s: send buffer %u B (was %u, mss %u%s), power save %s%s\n", ip.c_str(), (unsigned)(set ? set : was),
-         (unsigned)was, (unsigned)mss, set ? "" : ", left as it was", awake.was(), awake.lifted ? " - lifted for the push" : "");
+    gLog("[fleet] push to FluxDrive %s: send buffer %u B (was %u, mss %u%s), power save %s%s, rssi %d\n", ip.c_str(), (unsigned)(set ? set : was),
+         (unsigned)was, (unsigned)mss, set ? "" : ", left as it was", awake.was(), awake.lifted ? " - lifted for the push" : "", (int)WiFi.RSSI());
   }
 #if defined(GTI_FLEET)
   if (g_panel_token_ok && pfPeerWantsAuth(ip)) {   // #lock: prove ownership before the disk

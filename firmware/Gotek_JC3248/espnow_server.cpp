@@ -720,14 +720,18 @@ bool espnowSendDiskHome(const String& ssid, const String& pass, String& ioIp, ui
   WiFi.mode(WIFI_STA); delay(100);
   WiFi.persistent(false); WiFi.setAutoReconnect(false);
   WiFi.disconnect(false, true); delay(200);
+  // The strongest access point of the home network, not the first one heard (an all-channel scan sorted by signal);
+  // Arduino's setting back to its default after, so the dongle joins below (explicit BSSID + channel) scan as before.
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN); WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
   WiFi.begin(ssid.c_str(), pass.c_str());
+  WiFi.setScanMethod(WIFI_FAST_SCAN);
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) { delay(200); Serial.print("."); }
   Serial.println();
 
   bool ok = false;
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("[HOME] Joined. IP %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("[HOME] Joined. IP %s bssid %s ch %d rssi %d\n", WiFi.localIP().toString().c_str(), WiFi.BSSIDstr().c_str(), (int)WiFi.channel(), (int)WiFi.RSSI());
     String ip = "";                                    // pf4c (#77): only a verified dongle, never a screen
     const bool md = MDNS.begin("gti-remote");
     if (md && g_espnow_paired) {                       // 1. our paired dongle by its own name (it steps aside to this when a screen leads)
