@@ -758,27 +758,143 @@ static void test_fd_wp_reply_meanings() {
 }
 
 // START FRESH deletes a save file. A FluxDrive record whose base (`sent`, the file its Amiga was given) is that file must
-// not be left pointing at nothing (its next fetch rebuilds from the base): when its own save is a different file, the base
-// becomes its own save first (2); when its base IS its own save, the one that goes, the record goes (1): its disk's writes
-// belong to that save. Any other base: nothing (0). FAT names: case does not count; a path is compared whole.
+// not be left pointing at nothing (its next fetch rebuilds from the base). Its base is its own save, the one that goes: the
+// record goes (1). Otherwise the base becomes its own save (2) only when that FluxDrive is heard holding that very disk, or
+// its state is unknown (not heard, STANDALONE) and it has no own save yet; else the record goes (1) and its own save stays
+// as it is - another device's progress is never overwritten for a record that may be dead. Any other base: nothing (0).
+// FAT names: case does not count; a path is compared whole.
 static void test_fd_start_fresh_keeps_every_record_base() {
   const char* own = "/ADF/G.sav.80FE.adf";
   const char* cable = "/ADF/G.sav.adf";
-  CHECK(fdFreshRecordFate(own, own, own) == 1);                        // the target's own save was its base: dropped
-  CHECK(fdFreshRecordFate(cable, own, cable) == 2);                    // the cable save was its base: becomes its own save
-  CHECK(fdFreshRecordFate("/ADF/G.sav.00FF.adf", own, "/ADF/G.sav.00FF.adf") == 2);   // another FluxDrive's own save
-  CHECK(fdFreshRecordFate("/ADF/G.adf", own, cable) == 0);             // the image: untouched
-  CHECK(fdFreshRecordFate(own, own, cable) == 0);                      // its own save, not the one that goes
-  CHECK(fdFreshRecordFate("/ADF/G.adf", own, own) == 0);               // its own save goes, but its base is the image: fine
-  CHECK(fdFreshRecordFate("/adf/g.SAV.ADF", own, cable) == 2);         // case does not count
-  CHECK(fdFreshRecordFate(own, "/adf/g.sav.80fe.ADF", "/ADF/G.SAV.80FE.adf") == 1);
-  CHECK(fdFreshRecordFate("/ADF/G.sav.adf.tmp", own, cable) == 0);     // whole paths only
-  CHECK(fdFreshRecordFate("/ADF/G.sav.ad", own, cable) == 0);
-  CHECK(fdFreshRecordFate(cable, own, "") == 0);                       // nothing goes
-  CHECK(fdFreshRecordFate("", own, "") == 0);
-  CHECK(fdFreshRecordFate(nullptr, own, cable) == 0);
-  CHECK(fdFreshRecordFate(cable, nullptr, cable) == 2);                // no own save name known: still keep the base
-  CHECK(fdFreshRecordFate(cable, own, nullptr) == 0);
+  const int IT = FD_HOLDS_IT, OTHER = FD_HOLDS_OTHER, UNKNOWN = FD_HOLDS_UNKNOWN;
+  CHECK(fdFreshRecordFate(own, own, own, IT, true) == 1);              // the target's own save was its base: dropped
+  CHECK(fdFreshRecordFate(own, own, own, UNKNOWN, false) == 1);
+  CHECK(fdFreshRecordFate(cable, own, cable, IT, false) == 2);         // the cable save was its base: becomes its own save
+  CHECK(fdFreshRecordFate("/ADF/G.sav.00FF.adf", own, "/ADF/G.sav.00FF.adf", IT, false) == 2);   // another FluxDrive's own save
+  CHECK(fdFreshRecordFate("/ADF/G.adf", own, cable, IT, true) == 0);   // the image: untouched
+  CHECK(fdFreshRecordFate(own, own, cable, IT, true) == 0);            // its own save, not the one that goes
+  CHECK(fdFreshRecordFate("/ADF/G.adf", own, own, IT, true) == 0);     // its own save goes, but its base is the image: fine
+  CHECK(fdFreshRecordFate("/adf/g.SAV.ADF", own, cable, IT, false) == 2);   // case does not count
+  CHECK(fdFreshRecordFate(own, "/adf/g.sav.80fe.ADF", "/ADF/G.SAV.80FE.adf", IT, true) == 1);
+  CHECK(fdFreshRecordFate("/ADF/G.sav.adf.tmp", own, cable, IT, false) == 0);   // whole paths only
+  CHECK(fdFreshRecordFate("/ADF/G.sav.ad", own, cable, IT, false) == 0);
+  CHECK(fdFreshRecordFate(cable, own, "", IT, false) == 0);            // nothing goes
+  CHECK(fdFreshRecordFate("", own, "", IT, false) == 0);
+  CHECK(fdFreshRecordFate(nullptr, own, cable, IT, false) == 0);
+  CHECK(fdFreshRecordFate(cable, nullptr, cable, IT, false) == 2);     // no own save name known: still keep the base
+  CHECK(fdFreshRecordFate(cable, own, nullptr, IT, false) == 0);
+  // fix round 1: whose state decides a rebase
+  CHECK(fdFreshRecordFate(cable, own, cable, IT, true) == 2);          // heard holding that disk: rebase (own save -> .bak)
+  CHECK(fdFreshRecordFate(cable, own, cable, OTHER, false) == 1);      // heard with another disk or none: the record is dead
+  CHECK(fdFreshRecordFate(cable, own, cable, OTHER, true) == 1);
+  CHECK(fdFreshRecordFate(cable, own, cable, UNKNOWN, false) == 2);    // not heard, nothing of its own to lose: rebase
+  CHECK(fdFreshRecordFate(cable, own, cable, UNKNOWN, true) == 1);     // not heard, an own save there: it stays, record goes
+  CHECK(fdFreshRecordFate(cable, own, cable, 7, false) == 1);          // a state it does not know: the safe way
+  CHECK(fdFreshRecordFate("/ADF/G.adf", own, cable, OTHER, true) == 0);   // another base: never touched, whatever the state
+  CHECK(fdFreshRecordFate("/ADF/G.adf", own, cable, UNKNOWN, true) == 0);
+}
+
+// What a record's FluxDrive is doing, from its beacon: not heard (or STANDALONE: no roster) = unknown; heard with a disk in
+// it whose uid ("load_id") is the record's = it holds that disk; heard otherwise (another disk, ejected, no uid) = other.
+static void test_fd_peer_holds_the_disk_of_its_record() {
+  CHECK(fdPeerHolds(false, true, 42, 42) == FD_HOLDS_UNKNOWN);
+  CHECK(fdPeerHolds(false, false, 0, 42) == FD_HOLDS_UNKNOWN);
+  CHECK(fdPeerHolds(true, true, 42, 42) == FD_HOLDS_IT);
+  CHECK(fdPeerHolds(true, true, 43, 42) == FD_HOLDS_OTHER);            // another disk in it
+  CHECK(fdPeerHolds(true, false, 42, 42) == FD_HOLDS_OTHER);           // ejected: it keeps the uid
+  CHECK(fdPeerHolds(true, true, 0, 0) == FD_HOLDS_OTHER);              // no uid: matches nothing
+  CHECK(fdPeerHolds(true, true, 4294967295u, 4294967295u) == FD_HOLDS_IT);
+  CHECK(FD_HOLDS_UNKNOWN != FD_HOLDS_IT && FD_HOLDS_IT != FD_HOLDS_OTHER && FD_HOLDS_UNKNOWN != FD_HOLDS_OTHER);
+}
+
+// START FRESH is offered in STANDALONE (wireless off; home Wi-Fi then only serves the web page) and in fleet mode (wireless
+// over home Wi-Fi), never in ESP-NOW mode (wireless without home Wi-Fi): ESP-NOW behaves as before Task 8.
+static void test_fd_start_fresh_is_offered_in_standalone_and_fleet_mode_only() {
+  CHECK(fdFreshOffered(false, false));                                 // STANDALONE
+  CHECK(fdFreshOffered(false, true));                                  // STANDALONE with the web page on home Wi-Fi
+  CHECK(fdFreshOffered(true, true));                                   // fleet mode
+  CHECK(!fdFreshOffered(true, false));                                 // ESP-NOW mode
+}
+
+// After START FRESH on a FluxDrive the next fling of that game to it is the original image, not the cable save: a mark per
+// FluxDrive tag and image, kept on the card, until that FluxDrive has an own save again. Several targets (as Hivemind)
+// still get the staged file; an own save always wins.
+static void test_fd_after_start_fresh_the_original_is_sent() {
+  const char* own = "/ADF/G.sav.80FE.adf";
+  const char* cable = "/ADF/G.sav.adf";
+  const char* image = "/ADF/G.adf";
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80FE", false, own, cable, true, image), image) == 0);    // marked: the image
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80FE", false, own, cable, false, image), cable) == 0);   // not marked: as before
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80FE", false, own, cable), cable) == 0);
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80FE", true, own, cable, true, image), own) == 0);       // an own save wins
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80FE", false, own, image, true, image), image) == 0);    // no cable save
+  CHECK(std::strcmp(fdFileToSend(2, true, true, "80FE", false, own, cable, true, image), cable) == 0);    // several targets
+  CHECK(std::strcmp(fdFileToSend(1, false, true, "80FE", false, own, cable, true, image), cable) == 0);   // a Webby
+  CHECK(std::strcmp(fdFileToSend(1, true, false, "80FE", false, own, cable, true, image), cable) == 0);   // SAVES=OFF
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "", false, own, cable, true, image), cable) == 0);        // no tag
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80FE", false, own, cable, true, ""), cable) == 0);       // no image name
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80FE", false, own, cable, true, nullptr), cable) == 0);
+}
+
+// The marks themselves: one per tag and image (an image path compared whole, case does not count), kept in a small table
+// that survives a reboot as lines of a file. START FRESH adds one; the first fetch that writes the own save (or a fling that
+// sends one) drops it; a full table forgets the oldest. With the mark gone and the own save there, the own save is sent.
+static void test_fd_fresh_marks_are_added_found_and_dropped() {
+  FdFreshSet s; fdFreshClearAll(s);
+  CHECK(fdFreshFind(s, "80FE", "/ADF/G.adf") < 0);
+  CHECK(fdFreshAdd(s, "80FE", "/ADF/G.adf"));
+  CHECK(fdFreshFind(s, "80FE", "/ADF/G.adf") >= 0);
+  CHECK(fdFreshFind(s, "80FE", "/adf/g.ADF") >= 0);                    // case does not count in a path
+  CHECK(fdFreshFind(s, "00FF", "/ADF/G.adf") < 0);                     // another FluxDrive
+  CHECK(fdFreshFind(s, "80FE", "/ADF/H.adf") < 0);                     // another game
+  CHECK(fdFreshFind(s, "80FE", "/ADF/G.adf.x") < 0);
+  CHECK(fdFreshFind(s, nullptr, "/ADF/G.adf") < 0 && fdFreshFind(s, "80FE", nullptr) < 0);
+  CHECK(fdFreshAdd(s, "80FE", "/ADF/G.adf") && s.n == 1);              // twice: still one
+  CHECK(!fdFreshAdd(s, "80fe", "/ADF/H.adf") && s.n == 1);             // not a tag
+  CHECK(!fdFreshAdd(s, "80FE", "ADF/H.adf") && s.n == 1);              // not a path from the root
+  CHECK(!fdFreshAdd(s, nullptr, "/ADF/H.adf") && !fdFreshAdd(s, "80FE", nullptr) && s.n == 1);
+  char p160[200]; std::memset(p160, 'x', 160); p160[0] = '/'; p160[160] = 0;
+  CHECK(!fdFreshAdd(s, "80FE", p160) && s.n == 1);                     // does not fit whole: not kept (a cut path names another)
+  CHECK(fdFreshAdd(s, "00FF", "/ADF/G.adf") && s.n == 2);
+  // the first fetch that writes Game.sav.80FE.adf: the mark goes, and the own save is what goes out from then on
+  CHECK(fdFreshDrop(s, "80FE", "/adf/G.ADF") && s.n == 1);
+  CHECK(fdFreshFind(s, "80FE", "/ADF/G.adf") < 0 && fdFreshFind(s, "00FF", "/ADF/G.adf") >= 0);
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80FE", true, "/ADF/G.sav.80FE.adf", "/ADF/G.sav.adf",
+                                 fdFreshFind(s, "80FE", "/ADF/G.adf") >= 0, "/ADF/G.adf"), "/ADF/G.sav.80FE.adf") == 0);
+  CHECK(!fdFreshDrop(s, "80FE", "/ADF/G.adf") && s.n == 1);            // nothing to drop
+  fdFreshClearAll(s);
+  CHECK(s.n == 0);
+  char path[40];
+  for (int i = 0; i < FD_FRESH_MAX + 2; i++) { std::snprintf(path, sizeof path, "/ADF/G%02d.adf", i); CHECK(fdFreshAdd(s, "80FE", path)); }
+  CHECK(s.n == FD_FRESH_MAX);
+  CHECK(fdFreshFind(s, "80FE", "/ADF/G00.adf") < 0 && fdFreshFind(s, "80FE", "/ADF/G01.adf") < 0);   // the oldest forgotten
+  std::snprintf(path, sizeof path, "/ADF/G%02d.adf", FD_FRESH_MAX + 1);
+  CHECK(fdFreshFind(s, "80FE", path) >= 0 && fdFreshFind(s, "80FE", "/ADF/G02.adf") >= 0);
+}
+
+static void test_fd_fresh_mark_lines_round_trip_and_refuse_garbage() {
+  FdFreshMark m; std::memset(&m, 0, sizeof m);
+  std::strcpy(m.tag, "80FE"); std::strcpy(m.image, "/ADF/Lemmings (1991)/Lemmings.adf");
+  char line[300];
+  const int n = fdFreshFormat(m, line, sizeof line);
+  CHECK(n > 0 && (size_t)n == std::strlen(line));
+  CHECK(std::strcmp(line, "fresh\t80FE\t/ADF/Lemmings (1991)/Lemmings.adf") == 0);
+  FdFreshMark b; std::memset(&b, 0x5A, sizeof b);
+  CHECK(fdFreshParse(line, b) && std::strcmp(b.tag, m.tag) == 0 && std::strcmp(b.image, m.image) == 0);
+  char lf[320]; std::snprintf(lf, sizeof lf, "%s\r\n", line);
+  CHECK(fdFreshParse(lf, b) && std::strcmp(b.image, m.image) == 0);    // a newline (and a CR) at its end do not count
+  const FdFreshMark keep = b;
+  char ctl[40]; std::snprintf(ctl, sizeof ctl, "fresh\t80FE\t/ADF/G%c.adf", 1);
+  char p160[200]; std::memset(p160, 'x', sizeof p160); std::memcpy(p160, "fresh\t80FE\t/", 12); p160[12 + 159] = 0;   // a 160-char path
+  const char* bad[] = { "", "fresh", "fresh\t80FE", "fresh\t80FE\t", "fresh\t80fe\t/ADF/G.adf", "fresh\t80FE0\t/ADF/G.adf",
+                        "fresh\t80FE\tADF/G.adf", "fresh\t80FE\t/ADF/G.adf\textra", "fresh 80FE /ADF/G.adf", ctl, p160,
+                        "Fresh\t80FE\t/ADF/G.adf", "A1B2C3D4E5F6\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf" };   // a save record is not a mark
+  for (const char* l : bad) CHECK(!fdFreshParse(l, b) && std::strcmp(b.image, keep.image) == 0 && std::strcmp(b.tag, keep.tag) == 0);
+  CHECK(!fdFreshParse(nullptr, b));
+  FdFreshMark z; std::memset(&z, 0, sizeof z);
+  CHECK(fdFreshFormat(z, line, sizeof line) == -1 && line[0] == 0);    // not a mark: nothing written
+  CHECK(fdFreshFormat(m, line, 10) == -1);                             // does not fit whole
+  CHECK(fdFreshFormat(m, nullptr, 10) == -1);
 }
 
 int main() {
@@ -838,6 +954,11 @@ int main() {
   test_fd_start_fresh_skips_the_fetch_before_its_swap();
   test_fd_wp_reply_meanings();
   test_fd_start_fresh_keeps_every_record_base();
+  test_fd_peer_holds_the_disk_of_its_record();
+  test_fd_start_fresh_is_offered_in_standalone_and_fleet_mode_only();
+  test_fd_after_start_fresh_the_original_is_sent();
+  test_fd_fresh_marks_are_added_found_and_dropped();
+  test_fd_fresh_mark_lines_round_trip_and_refuse_garbage();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }

@@ -871,6 +871,54 @@ static bool pfRecordPut(const FdSaveRecord &r) {
   g_pfRecs[g_pfRecN++] = r;
   return pfRecordsWrite();
 }
+// ── fd2 fix round 1: FluxDrives STARTED FRESH on a game (fluxdrive_peer.h FdFreshSet) ──
+// Until such a FluxDrive has an own save of that game again, a single-target fling of it sends the original image, not the
+// cable save (fdFileToSend's `reset`). In RAM and in /GTI/fdfresh.txt, loaded at boot and written whole after every change
+// (a .tmp first, as the save records), so a restart of the panel keeps it.
+#define PF_FDFRESH "/GTI/fdfresh.txt"
+static FdFreshSet g_pfFresh;   // zeroed: no marks
+static bool pfFreshWrite() {
+  const String tmp = String(PF_FDFRESH) + ".tmp";
+  SD_MMC.remove(tmp);
+  File f = SD_MMC.open(tmp, FILE_WRITE); if (!f) return false;
+  bool ok = true; char line[200];
+  for (int i = 0; i < g_pfFresh.n && ok; i++) {
+    const int n = fdFreshFormat(g_pfFresh.m[i], line, sizeof line - 1); if (n < 0) continue;
+    line[n] = '\n';
+    ok = f.write((const uint8_t *)line, n + 1) == (size_t)(n + 1);
+  }
+  f.close();
+  if (!ok) { SD_MMC.remove(tmp); return false; }
+  SD_MMC.remove(PF_FDFRESH);
+  return SD_MMC.rename(tmp, PF_FDFRESH);
+}
+static void pfFreshLoad() {
+  fdFreshClearAll(g_pfFresh);
+  const String tmp = String(PF_FDFRESH) + ".tmp";
+  if (!SD_MMC.exists(PF_FDFRESH) && SD_MMC.exists(tmp)) SD_MMC.rename(tmp, PF_FDFRESH);   // cut between the remove and the rename
+  File f = SD_MMC.open(PF_FDFRESH, FILE_READ); if (!f) return;
+  while (f.available()) {
+    const String l = f.readStringUntil('\n'); FdFreshMark m;
+    if (fdFreshParse(l.c_str(), m)) fdFreshAdd(g_pfFresh, m.tag, m.image);   // a line that is not a mark is skipped
+  }
+  f.close();
+}
+static bool pfFreshHas(const String &tag, const String &image) { return fdFreshFind(g_pfFresh, tag.c_str(), image.c_str()) >= 0; }
+// START FRESH on FluxDrive `tag` for `image`: from now on it gets the original. One gti.log line.
+static void pfFreshMark(const String &tag, const String &image) {
+  if (pfFreshHas(tag, image)) return;
+  if (!fdFreshAdd(g_pfFresh, tag.c_str(), image.c_str())) { gLog("[saves] FluxDrive %s: %s cannot be marked as started fresh (not a tag or path)\n", tag.c_str(), image.c_str()); return; }
+  const bool onCard = pfFreshWrite();
+  gLog("[saves] FluxDrive %s: %s started fresh - it gets the original until it has an own save again%s\n", tag.c_str(), image.c_str(),
+       onCard ? "" : " (NOT written to the card: kept until a restart)");
+}
+// FluxDrive `tag` has an own save of `image` again (a fetch wrote it, or a fling sent one): the mark goes.
+static void pfFreshClear(const String &tag, const String &image) {
+  if (!fdFreshDrop(g_pfFresh, tag.c_str(), image.c_str())) return;
+  const bool onCard = pfFreshWrite();
+  gLog("[saves] FluxDrive %s: %s has an own save again - no longer started fresh%s\n", tag.c_str(), image.c_str(),
+       onCard ? "" : " (NOT written to the card)");
+}
 // In the sketch, next to the ESP-NOW save fetch: before a FluxDrive's disk goes (another disk, an eject) its unsaved
 // writes are fetched (1 fetched, 0 nothing to fetch, -1 failed) - except before START FRESH's fling of the original
 // (fresh, fdFetchFirstNeeded); a single-target fling to a FluxDrive sends its own save (fdStageFor / fdUnstage around the

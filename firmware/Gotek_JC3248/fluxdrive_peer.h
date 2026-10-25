@@ -397,9 +397,14 @@ inline bool fdSaveTagOk(const char* tag) {
 // Which file a fling sends to a target: `own` (its own save, Game.sav.<tag>.adf) when the target is a FluxDrive and the
 // only one, saves are on, it has a save tag (fdSaveTagOk) and that file exists; else `staged`, the file staged here (the
 // cable save or the image). Several targets get the staged file, as a Hivemind fan-out does.
+// reset (fd2 fix round 1): that FluxDrive was STARTED FRESH on this game and has no own save since (its mark, FdFreshSet):
+// the one target gets `image`, the original, instead of the staged cable save. An own save always wins.
 inline const char* fdFileToSend(int targets, bool is_fd, bool saves_on, const char* tag, bool own_exists, const char* own,
-                                const char* staged) {
-  return (targets == 1 && is_fd && saves_on && fdSaveTagOk(tag) && own_exists && own != nullptr && own[0]) ? own : staged;
+                                const char* staged, bool reset = false, const char* image = nullptr) {
+  const bool one = targets == 1 && is_fd && saves_on && fdSaveTagOk(tag);
+  if (one && own_exists && own != nullptr && own[0]) return own;
+  if (one && reset && image != nullptr && image[0]) return image;
+  return staged;
 }
 
 // ---- Panel controls (v2 writing): start fresh, write protect -------------------------------------------------------------
@@ -423,14 +428,101 @@ inline bool fdPathSame(const char* a, const char* b) {
   for (; *a && *b; a++, b++) if (fdNameLower(*a) != fdNameLower(*b)) return false;
   return *a == 0 && *b == 0;
 }
+// What a record's FluxDrive is doing (fd2 fix round 1), from its beacon: not heard - or STANDALONE, which keeps no roster -
+// is unknown; heard with a disk in it whose uid ("load_id") is the record's: it holds that disk; heard otherwise (another
+// disk, ejected - FluxDrive keeps the uid -, no uid): other.
+enum { FD_HOLDS_UNKNOWN = 0, FD_HOLDS_IT = 1, FD_HOLDS_OTHER = 2 };
+inline int fdPeerHolds(bool heard, bool loaded, uint32_t beacon_uid, uint32_t rec_uid) {
+  if (!heard) return FD_HOLDS_UNKNOWN;
+  return (loaded && beacon_uid != 0 && beacon_uid == rec_uid) ? FD_HOLDS_IT : FD_HOLDS_OTHER;
+}
 // START FRESH deletes the save file `gone`. What becomes of a FluxDrive record whose base (`sent`, the file its Amiga was
-// given; its next fetch rebuilds from it) is that file? 0: nothing (another base). 1: its base is its own save (`own`,
-// Game.sav.<tag>.adf of its game), the one that goes: the record goes too - its disk's writes belong to that save. 2: its
-// own save is another file: the base becomes its own save first (what its next fetch would have rebuilt from it anyway),
-// so it is not left pointing at nothing.
-inline int fdFreshRecordFate(const char* sent, const char* own, const char* gone) {
+// given; its next fetch rebuilds from it) is that file? 0: nothing (another base). 1: the record goes. 2: the base becomes
+// its own save first (what its next fetch would have rebuilt from it anyway), so it is not left pointing at nothing.
+//  - Its base is its own save (`own`, Game.sav.<tag>.adf of its game), the one that goes: 1 - its disk's writes belong to it.
+//  - Its own save is another file: 2 only when that FluxDrive is heard holding that very disk (holds, fdPeerHolds), or its
+//    state is unknown and it has no own save yet (own_exists false); otherwise 1, and its own save stays as it is: the
+//    rebase would move it to .bak (dropping the older .bak) for a record that is dead or may be.
+inline int fdFreshRecordFate(const char* sent, const char* own, const char* gone, int holds, bool own_exists) {
   if (!fdPathSame(sent, gone)) return 0;
-  return fdPathSame(own, gone) ? 1 : 2;
+  if (fdPathSame(own, gone)) return 1;
+  if (holds == FD_HOLDS_IT) return 2;
+  if (holds == FD_HOLDS_UNKNOWN && !own_exists) return 2;
+  return 1;
+}
+
+// START FRESH is offered (fd2 fix round 1) in STANDALONE (wireless off) and in fleet mode (wireless over home Wi-Fi), never
+// in ESP-NOW mode (wireless without home Wi-Fi): there it would eject the paired dongle's disk and fetch its writes into a
+// save built from the one thrown away, while nothing is sent again. ESP-NOW behaves as before Task 8.
+inline bool fdFreshOffered(bool wireless, bool link_home) { return !wireless || link_home; }
+
+// After START FRESH on a FluxDrive (fd2 fix round 1): a mark per FluxDrive tag and image says "send it the original" -
+// fdFileToSend's `reset` - until that FluxDrive has an own save of the game again (the first fetch that writes it, or a
+// fling that sends one). Kept on the card, one line per mark: "fresh TAB tag TAB image". A full table forgets the oldest.
+#define FD_FRESH_MAX 16
+struct FdFreshMark { char tag[5]; char image[160]; };
+struct FdFreshSet { FdFreshMark m[FD_FRESH_MAX]; int n; };
+inline void fdFreshClearAll(FdFreshSet& s) { s.n = 0; }
+// A mark that can be kept: a save tag (fdSaveTagOk's form) and an SD path from the root without control characters.
+inline bool fdFreshMarkValid(const FdFreshMark& m) {
+  return fdRecHexField(m.tag, sizeof m.tag, 4, 4) && fdRecPathField(m.image, sizeof m.image);
+}
+// Its index, or -1. The tag exactly, the image as a whole path (case does not count: FAT).
+inline int fdFreshFind(const FdFreshSet& s, const char* tag, const char* image) {
+  if (tag == nullptr || image == nullptr) return -1;
+  for (int i = 0; i < s.n && i < FD_FRESH_MAX; i++)
+    if (strcmp(s.m[i].tag, tag) == 0 && fdPathSame(s.m[i].image, image)) return i;
+  return -1;
+}
+// true = it was there and is gone.
+inline bool fdFreshDrop(FdFreshSet& s, const char* tag, const char* image) {
+  const int k = fdFreshFind(s, tag, image);
+  if (k < 0) return false;
+  for (int i = k + 1; i < s.n; i++) s.m[i - 1] = s.m[i];
+  s.n--;
+  return true;
+}
+// true = it is in the table (it was, or is now). Not a valid mark, or a path that does not fit whole (a cut path would name
+// another file): false, nothing changes.
+inline bool fdFreshAdd(FdFreshSet& s, const char* tag, const char* image) {
+  if (tag == nullptr || image == nullptr || strlen(tag) >= sizeof s.m[0].tag || strlen(image) >= sizeof s.m[0].image) return false;
+  FdFreshMark t;
+  memset(&t, 0, sizeof t);
+  strcpy(t.tag, tag); strcpy(t.image, image);
+  if (!fdFreshMarkValid(t)) return false;
+  if (fdFreshFind(s, tag, image) >= 0) return true;
+  if (s.n >= FD_FRESH_MAX) { for (int i = 1; i < FD_FRESH_MAX; i++) s.m[i - 1] = s.m[i]; s.n = FD_FRESH_MAX - 1; }
+  s.m[s.n++] = t;
+  return true;
+}
+// The mark as one line (no newline) into out: its length, or -1 (out "" when it has room) for an invalid mark or one that
+// does not fit whole.
+inline int fdFreshFormat(const FdFreshMark& m, char* out, size_t n) {
+  if (out == nullptr || n == 0) return -1;
+  out[0] = 0;
+  if (!fdFreshMarkValid(m)) return -1;
+  const int w = snprintf(out, n, "fresh\t%s\t%s", m.tag, m.image);
+  if (w < 0 || (size_t)w >= n) { out[0] = 0; return -1; }
+  return w;
+}
+// One line into a mark: exactly "fresh TAB tag TAB image", a newline (and CRs) at its end not counted. Anything else -
+// a save record line among them - is refused and m left as it was.
+inline bool fdFreshParse(const char* line, FdFreshMark& m) {
+  if (line == nullptr) return false;
+  size_t len = strlen(line);
+  while (len && (line[len - 1] == '\n' || line[len - 1] == '\r')) len--;
+  if (len < 6 || strncmp(line, "fresh\t", 6) != 0) return false;
+  const char* tag = line + 6;
+  const char* tab = (const char*)memchr(tag, '\t', len - 6);
+  if (tab == nullptr) return false;
+  const size_t tn = (size_t)(tab - tag), in = len - 6 - tn - 1;
+  FdFreshMark t;
+  memset(&t, 0, sizeof t);
+  if (tn >= sizeof t.tag || in >= sizeof t.image) return false;
+  memcpy(t.tag, tag, tn); memcpy(t.image, tab + 1, in);
+  if (!fdFreshMarkValid(t)) return false;   // a further TAB in the image is a control character: refused here
+  m = t;
+  return true;
 }
 
 // SET_WP (0x10 + 1 byte: 1 on, 0 off) makes the change a re-insert on FluxDrive (the drive empty for 1 s, then the disk back

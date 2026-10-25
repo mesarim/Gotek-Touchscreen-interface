@@ -2244,6 +2244,7 @@ static int g_info_x=0,g_info_w=150,g_info_bottom=0;
 static String g_manual_path=""; static int g_manual_bx=0,g_manual_by=0,g_manual_bw=0,g_manual_bh=0;  // v4.9.2 .rtfm book button rect
 static int g_nfo_bx=0,g_nfo_by=0,g_nfo_bw=0,g_nfo_bh=0;   // lab15j: list-panel text area (title + description) - a tap opens the whole .nfo
 static int g_fresh_bx=0,g_fresh_by=0,g_fresh_bw=0,g_fresh_bh=0;   // fd2: the cover panel's START FRESH key (0 wide = not shown)
+static String g_freshDrawn;   // fd2 fix round 1: the save that key was drawn for - a tap deletes that save or nothing
 // lab15b: 36 bytes, no heap blocks of its own - text + multi-disk lists live in g_gtext (gti_gamestore.h)
 struct GameEntry{AStr name;AStr jpg_path;AStr blurb;DiskList disk_indices;int first_file_idx=0;int disk_count=0;uint16_t plays=0;bool fav=false;bool cover_ok=false;bool nfo_done=false;bool has_manual=false;bool is_hd=false;};   // 5.9.31-lab1: sidecar results cached in PSRAM (see .nfocache) so selecting a game costs ZERO directory walks
 // 5.9.41-lab14b: g_games is a deque, not a vector. At 15k games a vector needs ONE 1.2 MB block
@@ -2944,7 +2945,7 @@ static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=
 enum { LANG_EN=0, LANG_FR, LANG_IT, LANG_ES, LANG_DE, LANG_NL, LANG_PL, LANG_CS, LANG_N };   // lab15o: + Polish, Czech
 static int g_lang=0;
 static const char* const LANG_NAMES[LANG_N]={"EN","FR","IT","ES","DE","NL","PL","CS"};
-enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_CFG_MODE, L_CFG_FONT, L_CFG_LANG, L_CFG_ROTATE, L_CFG_COMPACT, L_CFG_LIBRARY, L_CFG_CATEG, L_CFG_BUTTONS, L_CFG_SAVER, L_CFG_FAVSAVER, L_CFG_HIVEMIND, L_ON, L_OFF, L_PORTRAIT, L_LANDSCAPE, L_FONT_SMALL, L_FONT_NORMAL, L_FONT_LARGE, L_PILL, L_FLAT, L_SLIDES, L_BOUNCE, L_MATRIX, L_CRACKTRO, L_SWITCH_DONGLE, L_SCAN_DONGLES, L_PAGE, L_CLOSE, L_TOP, L_SECTIONS, L_REEL_BORDER, L_COVER_ART, L_LIST_TILE, L_LAST_USED, L_HOME_WIFI, L_WIFI_CHECK, L_SET_UP, L_START_FRESH, L_FRESH_GONE, L_FRESH_ORIG, L_FRESH_SWAP, L_FRESH_DONE, L_FRESH_KEPT, L_WP_LATER, L_STR_N };
+enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_CFG_MODE, L_CFG_FONT, L_CFG_LANG, L_CFG_ROTATE, L_CFG_COMPACT, L_CFG_LIBRARY, L_CFG_CATEG, L_CFG_BUTTONS, L_CFG_SAVER, L_CFG_FAVSAVER, L_CFG_HIVEMIND, L_ON, L_OFF, L_PORTRAIT, L_LANDSCAPE, L_FONT_SMALL, L_FONT_NORMAL, L_FONT_LARGE, L_PILL, L_FLAT, L_SLIDES, L_BOUNCE, L_MATRIX, L_CRACKTRO, L_SWITCH_DONGLE, L_SCAN_DONGLES, L_PAGE, L_CLOSE, L_TOP, L_SECTIONS, L_REEL_BORDER, L_COVER_ART, L_LIST_TILE, L_LAST_USED, L_HOME_WIFI, L_WIFI_CHECK, L_SET_UP, L_START_FRESH, L_FRESH_GONE, L_FRESH_ORIG, L_FRESH_SWAP, L_FRESH_DONE, L_FRESH_KEPT, L_WP_LATER, L_FRESH_CABLE, L_FRESH_CHANGED, L_STR_N };
 static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_PREV          */ {"PREV","PREC","PREC","ANT","VORH","VORIG","POPRZ","PRED"},
   /*L_NEXT          */ {"NEXT","SUIV","SUCC","SIG","WEIT","VOLG","DALEJ","DALSI"},
@@ -3049,6 +3050,9 @@ static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_FRESH_DONE   */ {"Save deleted","Sauvegarde supprimee","Salvataggio cancellato","Partida borrada","Spielstand geloescht","Opgeslagen spel gewist","Zapis usuniety","Ulozena hra smazana"},
   /*L_FRESH_KEPT   */ {"Not sent - its save is kept.","Non envoye - la sauvegarde reste.","Non inviato - il salvataggio resta.","No enviado - la partida se conserva.","Nicht gesendet - der Spielstand bleibt.","Niet verstuurd - het opgeslagen spel blijft.","Nie wyslano - zapis zostaje.","Neodeslano - ulozena hra zustava."},
   /*L_WP_LATER     */ {"WP changes once the Amiga stops reading","WP change quand l'Amiga a fini de lire","WP cambia quando l'Amiga finisce di leggere","WP cambia cuando el Amiga deje de leer","WP wechselt, wenn der Amiga fertig gelesen hat","WP wisselt zodra de Amiga klaar is met lezen","WP zmieni sie, gdy Amiga skonczy czytac","WP se zmeni, az Amiga docte"},
+  // fd2 fix round 1: the confirm names whose save goes (with the file name after it); a save that changed under the key.
+  /*L_FRESH_CABLE  */ {"cable save","sauvegarde du cable","salvataggio del cavo","partida del cable","Spielstand am Kabel","opgeslagen spel (kabel)","zapis z kabla","ulozena hra (kabel)"},
+  /*L_FRESH_CHANGED*/ {"The save changed - try again.","La sauvegarde a change - reessayez.","Il salvataggio e cambiato - riprova.","La partida cambio - intentalo de nuevo.","Spielstand geaendert - nochmal versuchen.","Het opgeslagen spel is veranderd - probeer opnieuw.","Zapis sie zmienil - sprobuj ponownie.","Ulozena hra se zmenila - zkuste znovu."},
 };
 static inline const char* T(int id){ return LSTR[id][g_lang]; }
 
@@ -4143,7 +4147,7 @@ static void drawMagnifier(int cx,int cy,uint16_t col){
 static void drawCoverPanel(){
   g_manual_bw=0;   // v4.9.2: cleared each draw; set below only if this game has a .rtfm
   g_nfo_bw=0;      // lab15j: same for the .nfo text tap area (set only when a description is drawn)
-  g_fresh_bw=0;    // fd2: same for START FRESH (set only when the selected disk has a save to throw away)
+  g_fresh_bw=0; g_freshDrawn="";   // fd2: same for START FRESH (set only when the selected disk has a save to throw away)
   if(!COVER_ON)return;
   NeoScope _ns; const uint16_t PB=g_neo?COL_BG:COL_PANEL;   // A600-neo2: see-through panel, labels without a box
   if(g_neo)neoPanel(COVER_X,COVER_Y,COVER_W,COVER_H,0); else gfx_fillRect(COVER_X,COVER_Y,COVER_W,COVER_H,COL_PANEL);if(g_games.empty())return;
@@ -4169,7 +4173,15 @@ static void drawCoverPanel(){
   { static int savSel=-1; static uint32_t savSeen=0;   // fd2: asked again when a save came or went (g_savGen: START FRESH), not only for a new selection
     if(savSel!=g_sel||savSeen!=g_savGen){ savSel=g_sel; savSeen=g_savGen;
       cachedHasSav=savBadgeFor(g_files[game.first_file_idx]); } }   // lab14i: from the save list (kept current when the GTi writes a save) - no card lookup
-  int freshPeer=-1; const bool fresh=freshSave(selDiskFile(),&freshPeer).length()>0;   // fd2: START FRESH is offered (save list, no card lookup)
+  // fd2: START FRESH is offered - the save it would delete (freshSave), cached like the badge (fix round 1): asked again only
+  // when the selection, its disk, the save list (g_savGen), the FluxDrive target and its tag, the radio mode or SAVES changed.
+  { static int frSel=-2,frDisk=-2,frSaves=-2; static uint32_t frGen=0; static bool frW=false,frH=false; static String frKey="?",frSav;
+    const int t=pfFluxTarget(); const String key=t>=0?(String("T")+g_pfPeers[t].id+"/"+g_pfPeers[t].tag):String("N");
+    if(frSel!=g_sel||frDisk!=g_disk_sel||frGen!=g_savGen||frKey!=key||frSaves!=g_saves_mode||frW!=g_wireless_mode||frH!=g_link_home){
+      frSel=g_sel; frDisk=g_disk_sel; frGen=g_savGen; frKey=key; frSaves=g_saves_mode; frW=g_wireless_mode; frH=g_link_home;
+      int p=-1; frSav=freshSave(selDiskFile(),&p); }
+    g_freshDrawn=frSav; }
+  const bool fresh=g_freshDrawn.length()>0;
   // Cover art
   int ax=COVER_ART_X,ay=COVER_ART_Y,aw=COVER_ART_W,ah=COVER_ART_H;   // lab15l: the frame; shrinks to hug a tile picture
   gfx_fillRoundRect(COVER_ART_X,COVER_ART_Y,COVER_ART_W,COVER_ART_H,5,COL_BAR);
@@ -5667,10 +5679,11 @@ static String selDiskFile(){
 // (pfFluxTarget, *peer): that FluxDrive's own save, Game.sav.<tag>.adf, which a fling to it sends instead of the image
 // (none while its beacon has no save tag). Without a target: the cable save, Game.sav.adf - the save a load uses in COPY
 // mode only (OVERWRITE writes into the image itself, nothing to go back from). SAVES=OFF uses no save: none. From the save
-// list (savBadgeForOne): no card lookup while it is there.
+// list (savBadgeForOne): no card lookup while it is there. Fix round 1: never in ESP-NOW mode (fdFreshOffered): only
+// STANDALONE and fleet mode offer it.
 static String freshSave(const String&file,int*peer){
   *peer=-1;
-  if(g_saves_mode==0||!file.length()) return "";
+  if(g_saves_mode==0||!file.length()||!fdFreshOffered(g_wireless_mode,g_link_home)) return "";
   const int t=pfFluxTarget();
   if(t>=0){ *peer=t; const String tag=g_pfPeers[t].tag; if(!fdSaveTagOk(tag.c_str())) return "";
     const String own=dongleSavPathFor(file,tag); return savBadgeForOne(file,own)?own:""; }
@@ -5843,7 +5856,7 @@ static bool fdPersistLan(uint32_t load_id,uint32_t img_size,const uint8_t*map,ui
        rebuild?"built from ":had?"updated":"new save file",rebuild?sent.c_str():"",(ok&&bak.length())?"; the save it replaced is kept as ":"",
        (ok&&bak.length())?bak.c_str():"",ok?"":" - ",
        ok?"":(!recOk?"its record could not be written to the card (not acked: fetched again)":g_sv_err[0]?g_sv_err:"no detail"));
-  if(ok)g_fdFetchSectors=nSec;
+  if(ok){ g_fdFetchSectors=nSec; pfFreshClear(tag,orig); }   // fd2 fix round 1: it has an own save of this game again
   return ok;
 }
 // The LAN fetch from roster peer i, without drawing anything: its TCP port, GET_SAVE, fdPersistLan, the ack. replyMs and
@@ -5945,31 +5958,37 @@ static bool fdFetchFirstOrAsk(const String&ip,const char*verb,bool fresh=false){
 // stays as it was loaded. Only a disk held in RAM and not on the panel's own USB port is swapped (a fleet disk is not on
 // it: doLoadSelected attaches it only when its single send failed); otherwise the staged file goes, and the first fetch
 // keeps the own save it then replaces as a backup (fdPersistLan). Returns the path whose bytes go out (the record's `sent`).
-static uint8_t* g_fdKeep=nullptr;   // the staged bytes while a FluxDrive's own save is swapped in for one push
+static uint8_t* g_fdKeep=nullptr;   // the staged bytes while a FluxDrive's own save (or, started fresh, the original) is swapped in for one push
 static String fdStageFor(const String&ip,int targets){
   const String staged=g_loaded_path;
   int i=-1; for(int k=0;k<g_pfPeerN;k++) if(g_pfPeers[k].ip==ip){i=k;break;}
   if(i<0||!fdIsFluxDrive(g_pfPeers[i].board.c_str())||targets!=1||g_saves_mode==0||!g_pfPeers[i].tag.length())return staged;   // no own save in question: no card access
   const String tag=g_pfPeers[i].tag, orig=g_loaded_orig.length()?g_loaded_orig:g_loaded_path;
   const String own=orig.length()?dongleSavPathFor(orig,tag):String("");
-  const String pick=fdFileToSend(targets,true,true,tag.c_str(),own.length()&&SD_MMC.exists(own),own.c_str(),staged.c_str());
-  if(pick!=own||own.equalsIgnoreCase(staged)){ gLog("[saves] FluxDrive %s: %s\n",tag.c_str(),pick==own?"sending its own save":"no own save yet"); return staged; }
+  // fd2 fix round 1: a FluxDrive STARTED FRESH on this game (pfFreshHas) gets the original instead of a staged cable save,
+  // swapped in the same way; one that has an own save again loses that mark.
+  const bool ownThere=own.length()&&SD_MMC.exists(own), reset=orig.length()&&pfFreshHas(tag,orig);
+  const String pick=fdFileToSend(targets,true,true,tag.c_str(),ownThere,own.c_str(),staged.c_str(),reset,orig.c_str());
+  const bool isOwn=ownThere&&pick==own;
+  const char*what=isOwn?"its own save":"the original (started fresh)";
+  if(isOwn)pfFreshClear(tag,orig);
+  if(pick.equalsIgnoreCase(staged)){ gLog("[saves] FluxDrive %s: %s\n",tag.c_str(),isOwn?"sending its own save":reset?"started fresh - sending the original":"no own save yet"); return staged; }
   const char*why=nullptr; uint8_t*t=nullptr; struct stat st;
   if(!g_loaded||g_img_bytes==0||g_alias)why="the staged disk is not in RAM";
   else if(g_usb_online)why="the staged disk is on the panel's USB port";
-  else if(stat(("/sdcard"+own).c_str(),&st)!=0||(uint32_t)st.st_size!=g_img_bytes)why="it is not the staged disk's size";
+  else if(stat(("/sdcard"+pick).c_str(),&st)!=0||(uint32_t)st.st_size!=g_img_bytes)why="it is not the staged disk's size";
   else if(!(t=(uint8_t*)ps_malloc(g_img_bytes)))why="no PSRAM for it";
-  else { File f=SD_MMC.open(own.c_str(),FILE_READ); uint32_t got=0;
+  else { File f=SD_MMC.open(pick.c_str(),FILE_READ); uint32_t got=0;
     if(f){ while(got<g_img_bytes){ const int rd=f.read(t+got,(g_img_bytes-got)>16384?16384:(g_img_bytes-got)); if(rd<=0)break; got+=rd; } f.close(); }
     if(got!=g_img_bytes)why="SD read error"; }
   if(why){ if(t)free(t);
-    gLog("[saves] FluxDrive %s: its own save %s NOT sent (%s) - the staged %s goes instead\n",tag.c_str(),own.c_str(),why,staged.c_str());
+    gLog("[saves] FluxDrive %s: %s %s NOT sent (%s) - the staged %s goes instead\n",tag.c_str(),what,pick.c_str(),why,staged.c_str());
     return staged; }
   uint8_t*d=g_disk+DATA_LBA*512; uint8_t b[1024];
   for(uint32_t o=0;o<g_img_bytes;o+=sizeof b){ const uint32_t k=(g_img_bytes-o)<sizeof b?(g_img_bytes-o):sizeof b; memcpy(b,d+o,k); memcpy(d+o,t+o,k); memcpy(t+o,b,k); }
   g_fdKeep=t;
-  gLog("[saves] FluxDrive %s: sending its own save\n",tag.c_str());
-  return own;
+  gLog("[saves] FluxDrive %s: sending %s\n",tag.c_str(),what);
+  return pick;
 }
 // The staging as it was before fdStageFor swapped a FluxDrive's own save in (nothing when it did not).
 static void fdUnstage(){
@@ -6003,12 +6022,24 @@ static void fdRecordFling(const String&ip,uint32_t uid,const String&sent){
 // now - what its next fetch would have rebuilt from it anyway (svPatchCore from the base; an own save already there is
 // kept as its .bak, as fdPersistLan does) - and points at it. The table is written to the card. False = not done (logged):
 // nothing may be deleted then; what was done so far is consistent (an own save holding its base).
+// Fix round 1: the base becomes its own save only for a FluxDrive heard holding that very disk, or one whose state is not
+// known (not heard; STANDALONE keeps no roster) and that has no own save yet (fdPeerHolds, fdFreshRecordFate); any other
+// such record goes and that FluxDrive's own save stays as it is - another device's progress is never overwritten for a
+// record that is dead or may be.
 static bool fdFreshRecords(const String&gone){
-  bool changed=false, ok=true;
+  bool changed=false, ok=true; const uint32_t now=millis();
+  const bool fleet=g_wireless_mode&&g_link_home&&WiFi.status()==WL_CONNECTED;
   for(int i=0;i<g_pfRecN&&ok;){ FdSaveRecord&r=g_pfRecs[i];
     const String orig=r.orig, tag=r.tag, own=dongleSavPathFor(orig,tag);
-    const int fate=fdFreshRecordFate(r.sent,own.c_str(),gone.c_str());
-    if(fate==1){ gLog("[saves] START FRESH %s: FluxDrive %s's record of it goes with it\n",gone.c_str(),tag.c_str());
+    int holds=FD_HOLDS_UNKNOWN; bool ownThere=false;
+    if(fdPathSame(r.sent,gone.c_str())){   // only a record whose base goes needs its FluxDrive's state (and a card lookup)
+      const int k=fleet?pfPeerIdx(String(r.id)):-1;
+      if(k>=0){ const PfPeer&p=g_pfPeers[k]; holds=fdPeerHolds(fdHeard(now,p.seen,fdStaleMs(p.board.c_str(),PF_STALE_MS)),p.loaded,p.loadId,r.uid); }
+      ownThere=SD_MMC.exists(own); }
+    const int fate=fdFreshRecordFate(r.sent,own.c_str(),gone.c_str(),holds,ownThere);
+    if(fate==1){ gLog("[saves] START FRESH %s: FluxDrive %s's record of it goes%s\n",gone.c_str(),tag.c_str(),
+           fdPathSame(own.c_str(),gone.c_str())?" with it":holds==FD_HOLDS_OTHER?" (it holds another disk or none); its own save stays as it is":
+           " (not heard, and it has an own save); its own save stays as it is");
       for(int k=i+1;k<g_pfRecN;k++)g_pfRecs[k-1]=g_pfRecs[k]; g_pfRecN--; changed=true; continue; }
     if(fate==2){
       String bak; const bool had=SD_MMC.exists(own);
@@ -6021,7 +6052,8 @@ static bool fdFreshRecords(const String&gone){
         ok=false; break; }
       strlcpy(r.sent,own.c_str(),sizeof r.sent); changed=true;
       gLog("[saves] START FRESH %s: FluxDrive %s's game started from it - kept as its own save %s%s%s\n",gone.c_str(),tag.c_str(),own.c_str(),
-           had?"; the save it replaced is kept as ":"",had?bak.c_str():""); }
+           had?"; the save it replaced is kept as ":"",had?bak.c_str():"");
+      pfFreshClear(tag,orig); }   // it has an own save of that game now
     i++; }
   if(changed&&!pfRecordsWrite()){ gLog("[saves] START FRESH %s: the save records could not be written to the card\n",gone.c_str()); ok=false; }
   return ok;
@@ -6153,8 +6185,12 @@ static bool doLoadSelected(const String&adfPath,const String&freshId,bool*sent){
   // as a Hivemind fan-out does.
   if(fdOne>=0&&!fresh&&g_saves_mode!=0&&g_pfPeers[fdOne].tag.length()){
     const String fdTag=g_pfPeers[fdOne].tag, ds=dongleSavPathFor(adfPath,fdTag);
-    const String pick=fdFileToSend(1,true,true,fdTag.c_str(),SD_MMC.exists(ds),ds.c_str(),loadPath.c_str());
-    gLog("[saves] FluxDrive %s: %s\n",fdTag.c_str(),pick==ds?"sending its own save":"no own save yet");
+    // fd2 fix round 1: STARTED FRESH on this game (pfFreshHas) and no own save since: the original, not the cable save
+    const bool dsThere=SD_MMC.exists(ds), reset=pfFreshHas(fdTag,adfPath);
+    const String pick=fdFileToSend(1,true,true,fdTag.c_str(),dsThere,ds.c_str(),loadPath.c_str(),reset,adfPath.c_str());
+    const bool isOwn=dsThere&&pick==ds;
+    if(isOwn)pfFreshClear(fdTag,adfPath);   // it has an own save again: the mark goes
+    gLog("[saves] FluxDrive %s: %s\n",fdTag.c_str(),isOwn?"sending its own save":reset?"started fresh - sending the original":"no own save yet");
     loadPath=pick;
   }
   gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
@@ -6297,19 +6333,20 @@ static bool doLoadSelected(const String&adfPath,const String&freshId,bool*sent){
   drawStatusBar();drawListAndCover();gfx_flush();return true;
 }
 
-// fd2: START FRESH asks first, laid out as claimAskUI: the game, whose save (where: the FluxDrive's name; "" = the cable
-// save), what happens, and (swap) that the Amiga gets the original at once. No answer in 30 s = CANCEL. true = go ahead.
-static bool freshAskUI(const String&game,const String&where,bool swap){
+// fd2: START FRESH asks first, laid out as claimAskUI: the game, whose save goes (who: the FluxDrive's name, or "cable save"
+// - fix round 1: always named - and the file's name under it), what happens, and (swap) that the Amiga gets the original at
+// once. No answer in 30 s = CANCEL. true = go ahead.
+static bool freshAskUI(const String&game,const String&who,const String&fileName,bool swap){
   uint32_t r0=millis(); while(Touch_ReadFrame()&&millis()-r0<1500) delay(10);   // let go of the tap that opened it
   const String yes=T(L_START_FRESH), no=T(L_CANCEL);
   auto line=[&](const String&s,int y){ String t=s; while(t.length()>1&&gfx_textWidth(t)>VW-16)t.remove(t.length()-1);
     gfx_setCursor((VW-gfx_textWidth(t))/2,y); gfx_print(t); };
   gfx_fillScreen(COL_BG);
   gfx_setTextSize(2); gfx_setTextColor(COL_AMBER,COL_BG); line(yes+"?",VH/2-86);
-  gfx_setTextSize(1); gfx_setTextColor(COL_LIT,COL_BG); line(game,VH/2-58);
-  if(where.length()){ gfx_setTextColor(COL_DIM,COL_BG); line(where,VH/2-46); }
-  gfx_setTextColor(COL_LIT,COL_BG); line(T(L_FRESH_GONE),VH/2-26); line(T(L_FRESH_ORIG),VH/2-12);
-  if(swap){ gfx_setTextColor((uint16_t)0xE8C4,COL_BG); line(T(L_FRESH_SWAP),VH/2+8); }
+  gfx_setTextSize(1); gfx_setTextColor(COL_LIT,COL_BG); line(game,VH/2-62);
+  gfx_setTextColor(COL_DIM,COL_BG); line(who,VH/2-50); line(fileName,VH/2-38);
+  gfx_setTextColor(COL_LIT,COL_BG); line(T(L_FRESH_GONE),VH/2-22); line(T(L_FRESH_ORIG),VH/2-8);
+  if(swap){ gfx_setTextColor((uint16_t)0xE8C4,COL_BG); line(T(L_FRESH_SWAP),VH/2+12); }
   int bw=(VW-36)/2, by=VH-70, bh=44;
   uint16_t cT=(uint16_t)0x8000, cC=COL_BAR;
   gfx_fillRoundRect(12,by,bw,bh,8,cT); gfx_setTextColor(inkFor(cT),cT); gfx_setCursor(12+(bw-gfx_textWidth(yes))/2,by+18); gfx_print(yes);
@@ -6326,29 +6363,43 @@ static bool freshAskUI(const String&game,const String&where,bool swap){
   return go;
 }
 // fd2: START FRESH on the cover panel (spec section 6, the controller's call): the selected disk's save goes - freshSave:
-// the FluxDrive target's own save, else the cable save - with its entry in the save list, so the game starts from the
-// original again.
+// the FluxDrive target's own save, else the cable save; STANDALONE and fleet mode only - with its entry in the save list,
+// so the game starts from the original again.
+//  - Fix round 1: the tap deletes the save the key was drawn for (g_freshDrawn), or nothing: a target that came or went
+//    meanwhile (a Wi-Fi blip, a stale beacon) changes which save freshSave names. Checked at the tap and again after the
+//    confirm (which names it); changed = "The save changed - try again.", nothing done.
 //  - The FluxDrive target holds this very disk now (its record names this file and the beacon's uid is the record's,
 //    fdStartFreshResends): it gets the original at once - the Amiga sees a swap - BEFORE the save is deleted, with no
 //    fetch first (doLoadSelected with freshId, fdFetchFirstNeeded): the writes it holds belong to the save that goes, and
 //    FluxDrive discards them. If that send fails nothing is deleted ("the save is kept").
-//  - A FluxDrive record whose base is that file keeps it (fdFreshRecords) before it goes; if that cannot be done the file
-//    stays.
+//  - A FluxDrive record whose base is that file keeps it or goes (fdFreshRecords) before it goes; if that cannot be done
+//    the file stays.
 //  - This panel's own staging came from that save, or (STANDALONE) the Amiga on the cable has this disk in: it is unloaded
-//    first, its writes not on the card yet dropped (they belong to the save that goes), and in STANDALONE the original
-//    goes back in once the save is gone (the cable's Amiga sees the swap).
+//    first, its writes not on the card yet dropped (they belong to the save that goes); in STANDALONE the disk goes back in
+//    at once - the original once the save is gone, the save itself if it could not be deleted (fix round 1: the drive is
+//    never left empty).
+//  - Fix round 1: a FluxDrive's own save gone, that FluxDrive is marked as started fresh on this game (pfFreshMark): its
+//    next flings of it send the original, not the cable save, until it has an own save again.
 // A Game.sav.<tag>.bak.adf (an own save a rebuild replaced, fdPersistLan) is not touched.
 static void doStartFresh(){
-  const String file=selDiskFile(); int peer=-1; const String sav=freshSave(file,&peer);
-  if(!sav.length()){ drawFullUI(); gfx_flush(); return; }   // gone since the key was drawn (the target changed, a rescan): the key goes too
+  const String file=selDiskFile(), drawn=g_freshDrawn;
+  String sav,pid,who,tag; bool resend=false;
+  auto plan=[&](){ int peer=-1; sav=freshSave(file,&peer); pid=""; who=T(L_FRESH_CABLE); tag=""; resend=false;
+    if(peer>=0&&sav.length()){ const PfPeer&p=g_pfPeers[peer]; const FdSaveRecord*r=pfRecordFor(p.id);
+      pid=p.id; who=pfPeerLabel(p); tag=p.tag;
+      resend=r&&file.equalsIgnoreCase(String(r->orig))&&fdStartFreshResends(r,p.loadId,p.loaded); } };
+  auto changed=[&](const char*when){
+    gLog("[saves] START FRESH: the save changed %s (drawn for %s, now %s) - nothing deleted\n",when,drawn.length()?drawn.c_str():"none",sav.length()?sav.c_str():"none");
+    hwMsg(T(L_START_FRESH),T(L_FRESH_CHANGED),COL_AMBER,1800); drawFullUI(); gfx_flush(); };
+  plan();
+  if(!sav.length()||!fdPathSame(sav.c_str(),drawn.c_str())){ changed("since the key was drawn"); return; }
   String gn=g_games[g_sel].name; if(!gn.length())gn=basenameNoExt(filenameOnly(file));
-  String pid,where,tag; bool resend=false;
-  if(peer>=0){ const PfPeer&p=g_pfPeers[peer]; const FdSaveRecord*r=pfRecordFor(p.id);
-    pid=p.id; where=pfPeerLabel(p); tag=p.tag;
-    resend=r&&file.equalsIgnoreCase(String(r->orig))&&fdStartFreshResends(r,p.loadId,p.loaded); }
   const bool here=g_loaded&&g_loaded_path.equalsIgnoreCase(sav);                       // this panel's staging is that save
   const bool onCable=!g_wireless_mode&&g_loaded&&g_loaded_orig.equalsIgnoreCase(file);  // STANDALONE: the cable's Amiga has this disk in
-  if(!freshAskUI(gn,where,resend||onCable)){ gLog("[saves] START FRESH %s: cancelled\n",sav.c_str()); drawFullUI(); gfx_flush(); return; }
+  const bool swapped=resend;
+  if(!freshAskUI(gn,who,filenameOnly(sav),resend||onCable)){ gLog("[saves] START FRESH %s: cancelled\n",sav.c_str()); drawFullUI(); gfx_flush(); return; }
+  plan();   // up to 30 s later: still the save the confirm named, still the same swap?
+  if(!sav.length()||!fdPathSame(sav.c_str(),drawn.c_str())||resend!=swapped){ changed("while the confirm was up"); return; }
   if(resend){ bool sent=false; doLoadSelected(file,pid,&sent);
     if(!sent){ gLog("[saves] START FRESH %s: the original did not reach FluxDrive %s - the save is kept\n",sav.c_str(),tag.c_str());
       hwMsg(T(L_FAILED),T(L_FRESH_KEPT),COL_AMBER,2200); drawFullUI(); gfx_flush(); return; } }
@@ -6359,7 +6410,8 @@ static void doStartFresh(){
   const bool gone=!SD_MMC.exists(sav);
   if(gone)savSetRemove(sav);
   gLog("[saves] START FRESH %s: %s%s%s\n",sav.c_str(),gone?"deleted":"could NOT be deleted",resend?" - the original went to FluxDrive ":"",resend?tag.c_str():"");
-  if(gone&&onCable&&!resend)doLoadSelected(file);   // STANDALONE: the original back in, now that its save is gone
+  if(gone&&tag.length())pfFreshMark(tag,file);   // its own save gone: that FluxDrive gets the original from now on
+  if(onCable)doLoadSelected(file);   // STANDALONE: back in at once - the original, or the save that could not be deleted
   hwMsg(gone?T(L_FRESH_DONE):T(L_FAILED),gone?gn.c_str():filenameOnly(sav).c_str(),gone?COL_GREEN:COL_AMBER,gone?1500:2500);
   drawFullUI(); gfx_flush();
 }
@@ -8583,6 +8635,8 @@ void setup(){
     loadKnownNets();            // #clubday: remembered WiFi networks (NETWORKS.TXT)
     pfRecordsLoad();            // LAN saves: which disk this panel last sent each FluxDrive (/GTI/fdsaves.txt)
     gLog("[saves] %d FluxDrive save record(s) on the card\n",g_pfRecN);
+    pfFreshLoad();              // fd2 fix round 1: FluxDrives started fresh on a game (/GTI/fdfresh.txt)
+    if(g_pfFresh.n) gLog("[saves] %d FluxDrive game(s) started fresh: they get the original until they have an own save\n",g_pfFresh.n);
     g_sdg.on=g_sdguard_cfg; sdPullups();           // lab14g: SDGUARD= / SDPULLUP= from CONFIG.TXT
     if(g_sd_freq!=20000){           // 5.3.5: SDSPEED=40 opt-in (lab14g: or 10) — remount, fall back to 20 if it won't take
       sdGuardRemove();
