@@ -915,8 +915,11 @@ bool   espnowDongleHasKey(){ return _xiao_key.length() > 0; }
 // the escape + 0x01, the 14-byte 'SV1' header, the map, the sectors it marks, the CRC32. persist() runs before the ack;
 // the ack is 0x01 only when it returned true, 0x00 on a CRC mismatch, nothing on a short read. The caller connects and
 // stops the client: espnowFetchSave over the dongle's own access point, the panel's LAN fetch (pfFetchSave in the sketch)
-// over home Wi-Fi. True = persisted and acked.
-bool saveExchange(WiFiClient& client, SavePersistCb persist) {
+// over home Wi-Fi. True = persisted and acked. replyMs: how long the header, the map and the CRC may keep the panel
+// waiting, sectorsMs the sectors (both counted from the last byte that came); espnowFetchSave uses the defaults, 5 s and
+// 30 s (espnow_server.h), the panel's fetch before a swap a FluxDrive's busy wait (it holds every reply byte while the
+// Amiga's motor runs).
+bool saveExchange(WiFiClient& client, SavePersistCb persist, uint32_t replyMs, uint32_t sectorsMs) {
   if (!persist) return false;
   bool okAll = false;
   uint8_t* mapBuf = nullptr; uint8_t* packed = nullptr;
@@ -924,13 +927,13 @@ bool saveExchange(WiFiClient& client, SavePersistCb persist) {
     uint8_t esc[5] = {0xFF,0xFF,0xFF,0xFF, 0x01};   // command escape + GET_SAVE
     client.write(esc, 5);
     uint8_t hdr[14];
-    if (readFull(client, hdr, 14, 5000) && hdr[0]=='S' && hdr[1]=='V' && hdr[2]=='1') {
+    if (readFull(client, hdr, 14, replyMs) && hdr[0]=='S' && hdr[1]=='V' && hdr[2]=='1') {
       uint32_t loadId  = (uint32_t)hdr[4] | ((uint32_t)hdr[5]<<8) | ((uint32_t)hdr[6]<<16) | ((uint32_t)hdr[7]<<24);
       uint32_t imgSize = (uint32_t)hdr[8] | ((uint32_t)hdr[9]<<8) | ((uint32_t)hdr[10]<<16) | ((uint32_t)hdr[11]<<24);
       uint16_t mapLen  = (uint16_t)hdr[12] | ((uint16_t)hdr[13]<<8);
       if (mapLen > 0 && mapLen <= 256) {
         mapBuf = (uint8_t*)malloc(mapLen);
-        if (mapBuf && readFull(client, mapBuf, mapLen, 5000)) {
+        if (mapBuf && readFull(client, mapBuf, mapLen, replyMs)) {
           uint32_t nSec = 0;
           for (uint32_t i = 0; i < (uint32_t)mapLen*8; i++)
             if ((mapBuf[i>>3]>>(i&7))&1) nSec++;
@@ -940,10 +943,10 @@ bool saveExchange(WiFiClient& client, SavePersistCb persist) {
           if (nSec > 0) {
             packed = (uint8_t*)ps_malloc(nSec*512);
             if (!packed) packed = (uint8_t*)malloc(nSec*512);
-            dataOk = packed && readFull(client, packed, nSec*512, 30000);
+            dataOk = packed && readFull(client, packed, nSec*512, sectorsMs);
           }
           uint8_t crcb[4];
-          if (dataOk && readFull(client, crcb, 4, 5000)) {
+          if (dataOk && readFull(client, crcb, 4, replyMs)) {
             uint32_t crcRx = (uint32_t)crcb[0] | ((uint32_t)crcb[1]<<8) | ((uint32_t)crcb[2]<<16) | ((uint32_t)crcb[3]<<24);
             uint32_t crc = crc32sw(0, mapBuf, mapLen);
             if (nSec > 0) crc = crc32sw(crc, packed, nSec*512);

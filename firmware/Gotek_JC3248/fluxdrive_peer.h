@@ -379,3 +379,20 @@ inline bool fdRecordSet(FdSaveRecord& r, const char* id, uint32_t uid, const cha
 inline bool fdShouldFetch(uint16_t dirty, uint32_t beacon_uid, const FdSaveRecord* rec) {
   return dirty > 0 && rec != nullptr && beacon_uid != 0 && rec->uid == beacon_uid;
 }
+// Before a swap (another disk flung to it, or an eject), fetch? Whenever the disk in it is the one this panel sent it: it
+// holds one (the beacon's "loaded"; an ejected disk's sectors cannot be fetched, though FluxDrive keeps its uid) and its
+// uid is the record's. No dirty count: that comes only from a beacon, FluxDrive sends none while the Amiga's motor runs,
+// and the panel zeroes it after its own fling, so writes made since would be missed. An empty fetch is one round trip.
+inline bool fdFetchBeforeSwap(bool loaded, uint32_t beacon_uid, const FdSaveRecord* rec) {
+  return loaded && rec != nullptr && beacon_uid != 0 && rec->uid == beacon_uid;
+}
+
+// Which file a fling sends to a target: `own` (its own save, Game.sav.<tag>.adf) when the target is a FluxDrive and the
+// only one, saves are on, it has a save tag (4 upper-case hex digits) and that file exists; else `staged`, the file staged
+// here (the cable save or the image). Several targets get the staged file, as a Hivemind fan-out does.
+inline const char* fdFileToSend(int targets, bool is_fd, bool saves_on, const char* tag, bool own_exists, const char* own,
+                                const char* staged) {
+  const bool tagOk = tag != nullptr && strlen(tag) == 4 && fdRecUpperHex(tag[0]) && fdRecUpperHex(tag[1]) &&
+                     fdRecUpperHex(tag[2]) && fdRecUpperHex(tag[3]);
+  return (targets == 1 && is_fd && saves_on && tagOk && own_exists && own != nullptr && own[0]) ? own : staged;
+}

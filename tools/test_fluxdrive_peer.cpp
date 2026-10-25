@@ -634,6 +634,45 @@ static void test_fd_should_fetch_needs_dirty_record_and_same_uid() {
   CHECK(!fdShouldFetch(5, 0, &z));                                     // an unknown uid matches nothing, not even "none"
 }
 
+// Before a swap (another disk flung to it, an eject) the panel fetches whenever the disk in it is the one this panel
+// sent, whatever the dirty count says: that count comes only from a beacon, FluxDrive sends none while the Amiga's motor
+// runs, and the panel zeroes it after its own fling. An empty fetch costs one round trip.
+static void test_fd_fetch_before_swap_needs_a_matching_record_not_a_dirty_count() {
+  const FdSaveRecord r = fdRec("A1B2C3D4E5F6", 42, "/ADF/G.adf", "/ADF/G.adf", "80FE");
+  CHECK(fdFetchBeforeSwap(true, 42, &r));                              // no dirty count asked at all
+  CHECK(!fdFetchBeforeSwap(true, 43, &r));                             // another disk in it now
+  CHECK(!fdFetchBeforeSwap(true, 0, &r));                              // no uid known
+  CHECK(!fdFetchBeforeSwap(true, 42, nullptr));                        // this panel never sent it a disk
+  CHECK(!fdFetchBeforeSwap(false, 42, &r));                            // ejected: FluxDrive keeps the uid, but an ejected
+                                                                       // disk's sectors cannot be fetched
+  FdSaveRecord z = r; z.uid = 0;
+  CHECK(!fdFetchBeforeSwap(true, 0, &z));
+}
+
+// Which file a fling sends to a target: a FluxDrive that is the only target gets its own save (Game.sav.<tag>.adf) when
+// saves are on, it has a tag and that file exists; everything else gets the file staged here (the cable save or the
+// image). Several targets get the staged file, as a Hivemind fan-out does.
+static void test_fd_a_single_fluxdrive_target_gets_its_own_save() {
+  const char* own = "/ADF/G.sav.80FE.adf";
+  const char* staged = "/ADF/G.adf";
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80FE", true, own, staged), own) == 0);
+  CHECK(std::strcmp(fdFileToSend(2, true, true, "80FE", true, own, staged), staged) == 0);     // several targets
+  CHECK(std::strcmp(fdFileToSend(0, true, true, "80FE", true, own, staged), staged) == 0);
+  CHECK(std::strcmp(fdFileToSend(1, false, true, "80FE", true, own, staged), staged) == 0);    // a Webby
+  CHECK(std::strcmp(fdFileToSend(1, true, false, "80FE", true, own, staged), staged) == 0);    // SAVES=OFF
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "", true, own, staged), staged) == 0);         // no tag in its beacon
+  CHECK(std::strcmp(fdFileToSend(1, true, true, nullptr, true, own, staged), staged) == 0);
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80F", true, own, staged), staged) == 0);      // not a tag
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80FE0", true, own, staged), staged) == 0);
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "8GFE", true, own, staged), staged) == 0);
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80FG", true, own, staged), staged) == 0);
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80fe", true, own, staged), staged) == 0);     // upper-case, as save_tag
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80FE", false, own, staged), staged) == 0);    // no own save yet
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80FE", true, "", staged), staged) == 0);      // no name for it
+  CHECK(std::strcmp(fdFileToSend(1, true, true, "80FE", true, nullptr, staged), staged) == 0);
+  CHECK(fdFileToSend(1, true, true, "80FE", false, own, nullptr) == nullptr);                  // nothing staged: nothing
+}
+
 int main() {
   test_fluxdrive_is_told_apart_by_its_beacon_board();
   test_only_a_dd_adf_goes_to_a_fluxdrive();
@@ -683,6 +722,8 @@ int main() {
   test_fd_record_rejects_garbage();
   test_fd_record_is_made_whole_or_not_at_all();
   test_fd_should_fetch_needs_dirty_record_and_same_uid();
+  test_fd_fetch_before_swap_needs_a_matching_record_not_a_dirty_count();
+  test_fd_a_single_fluxdrive_target_gets_its_own_save();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }

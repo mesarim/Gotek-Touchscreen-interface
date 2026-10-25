@@ -832,9 +832,12 @@ static bool pfRecordPut(const FdSaveRecord &r) {
   return pfRecordsWrite();
 }
 // In the sketch, next to the ESP-NOW save fetch: before a FluxDrive's disk goes (another disk, an eject) its unsaved
-// writes are fetched; after a single-target fling to a FluxDrive its record is kept (see there).
-static bool fdFetchFirst(const String &ip, bool ui);
-static void fdRecordFling(const String &ip, uint32_t uid);
+// writes are fetched (1 fetched, 0 nothing to fetch, -1 failed); a single-target fling to a FluxDrive sends its own save
+// (fdStageFor / fdUnstage around the push) and keeps its record (see there).
+static int    fdFetchFirst(const String &ip, bool ui);
+static String fdStageFor(const String &ip, int targets);
+static void   fdUnstage();
+static void   fdRecordFling(const String &ip, uint32_t uid, const String &sent);
 
 // Release the discovery socket + roster. Called from applyRadioMode() on a live MODE switch,
 // so the panel does not keep a UDP listener alive in a mode that has no LAN.
@@ -867,19 +870,23 @@ static void pfWorker() {
   if (g_pfCmdIp.length()) {
     const String ip = g_pfCmdIp; g_pfCmdIp = ""; const uint8_t cmd = g_pfCmd; g_pfCmd = 0;
     g_pfBusy = true; String err;
-    fdFetchFirst(ip, false);   // the web page's commands are ejects (3, 4): a FluxDrive's unsaved writes go to the card first
+    // The web page's commands are ejects (3, 4): a FluxDrive's unsaved writes go to the card first. If that failed the
+    // eject still goes, and the result says so (the page has nobody to ask).
+    const bool fetched = fdFetchFirst(ip, false) >= 0;
     const bool ok = pfSendCommand(ip, pfPeerTcp(ip), cmd, err);
-    g_pfLastTarget = ip; g_pfLastResult = ok ? "ok" : err; g_pfBusy = false;
+    g_pfLastTarget = ip; g_pfLastResult = !ok ? err : fetched ? String("ok") : String("saves not fetched - ejected anyway"); g_pfBusy = false;
   }
   if (g_pfSendIp.length()) {
     const String ip = g_pfSendIp; g_pfSendIp = ""; const uint16_t tp = g_pfSendTcp;
     g_pfBusy = true; String err;
-    fdFetchFirst(ip, false);   // a FluxDrive's unsaved writes go to the card before the next disk replaces them
+    const bool fetched = fdFetchFirst(ip, false) >= 0;   // a FluxDrive's unsaved writes go to the card before the next disk replaces them
+    const String sent = fdStageFor(ip, 1);              // one target: a FluxDrive gets its own save, for this push
     const String nm = g_loaded_display.length() ? g_loaded_display : g_loaded_name;
     if (nm.length()) { String nerr; pfSendName(ip, tp, nm, nerr); }   // #24: name-on-fling, best-effort — old dongles ignore the escape
     uint32_t uid = 0;
     const bool ok = pfSendDisk(ip, tp, err, &uid);
-    if (ok) fdRecordFling(ip, uid);   // one target: a FluxDrive's record of the disk it holds now
-    g_pfLastTarget = ip; g_pfLastResult = ok ? "ok" : err; g_pfBusy = false;
+    fdUnstage();                                        // the staging as it was
+    if (ok) fdRecordFling(ip, uid, sent);               // a FluxDrive's record of the disk it holds now
+    g_pfLastTarget = ip; g_pfLastResult = !ok ? err : fetched ? String("ok") : String("saves not fetched - sent anyway"); g_pfBusy = false;
   }
 }

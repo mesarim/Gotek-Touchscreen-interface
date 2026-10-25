@@ -72,8 +72,10 @@ typedef bool (*SavePersistCb)(uint32_t load_id, uint32_t img_size,
                               const uint8_t* packed, uint32_t nSectors);
 bool espnowFetchSave(SavePersistCb persist);
 // The GET_SAVE exchange itself, on a connection the caller opened (and stops): espnowFetchSave over the dongle's own
-// access point, and the LAN fetch from a FluxDrive over home Wi-Fi. Same bytes, same persist-before-ack rule.
-bool saveExchange(WiFiClient& client, SavePersistCb persist);
+// access point, and the LAN fetch from a FluxDrive over home Wi-Fi. Same bytes, same persist-before-ack rule. The waits
+// (from the last byte that came): replyMs for the header, the map and the CRC, sectorsMs for the sectors; espnowFetchSave
+// keeps 5 s and 30 s, the LAN fetch before a swap waits as long as a push would for a FluxDrive the Amiga holds.
+bool saveExchange(WiFiClient& client, SavePersistCb persist, uint32_t replyMs = 5000, uint32_t sectorsMs = 30000);
 
 // API
 void   espnowBegin();
