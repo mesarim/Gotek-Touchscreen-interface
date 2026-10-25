@@ -1,6 +1,7 @@
 // espnow_server.h — ESP-NOW pairing + WiFi TCP disk transfer, Waveshare side
 #pragma once
 #include <Arduino.h>
+#include <WiFiClient.h>   // saveExchange takes the open connection
 
 // ESP-NOW packet types (control only — no data transfer)
 #define PKT_PAIR_HELLO   0x05  // Waveshare → broadcast: I exist
@@ -70,6 +71,9 @@ typedef bool (*SavePersistCb)(uint32_t load_id, uint32_t img_size,
                               const uint8_t* map, uint16_t mapLen,
                               const uint8_t* packed, uint32_t nSectors);
 bool espnowFetchSave(SavePersistCb persist);
+// The GET_SAVE exchange itself, on a connection the caller opened (and stops): espnowFetchSave over the dongle's own
+// access point, and the LAN fetch from a FluxDrive over home Wi-Fi. Same bytes, same persist-before-ack rule.
+bool saveExchange(WiFiClient& client, SavePersistCb persist);
 
 // API
 void   espnowBegin();

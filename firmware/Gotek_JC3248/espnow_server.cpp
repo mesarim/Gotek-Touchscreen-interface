@@ -524,7 +524,8 @@ static bool tcpClaim(const char* ip){          // true = go ahead and send
     c.write(esc, 5); c.write(my, 6); c.write(&fl, 1); c.write(&L, 1); c.write((const uint8_t*)nm.c_str(), L);
     uint32_t t0 = millis(); while (!c.available() && millis()-t0 < 1500) delay(5);
     int r = c.available() ? c.read() : -1;
-    // A FluxDrive writes no disk, so it has no saves to lose: its 0x02 is "in use", the same as 0x03.
+    // A board without saves to lose would be "in use" (0x03) for its 0x02. Every board has them since FluxDrive v2
+    // (fdHasSaves), and a FluxDrive never answers 0x02 (spec section 6), so this no longer changes anything.
     if (r == 0x02 && !fdHasSaves(fdBoardForKind(g_espnow_dongle_kind))) r = 0x03;
     if (r == 0x05) { c.stop(); delay(20); g_espnow_lock_refused = true; _claimCancelled = true; Serial.println("[TCP] dongle: not an owner (0x05)"); return false; }   // lock-a
     if (r != 0x02 && r != 0x03) { c.stop(); delay(20); return true; }
@@ -910,32 +911,16 @@ int espnowDongleRemoveOwner(const uint8_t* mac){ return dongleCmd(0x0E, mac, 6, 
 String espnowDongleSsid(){ return _xiao_ssid; }
 bool   espnowDongleHasKey(){ return _xiao_key.length() > 0; }
 
-bool espnowFetchSave(SavePersistCb persist) {
-  if (!g_espnow_paired || !persist) return false;
-  String ip = _xiao_ip.length() ? _xiao_ip : String(DONGLE_AP_IP);
-  Serial.printf("[SAVE] Fetching dirty sectors from %s\n", ip.c_str());
-
-  ESP_NOW.end();
-  delay(100);
-  WiFi.mode(WIFI_STA);
-  delay(100);
-  WiFi.persistent(false);
-  WiFi.setAutoReconnect(false);
-  WiFi.disconnect(false, true);
-  delay(200);
-  { String ss = dongleSsid(_xiao_mac); WiFi.begin(ss.c_str(), donglePass(_xiao_mac), ESPNOW_CHANNEL, (uint8_t*)_xiao_mac); }   // lock-a: own password   // lab14s: real Wi-Fi name
-  uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) delay(200);
-  if (WiFi.status() != WL_CONNECTED) { dongleSsidForget(); Serial.println("[SAVE] WiFi join failed"); restoreEspNow(); return false; }
-
-  WiFiClient client;
+// GET_SAVE on a connection that is already open (Webby's save protocol, byte for byte; FluxDrive serves the same):
+// the escape + 0x01, the 14-byte 'SV1' header, the map, the sectors it marks, the CRC32. persist() runs before the ack;
+// the ack is 0x01 only when it returned true, 0x00 on a CRC mismatch, nothing on a short read. The caller connects and
+// stops the client: espnowFetchSave over the dongle's own access point, the panel's LAN fetch (pfFetchSave in the sketch)
+// over home Wi-Fi. True = persisted and acked.
+bool saveExchange(WiFiClient& client, SavePersistCb persist) {
+  if (!persist) return false;
   bool okAll = false;
   uint8_t* mapBuf = nullptr; uint8_t* packed = nullptr;
-  if (client.connect(ip.c_str(), DONGLE_TCP_PORT)) {
-    // No AUTH preamble, on purpose: this path joins the dongle's own AP, and a Webby dongle only
-    // gates on the shared LAN (wtokGateActive = locked && g_webmode==1, where it has no AP).
-    // Adding AUTH here would break the save of a dongle another screen has claimed. A future
-    // LAN save path (such as PR #27's GotekHome) is gated and must send AUTH first, as panel_fleet.h does.
+  {
     uint8_t esc[5] = {0xFF,0xFF,0xFF,0xFF, 0x01};   // command escape + GET_SAVE
     client.write(esc, 5);
     uint8_t hdr[14];
@@ -979,10 +964,40 @@ bool espnowFetchSave(SavePersistCb persist) {
         }
       }
     } else Serial.println("[SAVE] bad header");
-    client.stop();
-  } else Serial.println("[SAVE] TCP connect failed");
+  }
   if (mapBuf) free(mapBuf);
   if (packed) free(packed);
+  return okAll;
+}
+
+bool espnowFetchSave(SavePersistCb persist) {
+  if (!g_espnow_paired || !persist) return false;
+  String ip = _xiao_ip.length() ? _xiao_ip : String(DONGLE_AP_IP);
+  Serial.printf("[SAVE] Fetching dirty sectors from %s\n", ip.c_str());
+
+  ESP_NOW.end();
+  delay(100);
+  WiFi.mode(WIFI_STA);
+  delay(100);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, true);
+  delay(200);
+  { String ss = dongleSsid(_xiao_mac); WiFi.begin(ss.c_str(), donglePass(_xiao_mac), ESPNOW_CHANNEL, (uint8_t*)_xiao_mac); }   // lock-a: own password   // lab14s: real Wi-Fi name
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) delay(200);
+  if (WiFi.status() != WL_CONNECTED) { dongleSsidForget(); Serial.println("[SAVE] WiFi join failed"); restoreEspNow(); return false; }
+
+  WiFiClient client;
+  bool okAll = false;
+  if (client.connect(ip.c_str(), DONGLE_TCP_PORT)) {
+    // No AUTH preamble, on purpose: this path joins the dongle's own AP, and a Webby dongle only
+    // gates on the shared LAN (wtokGateActive = locked && g_webmode==1, where it has no AP).
+    // Adding AUTH here would break the save of a dongle another screen has claimed. A future
+    // LAN save path (such as PR #27's GotekHome) is gated and must send AUTH first, as panel_fleet.h does.
+    okAll = saveExchange(client, persist);
+    client.stop();
+  } else Serial.println("[SAVE] TCP connect failed");
 
   restoreEspNow();
   Serial.println("[NOW] ESP-NOW restored after save fetch");

@@ -68,8 +68,9 @@ static void test_the_busy_text() {
   CHECK(std::strcmp(fdBusyText(), "FluxDrive busy - the Amiga is reading") == 0);
 }
 
-static void test_a_fluxdrive_has_no_saves() {
-  CHECK(!fdHasSaves("fluxdrive"));
+// v2 (writing): a FluxDrive takes writes and serves GET_SAVE as a Webby does, so it has saves like a dongle.
+static void test_fd_has_saves_fluxdrive_true_webby_unchanged() {
+  CHECK(fdHasSaves("fluxdrive"));
   CHECK(fdHasSaves("supermini"));
   CHECK(fdHasSaves("zero"));
   CHECK(fdHasSaves("xiao"));
@@ -92,7 +93,7 @@ static void test_the_board_kind_from_the_pairing_reply() {
   for (int k = 0; k < 256; k++)
     if (k != 4) CHECK(!fdIsFluxDrive(fdBoardForKind((uint8_t)k)));
   CHECK(fdHasSaves(fdBoardForKind(1)));
-  CHECK(!fdHasSaves(fdBoardForKind(4)));
+  CHECK(fdHasSaves(fdBoardForKind(4)));
 }
 
 // The home-Wi-Fi transport looks the paired device up as <prefix>-<mac4>.local.
@@ -483,6 +484,156 @@ static void test_the_send_buffer_switch_is_read_from_config_txt() {
   CHECK(fdCfgSwitch("FD_SNDBUF=OFF", nullptr) == -1);
 }
 
+// ---- LAN saves: the record of what a single-target fling put in a FluxDrive (one line of /GTI/fdsaves.txt) ----------
+
+static FdSaveRecord fdRec(const char* id, uint32_t uid, const char* sent, const char* orig, const char* tag) {
+  FdSaveRecord r;
+  std::memset(&r, 0, sizeof r);
+  std::strcpy(r.id, id); r.uid = uid; std::strcpy(r.sent, sent); std::strcpy(r.orig, orig); std::strcpy(r.tag, tag);
+  return r;
+}
+static bool fdRecSame(const FdSaveRecord& a, const FdSaveRecord& b) {
+  return std::strcmp(a.id, b.id) == 0 && a.uid == b.uid && std::strcmp(a.sent, b.sent) == 0 &&
+         std::strcmp(a.orig, b.orig) == 0 && std::strcmp(a.tag, b.tag) == 0;
+}
+// A path of exactly `len` characters: "/ADF/" then 'x's, ".adf" at the end.
+static void fdLongPath(char* out, size_t len) {
+  std::memset(out, 'x', len); std::memcpy(out, "/ADF/", 5); std::memcpy(out + len - 4, ".adf", 4); out[len] = 0;
+}
+
+static void test_fd_record_round_trip() {
+  const FdSaveRecord a = fdRec("A1B2C3D4E5F6", 3735928559u, "/ADF/Lemmings/Lemmings.sav.80FE.adf", "/ADF/Lemmings/Lemmings.adf", "80FE");
+  char line[400], la[400];
+  const int n = fdRecordFormat(a, line, sizeof line);
+  CHECK(n > 0 && (size_t)n == std::strlen(line));
+  CHECK(std::strcmp(line, "A1B2C3D4E5F6\t3735928559\t80FE\t/ADF/Lemmings/Lemmings.sav.80FE.adf\t/ADF/Lemmings/Lemmings.adf") == 0);
+  std::strcpy(la, line);
+  FdSaveRecord b;
+  std::memset(&b, 0x5A, sizeof b);
+  CHECK(fdRecordParse(line, b) && fdRecSame(a, b));
+  char lf[420];
+  std::snprintf(lf, sizeof lf, "%s\n", line);                          // as read from the card: the newline does not count
+  CHECK(fdRecordParse(lf, b) && fdRecSame(a, b));
+  std::snprintf(lf, sizeof lf, "%s\r\n", line);                        // nor a CR an editor on a PC put before it
+  CHECK(fdRecordParse(lf, b) && fdRecSame(a, b));
+
+  // blanks, brackets, dots and UTF-8 in a name; the highest uid; the longest paths that fit (159 characters)
+  const FdSaveRecord c = fdRec("0123456789AB", 0xFFFFFFFFu, "/ADF/Monkey Island (1990)(Lucasfilm)[cr SKR]/Disk 1 of 4.adf",
+                               "/ADF/Caf\xC3\xA9 Ol\xC3\xA9 v1.2.adf", "00FF");
+  CHECK(fdRecordFormat(c, line, sizeof line) > 0 && fdRecordParse(line, b) && fdRecSame(c, b));
+  char p159[160]; fdLongPath(p159, 159);
+  const FdSaveRecord d = fdRec("FFFFFFFFFFFF", 1, p159, p159, "ABCD");
+  CHECK(fdRecordFormat(d, line, sizeof line) > 0 && fdRecordParse(line, b) && fdRecSame(d, b));
+
+  // the output buffer: exactly enough, one byte short, none
+  char exact[200];
+  CHECK(fdRecordFormat(a, exact, (size_t)n + 1) == n && std::strcmp(exact, la) == 0);
+  CHECK(fdRecordFormat(a, exact, (size_t)n) < 0 && exact[0] == 0);    // cut: nothing usable is left in it
+  CHECK(fdRecordFormat(a, nullptr, 0) < 0);
+}
+
+static void test_fd_record_rejects_garbage() {
+  const FdSaveRecord good = fdRec("A1B2C3D4E5F6", 42, "/ADF/G.adf", "/ADF/G.adf", "80FE");
+  FdSaveRecord r = good;
+  CHECK(fdRecordParse("A1B2C3D4E5F6\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf", r) && fdRecSame(r, good));   // the reference line
+  const char* bad[] = {
+    "",
+    "\n",
+    "# FluxDrive save records",
+    "A1B2C3D4E5F6\t42\t80FE\t/ADF/G.adf",                              // a field missing
+    "A1B2C3D4E5F6\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf\tmore",            // one too many
+    "A1B2C3D4E5F6 42 80FE /ADF/G.adf /ADF/G.adf",                      // blanks are not the separator
+    "\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf",                              // no id
+    "A1B2C3D4E5F60\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf",                 // an id longer than a MAC
+    "A1B2C3D4E5FG\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf",                  // not hex
+    "a1b2c3d4e5f6\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf",                  // a beacon id is upper-case
+    "A1B2C3D4E5F6\t0\t80FE\t/ADF/G.adf\t/ADF/G.adf",                   // uid 0: no disk, nothing to match
+    "A1B2C3D4E5F6\t\t80FE\t/ADF/G.adf\t/ADF/G.adf",                    // no uid
+    "A1B2C3D4E5F6\t4294967296\t80FE\t/ADF/G.adf\t/ADF/G.adf",          // past 32 bits
+    "A1B2C3D4E5F6\t4294967338\t80FE\t/ADF/G.adf\t/ADF/G.adf",          // 2^32 + 42: not uid 42
+    "A1B2C3D4E5F6\t18446744073709551658\t80FE\t/ADF/G.adf\t/ADF/G.adf",   // 2^64 + 42: not uid 42 either
+    "A1B2C3D4E5F6\t99999999999\t80FE\t/ADF/G.adf\t/ADF/G.adf",
+    "A1B2C3D4E5F6\t-1\t80FE\t/ADF/G.adf\t/ADF/G.adf",
+    "A1B2C3D4E5F6\t+42\t80FE\t/ADF/G.adf\t/ADF/G.adf",
+    "A1B2C3D4E5F6\t42x\t80FE\t/ADF/G.adf\t/ADF/G.adf",
+    "A1B2C3D4E5F6\t 42\t80FE\t/ADF/G.adf\t/ADF/G.adf",
+    "A1B2C3D4E5F6\t42\t80F\t/ADF/G.adf\t/ADF/G.adf",                   // a tag is 4 hex digits
+    "A1B2C3D4E5F6\t42\t80FE0\t/ADF/G.adf\t/ADF/G.adf",
+    "A1B2C3D4E5F6\t42\t80GE\t/ADF/G.adf\t/ADF/G.adf",
+    "A1B2C3D4E5F6\t42\t80fe\t/ADF/G.adf\t/ADF/G.adf",                  // upper-case, as FluxDrive's save_tag
+    "A1B2C3D4E5F6\t42\t\t/ADF/G.adf\t/ADF/G.adf",
+    "A1B2C3D4E5F6\t42\t80FE\t\t/ADF/G.adf",                            // no file sent
+    "A1B2C3D4E5F6\t42\t80FE\t/ADF/G.adf\t",                            // no original
+    "A1B2C3D4E5F6\t42\t80FE\tADF/G.adf\t/ADF/G.adf",                   // a path from the card's root
+    "A1B2C3D4E5F6\t42\t80FE\t/ADF/G.adf\tG.adf",
+    "A1B2C3D4E5F6\t42\t80FE\t/ADF/G\x01.adf\t/ADF/G.adf",              // a control character
+    "A1B2C3D4E5F6\t42\t80FE\t/ADF/G.adf\t/ADF/G\x7F.adf",
+  };
+  for (const char* line : bad) {
+    FdSaveRecord keep = good;
+    const bool parsed = fdRecordParse(line, keep);
+    CHECK(!parsed && fdRecSame(keep, good));                           // refused, and the record left as it was
+    if (parsed) std::printf("  accepted: \"%s\"\n", line);
+  }
+  CHECK(!fdRecordParse(nullptr, r) && fdRecSame(r, good));
+  char p160[161]; fdLongPath(p160, 160);                               // one character more than the record holds
+  char line[480];
+  std::snprintf(line, sizeof line, "A1B2C3D4E5F6\t42\t80FE\t%s\t/ADF/G.adf", p160);
+  CHECK(!fdRecordParse(line, r) && fdRecSame(r, good));
+  std::snprintf(line, sizeof line, "A1B2C3D4E5F6\t42\t80FE\t/ADF/G.adf\t%s", p160);
+  CHECK(!fdRecordParse(line, r) && fdRecSame(r, good));
+
+  // the other way: a record that is not one is never written
+  char out[400];
+  FdSaveRecord x = good; x.uid = 0;                         CHECK(fdRecordFormat(x, out, sizeof out) < 0 && out[0] == 0);
+  x = good; std::strcpy(x.tag, "80F");                      CHECK(fdRecordFormat(x, out, sizeof out) < 0);
+  x = good; std::strcpy(x.id, "");                          CHECK(fdRecordFormat(x, out, sizeof out) < 0);
+  x = good; std::strcpy(x.sent, "");                        CHECK(fdRecordFormat(x, out, sizeof out) < 0);
+  x = good; std::strcpy(x.orig, "ADF/G.adf");               CHECK(fdRecordFormat(x, out, sizeof out) < 0);
+  x = good; std::strcpy(x.sent, "/ADF/G\t2.adf");           CHECK(fdRecordFormat(x, out, sizeof out) < 0);   // would split the line
+  x = good; std::strcpy(x.orig, "/ADF/G\n2.adf");           CHECK(fdRecordFormat(x, out, sizeof out) < 0);   // would make two lines
+  x = good; std::memset(x.id, 'A', sizeof x.id);            CHECK(fdRecordFormat(x, out, sizeof out) < 0);   // no end to it
+  x = good; std::memset(x.sent, 'x', sizeof x.sent); x.sent[0] = '/';
+                                                            CHECK(fdRecordFormat(x, out, sizeof out) < 0);
+}
+
+// A record is made from what the fling knew, whole or not at all: a cut path would name another file.
+static void test_fd_record_is_made_whole_or_not_at_all() {
+  const FdSaveRecord good = fdRec("A1B2C3D4E5F6", 42, "/ADF/G.adf", "/ADF/G.adf", "80FE");
+  FdSaveRecord r = good;
+  CHECK(fdRecordSet(r, "0123456789AB", 7, "/ADF/H.sav.00FF.adf", "/ADF/H.adf", "00FF"));
+  CHECK(fdRecSame(r, fdRec("0123456789AB", 7, "/ADF/H.sav.00FF.adf", "/ADF/H.adf", "00FF")));
+  char p159[160]; fdLongPath(p159, 159);
+  char p160[161]; fdLongPath(p160, 160);
+  CHECK(fdRecordSet(r, "A1B2C3D4E5F6", 42, p159, p159, "80FE") && std::strcmp(r.sent, p159) == 0);
+  r = good;
+  CHECK(!fdRecordSet(r, "A1B2C3D4E5F6", 42, p160, "/ADF/G.adf", "80FE") && fdRecSame(r, good));
+  CHECK(!fdRecordSet(r, "A1B2C3D4E5F6", 42, "/ADF/G.adf", p160, "80FE") && fdRecSame(r, good));
+  CHECK(!fdRecordSet(r, "A1B2C3D4E5F6A", 42, "/ADF/G.adf", "/ADF/G.adf", "80FE") && fdRecSame(r, good));
+  CHECK(!fdRecordSet(r, "A1B2C3D4E5F6", 42, "/ADF/G.adf", "/ADF/G.adf", "80FE0") && fdRecSame(r, good));
+  CHECK(!fdRecordSet(r, "A1B2C3D4E5F6", 0, "/ADF/G.adf", "/ADF/G.adf", "80FE") && fdRecSame(r, good));   // no uid from the ack
+  CHECK(!fdRecordSet(r, "A1B2C3D4E5F6", 42, "/ADF/G.adf", "/ADF/G.adf", "") && fdRecSame(r, good));     // an old FluxDrive: no tag
+  CHECK(!fdRecordSet(r, "A1B2C3D4E5F6", 42, "", "/ADF/G.adf", "80FE") && fdRecSame(r, good));           // the test kit: no file
+  CHECK(!fdRecordSet(r, nullptr, 42, "/ADF/G.adf", "/ADF/G.adf", "80FE") && fdRecSame(r, good));
+  CHECK(!fdRecordSet(r, "A1B2C3D4E5F6", 42, nullptr, "/ADF/G.adf", "80FE") && fdRecSame(r, good));
+  CHECK(!fdRecordSet(r, "A1B2C3D4E5F6", 42, "/ADF/G.adf", nullptr, "80FE") && fdRecSame(r, good));
+  CHECK(!fdRecordSet(r, "A1B2C3D4E5F6", 42, "/ADF/G.adf", "/ADF/G.adf", nullptr) && fdRecSame(r, good));
+}
+
+// The panel fetches a FluxDrive's unsaved sectors only when they belong to the disk this panel sent it: the beacon's
+// "dirty" > 0, a record for that FluxDrive, and the beacon's "load_id" equal to the uid its push ack gave that disk.
+static void test_fd_should_fetch_needs_dirty_record_and_same_uid() {
+  const FdSaveRecord r = fdRec("A1B2C3D4E5F6", 42, "/ADF/G.adf", "/ADF/G.adf", "80FE");
+  CHECK(fdShouldFetch(1, 42, &r));
+  CHECK(fdShouldFetch(1760, 42, &r));                                  // a whole disk
+  CHECK(!fdShouldFetch(0, 42, &r));                                    // nothing unsaved
+  CHECK(!fdShouldFetch(5, 43, &r));                                    // another disk in it now (a PC push, the web page)
+  CHECK(!fdShouldFetch(5, 0, &r));                                     // no disk in it
+  CHECK(!fdShouldFetch(5, 42, nullptr));                               // this panel never sent it a disk
+  FdSaveRecord z = r; z.uid = 0;
+  CHECK(!fdShouldFetch(5, 0, &z));                                     // an unknown uid matches nothing, not even "none"
+}
+
 int main() {
   test_fluxdrive_is_told_apart_by_its_beacon_board();
   test_only_a_dd_adf_goes_to_a_fluxdrive();
@@ -490,7 +641,7 @@ int main() {
   test_a_busy_fluxdrive_gets_two_minutes();
   test_a_fluxdrive_stays_listed_through_a_game_load();
   test_the_busy_text();
-  test_a_fluxdrive_has_no_saves();
+  test_fd_has_saves_fluxdrive_true_webby_unchanged();
   test_the_device_word_in_messages();
   test_the_board_kind_from_the_pairing_reply();
   test_the_mdns_prefix_of_a_paired_device();
@@ -528,6 +679,10 @@ int main() {
   test_the_send_buffer_is_left_alone_unless_all_is_as_expected();
   test_a_join_is_logged_once_per_30_s_per_access_point();
   test_the_send_buffer_switch_is_read_from_config_txt();
+  test_fd_record_round_trip();
+  test_fd_record_rejects_garbage();
+  test_fd_record_is_made_whole_or_not_at_all();
+  test_fd_should_fetch_needs_dirty_record_and_same_uid();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }

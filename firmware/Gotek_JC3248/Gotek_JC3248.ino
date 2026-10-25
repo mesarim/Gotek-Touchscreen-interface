@@ -5738,6 +5738,137 @@ static void svFetchWireless(){
   else svToast("SAVE FETCH FAILED");
 }
 
+// ── LAN saves (v2 writing): a FluxDrive's save fetched over home Wi-Fi ──────────────────────────────────────────────
+// In fleet mode (WIRELESS + WiFi) a FluxDrive is a LAN peer, not an ESP-NOW pairing. Its beacon says how many sectors
+// of the disk it holds are unsaved ("dirty") and which disk that is ("load_id": the uid its push ack gave). For the disk
+// this panel sent it (its record, panel_fleet.h pfRecordFor, kept after every single-target fling) the panel pulls them
+// with GET_SAVE over TCP (saveExchange: espnowFetchSave's own exchange) into Game.sav.<tag>.adf, the file an ESP-NOW
+// pairing with that FluxDrive uses too. When: loop() as soon as the beacon says so (fdAutoFetch), and before its disk
+// goes (fdFetchFirst: another disk, an eject). SAVES=OFF: none of it.
+static String g_fdFetchId;   // the FluxDrive a LAN fetch is talking to: fdPersistLan finds its record by this id
+// The persist callback of a LAN fetch, inside saveExchange between the CRC check and the ack. The save is built on the
+// file the Amiga was given (the record's `sent`). When that was not the FluxDrive's own save (the cable save or the
+// image), the first fetch rebuilds the save from it (svPatchCore fromMaster, as the cable path rebases) and the record
+// then points at the save itself, so every later fetch patches it. That record is on the card before the ack goes, or
+// no ack goes: the next fetch then rebuilds from the same file, with every sector again.
+static bool fdPersistLan(uint32_t load_id,uint32_t img_size,const uint8_t*map,uint16_t mapLen,const uint8_t*packed,uint32_t nSec){
+  (void)img_size;
+  if(g_saves_mode==0)return false;
+  FdSaveRecord*r=pfRecordFor(g_fdFetchId);
+  if(!r||!load_id||r->uid!=load_id){   // a new disk came between the beacon and the fetch: not the disk this panel sent
+    gLog("[saves] FluxDrive %s: its disk %lu is not the one this panel sent it - not saved\n",g_fdFetchId.c_str(),(unsigned long)load_id);
+    return false; }
+  if(nSec==0)return true;                                             // nothing to write; the ack is harmless
+  const String sent=r->sent, sav=dongleSavPathFor(String(r->orig),String(r->tag));
+  const bool rebuild=!sent.equalsIgnoreCase(sav), had=SD_MMC.exists(sav);
+  if(sav.length()>=sizeof r->sent){ gLog("[saves] FluxDrive %s: save path too long: %s - not saved\n",r->tag,sav.c_str()); return false; }
+  bool ok=svPatchCore(sent,sav,map,(uint32_t)mapLen*8,packed,nullptr,rebuild);
+  bool recOk=true;
+  if(ok&&rebuild){ const FdSaveRecord was=*r; strlcpy(r->sent,sav.c_str(),sizeof r->sent);
+    if(!(recOk=pfRecordsWrite())){ *r=was; ok=false; } }
+  gLog("[saves] %s FluxDrive %s: %s - %u sectors, %s%s%s%s\n",ok?"saved":"FAILED",r->tag,sav.c_str(),(unsigned)nSec,
+       rebuild?"built from ":had?"updated":"new save file",rebuild?sent.c_str():"",ok?"":" - ",
+       ok?"":(!recOk?"its record could not be written to the card (not acked: fetched again)":g_sv_err[0]?g_sv_err:"no detail"));
+  return ok;
+}
+// The LAN fetch from roster peer i, without drawing anything: its TCP port, GET_SAVE, fdPersistLan, the ack.
+static bool fdFetchCore(int i){
+  if(i<0||i>=g_pfPeerN||g_saves_mode==0)return false;
+  const String ip=g_pfPeers[i].ip, id=g_pfPeers[i].id, tag=g_pfPeers[i].tag; const uint16_t tcp=g_pfPeers[i].tcp, dirty=g_pfPeers[i].dirty;
+#if defined(GTI_FLEET)
+  if(pfPeerLockedElsewhere(ip))return false;
+#endif
+  WiFiClient c;
+  if(!c.connect(ip.c_str(),tcp,5000)){ gLog("[saves] FluxDrive %s (%s): fetch failed - connect failed\n",tag.c_str(),ip.c_str()); return false; }
+  c.setNoDelay(true);
+#if defined(GTI_FLEET)
+  if(g_panel_token_ok&&pfPeerWantsAuth(ip)){ String e; if(!pfWriteAuth(c,e)){ c.stop(); gLog("[saves] FluxDrive %s: fetch refused - %s\n",tag.c_str(),e.c_str()); return false; } }   // #lock: a LAN save is gated like every other command
+#endif
+  const uint32_t t0=millis();
+  g_fdFetchId=id;
+  const bool ok=saveExchange(c,fdPersistLan);
+  g_fdFetchId="";
+  c.stop();
+  if(ok){ const int k=pfPeerIdx(id); if(k>=0)g_pfPeers[k].dirty=0; pfDropQueuedBeacons(); }   // beacons queued meanwhile still count them; the next one says what is left
+  else gLog("[saves] FluxDrive %s (%s): fetch of %u unsaved sector(s) failed after %u ms - it keeps them\n",tag.c_str(),ip.c_str(),(unsigned)dirty,(unsigned)(millis()-t0));
+  return ok;
+}
+// The LAN fetch from roster peer `peer`, with what the screen shows for a save fetch as svFetchWireless does: "SAVING
+// GAME...", the screen it was on, then "SAVED: <game>" or "SAVE FETCH FAILED".
+static bool pfFetchSave(int peer){
+  if(peer<0||peer>=g_pfPeerN)return false;
+  const FdSaveRecord*r=pfRecordFor(g_pfPeers[peer].id);
+  const String nm=r?basenameNoExt(filenameOnly(String(r->orig))):String("disk");
+  gfx_fillRect(0,VH/2-24,VW,48,COL_ACCENT);gfx_setTextSize(2);gfx_setTextColor(TFT_WHITE,COL_ACCENT);
+  {const char*m="SAVING GAME...";int tw=gfx_textWidth(m);gfx_setCursor((VW-tw)/2,VH/2-8);gfx_print(m);}gfx_flush();
+  const bool ok=fdFetchCore(peer);
+  if(g_car_active)drawCarousel();else if(g_info_showing)drawInfoFull();else drawFullUI();
+  gfx_flush();
+  if(ok)svToast("SAVED: "+nm);else svToast("SAVE FETCH FAILED");
+  return ok;
+}
+// Before a FluxDrive's disk goes (another disk is flung to it, or it is ejected): FluxDrive discards what nobody fetched
+// when the next disk comes, and an ejected disk's sectors cannot be fetched at all. So its unsaved writes of the disk this
+// panel sent it are fetched first. Any other board, SAVES=OFF, nothing unsaved, or another disk in it: nothing happens.
+// ui: with the overlay and the toast (the touchscreen's own flows); without (the web page's queued fling or eject, which
+// pfWorker runs under any screen, a screensaver included). A failed fetch does not stop the fling or the eject, as the
+// ESP-NOW interlocks do not; the toast (and gti.log) says so.
+static bool fdFetchFirst(const String&ip,bool ui){
+  if(g_saves_mode==0)return false;
+  for(int i=0;i<g_pfPeerN;i++){ const PfPeer&p=g_pfPeers[i]; if(p.ip!=ip)continue;
+    if(!fdIsFluxDrive(p.board.c_str())||!fdShouldFetch(p.dirty,p.loadId,pfRecordFor(p.id)))return false;
+    return ui?pfFetchSave(i):fdFetchCore(i); }
+  return false;
+}
+// After a single-target fling to a FluxDrive was acked: its record of what it holds now. The file staged here
+// (g_loaded_path: the bytes that went out), the library image behind it (the save's name), its tag, the ack's uid. Not
+// for a multi-target fling (as Hivemind: no write-back mapping), not with SAVES=OFF, not for any other board. Without a
+// uid in the ack, a tag in the beacon, or a file on the card (the test kit) there is no record, and its writes are not
+// fetched; the record it had stays, and matches nothing any more (another uid).
+static void fdRecordFling(const String&ip,uint32_t uid){
+  if(g_saves_mode==0)return;
+  int i=-1; for(int k=0;k<g_pfPeerN;k++) if(g_pfPeers[k].ip==ip){i=k;break;}
+  if(i<0||!fdIsFluxDrive(g_pfPeers[i].board.c_str()))return;
+  const PfPeer&p=g_pfPeers[i];
+  const String orig=g_loaded_orig.length()?g_loaded_orig:g_loaded_path, sav=dongleSavPathFor(orig,p.tag);
+  FdSaveRecord r;
+  if(sav.length()>=sizeof r.sent||!fdRecordSet(r,p.id.c_str(),uid,g_loaded_path.c_str(),orig.c_str(),p.tag.c_str())){
+    gLog("[saves] FluxDrive %s: no save record for disk %lu (%s) - its writes will not be fetched\n",p.tag.length()?p.tag.c_str():p.ip.c_str(),(unsigned long)uid,
+         !uid?"no uid in the ack":!p.tag.length()?"no save tag in its beacon":!g_loaded_path.length()?"not a file on the card":"a path too long");
+    return; }
+  const bool onCard=pfRecordPut(r);
+  gLog("[saves] FluxDrive %s: disk %lu is %s - saves go to %s%s\n",p.tag.c_str(),(unsigned long)uid,g_loaded_path.c_str(),sav.c_str(),
+       onCard?"":" (the record could NOT be written to the card: kept until a restart)");
+}
+// The one FluxDrive a fling from the touchscreen goes to straight away: fleet mode, exactly one peer in reach, and that
+// one a FluxDrive (doLoadSelected's single-peer send). -1: no fleet, no peer, a dongle, or several (the fleet manager).
+static int fdSingleFluxPeer(){
+  if(!(g_wireless_mode&&g_link_home&&WiFi.status()==WL_CONNECTED))return -1;
+  int vn=0,only=-1; for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])){vn++;only=i;}
+  return (vn==1&&fdIsFluxDrive(g_pfPeers[only].board.c_str()))?only:-1;
+}
+// The FluxDrive whose unsaved writes can be fetched now: fleet mode, SAVES on, fdShouldFetch (its beacon's dirty count and
+// load_id against its record), and that beacon at most FD_FETCH_FRESH_MS old. FluxDrive beacons every 2.5 s while sectors
+// are unsaved and none at all while the Amiga's motor runs: an older dirty count means the Amiga is reading (a fetch
+// would only sit out the 5 s header wait and fail) or the FluxDrive is gone. -1 = none.
+#define FD_FETCH_FRESH_MS 10000u
+static int fdFetchDue(){
+  if(g_saves_mode==0||!(g_wireless_mode&&g_link_home&&WiFi.status()==WL_CONNECTED))return -1;
+  const uint32_t now=millis();
+  for(int i=0;i<g_pfPeerN;i++){ const PfPeer&p=g_pfPeers[i];
+    if(fdIsFluxDrive(p.board.c_str())&&fdHeard(now,p.seen,FD_FETCH_FRESH_MS)&&fdShouldFetch(p.dirty,p.loadId,pfRecordFor(p.id)))return i; }
+  return -1;
+}
+// Fetch what is due (fdFetchDue). loop() calls it with the overlay once the finger is off the glass; the screensavers
+// call it without (the panel idles into one 2 minutes after a load, which is when the Amiga plays and saves). A failed
+// fetch waits 30 s before the next try (the beacon keeps saying dirty), as the ESP-NOW fetch does.
+static uint32_t g_fdNextTry=0;
+static void fdAutoFetch(bool ui){
+  if((int32_t)(millis()-g_fdNextTry)<0)return;
+  const int i=fdFetchDue(); if(i<0)return;
+  if(!(ui?pfFetchSave(i):fdFetchCore(i)))g_fdNextTry=millis()+30000;
+}
+
 // lab14s: asked in the middle of a wireless send when the dongle already holds ANOTHER screen's disk.
 // dirty = that screen's saves have not been handed back yet (taking over loses them). true = take over.
 static bool claimAskUI(bool dirty, const char* who){
@@ -5803,6 +5934,10 @@ static bool doLoadSelected(const String&adfPath){
   // (v4.8.1: own-disk flush runs in ANY mode — a wireless GTi can still be USB-attached)
   if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
   if(svPending()&&g_loaded)svFlushStandalone();
+  // LAN saves: going to one FluxDrive (the only peer in reach)? Its unsaved writes go to the card first - this disk
+  // replaces them on it - and the own save staged below is then up to date.
+  const int fdOne=fdSingleFluxPeer();
+  if(fdOne>=0)fdFetchFirst(g_pfPeers[fdOne].ip,true);
   // Prefer the save-copy when one exists (COPY mode): saves accumulate in the .sav
   String loadPath=adfPath;
   if(g_saves_mode==1&&savExistsFor(adfPath))loadPath=savPathFor(adfPath);
@@ -5820,6 +5955,14 @@ static bool doLoadSelected(const String&adfPath){
         gLog("[saves] dongle %s: %s\n",wlTag.c_str(),loadPath==ds?"sending its own save":"no own save yet - sending the cable save or the image");
       }
     }
+  }
+  // LAN saves: the same for the one FluxDrive in reach - its own save (Game.sav.<tag>.adf, by the tag in its beacon) if
+  // it has one, else the cable save / the image. Several in reach (the fleet manager) get the cable save or the image,
+  // as a Hivemind fan-out does.
+  if(fdOne>=0&&g_saves_mode!=0&&g_pfPeers[fdOne].tag.length()){
+    const String fdTag=g_pfPeers[fdOne].tag, ds=dongleSavPathFor(adfPath,fdTag);
+    if(SD_MMC.exists(ds))loadPath=ds;
+    gLog("[saves] FluxDrive %s: %s\n",fdTag.c_str(),loadPath==ds?"sending its own save":"no own save yet");
   }
   gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
   gfx_setTextSize(1);gfx_setTextColor(TFT_CYAN,COL_PANEL);String tn=basenameNoExt(filenameOnly(adfPath));if(tn.length()>16)tn=tn.substring(0,16);
@@ -5949,7 +6092,9 @@ static bool doLoadSelected(const String&adfPath){
     else if(vn==1){ PfPeer&p=g_pfPeers[only]; hwMsg("Sending...",p.name.c_str(),COL_ACCENT,1);
       fleetWaitHint(p.board.c_str());
       String nm=g_loaded_display.length()?g_loaded_display:g_loaded_name; if(nm.length()){String ne;pfSendName(p.ip,p.tcp,nm,ne);}
-      String err; bool ok=pfSendDisk(p.ip,p.tcp,err); hwMsg(ok?"Sent":"Not sent",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,ok?1200:2200);
+      String err; uint32_t uid=0; bool ok=pfSendDisk(p.ip,p.tcp,err,&uid);
+      if(ok)fdRecordFling(p.ip,uid);   // one target: a FluxDrive's record of the disk it holds now (any other board: nothing)
+      hwMsg(ok?"Sent":"Not sent",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,ok?1200:2200);
       if(!ok) hardAttach();   // the dongle refused or vanished - keep the disk usable on our own port
     }
     drawFullUI();gfx_flush();return true;   // a modal owned the screen; repaint all of it
@@ -6430,6 +6575,7 @@ static void runSlideshow(std::vector<String>&pool){
   while(true){
     webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
     pfService(); pfWorker();   // #console: and the fleet roster + queued fling
+    fdAutoFetch(false);        // LAN saves: a FluxDrive's unsaved writes are fetched while the saver runs too (no overlay)
     if(pool.size()<=1){ if(ssSlideHold(g_ss_time_ms))break; else continue; }
     int ni=(idx+1)%(int)pool.size();
     if(dbl){
@@ -6464,6 +6610,7 @@ static void runMatrixRain(){
   while(true){
     webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
     pfService(); pfWorker();   // #console: and the fleet roster + queued fling
+    fdAutoFetch(false);        // LAN saves: a FluxDrive's unsaved writes are fetched while the saver runs too (no overlay)
     if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
     uint32_t nf=millis();
     if(nf-last>=60){ last=nf; seed++;
@@ -6577,6 +6724,7 @@ static void runScreensaver(){                                // blocking bounce 
   while(true){
     webPanelService();   // keep the web UI (and its queued loads) alive while the saver owns the screen
     pfService(); pfWorker();   // #console: and the fleet roster + queued fling
+    fdAutoFetch(false);        // LAN saves: a FluxDrive's unsaved writes are fetched while the saver runs too (no overlay)
     if(Touch_ReadFrame()){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<400)delay(10); break; }
     uint32_t nf=millis();
     if(nf-last>=33){ last=nf;
@@ -7489,15 +7637,19 @@ static void fleetSendChecked(String* ids, int n){
   int ok=0, fail=0; String lastErr="";
   for(int k=0;k<n;k++){ int pi=-1; for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].id==ids[k]){pi=i;break;} if(pi<0) continue;
     PfPeer&p=g_pfPeers[pi];
+    fdFetchFirst(p.ip,true);   // a FluxDrive's unsaved writes go to the card before this disk replaces them
     hwMsg("Sending...",(p.name+"  ("+String(k+1)+"/"+String(n)+")").c_str(),COL_ACCENT,1);
     fleetWaitHint(p.board.c_str());
     if(nm.length()){ String ne; pfSendName(p.ip,p.tcp,nm,ne); }
-    String err; if(pfSendDisk(p.ip,p.tcp,err)) ok++; else { fail++; gfx_setTextSize(1); lastErr=fdKeepNamePrefix(p.board.c_str(),n,gfx_textWidth(p.name+": "+err),VW)?(p.name+": "+err):err; }
+    String err; uint32_t uid=0;
+    if(pfSendDisk(p.ip,p.tcp,err,&uid)){ ok++; if(n==1)fdRecordFling(p.ip,uid); }   // a record for one target only: several = as Hivemind, none
+    else { fail++; gfx_setTextSize(1); lastErr=fdKeepNamePrefix(p.board.c_str(),n,gfx_textWidth(p.name+": "+err),VW)?(p.name+": "+err):err; }
   }
   hwMsg(fail?"Some refused":"Sent", (fail?lastErr:("to "+String(ok)+" dongle(s)")).c_str(), fail?COL_AMBER:COL_GREEN, 2400);
 }
 static void fleetEjectChecked(String* ids, int n){
   int ok=0; for(int k=0;k<n;k++){ int pi=-1; for(int i=0;i<g_pfPeerN;i++) if(g_pfPeers[i].id==ids[k]){pi=i;break;} if(pi<0) continue;
+    fdFetchFirst(g_pfPeers[pi].ip,true);   // a FluxDrive's unsaved writes first: an ejected disk's cannot be fetched
     String err; if(pfSendCommand(g_pfPeers[pi].ip,g_pfPeers[pi].tcp,PF_CMD_EJECT,err)) ok++; }
   hwMsg("Ejected",("on "+String(ok)+" dongle(s)").c_str(),COL_AMBER,1500);
 }
@@ -7506,6 +7658,7 @@ static void fleetEjectChecked(String* ids, int n){
 static bool fleetEjectTarget(){
   const int t=pfFluxTarget(); if(t<0) return false;
   const String ip=g_pfPeers[t].ip, nm=pfPeerLabel(g_pfPeers[t]); const uint16_t tcp=g_pfPeers[t].tcp;   // copies: the roster may change meanwhile
+  fdFetchFirst(ip,true);   // its unsaved writes first: an ejected disk's cannot be fetched
   hwMsg("Ejecting...",nm.c_str(),COL_ACCENT,1);
   String err; bool ranOut=false; const bool ok=pfSendCommand(ip,tcp,PF_CMD_EJECT,err,&ranOut);
   if(!ok&&ranOut) hwMsg("FluxDrive busy","ejects when the Amiga stops",COL_AMBER,2200);   // silent the whole wait: it holds the eject and runs it then
@@ -8132,6 +8285,8 @@ void setup(){
     loadMineIds();              // #lock: which dongles we have claimed
 #endif
     loadKnownNets();            // #clubday: remembered WiFi networks (NETWORKS.TXT)
+    pfRecordsLoad();            // LAN saves: which disk this panel last sent each FluxDrive (/GTI/fdsaves.txt)
+    gLog("[saves] %d FluxDrive save record(s) on the card\n",g_pfRecN);
     g_sdg.on=g_sdguard_cfg; sdPullups();           // lab14g: SDGUARD= / SDPULLUP= from CONFIG.TXT
     if(g_sd_freq!=20000){           // 5.3.5: SDSPEED=40 opt-in (lab14g: or 10) — remount, fall back to 20 if it won't take
       sdGuardRemove();
@@ -8714,6 +8869,8 @@ void loop(){
       svFetchWireless();
       if(g_espnow_dirty)svNextTry=now+30000;   // fetch failed — back off; the dongle keeps beaconing
     }
+    // LAN saves: a FluxDrive reports unsaved sectors of the disk this panel sent it - fetch them the same way
+    if(now-g_last_touch_ms>1200)fdAutoFetch(true);
     // Own-disk writes settled — flush to SD (v4.8.1: in ANY mode; a wireless GTi
     // can still be USB-attached to a PC or a local Gotek)
     if(g_loaded&&svPending()&&g_sv_last_write&&now-g_sv_last_write>SV_SETTLE_MS)

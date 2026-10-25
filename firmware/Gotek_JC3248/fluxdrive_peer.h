@@ -8,7 +8,9 @@
 //  - it takes ONE image size, a DD ADF of 901,120 bytes, and refuses anything else before any change;
 //  - while the Amiga's drive motor runs it neither accepts nor answers, so a push can sit in the TCP backlog for
 //    the length of a game load, and so can the reply to SET_NAME;
-//  - it never writes a disk, so there are no saves to pull and none to lose by a take-over.
+//  - since v2 (writing) it takes the Amiga's writes and serves GET_SAVE as a Webby does. In home-Wi-Fi fleet mode the
+//    panel fetches them over the LAN (its beacon says "dirty" and "load_id"), into the same Game.sav.<tag>.adf an ESP-NOW
+//    pairing would use; which game file a save belongs to is kept in a record per FluxDrive (FdSaveRecord below).
 //
 // Pure functions of the board string, no Arduino types: tools/test_fluxdrive_peer.sh builds and runs them on the PC.
 // Every other board gets exactly the answer the panel gave before this file existed.
@@ -44,8 +46,9 @@ inline uint32_t fdStaleMs(const char* board, uint32_t normal_ms) { return fdIsFl
 // What a stalled push means for a FluxDrive: not a broken link, the Amiga is using the drive.
 inline const char* fdBusyText() { return "FluxDrive busy - the Amiga is reading"; }
 
-// No write-back in v1: no save pull, and no "saves not handed back" to refuse or warn about.
-inline bool fdHasSaves(const char* board) { return !fdIsFluxDrive(board); }
+// A FluxDrive writes back since v2 (writing), as a dongle does: it has saves to pull. (It never answers 0x02, spec
+// section 6, so the "unsaved saves" wording that goes with this never reaches a FluxDrive's user.)
+inline bool fdHasSaves(const char* board) { (void)board; return true; }
 
 // "dongle" in the words the panel says to the user; a FluxDrive is not one.
 inline const char* fdDeviceWord(const char* board) { return fdIsFluxDrive(board) ? "FluxDrive" : "dongle"; }
@@ -272,4 +275,107 @@ inline int fdCfgSwitch(const char* line, const char* key) {
     return true;
   };
   return (is("off") || is("0") || is("no")) ? 0 : 1;
+}
+
+
+// ---- LAN saves (v2 writing): which game file a FluxDrive's save belongs to -----------------------------------------------
+
+// What the panel keeps about the last disk a single-target fling put in a FluxDrive, one line per FluxDrive in
+// /GTI/fdsaves.txt, so that after either side restarts it still knows where a fetched save belongs (spec section 6):
+//  id    the FluxDrive's beacon id (its STA MAC, 12 upper-case hex digits);
+//  uid   the disk's uid from the push ack (0x01 + LE32), which is the beacon's "load_id" while it holds that disk;
+//  sent  the SD file whose bytes went out (its own save, the cable save or the image), the base the save is built on;
+//  orig  the library image behind it, which names the save: Game.sav.<tag>.adf;
+//  tag   the FluxDrive's save tag (its beacon "tag": softAP MAC bytes 4-5, upper-case hex).
+// The line: id TAB uid TAB tag TAB sent TAB orig (uid in decimal). FAT names cannot hold a TAB or a control character.
+struct FdSaveRecord { char id[13]; uint32_t uid; char sent[160]; char orig[160]; char tag[5]; };
+
+inline bool fdRecUpperHex(char c) { return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'); }
+// A string held in a fixed array: it ends inside the array, and its length is in [lo, hi].
+inline bool fdRecStrLen(const char* s, size_t cap, size_t lo, size_t hi, size_t* len) {
+  const void* end = memchr(s, 0, cap);
+  if (end == nullptr) return false;
+  *len = (size_t)((const char*)end - s);
+  return *len >= lo && *len <= hi;
+}
+inline bool fdRecHexField(const char* s, size_t cap, size_t lo, size_t hi) {
+  size_t n;
+  if (!fdRecStrLen(s, cap, lo, hi, &n)) return false;
+  for (size_t i = 0; i < n; i++) if (!fdRecUpperHex(s[i])) return false;
+  return true;
+}
+// An SD path: from the card's root, no control characters (a TAB or a newline would break the line).
+inline bool fdRecPathField(const char* s, size_t cap) {
+  size_t n;
+  if (!fdRecStrLen(s, cap, 1, cap - 1, &n) || s[0] != '/') return false;
+  for (size_t i = 0; i < n; i++) if ((unsigned char)s[i] < 0x20 || s[i] == 0x7F) return false;
+  return true;
+}
+// A record that can be written and matched: an id, a uid (0 = none: matches nothing), a 4-digit tag, two SD paths.
+inline bool fdRecordValid(const FdSaveRecord& r) {
+  return fdRecHexField(r.id, sizeof r.id, 1, sizeof r.id - 1) && r.uid != 0 && fdRecHexField(r.tag, sizeof r.tag, 4, 4) &&
+         fdRecPathField(r.sent, sizeof r.sent) && fdRecPathField(r.orig, sizeof r.orig);
+}
+
+// The record as one line (no newline) into out. Returns its length, or -1 when the record is not valid or does not fit
+// whole (out is then "" when it has room for that).
+inline int fdRecordFormat(const FdSaveRecord& r, char* out, size_t n) {
+  if (out == nullptr || n == 0) return -1;
+  out[0] = 0;
+  if (!fdRecordValid(r)) return -1;
+  const int w = snprintf(out, n, "%s\t%lu\t%s\t%s\t%s", r.id, (unsigned long)r.uid, r.tag, r.sent, r.orig);
+  if (w < 0 || (size_t)w >= n) { out[0] = 0; return -1; }
+  return w;
+}
+
+// One line of the file into a record. A newline (and CRs) at its end do not count. Anything that is not exactly the
+// five fields fdRecordFormat writes is refused, and r is then left as it was.
+inline bool fdRecordParse(const char* line, FdSaveRecord& r) {
+  if (line == nullptr) return false;
+  size_t len = strlen(line);
+  while (len && (line[len - 1] == '\n' || line[len - 1] == '\r')) len--;
+  const char* f[5]; size_t fn[5]; int k = 0; size_t start = 0;
+  for (size_t i = 0; i <= len; i++) {
+    if (i < len && line[i] != '\t') continue;
+    if (k == 5) return false;                                     // a sixth field
+    f[k] = line + start; fn[k] = i - start; k++; start = i + 1;
+  }
+  if (k != 5) return false;
+  FdSaveRecord t;
+  memset(&t, 0, sizeof t);
+  if (fn[1] == 0 || fn[1] > 10) return false;
+  uint64_t uid = 0;
+  for (size_t i = 0; i < fn[1]; i++) {
+    if (f[1][i] < '0' || f[1][i] > '9') return false;
+    uid = uid * 10 + (uint64_t)(f[1][i] - '0');
+  }
+  if (uid > 0xFFFFFFFFull) return false;
+  t.uid = (uint32_t)uid;
+  if (fn[0] >= sizeof t.id || fn[2] >= sizeof t.tag || fn[3] >= sizeof t.sent || fn[4] >= sizeof t.orig) return false;
+  memcpy(t.id, f[0], fn[0]); memcpy(t.tag, f[2], fn[2]); memcpy(t.sent, f[3], fn[3]); memcpy(t.orig, f[4], fn[4]);
+  if (!fdRecordValid(t)) return false;
+  r = t;
+  return true;
+}
+
+// A record from what a fling knew, whole or not at all (a cut path would name another file): false, and r left as it
+// was, when a field does not fit or the result is not a valid record (no uid from the ack, no tag, no SD file).
+inline bool fdRecordSet(FdSaveRecord& r, const char* id, uint32_t uid, const char* sent, const char* orig, const char* tag) {
+  if (id == nullptr || sent == nullptr || orig == nullptr || tag == nullptr) return false;
+  FdSaveRecord t;
+  memset(&t, 0, sizeof t);
+  if (strlen(id) >= sizeof t.id || strlen(sent) >= sizeof t.sent || strlen(orig) >= sizeof t.orig || strlen(tag) >= sizeof t.tag)
+    return false;
+  strcpy(t.id, id); strcpy(t.sent, sent); strcpy(t.orig, orig); strcpy(t.tag, tag);
+  t.uid = uid;
+  if (!fdRecordValid(t)) return false;
+  r = t;
+  return true;
+}
+
+// Fetch this FluxDrive's unsaved sectors now? Only when there are some (its beacon's "dirty") and they belong to the disk
+// this panel sent it: a record (rec) whose uid is the beacon's "load_id". Another disk (a PC push, its web page) or none
+// in the drive: no.
+inline bool fdShouldFetch(uint16_t dirty, uint32_t beacon_uid, const FdSaveRecord* rec) {
+  return dirty > 0 && rec != nullptr && beacon_uid != 0 && rec->uid == beacon_uid;
 }
