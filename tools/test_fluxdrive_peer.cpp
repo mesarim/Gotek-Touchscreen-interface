@@ -218,6 +218,20 @@ static void test_the_row_signature_fits_its_buffer() {
   CHECK(fdRowSig("fluxdrive", true, true, "x", tiny, 0) == 0);    // no buffer: nothing written
 }
 
+// A FluxDrive row's WP key shows its beacon's "wp": a change of it repaints the row. Every other board still adds nothing.
+static void test_the_row_signature_follows_write_protect() {
+  char a[120], b[120];
+  CHECK(fdRowSig("fluxdrive", true, true, "Workbench 1.3", a, sizeof(a), false) > 0);
+  CHECK(fdRowSig("fluxdrive", true, true, "Workbench 1.3", b, sizeof(b), true) > 0 && std::strcmp(a, b) != 0);    // WP on
+  CHECK(fdRowSig("fluxdrive", true, true, "Workbench 1.3", b, sizeof(b)) > 0 && std::strcmp(a, b) == 0);          // default: off
+  CHECK(fdRowSig("fluxdrive", true, true, "Workbench 1.3", a, sizeof(a), true) > 0 &&
+        fdRowSig("fluxdrive", true, true, "Workbench 1.3", b, sizeof(b), true) > 0 && std::strcmp(a, b) == 0);    // steady
+  CHECK(fdRowSig("fluxdrive", true, false, "", a, sizeof(a), true) > 0 &&
+        fdRowSig("fluxdrive", true, false, "", b, sizeof(b), false) > 0 && std::strcmp(a, b) != 0);              // empty drive too
+  CHECK(fdRowSig("supermini", true, true, "Workbench", a, sizeof(a), true) == 0 && a[0] == 0);
+  CHECK(fdRowSig(nullptr, true, true, "x", a, sizeof(a), true) == 0 && a[0] == 0);
+}
+
 // The FluxDrive the main screen speaks for (NOW PLAYING, the loaded marker, EJECT): the one the last disk of this boot
 // went to while it is still heard, else the only FluxDrive heard, else none. Peers are identified by their beacon id.
 static void test_the_target_is_where_the_last_disk_went() {
@@ -673,6 +687,100 @@ static void test_fd_a_single_fluxdrive_target_gets_its_own_save() {
   CHECK(fdFileToSend(1, true, true, "80FE", false, own, nullptr) == nullptr);                  // nothing staged: nothing
 }
 
+// ---- Panel controls (v2 writing): start fresh, write protect -------------------------------------------------------------
+
+// A FluxDrive save tag names Game.sav.<tag>.adf: exactly 4 upper-case hex digits (its beacon's "tag", the softAP MAC's last
+// two bytes). Anything else names no save.
+static void test_fd_save_tag_is_four_upper_case_hex_digits() {
+  CHECK(fdSaveTagOk("80FE"));
+  CHECK(fdSaveTagOk("0000"));
+  CHECK(fdSaveTagOk("A9F0"));
+  CHECK(!fdSaveTagOk(""));                                             // an old FluxDrive: no tag in its beacon
+  CHECK(!fdSaveTagOk(nullptr));
+  CHECK(!fdSaveTagOk("80F"));
+  CHECK(!fdSaveTagOk("80FE0"));
+  CHECK(!fdSaveTagOk("80fe"));
+  CHECK(!fdSaveTagOk("G0FE"));
+  CHECK(!fdSaveTagOk("80FG"));
+  CHECK(!fdSaveTagOk("8 FE"));
+  CHECK(!fdSaveTagOk("80F/"));
+  CHECK(!fdSaveTagOk("80F:"));
+}
+
+// START FRESH sends the original at once only to a FluxDrive that holds, right now, the disk this panel's record says it
+// sent (the caller passes the record only when it names this game's file): the beacon says a disk is in, and its uid is
+// the record's. Another disk, an ejected one (FluxDrive keeps its uid), no record: no swap, the save just goes.
+static void test_fd_start_fresh_resends_only_when_that_disk_is_in() {
+  const FdSaveRecord r = fdRec("A1B2C3D4E5F6", 42, "/ADF/G.sav.80FE.adf", "/ADF/G.adf", "80FE");
+  CHECK(fdStartFreshResends(&r, 42, true));
+  CHECK(!fdStartFreshResends(&r, 43, true));                           // record uid != beacon uid: another disk in it now
+  CHECK(!fdStartFreshResends(&r, 42, false));                          // not loaded: ejected, it keeps the old uid
+  CHECK(!fdStartFreshResends(&r, 0, true));                            // no uid in its beacon
+  CHECK(!fdStartFreshResends(&r, 0, false));
+  CHECK(!fdStartFreshResends(nullptr, 42, true));                      // no record of this game for it
+  FdSaveRecord z = r; z.uid = 0;
+  CHECK(!fdStartFreshResends(&z, 0, true));                            // an unknown uid matches nothing, not even "none"
+  FdSaveRecord big = r; big.uid = 4294967295u;
+  CHECK(fdStartFreshResends(&big, 4294967295u, true));                 // the whole 32 bits
+  CHECK(!fdStartFreshResends(&big, 2147483647u, true));
+}
+
+// START FRESH's fling of the original skips the fetch every other swap makes first: the writes the FluxDrive holds belong
+// to the save being thrown away (fetched, they would go into a new save of the game). Every other fling and every eject
+// fetch exactly when fdFetchBeforeSwap says so.
+static void test_fd_start_fresh_skips_the_fetch_before_its_swap() {
+  const FdSaveRecord r = fdRec("A1B2C3D4E5F6", 42, "/ADF/G.sav.80FE.adf", "/ADF/G.adf", "80FE");
+  CHECK(fdFetchBeforeSwap(true, 42, &r));                              // the fling it replaces would fetch...
+  CHECK(!fdFetchFirstNeeded(true, true, 42, &r));                      // ...START FRESH does not
+  CHECK(fdFetchFirstNeeded(false, true, 42, &r));                      // any other fling or eject: fetch first
+  const bool ld[2] = { false, true };
+  const uint32_t uids[3] = { 0, 42, 43 };
+  const FdSaveRecord* recs[2] = { nullptr, &r };
+  for (bool l : ld) for (uint32_t u : uids) for (const FdSaveRecord* p : recs) {
+    CHECK(fdFetchFirstNeeded(false, l, u, p) == fdFetchBeforeSwap(l, u, p));
+    CHECK(!fdFetchFirstNeeded(true, l, u, p));
+  }
+}
+
+// What FluxDrive's answer to SET_WP means. 0x01: done (the disk is back in with that write protect). 0x00: no disk in it,
+// nothing changed. No answer for the whole wait: busy - it holds commands while the Amiga reads and makes the change after
+// the load (the beacon's "wp" shows it then). The connection closed early without an answer, or another byte: not done.
+static void test_fd_wp_reply_meanings() {
+  CHECK(fdWpFailText(0x01, false) == nullptr);
+  CHECK(fdWpFailText(0x01, true) == nullptr);                          // an answer is an answer, however late
+  CHECK(fdWpFailText(0x00, false) != nullptr && std::strcmp(fdWpFailText(0x00, false), "no disk in it") == 0);
+  CHECK(fdWpFailText(-1, true) != nullptr && std::strcmp(fdWpFailText(-1, true), FD_WP_BUSY) == 0);
+  CHECK(fdWpFailText(-1, false) != nullptr && std::strcmp(fdWpFailText(-1, false), "no reply") == 0);
+  CHECK(fdWpFailText(0x02, false) != nullptr && std::strcmp(fdWpFailText(0x02, false), "refused") == 0);
+  CHECK(fdWpFailText(0x05, false) != nullptr && std::strcmp(fdWpFailText(0x05, false), "refused") == 0);
+  CHECK(fdWpFailText(0x00, true) != nullptr && std::strcmp(fdWpFailText(0x00, true), "no disk in it") == 0);
+  CHECK(std::strcmp(FD_WP_BUSY, "no reply") != 0 && std::strcmp(FD_WP_BUSY, "no disk in it") != 0);
+}
+
+// START FRESH deletes a save file. A FluxDrive record whose base (`sent`, the file its Amiga was given) is that file must
+// not be left pointing at nothing (its next fetch rebuilds from the base): when its own save is a different file, the base
+// becomes its own save first (2); when its base IS its own save, the one that goes, the record goes (1): its disk's writes
+// belong to that save. Any other base: nothing (0). FAT names: case does not count; a path is compared whole.
+static void test_fd_start_fresh_keeps_every_record_base() {
+  const char* own = "/ADF/G.sav.80FE.adf";
+  const char* cable = "/ADF/G.sav.adf";
+  CHECK(fdFreshRecordFate(own, own, own) == 1);                        // the target's own save was its base: dropped
+  CHECK(fdFreshRecordFate(cable, own, cable) == 2);                    // the cable save was its base: becomes its own save
+  CHECK(fdFreshRecordFate("/ADF/G.sav.00FF.adf", own, "/ADF/G.sav.00FF.adf") == 2);   // another FluxDrive's own save
+  CHECK(fdFreshRecordFate("/ADF/G.adf", own, cable) == 0);             // the image: untouched
+  CHECK(fdFreshRecordFate(own, own, cable) == 0);                      // its own save, not the one that goes
+  CHECK(fdFreshRecordFate("/ADF/G.adf", own, own) == 0);               // its own save goes, but its base is the image: fine
+  CHECK(fdFreshRecordFate("/adf/g.SAV.ADF", own, cable) == 2);         // case does not count
+  CHECK(fdFreshRecordFate(own, "/adf/g.sav.80fe.ADF", "/ADF/G.SAV.80FE.adf") == 1);
+  CHECK(fdFreshRecordFate("/ADF/G.sav.adf.tmp", own, cable) == 0);     // whole paths only
+  CHECK(fdFreshRecordFate("/ADF/G.sav.ad", own, cable) == 0);
+  CHECK(fdFreshRecordFate(cable, own, "") == 0);                       // nothing goes
+  CHECK(fdFreshRecordFate("", own, "") == 0);
+  CHECK(fdFreshRecordFate(nullptr, own, cable) == 0);
+  CHECK(fdFreshRecordFate(cable, nullptr, cable) == 2);                // no own save name known: still keep the base
+  CHECK(fdFreshRecordFate(cable, own, nullptr) == 0);
+}
+
 int main() {
   test_fluxdrive_is_told_apart_by_its_beacon_board();
   test_only_a_dd_adf_goes_to_a_fluxdrive();
@@ -724,6 +832,12 @@ int main() {
   test_fd_should_fetch_needs_dirty_record_and_same_uid();
   test_fd_fetch_before_swap_needs_a_matching_record_not_a_dirty_count();
   test_fd_a_single_fluxdrive_target_gets_its_own_save();
+  test_the_row_signature_follows_write_protect();
+  test_fd_save_tag_is_four_upper_case_hex_digits();
+  test_fd_start_fresh_resends_only_when_that_disk_is_in();
+  test_fd_start_fresh_skips_the_fetch_before_its_swap();
+  test_fd_wp_reply_meanings();
+  test_fd_start_fresh_keeps_every_record_base();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }

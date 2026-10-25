@@ -102,13 +102,14 @@ inline bool fdKeepNamePrefix(const char* board, int targets, int full_text_px, i
 }
 
 // What the fleet manager compares to decide whether to repaint: for a FluxDrive the Amiga's power, whether it holds a
-// disk and the disk's name; for any other board nothing (its row repaints when its id list changes, as before).
-// Writes "" or "|<A|a><L|l><disk>;" into out (cut to cap-1) and returns the length.
-inline size_t fdRowSig(const char* board, bool amiga, bool loaded, const char* disk, char* out, size_t cap) {
+// disk, the disk's name and its write protect (the row's WP key, v2 writing); for any other board nothing (its row
+// repaints when its id list changes, as before).
+// Writes "" or "|<A|a><L|l><W|w><disk>;" into out (cut to cap-1) and returns the length.
+inline size_t fdRowSig(const char* board, bool amiga, bool loaded, const char* disk, char* out, size_t cap, bool wp = false) {
   if (out == nullptr || cap == 0) return 0;
   out[0] = 0;
   if (!fdIsFluxDrive(board)) return 0;
-  const int n = snprintf(out, cap, "|%c%c%s;", amiga ? 'A' : 'a', loaded ? 'L' : 'l', disk ? disk : "");
+  const int n = snprintf(out, cap, "|%c%c%c%s;", amiga ? 'A' : 'a', loaded ? 'L' : 'l', wp ? 'W' : 'w', disk ? disk : "");
   if (n < 0) { out[0] = 0; return 0; }
   return (size_t)n >= cap ? cap - 1 : (size_t)n;
 }
@@ -387,12 +388,61 @@ inline bool fdFetchBeforeSwap(bool loaded, uint32_t beacon_uid, const FdSaveReco
   return loaded && rec != nullptr && beacon_uid != 0 && rec->uid == beacon_uid;
 }
 
+// A FluxDrive save tag (its beacon's "tag": the softAP MAC's last two bytes) names Game.sav.<tag>.adf: exactly 4 upper-case
+// hex digits. Anything else (an old FluxDrive sends none) names no save.
+inline bool fdSaveTagOk(const char* tag) {
+  return tag != nullptr && strlen(tag) == 4 && fdRecUpperHex(tag[0]) && fdRecUpperHex(tag[1]) && fdRecUpperHex(tag[2]) &&
+         fdRecUpperHex(tag[3]);
+}
 // Which file a fling sends to a target: `own` (its own save, Game.sav.<tag>.adf) when the target is a FluxDrive and the
-// only one, saves are on, it has a save tag (4 upper-case hex digits) and that file exists; else `staged`, the file staged
-// here (the cable save or the image). Several targets get the staged file, as a Hivemind fan-out does.
+// only one, saves are on, it has a save tag (fdSaveTagOk) and that file exists; else `staged`, the file staged here (the
+// cable save or the image). Several targets get the staged file, as a Hivemind fan-out does.
 inline const char* fdFileToSend(int targets, bool is_fd, bool saves_on, const char* tag, bool own_exists, const char* own,
                                 const char* staged) {
-  const bool tagOk = tag != nullptr && strlen(tag) == 4 && fdRecUpperHex(tag[0]) && fdRecUpperHex(tag[1]) &&
-                     fdRecUpperHex(tag[2]) && fdRecUpperHex(tag[3]);
-  return (targets == 1 && is_fd && saves_on && tagOk && own_exists && own != nullptr && own[0]) ? own : staged;
+  return (targets == 1 && is_fd && saves_on && fdSaveTagOk(tag) && own_exists && own != nullptr && own[0]) ? own : staged;
+}
+
+// ---- Panel controls (v2 writing): start fresh, write protect -------------------------------------------------------------
+
+// START FRESH throws away the save of a game's disk (spec section 6). Does the FluxDrive target get the original at once
+// (the Amiga sees a swap)? Only when the disk in it now is the one this panel's record says it sent: it holds one (the
+// beacon's "loaded"; an ejected disk keeps its uid) and its uid (the beacon's "load_id") is the record's. The caller passes
+// the record only when it names this disk's file. Another disk, an empty drive, no record: no swap, the save just goes.
+inline bool fdStartFreshResends(const FdSaveRecord* rec, uint32_t beacon_uid, bool loaded) {
+  return rec != nullptr && loaded && beacon_uid != 0 && rec->uid == beacon_uid;
+}
+// Before a swap (a fling to a FluxDrive, an eject), fetch its unsaved writes first? Every swap as fdFetchBeforeSwap says,
+// except START FRESH's fling of the original: those writes belong to the save it throws away (fetched, they would start a
+// new save of the game), and the original replaces them (FluxDrive counts them as discarded).
+inline bool fdFetchFirstNeeded(bool start_fresh, bool loaded, uint32_t beacon_uid, const FdSaveRecord* rec) {
+  return !start_fresh && fdFetchBeforeSwap(loaded, beacon_uid, rec);
+}
+// Two SD paths name the same file: whole, case does not count (FAT). Empty or missing names nothing.
+inline bool fdPathSame(const char* a, const char* b) {
+  if (a == nullptr || b == nullptr || a[0] == 0) return false;
+  for (; *a && *b; a++, b++) if (fdNameLower(*a) != fdNameLower(*b)) return false;
+  return *a == 0 && *b == 0;
+}
+// START FRESH deletes the save file `gone`. What becomes of a FluxDrive record whose base (`sent`, the file its Amiga was
+// given; its next fetch rebuilds from it) is that file? 0: nothing (another base). 1: its base is its own save (`own`,
+// Game.sav.<tag>.adf of its game), the one that goes: the record goes too - its disk's writes belong to that save. 2: its
+// own save is another file: the base becomes its own save first (what its next fetch would have rebuilt from it anyway),
+// so it is not left pointing at nothing.
+inline int fdFreshRecordFate(const char* sent, const char* own, const char* gone) {
+  if (!fdPathSame(sent, gone)) return 0;
+  return fdPathSame(own, gone) ? 1 : 2;
+}
+
+// SET_WP (0x10 + 1 byte: 1 on, 0 off) makes the change a re-insert on FluxDrive (the drive empty for 1 s, then the disk back
+// with the change latch set: AmigaDOS reads the tab when a disk comes in) and answers after it. What the answer means:
+// nullptr = done (0x01); otherwise why not. 0x00: no disk in it, nothing changed. No answer for the whole wait (ran_out):
+// busy, FD_WP_BUSY - FluxDrive holds commands while the Amiga reads and makes the change after the load; its beacon's "wp"
+// shows it then, and that is what the screen goes by. The connection closed early without one: "no reply". Another byte:
+// "refused".
+#define FD_WP_BUSY "busy - it changes when the Amiga stops"
+inline const char* fdWpFailText(int reply, bool ran_out) {
+  if (reply == 0x01) return nullptr;
+  if (reply == 0x00) return "no disk in it";
+  if (reply < 0) return ran_out ? FD_WP_BUSY : "no reply";
+  return "refused";
 }
