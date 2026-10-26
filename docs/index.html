@@ -171,6 +171,8 @@
   esp-web-install-button::part(button){font-family:var(--display);font-weight:700;font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;padding:.7rem 1.4rem;border-radius:4px;border:1px solid var(--green);background:var(--green);color:#0d1f16;cursor:pointer}
   esp-web-install-button::part(button):hover{background:#5fe6a1;border-color:#5fe6a1}
   esp-web-install-button[install-unsupported]{display:block;font-size:.78rem;color:var(--red)}
+  a.install-alt{display:inline-block;text-decoration:none;font-family:var(--display);font-weight:700;font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;padding:.7rem 1.4rem;border-radius:4px;border:1px solid var(--green);background:var(--green);color:#0d1f16}
+  a.install-alt:hover{background:#5fe6a1;border-color:#5fe6a1}
 
   .opt{background:var(--panel);border:1px solid var(--border);border-radius:5px;padding:1.05rem 1.1rem;margin-bottom:.9rem}
   .opt h3{font-family:var(--display);font-weight:700;font-size:.92rem;color:var(--bright);margin:0 0 .35rem}
@@ -300,6 +302,7 @@
       <div class="card-h"><span class="num">3</span><span id="s3h">Flash it</span></div>
       <div class="fwline" id="fwline"></div>
       <esp-web-install-button id="installBtn" manifest="" hide-progress></esp-web-install-button>
+      <a class="install-alt" id="installAlt" href="flash.html" hidden>Install</a>
       <div class="status" id="flash-status">The flasher opens its own window — pick your board’s port there, then it installs. Don’t unplug until it finishes.</div>
     </div>
   </section>
@@ -459,7 +462,7 @@
         prep:'Use the USB-C port <b>furthest from the buttons</b>, with a <b>data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release. <span class="muted">First boot self-updates its WiFi co-processor from the SD card.</span> <span class="muted">This card is for P4 <b>chip v1.x</b> (v1.3). Not sure which chip your P4 has? <a href="chip.html">Check it here first</a>.</span>',
         stable:null,
         beta:{man:'firmware/p4-beta/manifest-5.9.42-lab5.json', ver:'Firmware 5.9.42-lab5-P4 (LAB) — FIX: cable loads now work on a standard Gotek (USB packet size at Full-Speed). NEO look with a switch: Settings → NEO ON/OFF. Plug the P4 in after the Amiga has started, or use a powered USB hub. For P4 chips revision v1.x (the IDE says "Before v3.00"). After flashing, power it off and on once before saving games.', sd:'firmware/p4-beta/GTi-P4-5.9.42-lab5-update.bin'}},
-      {id:'p4v3', grp:'4.3', nm:'Guition JC4880 · P4 — chip v3', sz:'4.3″', ar:800/480, meta:'ESP32-P4 chip v3.x + C6 · 480×800 DSI',
+      {id:'p4v3', web07:true, grp:'4.3', nm:'Guition JC4880 · P4 — chip v3', sz:'4.3″', ar:800/480, meta:'ESP32-P4 chip v3.x + C6 · 480×800 DSI',
         spot:'Newer JC4880 boards with the v3 P4 chip', tags:[['LAB','t-beta'],['STANDALONE','t-stand'],['WIRELESS','t-wifi']],
         prep:'Use the USB-C port <b>furthest from the buttons</b>, with a <b>data cable</b>. Hold <b>BOOT</b>, tap <b>RESET</b>, release. <span class="muted">First boot self-updates its WiFi co-processor.</span> <span class="muted">This card is <b>only for P4 chip v3.x</b> (v3.0 and newer) - a v1.3 board won\'t start with it (no harm done: flash the chip v1.3 card). Not sure which chip your P4 has? <a href="chip.html">Check it here first</a>.</span>',
         stable:null,
@@ -793,6 +796,14 @@
   function applyBuild(){
     const b=curBuild(); if(!b) return;
     $('installBtn').setAttribute('manifest', b.man);
+    // P4 chip v3.x: ESP Web Tools 10.4.0 (esptool-js 0.6.x) fails "Failed to initialize" on a v3.2, so these cards
+    // install from flash.html (esptool-js 0.7.0) instead. It needs a real manifest file, not an in-browser blob.
+    const alt = !!sel.web07;
+    let man07 = b.man; if (alt && /^blob:/.test(man07) && selVer && selVer.full) man07 = selVer.full;
+    $('installBtn').hidden = alt; $('installAlt').hidden = !alt;
+    if (alt) $('installAlt').href = 'flash.html?m=' + encodeURIComponent(man07) + '&chip=v3';
+    $('flash-status').textContent = alt ? 'Opens the GTi P4 v3 flasher page (needed for chip v3) - pick your board\u2019s port there, then it installs. Don\u2019t unplug until it finishes.'
+                                        : 'The flasher opens its own window \u2014 pick your board\u2019s port there, then it installs. Don\u2019t unplug until it finishes.';
     let tag='';
     if(selVer){ tag=' <span class="v">· '+selVer.ch+(selVer.ch==='beta'?' / testing':'')+'</span>';
       $('vhint').textContent = selVer.full ? '(full image — clean wipe)' : '(app image — keeps SD settings)'; }
@@ -812,7 +823,7 @@
     $('mode-fresh').classList.add('on'); $('mode-sd').classList.remove('on');
     $('ready-chk').checked=false; $('btn-confirm').disabled=true;
     $('confirm-status').innerHTML='';
-    $('verbox').hidden=true; $('betabox').hidden=true; $('beta-chk').checked=false; $('fwline').innerHTML=''; $('installBtn').setAttribute('manifest','');
+    $('verbox').hidden=true; $('betabox').hidden=true; $('beta-chk').checked=false; $('fwline').innerHTML=''; $('installBtn').setAttribute('manifest',''); $('installBtn').hidden=false; $('installAlt').hidden=true;
     $('legacy-wrap').hidden=true; $('trouble').hidden=false;
     $('s3').hidden=false; $('stln2').hidden=false; $('step3-dot').hidden=false;
     $('ready-row').hidden=false; $('btn-confirm').hidden=false; $('confirm-status').hidden=false;

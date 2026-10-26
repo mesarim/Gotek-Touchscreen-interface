@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GTi P4 v3 Flasher — OMEGAWARE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap">
+<style>
+  /* Same look as the GTi Flasher (index.html) and the Chip Check (chip.html). */
+  :root{
+    --bg:#12131b; --panel:#191b28; --panel2:#1f2233; --border:#2c2f47;
+    --copper1:#ff8a3c; --copper2:#ffc061; --green:#46d68f; --dim:#9096ba;
+    --text:#e2e4f3; --bright:#fff; --blue:#6aa6ff; --red:#ff6060;
+    --mono:'Share Tech Mono',ui-monospace,monospace; --display:'Orbitron',var(--mono);
+  }
+  *{box-sizing:border-box}
+  [hidden]{display:none!important}
+  html{color-scheme:dark}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);line-height:1.5;-webkit-font-smoothing:antialiased}
+  .copper-top{height:6px;background:linear-gradient(90deg,#f00,#ff6b00,#fa0,#ff0,#0f8,#08f,#80f,#f08,#f00);background-size:200% 100%;animation:cs 3s linear infinite}
+  @keyframes cs{from{background-position:0 0}to{background-position:200% 0}}
+  @media (prefers-reduced-motion:reduce){.copper-top{animation:none}}
+  header{text-align:center;padding:2rem 1rem 1.3rem;border-bottom:1px solid var(--border)}
+  .eyebrow{font-size:.68rem;letter-spacing:.4em;color:var(--copper1);text-transform:uppercase;margin-bottom:.5rem}
+  h1{font-family:var(--display);font-weight:900;font-size:clamp(1.3rem,4.2vw,2.1rem);color:var(--bright);letter-spacing:.04em;line-height:1.1;margin:0}
+  h1 b{color:var(--copper2);font-weight:900}
+  .tagline{margin-top:.55rem;font-size:.72rem;color:var(--dim);letter-spacing:.18em;text-transform:uppercase}
+  main{max-width:720px;margin:0 auto;padding:1.4rem 1rem 4rem}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:5px;padding:1.2rem 1.2rem 1.1rem;margin-bottom:1rem}
+  .card h2{font-family:var(--display);font-weight:700;font-size:1rem;color:var(--bright);margin:0 0 .5rem;letter-spacing:.02em}
+  .card p{margin:.35rem 0;font-size:.85rem}
+  ol{margin:.3rem 0 .2rem;padding-left:1.3rem;font-size:.85rem}
+  ol li{margin:.2rem 0}
+  .fw{font-size:.85rem;background:var(--panel2);border-radius:3px;padding:.6rem .8rem;margin:.6rem 0}
+  .fw b{color:var(--bright)}
+  .btn{font-family:var(--display);font-weight:700;font-size:.85rem;letter-spacing:.08em;text-transform:uppercase;color:#0d1f16;background:var(--green);border:1px solid var(--green);border-radius:4px;padding:.7rem 1.4rem;cursor:pointer;margin-top:.6rem}
+  .btn:hover{background:#5fe6a1}
+  .btn:disabled{background:var(--border);border-color:var(--border);color:var(--dim);cursor:default}
+  .status{font-size:.82rem;color:var(--dim);margin-top:.6rem;min-height:1.2em}
+  .status.err{color:var(--red)} .status.ok{color:var(--green)}
+  .bar{height:10px;background:#0d0e14;border:1px solid var(--border);border-radius:5px;overflow:hidden;margin-top:.7rem}
+  .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--copper1),var(--copper2));transition:width .2s}
+  .pct{font-size:.75rem;color:var(--dim);margin-top:.25rem}
+  details{margin-top:.6rem;font-size:.75rem;color:var(--dim)}
+  pre{white-space:pre-wrap;word-break:break-word;background:#0d0e14;border:1px solid var(--border);border-radius:3px;padding:.6rem;max-height:16rem;overflow:auto;color:var(--text)}
+  a{color:var(--blue)}
+  footer{text-align:center;font-size:.7rem;color:var(--dim);padding:1rem}
+</style>
+</head>
+<body>
+<div class="copper-top"></div>
+<header>
+  <div class="eyebrow">OMEGAWARE</div>
+  <h1><b>GTi</b> P4 v3 Flasher</h1>
+  <div class="tagline">for ESP32-P4 chip v3.x boards</div>
+</header>
+<main>
+  <div class="card">
+    <h2>Why a separate flasher?</h2>
+    <p>The main <a href="./">GTi Flasher</a> uses a flashing library that can't start up ("initialise") a P4 with
+       chip <b>v3.x</b> yet. This page uses Espressif's newer library, which can. It writes the same firmware.</p>
+    <div class="fw" id="fw">Loading the firmware details...</div>
+    <ol>
+      <li>Use Chrome or Edge on a computer.</li>
+      <li>Plug the board in with a data USB-C cable, on the port you flash with.</li>
+      <li>Close the Arduino serial monitor or anything else using that port.</li>
+      <li>Press <b>Install</b> and pick the port. Don't unplug until it says done.</li>
+    </ol>
+    <button class="btn" id="go" disabled>Install</button>
+    <div class="bar" id="bar" hidden><i id="barfill"></i></div>
+    <div class="pct" id="pct"></div>
+    <div class="status" id="status"></div>
+    <p id="noserial" class="status err" hidden>This browser has no Web Serial. Open this page in Chrome or Edge on a computer.</p>
+  </div>
+  <details>
+    <summary>Technical log</summary>
+    <pre id="log"></pre>
+  </details>
+</main>
+<footer>GTi by OMEGAWARE · flashing with <a href="https://github.com/espressif/esptool-js">esptool-js</a> 0.7.0 · <a href="chip.html">Chip check</a> · <a href="./">GTi Flasher</a></footer>
+
+<script type="module">
+// Writes an ESP Web Tools manifest's parts with esptool-js 0.7.0 (the first release that brings up P4 chip v3.2 /
+// ECO7 reliably: flash power-on before attach + the ECO7 "XPD twice" ROM workaround; ESP Web Tools 10.4.0 bundles
+// 0.6.x and fails with "Failed to initialize" on a v3.2).
+// URL: flash.html?m=<manifest path, relative to this page>&chip=v3   (chip = which P4 family the image is built for)
+import { ESPLoader, Transport } from "https://unpkg.com/esptool-js@0.7.0/bundle.js";
+
+const $ = (id) => document.getElementById(id);
+const q = new URLSearchParams(location.search);
+const MANIFEST = q.get("m") || "firmware/p4v3-lab/manifest-5.9.42-lab5-P4V3.json";
+const WANT = (q.get("chip") || "v3").toLowerCase();   // v3 = needs P4 rev >= 3.0, v1 = needs rev < 3.0
+const logEl = $("log");
+const term = { clean() { logEl.textContent = ""; }, writeLine(s) { logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight; }, write(s) { logEl.textContent += s; } };
+let manifest = null, manBase = "";
+
+function setStatus(msg, cls = "") { const s = $("status"); s.textContent = msg; s.className = "status" + (cls ? " " + cls : ""); }
+function setBar(frac, label) { $("bar").hidden = false; $("barfill").style.width = Math.round(frac * 100) + "%"; $("pct").textContent = label || ""; }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+// Only manifests that live on this site (a relative path, no scheme, no "..").
+function safePath(p) { return !/^[a-z]+:|^\/\/|\.\./i.test(p); }
+
+async function loadManifest() {
+  if (!safePath(MANIFEST)) throw new Error("Bad manifest path");
+  const r = await fetch(MANIFEST, { cache: "no-store" });
+  if (!r.ok) throw new Error("Couldn't load " + MANIFEST + " (" + r.status + ")");
+  manifest = await r.json();
+  manBase = MANIFEST.replace(/[^/]*$/, "");
+  const b = manifest.builds && manifest.builds[0];
+  if (!b || !b.parts || !b.parts.length) throw new Error("The manifest lists no firmware parts");
+  $("fw").innerHTML = "<b>" + esc(manifest.name || "GTi firmware") + "</b><br>Version " + esc(manifest.version || "?") +
+    " · for ESP32-P4 chip <b>" + (WANT === "v3" ? "v3.x" : "v1.x") + "</b> · full flash (the whole board is rewritten).";
+  if ("serial" in navigator) $("go").disabled = false; else $("noserial").hidden = false;
+}
+
+async function fetchBin(url, onProg) {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) throw new Error("Download failed: " + url + " (" + r.status + ")");
+  const total = +r.headers.get("content-length") || 0, reader = r.body.getReader(), chunks = []; let got = 0;
+  for (;;) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); got += value.length; if (total) onProg(got / total); }
+  const out = new Uint8Array(got); let o = 0; for (const c of chunks) { out.set(c, o); o += c.length; } return out;
+}
+
+async function install() {
+  let transport = null, loader = null, flashed = false;
+  $("go").disabled = true; term.clean();
+  try {
+    setStatus("Downloading the firmware...");
+    const parts = manifest.builds[0].parts, files = [];
+    for (let i = 0; i < parts.length; i++) {
+      if (!safePath(parts[i].path)) throw new Error("Bad part path");
+      const data = await fetchBin(manBase + parts[i].path, f => setBar(f, "Downloading " + (i + 1) + "/" + parts.length + ": " + Math.round(f * 100) + "%"));
+      files.push({ data, address: parts[i].offset });
+    }
+
+    setStatus("Choose the board's serial port...");
+    const port = await navigator.serial.requestPort();
+    transport = new Transport(port, false);
+    loader = new ESPLoader({ transport, baudrate: 921600, terminal: term, debugLogging: false });
+
+    setStatus("Connecting (the board resets into its loader)...");
+    await loader.main("default_reset");                       // detect chip, power the flash, load the stub
+
+    const name = loader.chip.CHIP_NAME || "";
+    const want = (manifest.builds[0].chipFamily || "").toUpperCase();
+    if (want && name.toUpperCase() !== want) throw new Error("This board is a " + name + ", not an " + want + ". Pick the card for your board on the GTi Flasher.");
+    if (name.toUpperCase() === "ESP32-P4" && loader.chip.getChipRevision) {
+      const rev = await loader.chip.getChipRevision(loader), v = "v" + Math.floor(rev / 100) + "." + (rev % 100);
+      if (WANT === "v3" && rev < 300) throw new Error("This P4 is chip " + v + ". This firmware is only for chip v3.x - use the \"chip v1.3\" card on the GTi Flasher. Nothing was written.");
+      if (WANT === "v1" && rev >= 300) throw new Error("This P4 is chip " + v + ". This firmware is only for chip v1.x - use the \"chip v3\" card on the GTi Flasher. Nothing was written.");
+      term.writeLine("Chip revision " + v + " matches.");
+    }
+
+    setStatus("Writing - don't unplug...");
+    const total = files.reduce((a, f) => a + f.data.length, 0); let before = 0, cur = 0;
+    await loader.writeFlash({
+      fileArray: files, flashMode: "keep", flashFreq: "keep", flashSize: "keep", eraseAll: false, compress: true,
+      reportProgress: (i, written, size) => { if (i !== cur) { before += files[cur].data.length; cur = i; } setBar((before + written) / total, "Writing: " + Math.round((before + written) / total * 100) + "%"); },
+    });
+    flashed = true;
+    setBar(1, "Writing: 100%");
+    setStatus("Done. The board restarts with the new firmware. Power it off and on once before saving games.", "ok");
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (/No port selected/i.test(msg)) setStatus("No port chosen.", "err");
+    else setStatus((flashed ? "" : "Not installed: ") + msg + (/connect|timeout|sync/i.test(msg) ? " - replug the board (or hold BOOT while plugging in) and try again." : ""), "err");
+    term.writeLine("ERROR: " + msg);
+  } finally {
+    try { if (loader) await loader.after("hard_reset"); } catch (e) { term.writeLine("reset: " + e); }
+    try { if (transport) await transport.disconnect(); } catch (e) {}
+    $("go").disabled = !("serial" in navigator);
+  }
+}
+
+$("go").addEventListener("click", install);
+loadManifest().catch(e => { $("fw").textContent = String(e.message || e); setStatus("Can't install: the firmware details didn't load.", "err"); });
+</script>
+</body>
+</html>
