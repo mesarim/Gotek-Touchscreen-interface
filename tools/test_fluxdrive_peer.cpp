@@ -1158,6 +1158,58 @@ static void test_fd_fresh_pending_check() {
   CHECK(fdFreshPendingCheck(&p, 43, 43, true, true) == FdRevert::Keep);
 }
 
+// fix round 2: START FRESH on G with a resend (the original is disk 43, it replaced 42) and then on H without one in the same
+// window (fresh = the disk in it now, 43 as well; H's disk 41 is a kept record). Both share the FluxDrive and the fresh uid,
+// never the backup: two entries, and whichever disk comes back undoes only its own START FRESH with its own backup.
+static void test_fd_two_games_started_fresh_in_one_window() {
+  const char* id = "A1B2C3D4E5F6";
+  FdFreshPending t[4]; std::memset(t, 0, sizeof t); int n = 0;
+  FdFreshPending g, h, ev; std::memset(&g, 0, sizeof g); std::memset(&h, 0, sizeof h);
+  CHECK(fdFreshPendingSet(g, id, 43, 42, "/ADF/G.sav.80FE.adf", "/ADF/G.sav.80FE.fresh-0000002B.adf", "/ADF/G.adf", "80FE"));
+  CHECK(fdFreshPendingSet(h, id, 43, 41, "/ADF/H.sav.80FE.adf", "/ADF/H.sav.80FE.fresh-0000002B.adf", "/ADF/H.adf", "80FE"));
+  CHECK(!fdPendSame(g, h));
+  CHECK(fdPendPut(t, n, 4, g, &ev) == FD_PEND_ADDED && n == 1);
+  CHECK(fdPendPut(t, n, 4, h, &ev) == FD_PEND_ADDED && n == 2);       // H does not replace G
+  auto undoes = [&](uint32_t cur, uint32_t beacon) -> const FdFreshPending* {   // the one entry a beacon undoes, else none
+    const FdFreshPending* u = nullptr; int k = 0;
+    for (int i = 0; i < n; i++) if (fdFreshPendingCheck(&t[i], cur, beacon, true, true) == FdRevert::Restore) { u = &t[i]; k++; }
+    return k == 1 ? u : nullptr;
+  };
+  const FdFreshPending* u = undoes(43, 42);                            // G's disk back: G's own backup, G's own save
+  CHECK(u != nullptr && std::strcmp(u->bak, "/ADF/G.sav.80FE.fresh-0000002B.adf") == 0 && std::strcmp(u->own, "/ADF/G.sav.80FE.adf") == 0);
+  u = undoes(43, 41);                                                  // H's disk back: H's
+  CHECK(u != nullptr && std::strcmp(u->bak, "/ADF/H.sav.80FE.fresh-0000002B.adf") == 0 && std::strcmp(u->own, "/ADF/H.sav.80FE.adf") == 0);
+  CHECK(undoes(43, 43) == nullptr && undoes(43, 44) == nullptr);
+  CHECK(fdFreshPendingCheck(&t[1], 42, 42, true, true) == FdRevert::DropPrev);   // G's disk back and stored: H's stands
+  CHECK(fdFreshPendingCheck(&t[0], 41, 41, true, true) == FdRevert::DropPrev);   // H's disk back and stored: G's stands
+  CHECK(fdFreshPendingCheck(&t[0], 43, 43, true, true) == FdRevert::DropPrev &&
+        fdFreshPendingCheck(&t[1], 43, 43, true, true) == FdRevert::DropPrev);   // the original stored: both done
+  // the same START FRESH again (FluxDrive, fresh disk and backup) replaces its entry; anything else is another one
+  FdFreshPending g2 = g; g2.prior_uid = 40;
+  CHECK(fdPendSame(g, g2) && fdPendPut(t, n, 4, g2, &ev) == FD_PEND_REPLACED && n == 2 && t[0].prior_uid == 40 && t[1].prior_uid == 41);
+  FdFreshPending g3 = g; std::strcpy(g3.bak, "/adf/g.SAV.80fe.FRESH-0000002b.ADF");   // a FAT name: case does not count
+  CHECK(fdPendSame(g, g3));
+  FdFreshPending o = g; std::strcpy(o.id, "0123456789AB");
+  CHECK(!fdPendSame(g, o));                                            // another FluxDrive
+  o = g; o.fresh_uid = 44;
+  CHECK(!fdPendSame(g, o));                                            // another fresh disk
+}
+
+// A full pending table forgets its oldest entry and says which (the caller logs it: that backup stays on the card).
+static void test_fd_pending_table_full_evicts_the_oldest() {
+  FdFreshPending t[3]; std::memset(t, 0, sizeof t); int n = 0;
+  FdFreshPending p, ev; std::memset(&p, 0, sizeof p); std::memset(&ev, 0, sizeof ev);
+  for (uint32_t i = 0; i < 3; i++) {
+    char bak[64]; std::snprintf(bak, sizeof bak, "/ADF/G%u.sav.80FE.fresh-%08X.adf", (unsigned)i, (unsigned)(50 + i));
+    CHECK(fdFreshPendingSet(p, "A1B2C3D4E5F6", 50 + i, 40, "/ADF/G.sav.80FE.adf", bak, "/ADF/G.adf", "80FE"));
+    CHECK(fdPendPut(t, n, 3, p, &ev) == FD_PEND_ADDED);
+  }
+  CHECK(fdFreshPendingSet(p, "A1B2C3D4E5F6", 53, 40, "/ADF/G.sav.80FE.adf", "/ADF/G3.sav.80FE.fresh-00000035.adf", "/ADF/G.adf", "80FE"));
+  CHECK(fdPendPut(t, n, 3, p, &ev) == FD_PEND_EVICTED && ev.fresh_uid == 50 && n == 3 && t[0].fresh_uid == 51 && t[2].fresh_uid == 53);
+  p.fresh_uid = 54; std::strcpy(p.bak, "/ADF/G4.sav.80FE.fresh-00000036.adf");
+  CHECK(fdPendPut(t, n, 3, p, nullptr) == FD_PEND_EVICTED && n == 3 && t[0].fresh_uid == 52);   // without an out: still evicts
+}
+
 // The START FRESH confirm says "reset the Amiga afterwards" for a DOS disk: AmigaDOS takes two disks with the same name
 // and date as one volume. A DOS disk's boot block starts "DOS" and a flags byte 0-7.
 static void test_fd_dos_boot_block() {
@@ -1249,6 +1301,8 @@ int main() {
   test_fd_save_aside_names();
   test_fd_fresh_pending_is_made_whole_or_not_at_all();
   test_fd_fresh_pending_check();
+  test_fd_two_games_started_fresh_in_one_window();
+  test_fd_pending_table_full_evicts_the_oldest();
   test_fd_dos_boot_block();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;

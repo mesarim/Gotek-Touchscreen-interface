@@ -957,7 +957,10 @@ static void pfPrevDrop(const String &id) {
 static FdPrevList *pfPrevFor(const String &id, bool make = false) {
   for (int i = 0; i < g_pfPrevN; i++) if (id == g_pfPrev[i].id) return &g_pfPrev[i].l;
   if (!make || id.length() >= sizeof g_pfPrev[0].id || !pfWinReady()) return nullptr;
-  if (g_pfPrevN >= PF_FDSAVES_MAX) { for (int k = 1; k < g_pfPrevN; k++) g_pfPrev[k - 1] = g_pfPrev[k]; g_pfPrevN--; }
+  if (g_pfPrevN >= PF_FDSAVES_MAX) {   // fix round 2: a full table says which FluxDrive's kept records it forgets
+    gLog("[saves] FluxDrive %s: its %d kept record(s) are forgotten - records are kept for %d FluxDrives at most\n",
+         g_pfPrev[0].l.n ? g_pfPrev[0].l.r[0].tag : g_pfPrev[0].id, g_pfPrev[0].l.n, PF_FDSAVES_MAX);
+    for (int k = 1; k < g_pfPrevN; k++) g_pfPrev[k - 1] = g_pfPrev[k]; g_pfPrevN--; }
   PfPrevSlot &s = g_pfPrev[g_pfPrevN++];
   memset(&s, 0, sizeof s); strcpy(s.id, id.c_str()); fdPrevClear(s.l);
   return &s.l;
@@ -967,15 +970,14 @@ static void pfPendDropAt(int k) {
   for (int i = k + 1; i < g_pfPendN; i++) g_pfPend[i - 1] = g_pfPend[i];
   g_pfPendN--;
 }
-// p becomes a pending START FRESH (one per FluxDrive and fresh disk: a second START FRESH keeps the first one's entry and
-// backup). A full table forgets the oldest entry (*ev, *evicted: its backup stays on the card). false = no RAM.
+// p becomes a pending START FRESH (fix round 2: one per FluxDrive, fresh disk and backup - fdPendSame, fdPendPut - so a second
+// START FRESH, of this game or another, keeps the first one's entry and backup). A full table forgets the oldest entry (*ev,
+// *evicted: the caller logs it; its backup stays on the card). false = no RAM.
 static bool pfPendPut(const FdFreshPending &p, FdFreshPending *ev, bool *evicted) {
   *evicted = false;
   if (!pfWinReady()) return false;
-  const FdFreshPending c = p;
-  for (int i = 0; i < g_pfPendN; i++) if (strcmp(g_pfPend[i].id, c.id) == 0 && g_pfPend[i].fresh_uid == c.fresh_uid) { pfPendDropAt(i); break; }
-  if (g_pfPendN >= PF_FDSAVES_MAX) { *ev = g_pfPend[0]; *evicted = true; pfPendDropAt(0); }
-  g_pfPend[g_pfPendN++] = c;
+  const FdFreshPending c = p;   // p may live in this table
+  *evicted = fdPendPut(g_pfPend, g_pfPendN, PF_FDSAVES_MAX, c, ev) == FD_PEND_EVICTED;
   return true;
 }
 

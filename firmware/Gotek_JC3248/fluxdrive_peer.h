@@ -675,6 +675,24 @@ inline bool fdFreshPendingSet(FdFreshPending& p, const char* id, uint32_t fresh_
   p = t;
   return true;
 }
+// Fix round 2: one pending entry per FluxDrive, fresh disk AND backup. START FRESH on a game with a resend and then on another
+// game without one, in the same window, share the FluxDrive and the fresh disk's uid (without a resend it is the disk in it
+// now) but never the backup: two entries, each undone or done with its own backup. The backup is compared as a FAT path.
+inline bool fdPendSame(const FdFreshPending& a, const FdFreshPending& b) {
+  return strncmp(a.id, b.id, sizeof a.id) == 0 && a.fresh_uid == b.fresh_uid && fdPathSame(a.bak, b.bak);
+}
+enum { FD_PEND_ADDED = 0, FD_PEND_REPLACED = 1, FD_PEND_EVICTED = 2 };
+// p into the table t[0..n) that has room for cap: the same entry (fdPendSame) is replaced where it is; otherwise p is
+// appended, and a full table first drops its oldest entry (*ev when ev: the caller logs it, that backup stays on the card).
+// -1: no table.
+inline int fdPendPut(FdFreshPending* t, int& n, int cap, const FdFreshPending& p, FdFreshPending* ev) {
+  if (t == nullptr || cap <= 0) return -1;
+  for (int i = 0; i < n; i++) if (fdPendSame(t[i], p)) { t[i] = p; return FD_PEND_REPLACED; }
+  int res = FD_PEND_ADDED;
+  if (n >= cap) { if (ev != nullptr) *ev = t[0]; for (int i = 1; i < n; i++) t[i - 1] = t[i]; n--; res = FD_PEND_EVICTED; }
+  t[n++] = p;
+  return res;
+}
 // What a beacon of that FluxDrive means for a pending START FRESH (cur_uid: its record's uid now, the disk last flung to it):
 // Restore - the disk it replaced is in it again: undo, the backup is the own save again, the started-fresh mark goes;
 // DropPrev - the fresh disk, or the current disk flung after it, is in it and stored: done, the backup goes (no older disk can

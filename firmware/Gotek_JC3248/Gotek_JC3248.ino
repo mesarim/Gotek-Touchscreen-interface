@@ -6542,7 +6542,7 @@ static void doStartFresh(){
   if(gone)savSetRemove(sav);
   if(gone&&toBak){ FdFreshPending ev{}; bool evicted=false; pfPendPut(pend,&ev,&evicted);
     if(evicted) gLog("[saves] START FRESH %s: the START FRESH of %s on FluxDrive %s is no longer watched - its backup %s stays on the card\n",sav.c_str(),ev.image,ev.tag,ev.bak);
-    int others=0; for(int j=0;j<g_pfPendN;j++) if(pid==g_pfPend[j].id&&g_pfPend[j].fresh_uid!=pend.fresh_uid) others++;
+    int others=0; for(int j=0;j<g_pfPendN;j++) if(pid==g_pfPend[j].id&&!fdPendSame(g_pfPend[j],pend)) others++;   // fix round 2: every other one, this game's or another's
     if(others) gLog("[saves] START FRESH %s: %d earlier START FRESH(es) on FluxDrive %s still pending - their backups stay until their disks are stored or come back\n",sav.c_str(),others,tag.c_str()); }
   if(gone)fdPrevDropBase(sav,toBak?pid:String(),toBak?pend.prior_uid:0);   // no kept record may be put back onto a base that is gone
   gLog("[saves] START FRESH %s: %s%s%s%s\n",sav.c_str(),!gone?"could NOT be deleted":toBak?"kept as ":"deleted",gone&&toBak?bak.c_str():"",
