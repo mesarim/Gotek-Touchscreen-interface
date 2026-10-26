@@ -995,33 +995,113 @@ static void test_fd_revert_check_keep_for_anything_else() {
   CHECK(fdRevertCheck(&same, &kPrev, 42, true, true) == FdRevert::DropPrev);
 }
 
-// At a fling, the record kept as the one the new disk replaced: the one already kept (its disk is the last this panel saw
-// stored; the disk in between never was, so a power cut brings the older one back), else the record the fling replaces.
-// None for a first fling, a record without a uid, or the new disk itself.
-static void test_fd_prev_at_fling_keeps_the_last_disk_known_stored() {
-  const FdSaveRecord a = fdRec("A1B2C3D4E5F6", 41, "/ADF/F.adf", "/ADF/F.adf", "80FE");
-  const FdSaveRecord b = fdRec("A1B2C3D4E5F6", 42, "/ADF/G.adf", "/ADF/G.adf", "80FE");
-  CHECK(fdPrevAtFling(&b, nullptr, 43) == &b);                         // B was stored (nothing kept): B's record is kept
-  CHECK(fdPrevAtFling(&b, &a, 43) == &a);                              // a second fling before B was seen stored: A stays
-  CHECK(fdPrevAtFling(nullptr, &a, 43) == &a);
-  CHECK(fdPrevAtFling(nullptr, nullptr, 43) == nullptr);               // the first fling to it
-  CHECK(fdPrevAtFling(&b, nullptr, 42) == nullptr);                    // the same uid is not a replaced disk
-  CHECK(fdPrevAtFling(&b, &a, 41) == &b);
-  FdSaveRecord z = b; z.uid = 0;
-  CHECK(fdPrevAtFling(&z, nullptr, 43) == nullptr);
-  CHECK(fdPrevAtFling(&b, &z, 43) == &b);                              // a kept record without a uid is none
+// fix round 1: per FluxDrive a short list (FD_PREV_MAX) of the records flings replaced since its disk was last seen stored.
+// B can be stored without the panel seeing it (ejected while its commit finished, a dropped beacon, UDP loss), so a power
+// cut in C's window can bring back A or B: both are kept. Each fling appends the record it replaces; a full list drops the
+// oldest. A beacon with a disk whose uid is any kept one restores that one; the current disk stored clears the list.
+static const FdSaveRecord kA = fdRec("A1B2C3D4E5F6", 41, "/ADF/F.sav.80FE.adf", "/ADF/F.adf", "80FE");
+static const FdSaveRecord kB = fdRec("A1B2C3D4E5F6", 42, "/ADF/G.sav.80FE.adf", "/ADF/G.adf", "80FE");
+static const FdSaveRecord kC = fdRec("A1B2C3D4E5F6", 43, "/ADF/H.adf", "/ADF/H.adf", "80FE");
+
+static void test_fd_prev_list_a_b_c_reverts_to_a_or_b_or_none() {
+  FdPrevList l; fdPrevClear(l);
+  FdPrevOut o;
+  CHECK(fdPrevAtFling(l, nullptr, kA, false, &o) == FD_PREV_NONE && l.n == 0);   // the first fling to it: nothing replaced
+  CHECK(fdPrevAtFling(l, &kA, kB, false, &o) == FD_PREV_KEPT && l.n == 1 && l.r[0].uid == 41 && !o.evicted);
+  CHECK(fdPrevAtFling(l, &kB, kC, false, &o) == FD_PREV_KEPT && l.n == 2 && l.r[0].uid == 41 && l.r[1].uid == 42);
+  int w = -1;
+  CHECK(fdRevertList(&kC, l, 41, true, true, &w) == FdRevert::Restore && w == 0);    // back to A
+  CHECK(fdRevertList(&kC, l, 42, true, true, &w) == FdRevert::Restore && w == 1);    // back to B (stored, never seen so)
+  CHECK(fdRevertList(&kC, l, 42, true, false, &w) == FdRevert::Restore && w == 1);
+  CHECK(fdRevertList(&kC, l, 43, true, true, &w) == FdRevert::DropPrev && w == -1);  // C stored: the whole list goes
+  CHECK(fdRevertList(&kC, l, 43, true, false, &w) == FdRevert::Keep && w == -1);     // none: C's commit still runs
+  CHECK(fdRevertList(&kC, l, 42, false, true, &w) == FdRevert::Keep && w == -1);     // none: empty drive (B's uid kept)
+  CHECK(fdRevertList(&kC, l, 44, true, true, &w) == FdRevert::Keep);                 // none: a third disk
+  CHECK(fdRevertList(&kC, l, 0, true, true, &w) == FdRevert::Keep);
+  CHECK(fdRevertList(nullptr, l, 41, true, true, &w) == FdRevert::Restore && w == 0);   // its record gone meanwhile
+  CHECK(fdRevertList(nullptr, l, 43, true, true, &w) == FdRevert::Keep);
+  FdPrevList e; fdPrevClear(e);
+  CHECK(fdRevertList(&kC, e, 43, true, true, &w) == FdRevert::Keep && w == -1);      // nothing kept: nothing to do
+  FdSaveRecord other = kC; std::strcpy(other.id, "0123456789AB");
+  CHECK(fdRevertList(&other, l, 41, true, true, &w) == FdRevert::Keep);              // another FluxDrive's record
+}
+
+static void test_fd_prev_list_drops_the_oldest_when_full() {
+  FdPrevList l; fdPrevClear(l);
+  FdPrevOut o;
+  FdSaveRecord r[6];
+  for (int i = 0; i < 6; i++) {
+    char orig[40], own[40]; std::snprintf(orig, sizeof orig, "/ADF/G%d.adf", i); std::snprintf(own, sizeof own, "/ADF/G%d.sav.80FE.adf", i);
+    r[i] = fdRec("A1B2C3D4E5F6", 100u + (uint32_t)i, own, orig, "80FE");
+  }
+  for (int i = 1; i <= FD_PREV_MAX; i++) CHECK(fdPrevAtFling(l, &r[i - 1], r[i], false, &o) == FD_PREV_KEPT && !o.evicted);
+  CHECK(l.n == FD_PREV_MAX);
+  CHECK(fdPrevAtFling(l, &r[FD_PREV_MAX], r[FD_PREV_MAX + 1], false, &o) == FD_PREV_KEPT && o.evicted && o.ev.uid == 100 &&
+        l.n == FD_PREV_MAX && l.r[0].uid == 101 && l.r[FD_PREV_MAX - 1].uid == 100u + FD_PREV_MAX);
+  int w = -1;
+  CHECK(fdRevertList(&r[FD_PREV_MAX + 1], l, 100, true, true, &w) == FdRevert::Keep);   // the dropped one is gone
+  CHECK(fdRevertList(&r[FD_PREV_MAX + 1], l, 101, true, true, &w) == FdRevert::Restore && w == 0);
+}
+
+// fix round 1 Fix 3: the same game flung again (same image, same FluxDrive, so the same own save) keeps no replaced record:
+// the new disk's fetches patch the own save in place during the window, and the old record's later sectors would land on
+// top of them (a mixed save). An older kept record of that game goes too, for the same reason. START FRESH's fling of the
+// original keeps it (keep_same_game): its own save is set aside and comes back with an undo, so nothing is mixed.
+static void test_fd_prev_list_same_game_keeps_nothing() {
+  FdPrevList l; fdPrevClear(l);
+  FdPrevOut o;
+  FdSaveRecord b2 = kB; b2.uid = 52;                                   // G again, a new disk
+  CHECK(fdPrevAtFling(l, &kB, b2, false, &o) == FD_PREV_SAME_GAME && l.n == 0);
+  FdSaveRecord b3 = kB; b3.uid = 53; std::strcpy(b3.orig, "/adf/g.ADF"); // case does not count in a path
+  CHECK(fdPrevAtFling(l, &kB, b3, false, &o) == FD_PREV_SAME_GAME && l.n == 0);
+  CHECK(fdPrevAtFling(l, &kB, b2, true, &o) == FD_PREV_KEPT && l.n == 1);  // START FRESH: kept, its undo puts the save back
+  fdPrevClear(l);
+  // G, then H, then G again: G's record goes with the second G fling; H's is kept
+  CHECK(fdPrevAtFling(l, &kB, kC, false, &o) == FD_PREV_KEPT && l.n == 1);
+  CHECK(fdPrevAtFling(l, &kC, b2, false, &o) == FD_PREV_KEPT && o.same_dropped == 1 && l.n == 1 && l.r[0].uid == 43);
+  FdSaveRecord t = kB; std::strcpy(t.tag, "00FF");                     // another save tag: another own save
+  fdPrevClear(l);
+  CHECK(fdPrevAtFling(l, &t, b2, false, &o) == FD_PREV_KEPT && o.same_dropped == 0);
+  CHECK(fdSameGame(kB, b2) && fdSameGame(kB, b3) && !fdSameGame(kB, kC) && !fdSameGame(kB, t));
+}
+
+static void test_fd_prev_list_keeps_nothing_else() {
+  FdPrevList l; fdPrevClear(l);
+  FdPrevOut o;
+  FdSaveRecord z = kB; z.uid = 0;
+  CHECK(fdPrevAtFling(l, &z, kC, false, &o) == FD_PREV_NONE && l.n == 0);   // a record without a uid
+  CHECK(fdPrevAtFling(l, &kC, kC, false, &o) == FD_PREV_NONE && l.n == 0);  // the new disk itself
+  FdSaveRecord other = kB; std::strcpy(other.id, "0123456789AB");
+  CHECK(fdPrevAtFling(l, &other, kC, false, &o) == FD_PREV_NONE && l.n == 0);   // another FluxDrive's record
+  CHECK(fdPrevAtFling(l, &kA, kC, false, nullptr) == FD_PREV_KEPT && l.n == 1);   // no out: still kept
+  CHECK(fdPrevAtFling(l, &kA, kC, false, &o) == FD_PREV_KEPT && l.n == 1);   // the same record twice: kept once
+}
+
+// START FRESH's backup has a name of its own, with the fresh disk's uid in it, so two START FRESHes never share a file and
+// fdPersistLan's rebuild backup (Game.sav.<tag>.bak.adf) never touches it; an undo puts a save written in the window aside
+// under a name of its own too.
+static void test_fd_save_aside_names() {
+  char out[160];
+  CHECK(fdSaveAside("/ADF/G.sav.80FE.adf", "fresh", 0x2Bu, out, sizeof out) &&
+        std::strcmp(out, "/ADF/G.sav.80FE.fresh-0000002B.adf") == 0);
+  CHECK(fdSaveAside("/ADF/G.sav.80FE.adf", "undone", 0xDEADBEEFu, out, sizeof out) &&
+        std::strcmp(out, "/ADF/G.sav.80FE.undone-DEADBEEF.adf") == 0);
+  CHECK(fdSaveAside("/ADF/x.y/G", "fresh", 1, out, sizeof out) && std::strcmp(out, "/ADF/x.y/G.fresh-00000001") == 0);   // no extension
+  char p150[151]; fdLongPath(p150, 150);
+  CHECK(!fdSaveAside(p150, "fresh", 1, out, sizeof out) && out[0] == 0);   // does not fit whole: nothing (a cut name is another file)
+  CHECK(!fdSaveAside(nullptr, "fresh", 1, out, sizeof out) && !fdSaveAside("/ADF/G.adf", "fresh", 1, nullptr, 10));
 }
 
 // START FRESH on a FluxDrive that gets the original now: the own save is renamed to its .bak and this entry stays in RAM
 // (FluxDrive id, the fresh disk's uid, the uid of the disk it replaced, the own save, the .bak, the image, the save tag).
 static void test_fd_fresh_pending_is_made_whole_or_not_at_all() {
   const char* own = "/ADF/G.sav.80FE.adf";
-  const char* bak = "/ADF/G.sav.80FE.bak.adf";
+  const char* bak = "/ADF/G.sav.80FE.fresh-0000002B.adf";
   const char* img = "/ADF/G.adf";
   FdFreshPending p; std::memset(&p, 0x5A, sizeof p);
   CHECK(fdFreshPendingSet(p, "A1B2C3D4E5F6", 43, 42, own, bak, img, "80FE"));
   CHECK(std::strcmp(p.id, "A1B2C3D4E5F6") == 0 && p.fresh_uid == 43 && p.prior_uid == 42 && std::strcmp(p.own, own) == 0 &&
-        std::strcmp(p.bak, bak) == 0 && std::strcmp(p.image, img) == 0 && std::strcmp(p.tag, "80FE") == 0);
+        std::strcmp(p.bak, bak) == 0 && std::strcmp(p.image, img) == 0 && std::strcmp(p.tag, "80FE") == 0 && !p.undo_failed);
   const FdFreshPending keep = p;
   char p159[160]; fdLongPath(p159, 159);
   char p160[161]; fdLongPath(p160, 160);
@@ -1050,21 +1130,32 @@ static void test_fd_fresh_pending_is_made_whole_or_not_at_all() {
     CHECK(!fdFreshPendingSet(p, x.id, x.fresh, x.prior, x.own, x.bak, x.img, x.tag) && std::memcmp(&p, &keep, sizeof p) == 0);
 }
 
-// What a beacon of that FluxDrive means for a pending START FRESH: the fresh disk is in it and stored - done, the .bak goes
-// (DropPrev); the disk START FRESH replaced is in it again - undone, the .bak is its save again (Restore); else Keep. An
-// eject inside the window keeps it.
+// What a beacon of that FluxDrive means for a pending START FRESH (cur: the uid of its record now, the disk last flung to
+// it): the fresh disk - or the current one, flung after it - is in it and stored: done, the backup goes (DropPrev; no older
+// disk can come back then); the disk START FRESH replaced is in it again: undo (Restore); else Keep. An eject inside the
+// window keeps it, and so does an undo whose renames failed (undo_failed: the backup stays where it is).
 static void test_fd_fresh_pending_check() {
   FdFreshPending p; std::memset(&p, 0, sizeof p);
-  CHECK(fdFreshPendingSet(p, "A1B2C3D4E5F6", 43, 42, "/ADF/G.sav.80FE.adf", "/ADF/G.sav.80FE.bak.adf", "/ADF/G.adf", "80FE"));
-  CHECK(fdFreshPendingCheck(&p, 43, true, true) == FdRevert::DropPrev);
-  CHECK(fdFreshPendingCheck(&p, 43, true, false) == FdRevert::Keep);
-  CHECK(fdFreshPendingCheck(&p, 42, true, true) == FdRevert::Restore);
-  CHECK(fdFreshPendingCheck(&p, 42, true, false) == FdRevert::Restore);
-  CHECK(fdFreshPendingCheck(&p, 43, false, false) == FdRevert::Keep);   // ejected inside the window: the .bak stays
-  CHECK(fdFreshPendingCheck(&p, 42, false, true) == FdRevert::Keep);
-  CHECK(fdFreshPendingCheck(&p, 44, true, true) == FdRevert::Keep);     // a third disk
-  CHECK(fdFreshPendingCheck(&p, 0, true, true) == FdRevert::Keep);
-  CHECK(fdFreshPendingCheck(nullptr, 43, true, true) == FdRevert::Keep);
+  CHECK(fdFreshPendingSet(p, "A1B2C3D4E5F6", 43, 42, "/ADF/G.sav.80FE.adf", "/ADF/G.sav.80FE.fresh-0000002B.adf", "/ADF/G.adf", "80FE"));
+  CHECK(fdFreshPendingCheck(&p, 43, 43, true, true) == FdRevert::DropPrev);
+  CHECK(fdFreshPendingCheck(&p, 43, 43, true, false) == FdRevert::Keep);
+  CHECK(fdFreshPendingCheck(&p, 43, 42, true, true) == FdRevert::Restore);
+  CHECK(fdFreshPendingCheck(&p, 43, 42, true, false) == FdRevert::Restore);
+  CHECK(fdFreshPendingCheck(&p, 43, 43, false, false) == FdRevert::Keep);   // ejected inside the window: the backup stays
+  CHECK(fdFreshPendingCheck(&p, 43, 42, false, true) == FdRevert::Keep);
+  CHECK(fdFreshPendingCheck(&p, 43, 44, true, true) == FdRevert::Keep);     // a third disk (not flung by this panel)
+  CHECK(fdFreshPendingCheck(&p, 43, 0, true, true) == FdRevert::Keep);
+  CHECK(fdFreshPendingCheck(nullptr, 43, 43, true, true) == FdRevert::Keep);
+  // another disk flung after the original: once it is stored neither the original nor the replaced disk can come back
+  CHECK(fdFreshPendingCheck(&p, 44, 44, true, true) == FdRevert::DropPrev);
+  CHECK(fdFreshPendingCheck(&p, 44, 44, true, false) == FdRevert::Keep);
+  CHECK(fdFreshPendingCheck(&p, 44, 43, true, true) == FdRevert::DropPrev);  // the original came back stored: done as well
+  CHECK(fdFreshPendingCheck(&p, 44, 42, true, true) == FdRevert::Restore);
+  CHECK(fdFreshPendingCheck(&p, 0, 43, true, true) == FdRevert::DropPrev);
+  CHECK(fdFreshPendingCheck(&p, 0, 0, true, true) == FdRevert::Keep);
+  p.undo_failed = true;                                                      // its undo failed: frozen, the backup stays
+  CHECK(fdFreshPendingCheck(&p, 43, 42, true, true) == FdRevert::Keep);
+  CHECK(fdFreshPendingCheck(&p, 43, 43, true, true) == FdRevert::Keep);
 }
 
 // The START FRESH confirm says "reset the Amiga afterwards" for a DOS disk: AmigaDOS takes two disks with the same name
@@ -1151,7 +1242,11 @@ int main() {
   test_fd_revert_check_keep_without_prev();
   test_fd_revert_check_keep_when_not_loaded();
   test_fd_revert_check_keep_for_anything_else();
-  test_fd_prev_at_fling_keeps_the_last_disk_known_stored();
+  test_fd_prev_list_a_b_c_reverts_to_a_or_b_or_none();
+  test_fd_prev_list_drops_the_oldest_when_full();
+  test_fd_prev_list_same_game_keeps_nothing();
+  test_fd_prev_list_keeps_nothing_else();
+  test_fd_save_aside_names();
   test_fd_fresh_pending_is_made_whole_or_not_at_all();
   test_fd_fresh_pending_check();
   test_fd_dos_boot_block();

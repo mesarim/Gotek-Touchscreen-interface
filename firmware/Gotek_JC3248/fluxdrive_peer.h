@@ -577,20 +577,86 @@ inline FdRevert fdRevertCheck(const FdSaveRecord* cur, const FdSaveRecord* prev,
   return fdRevertUids(cur ? cur->uid : 0, prev->uid, beacon_uid, loaded, stored);
 }
 
-// A fling to a FluxDrive replaces its record `old` with the new disk's (new_uid). Which record is kept as prev: the one kept
-// already (`kept`), if any - the disk between it and this fling was never seen stored, so a power cut brings kept's disk back,
-// not that one -, else `old`. nullptr: nothing to keep (a first fling, no uid, or the new disk itself).
-inline const FdSaveRecord* fdPrevAtFling(const FdSaveRecord* old, const FdSaveRecord* kept, uint32_t new_uid) {
-  if (kept != nullptr && kept->uid != 0 && kept->uid != new_uid) return kept;
-  if (old != nullptr && old->uid != 0 && old->uid != new_uid) return old;
-  return nullptr;
+// Fix round 1: per FluxDrive a short list of the records flings replaced since its disk was last seen stored, oldest first.
+// One is not enough: a disk B can be stored without the panel seeing it (ejected while its commit finished - "stored" needs
+// a disk in the drive -, a beacon dropped after a fetch, fling or eject, UDP loss), so a power cut in the next fling's window
+// can bring back B or the disk before it. A full list forgets the oldest.
+#define FD_PREV_MAX 3
+struct FdPrevList { FdSaveRecord r[FD_PREV_MAX]; int n; };
+inline void fdPrevClear(FdPrevList& l) { l.n = 0; }
+// Two records of one game on one FluxDrive: the same image (whole path, case does not count) and the same save tag, so the
+// same own save Game.sav.<tag>.adf.
+inline bool fdSameGame(const FdSaveRecord& a, const FdSaveRecord& b) {
+  return fdPathSame(a.orig, b.orig) && strcmp(a.tag, b.tag) == 0;
+}
+enum { FD_PREV_NONE = 0, FD_PREV_KEPT = 1, FD_PREV_SAME_GAME = 2 };
+// What fdPrevAtFling also did: kept records of the new disk's game dropped; the oldest dropped for room (ev).
+struct FdPrevOut { int same_dropped; bool evicted; FdSaveRecord ev; };
+// A fling of `now` (its new record) replaces `old` (the record it had, or nullptr) on that FluxDrive. Kept records of now's
+// game go first (Fix 3: the new disk's fetches patch that game's own save in place during the window; a kept record put back
+// later would patch its disk's sectors over them, a mixed save). Then `old` is appended: FD_PREV_KEPT. Not kept: no record,
+// uid 0, another FluxDrive's, or the new disk itself (FD_PREV_NONE); the same game as now (FD_PREV_SAME_GAME) - unless
+// keep_same_game (START FRESH's fling of the original: the own save is set aside and an undo puts it back, nothing is mixed).
+// A record kept already (its uid) is not kept twice. A full list drops the oldest (out->evicted, out->ev).
+inline int fdPrevAtFling(FdPrevList& l, const FdSaveRecord* old, const FdSaveRecord& now, bool keep_same_game, FdPrevOut* out) {
+  FdPrevOut o;
+  memset(&o, 0, sizeof o);
+  int w = 0;
+  for (int i = 0; i < l.n && i < FD_PREV_MAX; i++) {
+    if (fdSameGame(l.r[i], now) || l.r[i].uid == now.uid) { o.same_dropped++; continue; }
+    l.r[w++] = l.r[i];
+  }
+  l.n = w;
+  int res = FD_PREV_NONE;
+  if (old != nullptr && old->uid != 0 && old->uid != now.uid && strncmp(old->id, now.id, sizeof old->id) == 0) {
+    if (!keep_same_game && fdSameGame(*old, now)) res = FD_PREV_SAME_GAME;
+    else {
+      res = FD_PREV_KEPT;
+      bool there = false;
+      for (int i = 0; i < l.n; i++) if (l.r[i].uid == old->uid) there = true;
+      if (!there) {
+        if (l.n >= FD_PREV_MAX) { o.evicted = true; o.ev = l.r[0]; for (int i = 1; i < l.n; i++) l.r[i - 1] = l.r[i]; l.n--; }
+        l.r[l.n++] = *old;
+      }
+    }
+  }
+  if (out != nullptr) *out = o;
+  return res;
+}
+// The list against a beacon of its FluxDrive (fdRevertCheck per kept record): Restore with *which = the kept record whose
+// disk is in it again; DropPrev when cur's disk is in it and stored (no kept disk can come back: the list goes); else Keep.
+inline FdRevert fdRevertList(const FdSaveRecord* cur, const FdPrevList& l, uint32_t beacon_uid, bool loaded, bool stored, int* which) {
+  if (which != nullptr) *which = -1;
+  for (int i = 0; i < l.n && i < FD_PREV_MAX; i++) {
+    const FdRevert v = fdRevertCheck(cur, &l.r[i], beacon_uid, loaded, stored);
+    if (v == FdRevert::DropPrev) return v;
+    if (v == FdRevert::Restore) { if (which != nullptr) *which = i; return v; }
+  }
+  return FdRevert::Keep;
 }
 
-// START FRESH on a FluxDrive inside a commit window: its own save is renamed to its .bak, not deleted, and this stays in RAM
+// Fix round 1: a save set aside under a name of its own, `<own without its extension>.<word>-<uid as 8 hex digits><ext>`:
+// START FRESH's backup ("fresh", the fresh disk's uid) and, on an undo, the save written inside the window ("undone").
+// Distinct per uid, so two START FRESHes never share a file and fdPersistLan's rebuild backup (.bak) never touches one.
+// false (out "") when it does not fit whole in cap (a cut name is another file).
+inline bool fdSaveAside(const char* own, const char* word, uint32_t uid, char* out, size_t cap) {
+  if (out == nullptr || cap == 0) return false;
+  out[0] = 0;
+  if (own == nullptr || word == nullptr) return false;
+  const char* dot = strrchr(own, '.');
+  const char* sl = strrchr(own, '/');
+  const size_t stem = (dot != nullptr && (sl == nullptr || dot > sl)) ? (size_t)(dot - own) : strlen(own);
+  const int n = snprintf(out, cap, "%.*s.%s-%08lX%s", (int)stem, own, word, (unsigned long)uid, own + stem);
+  if (n < 0 || (size_t)n >= cap) { out[0] = 0; return false; }
+  return true;
+}
+
+// START FRESH on a FluxDrive inside a commit window: its own save is renamed to a backup, not deleted, and this stays in RAM
 // until the window closes. fresh_uid: the disk whose storing makes the start fresh final (the original START FRESH sent it);
-// prior_uid: the disk it replaced, which a power cut can bring back; own, bak: Game.sav.<tag>.adf and Game.sav.<tag>.bak.adf;
-// image: the game's file (its started-fresh mark); tag: the FluxDrive's save tag.
-struct FdFreshPending { char id[13]; uint32_t fresh_uid, prior_uid; char own[160], bak[160], image[160]; char tag[5]; };
+// prior_uid: the disk it replaced, which a power cut can bring back; own: Game.sav.<tag>.adf; bak: its backup, fix round 1
+// Game.sav.<tag>.fresh-<fresh uid>.adf (fdSaveAside); image: the game's file (its started-fresh mark); tag: the FluxDrive's
+// save tag. undo_failed: an undo's renames failed - frozen, the backup stays where it is (fix round 1, Fix 4).
+struct FdFreshPending { char id[13]; uint32_t fresh_uid, prior_uid; char own[160], bak[160], image[160]; char tag[5]; bool undo_failed; };
 // Whole or not at all (p left as it was): an id (upper-case hex, 1-12), two different uids that are not 0, three SD paths
 // from the root without control characters that fit whole, a save tag.
 inline bool fdFreshPendingSet(FdFreshPending& p, const char* id, uint32_t fresh_uid, uint32_t prior_uid, const char* own,
@@ -609,11 +675,15 @@ inline bool fdFreshPendingSet(FdFreshPending& p, const char* id, uint32_t fresh_
   p = t;
   return true;
 }
-// What a beacon of that FluxDrive means for a pending START FRESH: DropPrev - the fresh disk is in it and stored: done, the
-// .bak goes; Restore - the disk it replaced is in it again: undone, the .bak is the own save again, the started-fresh mark
-// goes; Keep - anything else (an eject inside the window too).
-inline FdRevert fdFreshPendingCheck(const FdFreshPending* p, uint32_t beacon_uid, bool loaded, bool stored) {
-  return p == nullptr ? FdRevert::Keep : fdRevertUids(p->fresh_uid, p->prior_uid, beacon_uid, loaded, stored);
+// What a beacon of that FluxDrive means for a pending START FRESH (cur_uid: its record's uid now, the disk last flung to it):
+// Restore - the disk it replaced is in it again: undo, the backup is the own save again, the started-fresh mark goes;
+// DropPrev - the fresh disk, or the current disk flung after it, is in it and stored: done, the backup goes (no older disk can
+// come back then); Keep - anything else (an eject inside the window, a third disk), and always after a failed undo.
+inline FdRevert fdFreshPendingCheck(const FdFreshPending* p, uint32_t cur_uid, uint32_t beacon_uid, bool loaded, bool stored) {
+  if (p == nullptr || p->undo_failed || !loaded || beacon_uid == 0) return FdRevert::Keep;
+  if (beacon_uid == p->prior_uid) return FdRevert::Restore;
+  if (stored && (beacon_uid == p->fresh_uid || (cur_uid != 0 && beacon_uid == cur_uid))) return FdRevert::DropPrev;
+  return FdRevert::Keep;
 }
 
 // The START FRESH confirm says "reset the Amiga afterwards" for a DOS disk (spec section 6, same-volume twins: AmigaDOS takes

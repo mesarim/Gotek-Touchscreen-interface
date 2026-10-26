@@ -931,53 +931,50 @@ static void pfFreshClear(const String &tag, const String &image) {
        onCard ? "" : " (NOT written to the card)");
 }
 // ── fd3, the commit window: what the panel keeps in RAM until a FluxDrive's new disk is stored (spec section 6) ──
-// Per FluxDrive id: the record the last single-target fling to it replaced (fluxdrive_peer.h fdPrevAtFling), and a START
-// FRESH whose own save waits as its .bak (FdFreshPending). The sketch's fdCommitWatch forgets them once the new disk is stored
-// and puts them back when FluxDrive reports the replaced disk again (switched off before the new one was stored). RAM only
-// (the controller's call): a panel restart inside the window loses them. Both tables are allocated in PSRAM when first
-// needed (pfWinReady), one entry per FluxDrive like the save records; a full table forgets the entry kept longest.
-static FdSaveRecord   *g_pfPrev = nullptr;
+// Per FluxDrive id: the records flings to it replaced since its disk was last seen stored (fluxdrive_peer.h FdPrevList,
+// fdPrevAtFling: up to FD_PREV_MAX, fix round 1), and the START FRESHes whose own save waits as a backup (FdFreshPending,
+// one per fresh disk). The sketch's fdCommitWatch forgets them once the disk is stored and puts one back when FluxDrive
+// reports its disk again (switched off before the new one was stored). RAM only (the controller's call): a panel restart
+// inside the window loses them. Both tables are allocated in PSRAM when first needed (pfWinReady); PF_FDSAVES_MAX lists (one
+// per FluxDrive, like the save records) and PF_FDSAVES_MAX pending entries; a full table forgets the entry kept longest.
+struct PfPrevSlot { char id[13]; FdPrevList l; };
+static PfPrevSlot     *g_pfPrev = nullptr;
 static int             g_pfPrevN = 0;
 static FdFreshPending *g_pfPend = nullptr;
 static int             g_pfPendN = 0;
 static bool pfWinReady() {
-  if (!g_pfPrev) g_pfPrev = (FdSaveRecord *)ps_calloc(PF_FDSAVES_MAX, sizeof(FdSaveRecord));
+  if (!g_pfPrev) g_pfPrev = (PfPrevSlot *)ps_calloc(PF_FDSAVES_MAX, sizeof(PfPrevSlot));
   if (!g_pfPend) g_pfPend = (FdFreshPending *)ps_calloc(PF_FDSAVES_MAX, sizeof(FdFreshPending));
   return g_pfPrev && g_pfPend;
-}
-static FdSaveRecord *pfPrevFor(const String &id) {
-  for (int i = 0; i < g_pfPrevN; i++) if (id == g_pfPrev[i].id) return &g_pfPrev[i];
-  return nullptr;
 }
 static void pfPrevDrop(const String &id) {
   for (int i = 0; i < g_pfPrevN; i++) if (id == g_pfPrev[i].id) {
     for (int k = i + 1; k < g_pfPrevN; k++) g_pfPrev[k - 1] = g_pfPrev[k];
     g_pfPrevN--; return; }
 }
-// r becomes its FluxDrive's kept record (the one before goes). false = no RAM for the table: nothing is kept.
-static bool pfPrevPut(const FdSaveRecord &r) {
-  if (!pfWinReady()) return false;
-  const FdSaveRecord c = r;   // r may live in this table
-  pfPrevDrop(String(c.id));
+// That FluxDrive's list, or nullptr. make: an empty one when it has none (nullptr when there is no RAM for the table; a full
+// table forgets the FluxDrive kept longest).
+static FdPrevList *pfPrevFor(const String &id, bool make = false) {
+  for (int i = 0; i < g_pfPrevN; i++) if (id == g_pfPrev[i].id) return &g_pfPrev[i].l;
+  if (!make || id.length() >= sizeof g_pfPrev[0].id || !pfWinReady()) return nullptr;
   if (g_pfPrevN >= PF_FDSAVES_MAX) { for (int k = 1; k < g_pfPrevN; k++) g_pfPrev[k - 1] = g_pfPrev[k]; g_pfPrevN--; }
-  g_pfPrev[g_pfPrevN++] = c;
-  return true;
+  PfPrevSlot &s = g_pfPrev[g_pfPrevN++];
+  memset(&s, 0, sizeof s); strcpy(s.id, id.c_str()); fdPrevClear(s.l);
+  return &s.l;
 }
-static FdFreshPending *pfPendFor(const String &id) {
-  for (int i = 0; i < g_pfPendN; i++) if (id == g_pfPend[i].id) return &g_pfPend[i];
-  return nullptr;
+static void pfPendDropAt(int k) {
+  if (k < 0 || k >= g_pfPendN) return;
+  for (int i = k + 1; i < g_pfPendN; i++) g_pfPend[i - 1] = g_pfPend[i];
+  g_pfPendN--;
 }
-static void pfPendDrop(const String &id) {
-  for (int i = 0; i < g_pfPendN; i++) if (id == g_pfPend[i].id) {
-    for (int k = i + 1; k < g_pfPendN; k++) g_pfPend[k - 1] = g_pfPend[k];
-    g_pfPendN--; return; }
-}
-// p becomes its FluxDrive's pending START FRESH (an earlier one of it is forgotten: its .bak stays on the card as a backup).
-static bool pfPendPut(const FdFreshPending &p) {
+// p becomes a pending START FRESH (one per FluxDrive and fresh disk: a second START FRESH keeps the first one's entry and
+// backup). A full table forgets the oldest entry (*ev, *evicted: its backup stays on the card). false = no RAM.
+static bool pfPendPut(const FdFreshPending &p, FdFreshPending *ev, bool *evicted) {
+  *evicted = false;
   if (!pfWinReady()) return false;
   const FdFreshPending c = p;
-  pfPendDrop(String(c.id));
-  if (g_pfPendN >= PF_FDSAVES_MAX) { for (int k = 1; k < g_pfPendN; k++) g_pfPend[k - 1] = g_pfPend[k]; g_pfPendN--; }
+  for (int i = 0; i < g_pfPendN; i++) if (strcmp(g_pfPend[i].id, c.id) == 0 && g_pfPend[i].fresh_uid == c.fresh_uid) { pfPendDropAt(i); break; }
+  if (g_pfPendN >= PF_FDSAVES_MAX) { *ev = g_pfPend[0]; *evicted = true; pfPendDropAt(0); }
   g_pfPend[g_pfPendN++] = c;
   return true;
 }
@@ -989,7 +986,7 @@ static bool pfPendPut(const FdFreshPending &p) {
 static int    fdFetchFirst(const String &ip, bool ui, bool fresh = false);
 static String fdStageFor(const String &ip, int targets);
 static void   fdUnstage();
-static void   fdRecordFling(const String &ip, uint32_t uid, const String &sent);
+static void   fdRecordFling(const String &ip, uint32_t uid, const String &sent, bool fresh = false);
 
 // Release the discovery socket + roster. Called from applyRadioMode() on a live MODE switch,
 // so the panel does not keep a UDP listener alive in a mode that has no LAN.

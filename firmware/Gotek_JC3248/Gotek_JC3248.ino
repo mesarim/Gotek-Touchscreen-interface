@@ -4065,7 +4065,8 @@ static void drawStatusBar(){
     if(webWanted()){ int c=(VW-gfx_textWidth(pfMdnsName()+".local"))/2-12-gfx_textWidth("OMEGAWARE  "); if(c<lim)lim=c; }
     if(storing){ int c=(VW-gfx_textWidth(T(L_FD_NOT_OFF)))/2-12-gfx_textWidth("OMEGAWARE  "); if(c<lim)lim=c; }
     while(v.length()>4&&gfx_textWidth(v)>lim)v.remove(v.length()-1);
-    gfx_setTextColor(COL_MID,COL_BAR);gfx_print(String("  ")+v); }
+    if(storing&&gfx_textWidth(v)>lim)v="";   // fd3 fix round 1: not even "A600" fits before the warning (portrait EN/FR/DE/PL): no version
+    if(v.length()){ gfx_setTextColor(COL_MID,COL_BAR);gfx_print(String("  ")+v); } }
   if(storing){ gfx_setTextColor(COL_AMBER,COL_BAR); const int tw=gfx_textWidth(T(L_FD_NOT_OFF)); gfx_setCursor((VW-tw)/2,6); gfx_print(T(L_FD_NOT_OFF)); }
   else if(webWanted()){   // #clubday: wherever we serve, the useful thing to show is where to reach this screen
     String ln=pfMdnsName()+".local"; gfx_setTextColor(COL_BLUE==COL_BAR?0x07FF:0x06FF,COL_BAR);
@@ -6019,11 +6020,12 @@ static void fdUnstage(){
 // ack's uid. Not for a multi-target fling (as Hivemind: no write-back mapping), not with SAVES=OFF, not for any other
 // board. Without a uid in the ack, a tag in the beacon, or a file on the card (the test kit) there is no record, and its
 // writes are not fetched; the record it had stays, and matches nothing any more (another uid).
-// fd3, the commit window: the record this fling replaces is kept in RAM (pfPrevPut) until FluxDrive says the new disk is
-// stored - a power cut before that brings the previous disk back (fdCommitWatch). When one is kept already, its disk is the
-// last this panel saw stored and it stays (fdPrevAtFling). The same for every single-target fling: the touchscreen's, the
-// fleet manager's and the web page's all come here.
-static void fdRecordFling(const String&ip,uint32_t uid,const String&sent){
+// fd3, the commit window: the record this fling replaces is kept in RAM until FluxDrive says a disk flung later is stored -
+// a power cut before that brings an earlier disk back (fdCommitWatch). Fix round 1: a list per FluxDrive (fdPrevAtFling, up
+// to FD_PREV_MAX), since a disk can be stored without the panel seeing it; the same game flung again keeps no record of it
+// (Fix 3: a revert would mix two states of its save) - except START FRESH's fling of the original (fresh), whose undo puts
+// the own save back. The same for every single-target fling: the touchscreen's, the fleet manager's and the web page's.
+static void fdRecordFling(const String&ip,uint32_t uid,const String&sent,bool fresh){
   if(g_saves_mode==0)return;
   int i=-1; for(int k=0;k<g_pfPeerN;k++) if(g_pfPeers[k].ip==ip){i=k;break;}
   if(i<0||!fdIsFluxDrive(g_pfPeers[i].board.c_str()))return;
@@ -6039,71 +6041,89 @@ static void fdRecordFling(const String&ip,uint32_t uid,const String&sent){
   const bool onCard=pfRecordPut(r);
   gLog("[saves] FluxDrive %s: disk %lu is %s - saves go to %s%s\n",p.tag.c_str(),(unsigned long)uid,sent.c_str(),sav.c_str(),
        onCard?"":" (the record could NOT be written to the card: kept until a restart)");
-  const FdSaveRecord*kept=pfPrevFor(p.id), *keep=fdPrevAtFling(hadOld?&was:nullptr,kept,uid);
-  if(!keep) return;
-  if(keep==kept){ gLog("[saves] FluxDrive %s: still keeps the record of disk %lu (%s) until disk %lu is stored - disk %lu was never seen stored\n",
-                       p.tag.c_str(),(unsigned long)kept->uid,kept->orig,(unsigned long)uid,(unsigned long)(hadOld?was.uid:0)); return; }
-  if(pfPrevPut(was)) gLog("[saves] FluxDrive %s: keeps the record of disk %lu (%s) until disk %lu is stored\n",p.tag.c_str(),(unsigned long)was.uid,was.orig,(unsigned long)uid);
-  else gLog("[saves] FluxDrive %s: no RAM to keep the record of disk %lu until disk %lu is stored\n",p.tag.c_str(),(unsigned long)was.uid,(unsigned long)uid);
+  FdPrevList*l=pfPrevFor(p.id,true);
+  if(!l){ if(hadOld) gLog("[saves] FluxDrive %s: no RAM to keep the record of disk %lu until disk %lu is stored\n",p.tag.c_str(),(unsigned long)was.uid,(unsigned long)uid); return; }
+  FdPrevOut o; const int res=fdPrevAtFling(*l,hadOld?&was:nullptr,r,fresh,&o);
+  if(o.same_dropped) gLog("[saves] FluxDrive %s: %d kept record(s) of %s forgotten - this disk of the same game patches its save from now on\n",p.tag.c_str(),o.same_dropped,orig.c_str());
+  if(o.evicted) gLog("[saves] FluxDrive %s: forgets the kept record of disk %lu (%s) - only %d are kept\n",p.tag.c_str(),(unsigned long)o.ev.uid,o.ev.orig,FD_PREV_MAX);
+  if(res==FD_PREV_KEPT) gLog("[saves] FluxDrive %s: keeps the record of disk %lu (%s) until disk %lu is stored (%d kept)\n",p.tag.c_str(),(unsigned long)was.uid,was.orig,(unsigned long)uid,l->n);
+  else if(res==FD_PREV_SAME_GAME) gLog("[saves] FluxDrive %s: the record of disk %lu is not kept - the same game again (%s): if a power cut brings that disk back, its writes are not fetched (they would mix two states of its save)\n",
+                                       p.tag.c_str(),(unsigned long)was.uid,orig.c_str());
+  if(!l->n) pfPrevDrop(p.id);
 }
-// fd3, the commit window, after the beacons of every pfService pass (fluxdrive_peer.h fdRevertCheck, fdFreshPendingCheck).
-// For each FluxDrive with a kept record (pfPrevFor): its new disk stored - the record is forgotten; the kept record's disk in
-// it again (switched off before the new disk was stored) - the kept record is its record again, on the card, so that
-// disk's writes are fetched as before. For each pending START FRESH (pfPendFor): its fresh disk stored - the .bak goes; the
-// disk it replaced in it again - START FRESH is undone: the .bak is the own save again (an own save a fetch wrote meanwhile
-// becomes the .bak: its writes were on the disk that is gone), the started-fresh mark goes. The card changes at once; what
-// the panel says waits for the main screen (g_fdNote, loop()).
-static bool   g_fdNote=false, g_fdNoteUndone=false;   // a revert to tell; it undid a START FRESH
-static String g_fdNoteGame, g_fdNoteNew;               // the game FluxDrive went back to; the one that was not stored yet
+// fd3, the commit window, after the beacons of every pfService pass (fluxdrive_peer.h fdFreshPendingCheck, fdRevertList).
+// Pending START FRESHes first (fix round 1, Fix 4: the renames before any record is put back): the fresh disk, or the one
+// flung after it, stored - its backup (and only that file) goes; the disk START FRESH replaced in it again - undo: a save
+// written inside the window is set aside as Game.sav.<tag>.undone-<fresh uid>.adf, the backup becomes the own save again,
+// and only once both renames worked does the started-fresh mark go. A rename that fails leaves everything as it is: the entry
+// stays (frozen, undo_failed), the mark stays, the record of that disk is not put back, and the panel says FAILED.
+// Then each FluxDrive's kept records (fdRevertList): its current disk stored - the list goes; a kept record's disk in it again
+// (switched off before the newer disk was stored) - that record is its record again, on the card, so that disk's writes are
+// fetched as before, and the list goes. The card changes at once; what the panel says waits for the main screen (g_fdNote).
+static bool    g_fdNote=false;
+static uint8_t g_fdNoteKind=0;                         // 0 a revert, 1 START FRESH undone, 2 its undo failed
+static String  g_fdNoteGame, g_fdNoteNew, g_fdNoteFile; // the game FluxDrive went back to; the one not stored yet; a failed file
 static String fdGameOf(const char*path){ return basenameNoExt(filenameOnly(String(path))); }
+static bool fdUndoFailedFor(const char*id,uint32_t prior){
+  for(int k=0;k<g_pfPendN;k++) if(g_pfPend[k].undo_failed&&strcmp(g_pfPend[k].id,id)==0&&g_pfPend[k].prior_uid==prior) return true;
+  return false;
+}
 static void fdCommitWatch(){
   if((!g_pfPrevN&&!g_pfPendN)||!(g_wireless_mode&&g_link_home))return;   // nothing kept, or no roster (fleet mode only)
-  for(int k=0;k<g_pfPrevN;){
-    const FdSaveRecord prev=g_pfPrev[k]; const int i=pfPeerIdx(String(prev.id));
+  String told;   // the FluxDrive whose START FRESH outcome is the message of this pass
+  for(int k=0;k<g_pfPendN;){
+    FdFreshPending&f=g_pfPend[k]; const int i=pfPeerIdx(String(f.id));
     if(i<0||!fdIsFluxDrive(g_pfPeers[i].board.c_str())){ k++; continue; }
     const PfPeer&p=g_pfPeers[i]; const FdSaveRecord*cur=pfRecordFor(p.id);
-    const FdRevert v=fdRevertCheck(cur,&prev,p.loadId,p.loaded,p.stored);
+    const FdRevert v=fdFreshPendingCheck(&f,cur?cur->uid:0,p.loadId,p.loaded,p.stored);
     if(v==FdRevert::Keep){ k++; continue; }
-    const uint32_t newUid=cur?cur->uid:0; const String newOrig=cur?String(cur->orig):String();
-    pfPrevDrop(p.id);   // the table shifts: k stays
-    if(v==FdRevert::DropPrev){ gLog("[saves] FluxDrive %s: disk %lu is stored - the record of disk %lu (%s) is no longer kept\n",prev.tag,(unsigned long)newUid,(unsigned long)prev.uid,prev.orig); continue; }
+    if(v==FdRevert::DropPrev){ SD_MMC.remove(f.bak);
+      gLog("[saves] START FRESH %s: FluxDrive %s stored disk %lu - its backup %s %s\n",f.own,f.tag,(unsigned long)p.loadId,f.bak,SD_MMC.exists(f.bak)?"could NOT be deleted":"is deleted");
+      pfPendDropAt(k); continue; }
+    char aside[160]; const bool asideOk=fdSaveAside(f.own,"undone",f.fresh_uid,aside,sizeof aside);
+    const bool had=SD_MMC.exists(f.own); bool ok=!had||asideOk, moved=false;
+    if(ok&&had){ SD_MMC.remove(aside); ok=moved=SD_MMC.rename(f.own,aside); }    // the save written inside the window, aside
+    if(ok&&!(ok=SD_MMC.rename(f.bak,f.own))&&moved) SD_MMC.rename(aside,f.own); // the backup back; if not, the window's save back
+    told=f.id; g_fdNote=true; g_fdNoteGame=fdGameOf(f.image); g_fdNoteNew="";
+    if(!ok){ f.undo_failed=true; g_fdNoteKind=2; g_fdNoteFile=filenameOnly(String(f.own));
+      gLog("[saves] START FRESH %s: FluxDrive %s went back to disk %lu - the undo FAILED: the save could not be put back from %s; that stays as it is, the started-fresh mark stays, the record of disk %lu is not put back\n",
+           f.own,f.tag,(unsigned long)f.prior_uid,f.bak,(unsigned long)f.prior_uid);
+      k++; continue; }
+    savSetAdd(String(f.own));
+    if(fdFreshDrop(g_pfFresh,f.tag,f.image)) pfFreshWrite();   // started fresh no more
+    gLog("[saves] START FRESH %s: FluxDrive %s went back to disk %lu - START FRESH undone: its save is back from %s%s%s\n",f.own,f.tag,(unsigned long)f.prior_uid,
+         f.bak,moved?"; the save written since is kept as ":"",moved?aside:"");
+    g_fdNoteKind=1; pfPendDropAt(k);
+  }
+  for(int k=0;k<g_pfPrevN;){
+    PfPrevSlot&s=g_pfPrev[k]; const int i=pfPeerIdx(String(s.id));
+    if(i<0||!fdIsFluxDrive(g_pfPeers[i].board.c_str())){ k++; continue; }
+    const PfPeer&p=g_pfPeers[i]; const FdSaveRecord*cur=pfRecordFor(p.id); int w=-1;
+    const FdRevert v=fdRevertList(cur,s.l,p.loadId,p.loaded,p.stored,&w);
+    if(v==FdRevert::Keep){ k++; continue; }
+    const uint32_t newUid=cur?cur->uid:0; const String newOrig=cur?String(cur->orig):String(), id=s.id;
+    if(v==FdRevert::DropPrev){ gLog("[saves] FluxDrive %s: disk %lu is stored - the %d record(s) kept for it are forgotten\n",cur?cur->tag:s.l.r[0].tag,(unsigned long)newUid,s.l.n);
+      pfPrevDrop(id); continue; }   // the table shifts: k stays
+    const FdSaveRecord prev=s.l.r[w];
+    if(fdUndoFailedFor(s.id,prev.uid)){ k++; continue; }   // its START FRESH undo failed: its base is not right, so it stays out
+    pfPrevDrop(id);
     const bool onCard=pfRecordPut(prev);
     gLog("[saves] FluxDrive %s: went back to disk %lu (%s) - switched off before disk %lu (%s) was stored; its record is back%s\n",prev.tag,
          (unsigned long)prev.uid,prev.orig,(unsigned long)newUid,newOrig.length()?newOrig.c_str():"no record",onCard?"":" (NOT written to the card: kept until a restart)");
-    g_fdNote=true; g_fdNoteUndone=false; g_fdNoteGame=fdGameOf(prev.orig); g_fdNoteNew=newOrig.length()?fdGameOf(newOrig.c_str()):String();
-  }
-  for(int k=0;k<g_pfPendN;){
-    const FdFreshPending f=g_pfPend[k]; const int i=pfPeerIdx(String(f.id));
-    if(i<0||!fdIsFluxDrive(g_pfPeers[i].board.c_str())){ k++; continue; }
-    const PfPeer&p=g_pfPeers[i];
-    const FdRevert v=fdFreshPendingCheck(&f,p.loadId,p.loaded,p.stored);
-    if(v==FdRevert::Keep){ k++; continue; }
-    pfPendDrop(String(f.id));
-    if(v==FdRevert::DropPrev){ SD_MMC.remove(f.bak);
-      gLog("[saves] START FRESH %s: FluxDrive %s stored disk %lu - its backup %s %s\n",f.own,f.tag,(unsigned long)f.fresh_uid,f.bak,SD_MMC.exists(f.bak)?"could NOT be deleted":"is deleted");
-      continue; }
-    const String own=f.own, bak=f.bak, tmp=own+".tmp"; bool ok, swapped=false;
-    if(SD_MMC.exists(own)){   // a fetch wrote an own save inside the window: it trades places with the .bak
-      SD_MMC.remove(tmp); ok=SD_MMC.rename(bak,tmp);
-      if(ok&&!(ok=SD_MMC.rename(own,bak))) SD_MMC.rename(tmp,bak);
-      if(ok&&!(ok=SD_MMC.rename(tmp,own))) gLog("[saves] START FRESH %s: the save is left as %s\n",f.own,tmp.c_str());
-      swapped=ok; }
-    else ok=SD_MMC.rename(bak,own);
-    if(ok) savSetAdd(own);
-    if(fdFreshDrop(g_pfFresh,f.tag,f.image)) pfFreshWrite();   // started fresh no more
-    gLog("[saves] START FRESH %s: FluxDrive %s went back to disk %lu - START FRESH undone: %s%s\n",f.own,f.tag,(unsigned long)f.prior_uid,
-         ok?"its save is back from ":"its save could NOT be put back from ",bak.c_str(),swapped?" (the save written since is kept as the backup)":"");
-    g_fdNote=true; g_fdNoteUndone=true; g_fdNoteGame=fdGameOf(f.image); g_fdNoteNew="";
+    if(told!=id){ g_fdNote=true; g_fdNoteKind=0; g_fdNoteGame=fdGameOf(prev.orig); g_fdNoteNew=newOrig.length()?fdGameOf(newOrig.c_str()):String(); }
   }
 }
-// START FRESH (fd3): no record kept by a FluxDrive (pfPrevFor) may keep a base (`sent`) that START FRESH just removed: put
+// START FRESH (fd3): no record kept for a FluxDrive (its list) may keep a base (`sent`) that START FRESH just removed: put
 // back after a revert, its next fetch would rebuild from nothing. Such a record goes (a FluxDrive holding another disk:
-// fdFreshRecordFate's answer), except the one START FRESH keeps the base for in its .bak (keepId, keepUid: its pending entry).
+// fdFreshRecordFate's answer), except the one START FRESH keeps the base for in its backup (keepId, keepUid: its pending entry).
 static void fdPrevDropBase(const String&gone,const String&keepId,uint32_t keepUid){
-  for(int k=0;k<g_pfPrevN;){ const FdSaveRecord&r=g_pfPrev[k];
-    if(!fdPathSame(r.sent,gone.c_str())||(keepId==r.id&&r.uid==keepUid)){ k++; continue; }
-    gLog("[saves] START FRESH %s: FluxDrive %s's kept record of disk %lu goes with it (its base)\n",gone.c_str(),r.tag,(unsigned long)r.uid);
-    pfPrevDrop(String(r.id)); }
+  for(int k=0;k<g_pfPrevN;){ PfPrevSlot&s=g_pfPrev[k]; int w=0;
+    for(int j=0;j<s.l.n;j++){ const FdSaveRecord&r=s.l.r[j];
+      if(fdPathSame(r.sent,gone.c_str())&&!(keepId==r.id&&r.uid==keepUid)){
+        gLog("[saves] START FRESH %s: FluxDrive %s's kept record of disk %lu goes with it (its base)\n",gone.c_str(),r.tag,(unsigned long)r.uid); continue; }
+      s.l.r[w++]=r; }
+    s.l.n=w;
+    if(!w) pfPrevDrop(String(s.id)); else k++; }
 }
 // fd2, START FRESH is about to delete the save `gone`. No record may be left with a base (`sent`) that is gone: its next
 // fetch rebuilds from it (fdPersistLan). fdFreshRecordFate says, per record: a record whose base is its own save, the one
@@ -6413,7 +6433,7 @@ static bool doLoadSelected(const String&adfPath,const String&freshId,bool*sent){
       fleetWaitHint(p.board.c_str());
       String nm=g_loaded_display.length()?g_loaded_display:g_loaded_name; if(nm.length()){String ne;pfSendName(p.ip,p.tcp,nm,ne);}
       String err; uint32_t uid=0; bool ok=pfSendDisk(p.ip,p.tcp,err,&uid);
-      if(ok)fdRecordFling(p.ip,uid,g_loaded_path);   // one target: a FluxDrive's record of the disk it holds now (its own save when it has one; any other board: nothing)
+      if(ok)fdRecordFling(p.ip,uid,g_loaded_path,fresh);   // one target: a FluxDrive's record of the disk it holds now (its own save when it has one; any other board: nothing); fresh: START FRESH keeps the replaced record of the same game
       if(sent)*sent=ok;
       hwMsg(ok?"Sent":"Not sent",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,ok?1200:2200);
       if(!ok&&!fresh) hardAttach();   // the dongle refused or vanished - keep the disk usable on our own port (START FRESH: nobody asked for it here)
@@ -6472,13 +6492,14 @@ static bool freshAskUI(const String&game,const String&who,const String&fileName,
 //    never left empty).
 //  - Fix round 1: a FluxDrive's own save gone, that FluxDrive is marked as started fresh on this game (pfFreshMark): its
 //    next flings of it send the original, not the cable save, until it has an own save again.
-// A Game.sav.<tag>.bak.adf (an own save a rebuild replaced, fdPersistLan) is not touched - except by fd3 below.
-//  - fd3, the commit window: a FluxDrive's own save is renamed to its .bak (an older .bak is replaced, as R14) instead of
-//    deleted while a power cut can still bring back the disk it belongs to: after the resend, until the original is stored;
-//    without a resend, while the disk this FluxDrive held before the one in it now is this game's and the one in it now is
-//    not stored yet (its kept record, pfPrevFor). A pending entry (FdFreshPending, RAM only) says what then
-//    (fdCommitWatch): the .bak goes once that disk is stored, or becomes the own save again if the game's disk comes back
-//    ("START FRESH undone - try again"). Otherwise the save is deleted as before. STANDALONE (the cable save) is unchanged.
+// A Game.sav.<tag>.bak.adf (an own save a rebuild replaced, fdPersistLan) is not touched.
+//  - fd3, the commit window: a FluxDrive's own save is renamed to a backup of its own, Game.sav.<tag>.fresh-<fresh uid>.adf
+//    (fix round 1: fdSaveAside - no other START FRESH and no rebuild shares it), instead of deleted while a power cut can
+//    still bring back the disk it belongs to: after the resend, until the original is stored; without a resend, while a
+//    record of this game is kept for this FluxDrive (its list, pfPrevFor) and the disk in it now is not stored yet. A pending
+//    entry (FdFreshPending, RAM only, one per fresh disk) says what then (fdCommitWatch): exactly that backup goes once that
+//    disk (or one flung after it) is stored, or becomes the own save again if the game's disk comes back ("START FRESH undone
+//    - try again"). Otherwise the save is deleted as before. STANDALONE (the cable save) is unchanged.
 //  - fd3: the confirm says "Reset the Amiga afterwards." when the Amiga gets this game's DOS disk again now (fdIsDosBoot).
 static void doStartFresh(){
   const String file=selDiskFile(), drawn=g_freshDrawn;
@@ -6507,18 +6528,22 @@ static void doStartFresh(){
   if(!fdFreshRecords(sav)){   // a FluxDrive record whose base is this file could not keep it: the file stays
     hwMsg(T(L_FAILED),filenameOnly(sav).c_str(),COL_AMBER,2500); drawFullUI(); gfx_flush(); return; }
   if(!resend&&(here||onCable)){ if(g_usb_online)hardDetach(); svDirtyReset(); doUnload(); }   // its unsaved writes go with the save: dropped, not flushed into it
-  // fd3: a FluxDrive's own save waits as its .bak while a power cut can bring back the disk it belongs to (see above)
-  FdFreshPending pend{}; bool toBak=false; const String bak=tag.length()?dongleSavPathFor(file,tag+".bak"):String();
+  // fd3: a FluxDrive's own save waits as a backup of its own while a power cut can bring back the disk it belongs to (above)
+  FdFreshPending pend{}; bool toBak=false; String bak;
   if(tag.length()){ uint32_t fresh=0, from=0; const int k=pfPeerIdx(pid);
     if(resend){ from=prior; fresh=k>=0?g_pfPeers[k].loadId:0; }   // the original's uid, from its push ack
-    else { const FdSaveRecord*w=pfPrevFor(pid), *cur=pfRecordFor(pid); if(w&&cur&&fdPathSame(w->orig,file.c_str())){ from=w->uid; fresh=cur->uid; } }
-    toBak=fdFreshPendingSet(pend,pid.c_str(),fresh,from,sav.c_str(),bak.c_str(),file.c_str(),tag.c_str())&&pfWinReady(); }
+    else { const FdPrevList*l=pfPrevFor(pid); const FdSaveRecord*cur=pfRecordFor(pid);   // fix round 1: the whole list, newest first
+      for(int j=l?l->n-1:-1;j>=0&&cur;j--) if(fdPathSame(l->r[j].orig,file.c_str())){ from=l->r[j].uid; fresh=cur->uid; break; } }
+    char b[160]; if(fdSaveAside(sav.c_str(),"fresh",fresh,b,sizeof b)) bak=b;
+    toBak=bak.length()&&fdFreshPendingSet(pend,pid.c_str(),fresh,from,sav.c_str(),bak.c_str(),file.c_str(),tag.c_str())&&pfWinReady(); }
   bool gone;
-  if(toBak){ SD_MMC.remove(bak); gone=SD_MMC.rename(sav,bak); }
+  if(toBak){ SD_MMC.remove(bak); gone=SD_MMC.rename(sav,bak); }   // a name of its own: nothing else is ever called so
   else { SD_MMC.remove(sav); gone=!SD_MMC.exists(sav); }
   if(gone)savSetRemove(sav);
-  if(gone&&toBak){ if(const FdFreshPending*o=pfPendFor(pid)) gLog("[saves] START FRESH %s: an earlier START FRESH on FluxDrive %s is no longer watched - its backup %s stays\n",sav.c_str(),tag.c_str(),o->bak);
-    pfPendPut(pend); }
+  if(gone&&toBak){ FdFreshPending ev{}; bool evicted=false; pfPendPut(pend,&ev,&evicted);
+    if(evicted) gLog("[saves] START FRESH %s: the START FRESH of %s on FluxDrive %s is no longer watched - its backup %s stays on the card\n",sav.c_str(),ev.image,ev.tag,ev.bak);
+    int others=0; for(int j=0;j<g_pfPendN;j++) if(pid==g_pfPend[j].id&&g_pfPend[j].fresh_uid!=pend.fresh_uid) others++;
+    if(others) gLog("[saves] START FRESH %s: %d earlier START FRESH(es) on FluxDrive %s still pending - their backups stay until their disks are stored or come back\n",sav.c_str(),others,tag.c_str()); }
   if(gone)fdPrevDropBase(sav,toBak?pid:String(),toBak?pend.prior_uid:0);   // no kept record may be put back onto a base that is gone
   gLog("[saves] START FRESH %s: %s%s%s%s\n",sav.c_str(),!gone?"could NOT be deleted":toBak?"kept as ":"deleted",gone&&toBak?bak.c_str():"",
        resend?" - the original went to FluxDrive ":"",resend?tag.c_str():"");
@@ -6530,7 +6555,7 @@ static void doStartFresh(){
   drawFullUI(); gfx_flush();
 }
 // fd3: what fdCommitWatch found, once the main screen is up (loop()): "FluxDrive went back to <game>" and either "switched
-// off before <new game> was stored" or "START FRESH undone - try again". A read-and-act message (msgHold: 3 s, then until a
+// off before <new game> was stored", "START FRESH undone - try again" or (its undo failed) "FAILED: <save>". A read-and-act message (msgHold: 3 s, then until a
 // tap, at most 10 s); the finger that ends it is let go of before the main screen takes taps again.
 static void fdNoteUI(){
   uint32_t r0=millis(); while(Touch_ReadFrame()&&millis()-r0<1500) delay(10);
@@ -6540,7 +6565,8 @@ static void fdNoteUI(){
   gfx_setTextSize(1); gfx_setTextColor(COL_LIT,COL_BG); line(T(L_FD_WENT_BACK),VH/2-40);
   gfx_setTextSize(2); gfx_setTextColor(COL_AMBER,COL_BG); line(g_fdNoteGame,VH/2-24);
   gfx_setTextSize(1);
-  if(g_fdNoteUndone){ gfx_setTextColor((uint16_t)0xE8C4,COL_BG); line(T(L_FRESH_UNDONE),VH/2+6); }
+  if(g_fdNoteKind==1){ gfx_setTextColor((uint16_t)0xE8C4,COL_BG); line(T(L_FRESH_UNDONE),VH/2+6); }
+  else if(g_fdNoteKind==2){ gfx_setTextColor((uint16_t)0xE8C4,COL_BG); line(String(T(L_FAILED))+": "+g_fdNoteFile,VH/2+6); }   // fix round 1: its undo failed
   else if(g_fdNoteNew.length()){   // the new game's name is cut, not the words around it
     String nm=g_fdNoteNew, l=T(L_FD_OFF_BEFORE); l.replace("%1",nm);
     while(nm.length()>1&&gfx_textWidth(l)>VW-16){ nm.remove(nm.length()-1); l=T(L_FD_OFF_BEFORE); l.replace("%1",nm); }
