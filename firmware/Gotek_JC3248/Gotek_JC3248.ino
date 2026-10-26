@@ -50,7 +50,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-lab2i-fd2-JC3248"   // A600-lab2i-fd2 (25 Oct 2026): FluxDrive saves (writing): fetched over the LAN, write protect, start fresh | A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-lab2i-fd3-JC3248"   // A600-lab2i-fd3 (26 Oct 2026): FluxDrive's commit window - STORING... until the disk is in flash, a revert to the previous disk puts its record back, START FRESH keeps a backup until then | A600-lab2i-fd2 (25 Oct 2026): FluxDrive saves (writing): fetched over the LAN, write protect, start fresh | A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -2945,7 +2945,7 @@ static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=
 enum { LANG_EN=0, LANG_FR, LANG_IT, LANG_ES, LANG_DE, LANG_NL, LANG_PL, LANG_CS, LANG_N };   // lab15o: + Polish, Czech
 static int g_lang=0;
 static const char* const LANG_NAMES[LANG_N]={"EN","FR","IT","ES","DE","NL","PL","CS"};
-enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_CFG_MODE, L_CFG_FONT, L_CFG_LANG, L_CFG_ROTATE, L_CFG_COMPACT, L_CFG_LIBRARY, L_CFG_CATEG, L_CFG_BUTTONS, L_CFG_SAVER, L_CFG_FAVSAVER, L_CFG_HIVEMIND, L_ON, L_OFF, L_PORTRAIT, L_LANDSCAPE, L_FONT_SMALL, L_FONT_NORMAL, L_FONT_LARGE, L_PILL, L_FLAT, L_SLIDES, L_BOUNCE, L_MATRIX, L_CRACKTRO, L_SWITCH_DONGLE, L_SCAN_DONGLES, L_PAGE, L_CLOSE, L_TOP, L_SECTIONS, L_REEL_BORDER, L_COVER_ART, L_LIST_TILE, L_LAST_USED, L_HOME_WIFI, L_WIFI_CHECK, L_SET_UP, L_START_FRESH, L_FRESH_GONE, L_FRESH_ORIG, L_FRESH_SWAP, L_FRESH_DONE, L_FRESH_KEPT, L_WP_LATER, L_FRESH_CABLE, L_FRESH_CHANGED, L_STR_N };
+enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_CFG_MODE, L_CFG_FONT, L_CFG_LANG, L_CFG_ROTATE, L_CFG_COMPACT, L_CFG_LIBRARY, L_CFG_CATEG, L_CFG_BUTTONS, L_CFG_SAVER, L_CFG_FAVSAVER, L_CFG_HIVEMIND, L_ON, L_OFF, L_PORTRAIT, L_LANDSCAPE, L_FONT_SMALL, L_FONT_NORMAL, L_FONT_LARGE, L_PILL, L_FLAT, L_SLIDES, L_BOUNCE, L_MATRIX, L_CRACKTRO, L_SWITCH_DONGLE, L_SCAN_DONGLES, L_PAGE, L_CLOSE, L_TOP, L_SECTIONS, L_REEL_BORDER, L_COVER_ART, L_LIST_TILE, L_LAST_USED, L_HOME_WIFI, L_WIFI_CHECK, L_SET_UP, L_START_FRESH, L_FRESH_GONE, L_FRESH_ORIG, L_FRESH_SWAP, L_FRESH_DONE, L_FRESH_KEPT, L_WP_LATER, L_FRESH_CABLE, L_FRESH_CHANGED, L_FD_STORING, L_FD_NOT_OFF, L_FD_WENT_BACK, L_FD_OFF_BEFORE, L_FRESH_UNDONE, L_FRESH_RESET, L_STR_N };
 static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_PREV          */ {"PREV","PREC","PREC","ANT","VORH","VORIG","POPRZ","PRED"},
   /*L_NEXT          */ {"NEXT","SUIV","SUCC","SIG","WEIT","VOLG","DALEJ","DALSI"},
@@ -3053,6 +3053,15 @@ static const char* const LSTR[L_STR_N][LANG_N]={
   // fd2 fix round 1: the confirm names whose save goes (with the file name after it); a save that changed under the key.
   /*L_FRESH_CABLE  */ {"cable save","sauvegarde du cable","salvataggio del cavo","partida del cable","Spielstand am Kabel","opgeslagen spel (kabel)","zapis z kabla","ulozena hra (kabel)"},
   /*L_FRESH_CHANGED*/ {"The save changed - try again.","La sauvegarde a change - reessayez.","Il salvataggio e cambiato - riprova.","La partida cambio - intentalo de nuevo.","Spielstand geaendert - nochmal versuchen.","Het opgeslagen spel is veranderd - probeer opnieuw.","Zapis sie zmienil - sprobuj ponownie.","Ulozena hra se zmenila - zkuste znovu."},
+  // A600-lab2i-fd3: FluxDrive's commit window. STORING... is a chip (NOW PLAYING) and a fleet-row word: 12 characters at most.
+  // "do not switch off yet" sits in the middle of the status bar. L_FD_OFF_BEFORE: %1 = the game that was not stored yet.
+  // Drafts by Claude like the rest: FR/IT/ES/DE/NL to review, PL/CS to be checked by a speaker.
+  /*L_FD_STORING   */ {"STORING...","STOCKAGE...","MEMORIZZA...","GUARDANDO...","SPEICHERT...","OPSLAAN...","ZAPISUJE...","UKLADA..."},
+  /*L_FD_NOT_OFF   */ {"do not switch off yet","ne pas eteindre encore","non spegnere ancora","no apagar todavia","noch nicht ausschalten","nog niet uitzetten","jeszcze nie wylaczaj","zatim nevypinat"},
+  /*L_FD_WENT_BACK */ {"FluxDrive went back to","FluxDrive est revenu a","FluxDrive e tornato a","FluxDrive volvio a","FluxDrive ging zurueck zu","FluxDrive ging terug naar","FluxDrive wrocil do","FluxDrive se vratil k"},
+  /*L_FD_OFF_BEFORE*/ {"switched off before %1 was stored","eteint avant que %1 soit enregistre","spento prima che %1 fosse memorizzato","apagado antes de guardar %1","ausgeschaltet, bevor %1 gespeichert war","uitgezet voordat %1 was opgeslagen","wylaczono, zanim %1 zostal zapisany","vypnuto drive, nez se %1 ulozil"},
+  /*L_FRESH_UNDONE */ {"START FRESH undone - try again","REPARTIR A ZERO annule - reessayez","RICOMINCIA DA ZERO annullato - riprova","EMPEZAR DE CERO deshecho - intentalo","NEU ANFANGEN rueckgaengig - nochmal","OPNIEUW BEGINNEN ongedaan - probeer opnieuw","ZACZNIJ OD NOWA cofniete - sprobuj ponownie","ZACIT ZNOVU vraceno - zkuste znovu"},
+  /*L_FRESH_RESET  */ {"Reset the Amiga afterwards.","Redemarrez l'Amiga ensuite.","Poi riavvia l'Amiga.","Despues reinicia el Amiga.","Danach den Amiga neu starten.","Herstart de Amiga daarna.","Potem zresetuj Amige.","Potom Amigu restartujte."},
 };
 static inline const char* T(int id){ return LSTR[id][g_lang]; }
 
@@ -4047,12 +4056,18 @@ static int drawWrapped(int x,int y,const String&s,int maxW,int lineH,int maxLine
 static void drawStatusBar(){
   gfx_fillRect(0,0,VW,STATUS_H,COL_BAR);gfx_setTextSize(1);
   gfx_setTextColor(COL_ORANGE,COL_BAR);gfx_setCursor(6,6);gfx_print("OMEGAWARE");
+  // fd3, the commit window: while the FluxDrive target holds a disk that is not in flash yet (its beacon's "stored"), the
+  // middle of the bar says "do not switch off yet" instead of the address: a power cut now brings the previous disk back.
+  const int ft=pfFluxTarget();
+  const bool storing=ft>=0&&fdShowStoring(true,g_pfPeers[ft].loaded,g_pfPeers[ft].stored);
   { String v=FW_VERSION; int lim=VW/2-40-12-gfx_textWidth("OMEGAWARE  ");   // lab2: also clear of the centred GTi-XXXX.local address   // A600-neo2: never runs into the WIRELESS/STANDALONE word
     if(!g_wireless_mode)lim=(VW-gfx_textWidth(T(L_STANDALONE)))/2-12-gfx_textWidth("OMEGAWARE  ");
     if(webWanted()){ int c=(VW-gfx_textWidth(pfMdnsName()+".local"))/2-12-gfx_textWidth("OMEGAWARE  "); if(c<lim)lim=c; }
+    if(storing){ int c=(VW-gfx_textWidth(T(L_FD_NOT_OFF)))/2-12-gfx_textWidth("OMEGAWARE  "); if(c<lim)lim=c; }
     while(v.length()>4&&gfx_textWidth(v)>lim)v.remove(v.length()-1);
     gfx_setTextColor(COL_MID,COL_BAR);gfx_print(String("  ")+v); }
-  if(webWanted()){   // #clubday: wherever we serve, the useful thing to show is where to reach this screen
+  if(storing){ gfx_setTextColor(COL_AMBER,COL_BAR); const int tw=gfx_textWidth(T(L_FD_NOT_OFF)); gfx_setCursor((VW-tw)/2,6); gfx_print(T(L_FD_NOT_OFF)); }
+  else if(webWanted()){   // #clubday: wherever we serve, the useful thing to show is where to reach this screen
     String ln=pfMdnsName()+".local"; gfx_setTextColor(COL_BLUE==COL_BAR?0x07FF:0x06FF,COL_BAR);
     int tw=gfx_textWidth(ln); gfx_setCursor((VW-tw)/2,6); gfx_print(ln);}
   else if(g_wireless_mode){gfx_setTextColor(espnowIsPaired()?0x07E0:0xFD20,COL_BAR);gfx_setCursor(VW/2-40,6);gfx_print(espnowIsPaired()?"WIRELESS:PAIRED":"WIRELESS:PAIR");}
@@ -4064,7 +4079,7 @@ static void drawStatusBar(){
     bool alive = wl ? (millis()-g_espnow_xiao_last_seen < 8000UL) : true;
     bool ld, desync=false;
     if(wl){ ld=alive&&g_dongle_loaded; desync=g_loaded&&(!alive||!g_dongle_loaded); }
-    else  { const int ft=pfFluxTarget(); ld=ft>=0?g_pfPeers[ft].loaded:g_loaded; }   // fleet mode: what the FluxDrive holds (beacon), not what was staged here
+    else  { ld=ft>=0?g_pfPeers[ft].loaded:g_loaded; }   // fleet mode: what the FluxDrive holds (beacon), not what was staged here
     String lw; uint16_t lc; bool fill;
     if(wl&&!alive){ lw="OFFLINE"; lc=0xFD20; fill=false; }
     else if(desync){ lw="DISK?"; lc=0xFD20; fill=false; }
@@ -4513,11 +4528,15 @@ static void drawNowPlayingBar(){
     else{gfx_fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_NOW);gfx_drawRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_GREEN);}
     gfx_fillCircle(LIST_X+8,y+NOW_PLAY_H/2,3,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(COL_GREEN,nb);gfx_setCursor(LIST_X+16,y+3);gfx_print(T(L_NOW_PLAYING));
     const int wpW=(fp&&fp->wp)?gfx_textWidth("WP")+6:0;   // fd2: the FluxDrive target's write protect is on (its beacon's "wp"): a WP chip at the right
+    // fd3: the disk it holds is not in flash yet (its beacon's "stored"): a STORING... chip, left of the WP chip
+    const int stW=(fp&&fdShowStoring(true,fp->loaded,fp->stored))?gfx_textWidth(T(L_FD_STORING))+6:0;
+    const int chipW=wpW+stW+((wpW&&stW)?4:0);
     if(fp){ String lb=" > "+pfPeerLabel(*fp);
-      if(wpW){ const int room=LIST_W-24-wpW-gfx_textWidth(T(L_NOW_PLAYING)); while(lb.length()>3&&gfx_textWidth(lb)>room)lb.remove(lb.length()-1); }
+      if(chipW){ const int room=LIST_W-24-chipW-gfx_textWidth(T(L_NOW_PLAYING)); while(lb.length()&&gfx_textWidth(lb)>room)lb.remove(lb.length()-1); }
       gfx_print(lb); }
     else if(g_wireless_mode&&g_link_home&&g_pfTargetName.length()) gfx_print(" > "+g_pfTargetName);   // #console: which dongle this went to
     if(wpW){ const int cx=LIST_X+LIST_W-8-wpW; gfx_fillRoundRect(cx,y+2,wpW,10,2,COL_AMBER); gfx_setTextColor(TFT_BLACK,COL_AMBER); gfx_setCursor(cx+3,y+3); gfx_print("WP"); }
+    if(stW){ const int cx=LIST_X+LIST_W-8-chipW; gfx_fillRoundRect(cx,y+2,stW,10,2,COL_AMBER); gfx_setTextColor(TFT_BLACK,COL_AMBER); gfx_setCursor(cx+3,y+3); gfx_print(T(L_FD_STORING)); }
     gfx_setTextColor(g_neo?COL_LIT:TFT_WHITE,nb);gfx_setCursor(LIST_X+16,y+12);String n=fp?fp->disk:(g_loaded_display.length()?g_loaded_display:g_loaded_name);while(gfx_textWidth(n)>LIST_W-24&&n.length()>3)n=n.substring(0,n.length()-1);gfx_print(n);}
   else{NeoScope _ns;fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);gfx_setTextSize(1);gfx_setTextColor(COL_MID,COL_BG);gfx_setCursor(LIST_X+8,y+NOW_PLAY_H/2-4);gfx_print(tapHint());}   // A600-neo2d: hint only, the count is in the mode bar
 }
@@ -6000,6 +6019,10 @@ static void fdUnstage(){
 // ack's uid. Not for a multi-target fling (as Hivemind: no write-back mapping), not with SAVES=OFF, not for any other
 // board. Without a uid in the ack, a tag in the beacon, or a file on the card (the test kit) there is no record, and its
 // writes are not fetched; the record it had stays, and matches nothing any more (another uid).
+// fd3, the commit window: the record this fling replaces is kept in RAM (pfPrevPut) until FluxDrive says the new disk is
+// stored - a power cut before that brings the previous disk back (fdCommitWatch). When one is kept already, its disk is the
+// last this panel saw stored and it stays (fdPrevAtFling). The same for every single-target fling: the touchscreen's, the
+// fleet manager's and the web page's all come here.
 static void fdRecordFling(const String&ip,uint32_t uid,const String&sent){
   if(g_saves_mode==0)return;
   int i=-1; for(int k=0;k<g_pfPeerN;k++) if(g_pfPeers[k].ip==ip){i=k;break;}
@@ -6011,9 +6034,76 @@ static void fdRecordFling(const String&ip,uint32_t uid,const String&sent){
     gLog("[saves] FluxDrive %s: no save record for disk %lu (%s) - its writes will not be fetched\n",p.tag.length()?p.tag.c_str():p.ip.c_str(),(unsigned long)uid,
          !uid?"no uid in the ack":!p.tag.length()?"no save tag in its beacon":!sent.length()?"not a file on the card":"a path too long");
     return; }
+  FdSaveRecord was{}; const bool hadOld=pfRecordFor(p.id)!=nullptr;   // copied: pfRecordPut rewrites the table
+  if(hadOld)was=*pfRecordFor(p.id);
   const bool onCard=pfRecordPut(r);
   gLog("[saves] FluxDrive %s: disk %lu is %s - saves go to %s%s\n",p.tag.c_str(),(unsigned long)uid,sent.c_str(),sav.c_str(),
        onCard?"":" (the record could NOT be written to the card: kept until a restart)");
+  const FdSaveRecord*kept=pfPrevFor(p.id), *keep=fdPrevAtFling(hadOld?&was:nullptr,kept,uid);
+  if(!keep) return;
+  if(keep==kept){ gLog("[saves] FluxDrive %s: still keeps the record of disk %lu (%s) until disk %lu is stored - disk %lu was never seen stored\n",
+                       p.tag.c_str(),(unsigned long)kept->uid,kept->orig,(unsigned long)uid,(unsigned long)(hadOld?was.uid:0)); return; }
+  if(pfPrevPut(was)) gLog("[saves] FluxDrive %s: keeps the record of disk %lu (%s) until disk %lu is stored\n",p.tag.c_str(),(unsigned long)was.uid,was.orig,(unsigned long)uid);
+  else gLog("[saves] FluxDrive %s: no RAM to keep the record of disk %lu until disk %lu is stored\n",p.tag.c_str(),(unsigned long)was.uid,(unsigned long)uid);
+}
+// fd3, the commit window, after the beacons of every pfService pass (fluxdrive_peer.h fdRevertCheck, fdFreshPendingCheck).
+// For each FluxDrive with a kept record (pfPrevFor): its new disk stored - the record is forgotten; the kept record's disk in
+// it again (switched off before the new disk was stored) - the kept record is its record again, on the card, so that
+// disk's writes are fetched as before. For each pending START FRESH (pfPendFor): its fresh disk stored - the .bak goes; the
+// disk it replaced in it again - START FRESH is undone: the .bak is the own save again (an own save a fetch wrote meanwhile
+// becomes the .bak: its writes were on the disk that is gone), the started-fresh mark goes. The card changes at once; what
+// the panel says waits for the main screen (g_fdNote, loop()).
+static bool   g_fdNote=false, g_fdNoteUndone=false;   // a revert to tell; it undid a START FRESH
+static String g_fdNoteGame, g_fdNoteNew;               // the game FluxDrive went back to; the one that was not stored yet
+static String fdGameOf(const char*path){ return basenameNoExt(filenameOnly(String(path))); }
+static void fdCommitWatch(){
+  if((!g_pfPrevN&&!g_pfPendN)||!(g_wireless_mode&&g_link_home))return;   // nothing kept, or no roster (fleet mode only)
+  for(int k=0;k<g_pfPrevN;){
+    const FdSaveRecord prev=g_pfPrev[k]; const int i=pfPeerIdx(String(prev.id));
+    if(i<0||!fdIsFluxDrive(g_pfPeers[i].board.c_str())){ k++; continue; }
+    const PfPeer&p=g_pfPeers[i]; const FdSaveRecord*cur=pfRecordFor(p.id);
+    const FdRevert v=fdRevertCheck(cur,&prev,p.loadId,p.loaded,p.stored);
+    if(v==FdRevert::Keep){ k++; continue; }
+    const uint32_t newUid=cur?cur->uid:0; const String newOrig=cur?String(cur->orig):String();
+    pfPrevDrop(p.id);   // the table shifts: k stays
+    if(v==FdRevert::DropPrev){ gLog("[saves] FluxDrive %s: disk %lu is stored - the record of disk %lu (%s) is no longer kept\n",prev.tag,(unsigned long)newUid,(unsigned long)prev.uid,prev.orig); continue; }
+    const bool onCard=pfRecordPut(prev);
+    gLog("[saves] FluxDrive %s: went back to disk %lu (%s) - switched off before disk %lu (%s) was stored; its record is back%s\n",prev.tag,
+         (unsigned long)prev.uid,prev.orig,(unsigned long)newUid,newOrig.length()?newOrig.c_str():"no record",onCard?"":" (NOT written to the card: kept until a restart)");
+    g_fdNote=true; g_fdNoteUndone=false; g_fdNoteGame=fdGameOf(prev.orig); g_fdNoteNew=newOrig.length()?fdGameOf(newOrig.c_str()):String();
+  }
+  for(int k=0;k<g_pfPendN;){
+    const FdFreshPending f=g_pfPend[k]; const int i=pfPeerIdx(String(f.id));
+    if(i<0||!fdIsFluxDrive(g_pfPeers[i].board.c_str())){ k++; continue; }
+    const PfPeer&p=g_pfPeers[i];
+    const FdRevert v=fdFreshPendingCheck(&f,p.loadId,p.loaded,p.stored);
+    if(v==FdRevert::Keep){ k++; continue; }
+    pfPendDrop(String(f.id));
+    if(v==FdRevert::DropPrev){ SD_MMC.remove(f.bak);
+      gLog("[saves] START FRESH %s: FluxDrive %s stored disk %lu - its backup %s %s\n",f.own,f.tag,(unsigned long)f.fresh_uid,f.bak,SD_MMC.exists(f.bak)?"could NOT be deleted":"is deleted");
+      continue; }
+    const String own=f.own, bak=f.bak, tmp=own+".tmp"; bool ok, swapped=false;
+    if(SD_MMC.exists(own)){   // a fetch wrote an own save inside the window: it trades places with the .bak
+      SD_MMC.remove(tmp); ok=SD_MMC.rename(bak,tmp);
+      if(ok&&!(ok=SD_MMC.rename(own,bak))) SD_MMC.rename(tmp,bak);
+      if(ok&&!(ok=SD_MMC.rename(tmp,own))) gLog("[saves] START FRESH %s: the save is left as %s\n",f.own,tmp.c_str());
+      swapped=ok; }
+    else ok=SD_MMC.rename(bak,own);
+    if(ok) savSetAdd(own);
+    if(fdFreshDrop(g_pfFresh,f.tag,f.image)) pfFreshWrite();   // started fresh no more
+    gLog("[saves] START FRESH %s: FluxDrive %s went back to disk %lu - START FRESH undone: %s%s\n",f.own,f.tag,(unsigned long)f.prior_uid,
+         ok?"its save is back from ":"its save could NOT be put back from ",bak.c_str(),swapped?" (the save written since is kept as the backup)":"");
+    g_fdNote=true; g_fdNoteUndone=true; g_fdNoteGame=fdGameOf(f.image); g_fdNoteNew="";
+  }
+}
+// START FRESH (fd3): no record kept by a FluxDrive (pfPrevFor) may keep a base (`sent`) that START FRESH just removed: put
+// back after a revert, its next fetch would rebuild from nothing. Such a record goes (a FluxDrive holding another disk:
+// fdFreshRecordFate's answer), except the one START FRESH keeps the base for in its .bak (keepId, keepUid: its pending entry).
+static void fdPrevDropBase(const String&gone,const String&keepId,uint32_t keepUid){
+  for(int k=0;k<g_pfPrevN;){ const FdSaveRecord&r=g_pfPrev[k];
+    if(!fdPathSame(r.sent,gone.c_str())||(keepId==r.id&&r.uid==keepUid)){ k++; continue; }
+    gLog("[saves] START FRESH %s: FluxDrive %s's kept record of disk %lu goes with it (its base)\n",gone.c_str(),r.tag,(unsigned long)r.uid);
+    pfPrevDrop(String(r.id)); }
 }
 // fd2, START FRESH is about to delete the save `gone`. No record may be left with a base (`sent`) that is gone: its next
 // fetch rebuilds from it (fdPersistLan). fdFreshRecordFate says, per record: a record whose base is its own save, the one
@@ -6335,8 +6425,9 @@ static bool doLoadSelected(const String&adfPath,const String&freshId,bool*sent){
 
 // fd2: START FRESH asks first, laid out as claimAskUI: the game, whose save goes (who: the FluxDrive's name, or "cable save"
 // - fix round 1: always named - and the file's name under it), what happens, and (swap) that the Amiga gets the original at
-// once. No answer in 30 s = CANCEL. true = go ahead.
-static bool freshAskUI(const String&game,const String&who,const String&fileName,bool swap){
+// once. No answer in 30 s = CANCEL. true = go ahead. reset (fd3): it is a DOS disk the Amiga gets again now - "Reset the
+// Amiga afterwards." (AmigaDOS takes the original and the save, same name and date, as one volume).
+static bool freshAskUI(const String&game,const String&who,const String&fileName,bool swap,bool reset){
   uint32_t r0=millis(); while(Touch_ReadFrame()&&millis()-r0<1500) delay(10);   // let go of the tap that opened it
   const String yes=T(L_START_FRESH), no=T(L_CANCEL);
   auto line=[&](const String&s,int y){ String t=s; while(t.length()>1&&gfx_textWidth(t)>VW-16)t.remove(t.length()-1);
@@ -6347,6 +6438,7 @@ static bool freshAskUI(const String&game,const String&who,const String&fileName,
   gfx_setTextColor(COL_DIM,COL_BG); line(who,VH/2-50); line(fileName,VH/2-38);
   gfx_setTextColor(COL_LIT,COL_BG); line(T(L_FRESH_GONE),VH/2-22); line(T(L_FRESH_ORIG),VH/2-8);
   if(swap){ gfx_setTextColor((uint16_t)0xE8C4,COL_BG); line(T(L_FRESH_SWAP),VH/2+12); }
+  if(reset){ gfx_setTextColor(COL_AMBER,COL_BG); line(T(L_FRESH_RESET),VH/2+26); }
   int bw=(VW-36)/2, by=VH-70, bh=44;
   uint16_t cT=(uint16_t)0x8000, cC=COL_BAR;
   gfx_fillRoundRect(12,by,bw,bh,8,cT); gfx_setTextColor(inkFor(cT),cT); gfx_setCursor(12+(bw-gfx_textWidth(yes))/2,by+18); gfx_print(yes);
@@ -6380,14 +6472,21 @@ static bool freshAskUI(const String&game,const String&who,const String&fileName,
 //    never left empty).
 //  - Fix round 1: a FluxDrive's own save gone, that FluxDrive is marked as started fresh on this game (pfFreshMark): its
 //    next flings of it send the original, not the cable save, until it has an own save again.
-// A Game.sav.<tag>.bak.adf (an own save a rebuild replaced, fdPersistLan) is not touched.
+// A Game.sav.<tag>.bak.adf (an own save a rebuild replaced, fdPersistLan) is not touched - except by fd3 below.
+//  - fd3, the commit window: a FluxDrive's own save is renamed to its .bak (an older .bak is replaced, as R14) instead of
+//    deleted while a power cut can still bring back the disk it belongs to: after the resend, until the original is stored;
+//    without a resend, while the disk this FluxDrive held before the one in it now is this game's and the one in it now is
+//    not stored yet (its kept record, pfPrevFor). A pending entry (FdFreshPending, RAM only) says what then
+//    (fdCommitWatch): the .bak goes once that disk is stored, or becomes the own save again if the game's disk comes back
+//    ("START FRESH undone - try again"). Otherwise the save is deleted as before. STANDALONE (the cable save) is unchanged.
+//  - fd3: the confirm says "Reset the Amiga afterwards." when the Amiga gets this game's DOS disk again now (fdIsDosBoot).
 static void doStartFresh(){
   const String file=selDiskFile(), drawn=g_freshDrawn;
-  String sav,pid,who,tag; bool resend=false;
-  auto plan=[&](){ int peer=-1; sav=freshSave(file,&peer); pid=""; who=T(L_FRESH_CABLE); tag=""; resend=false;
+  String sav,pid,who,tag; bool resend=false; uint32_t prior=0;
+  auto plan=[&](){ int peer=-1; sav=freshSave(file,&peer); pid=""; who=T(L_FRESH_CABLE); tag=""; resend=false; prior=0;
     if(peer>=0&&sav.length()){ const PfPeer&p=g_pfPeers[peer]; const FdSaveRecord*r=pfRecordFor(p.id);
       pid=p.id; who=pfPeerLabel(p); tag=p.tag;
-      resend=r&&file.equalsIgnoreCase(String(r->orig))&&fdStartFreshResends(r,p.loadId,p.loaded); } };
+      resend=r&&file.equalsIgnoreCase(String(r->orig))&&fdStartFreshResends(r,p.loadId,p.loaded); if(resend)prior=r->uid; } };
   auto changed=[&](const char*when){
     gLog("[saves] START FRESH: the save changed %s (drawn for %s, now %s) - nothing deleted\n",when,drawn.length()?drawn.c_str():"none",sav.length()?sav.c_str():"none");
     hwMsg(T(L_START_FRESH),T(L_FRESH_CHANGED),COL_AMBER,1800); drawFullUI(); gfx_flush(); };
@@ -6397,7 +6496,9 @@ static void doStartFresh(){
   const bool here=g_loaded&&g_loaded_path.equalsIgnoreCase(sav);                       // this panel's staging is that save
   const bool onCable=!g_wireless_mode&&g_loaded&&g_loaded_orig.equalsIgnoreCase(file);  // STANDALONE: the cable's Amiga has this disk in
   const bool swapped=resend;
-  if(!freshAskUI(gn,who,filenameOnly(sav),resend||onCable)){ gLog("[saves] START FRESH %s: cancelled\n",sav.c_str()); drawFullUI(); gfx_flush(); return; }
+  bool dos=false;   // fd3: the Amiga gets this disk again now and it is an AmigaDOS disk (its boot block)
+  if(resend||onCable){ File bf=SD_MMC.open(file,FILE_READ); if(bf){ uint8_t b[4]={0,0,0,0}; dos=bf.read(b,4)==4&&fdIsDosBoot(b,4); bf.close(); } }
+  if(!freshAskUI(gn,who,filenameOnly(sav),resend||onCable,dos)){ gLog("[saves] START FRESH %s: cancelled\n",sav.c_str()); drawFullUI(); gfx_flush(); return; }
   plan();   // up to 30 s later: still the save the confirm named, still the same swap?
   if(!sav.length()||!fdPathSame(sav.c_str(),drawn.c_str())||resend!=swapped){ changed("while the confirm was up"); return; }
   if(resend){ bool sent=false; doLoadSelected(file,pid,&sent);
@@ -6406,14 +6507,46 @@ static void doStartFresh(){
   if(!fdFreshRecords(sav)){   // a FluxDrive record whose base is this file could not keep it: the file stays
     hwMsg(T(L_FAILED),filenameOnly(sav).c_str(),COL_AMBER,2500); drawFullUI(); gfx_flush(); return; }
   if(!resend&&(here||onCable)){ if(g_usb_online)hardDetach(); svDirtyReset(); doUnload(); }   // its unsaved writes go with the save: dropped, not flushed into it
-  SD_MMC.remove(sav);
-  const bool gone=!SD_MMC.exists(sav);
+  // fd3: a FluxDrive's own save waits as its .bak while a power cut can bring back the disk it belongs to (see above)
+  FdFreshPending pend{}; bool toBak=false; const String bak=tag.length()?dongleSavPathFor(file,tag+".bak"):String();
+  if(tag.length()){ uint32_t fresh=0, from=0; const int k=pfPeerIdx(pid);
+    if(resend){ from=prior; fresh=k>=0?g_pfPeers[k].loadId:0; }   // the original's uid, from its push ack
+    else { const FdSaveRecord*w=pfPrevFor(pid), *cur=pfRecordFor(pid); if(w&&cur&&fdPathSame(w->orig,file.c_str())){ from=w->uid; fresh=cur->uid; } }
+    toBak=fdFreshPendingSet(pend,pid.c_str(),fresh,from,sav.c_str(),bak.c_str(),file.c_str(),tag.c_str())&&pfWinReady(); }
+  bool gone;
+  if(toBak){ SD_MMC.remove(bak); gone=SD_MMC.rename(sav,bak); }
+  else { SD_MMC.remove(sav); gone=!SD_MMC.exists(sav); }
   if(gone)savSetRemove(sav);
-  gLog("[saves] START FRESH %s: %s%s%s\n",sav.c_str(),gone?"deleted":"could NOT be deleted",resend?" - the original went to FluxDrive ":"",resend?tag.c_str():"");
+  if(gone&&toBak){ if(const FdFreshPending*o=pfPendFor(pid)) gLog("[saves] START FRESH %s: an earlier START FRESH on FluxDrive %s is no longer watched - its backup %s stays\n",sav.c_str(),tag.c_str(),o->bak);
+    pfPendPut(pend); }
+  if(gone)fdPrevDropBase(sav,toBak?pid:String(),toBak?pend.prior_uid:0);   // no kept record may be put back onto a base that is gone
+  gLog("[saves] START FRESH %s: %s%s%s%s\n",sav.c_str(),!gone?"could NOT be deleted":toBak?"kept as ":"deleted",gone&&toBak?bak.c_str():"",
+       resend?" - the original went to FluxDrive ":"",resend?tag.c_str():"");
+  if(gone&&toBak) gLog("[saves] START FRESH %s: deleted once FluxDrive %s has stored disk %lu; back as the save if disk %lu comes back first\n",sav.c_str(),tag.c_str(),
+                      (unsigned long)pend.fresh_uid,(unsigned long)pend.prior_uid);
   if(gone&&tag.length())pfFreshMark(tag,file);   // its own save gone: that FluxDrive gets the original from now on
   if(onCable)doLoadSelected(file);   // STANDALONE: back in at once - the original, or the save that could not be deleted
   hwMsg(gone?T(L_FRESH_DONE):T(L_FAILED),gone?gn.c_str():filenameOnly(sav).c_str(),gone?COL_GREEN:COL_AMBER,gone?1500:2500);
   drawFullUI(); gfx_flush();
+}
+// fd3: what fdCommitWatch found, once the main screen is up (loop()): "FluxDrive went back to <game>" and either "switched
+// off before <new game> was stored" or "START FRESH undone - try again". A read-and-act message (msgHold: 3 s, then until a
+// tap, at most 10 s); the finger that ends it is let go of before the main screen takes taps again.
+static void fdNoteUI(){
+  uint32_t r0=millis(); while(Touch_ReadFrame()&&millis()-r0<1500) delay(10);
+  auto line=[&](const String&s,int y){ String t=s; while(t.length()>1&&gfx_textWidth(t)>VW-16)t.remove(t.length()-1);
+    gfx_setCursor((VW-gfx_textWidth(t))/2,y); gfx_print(t); };
+  gfx_fillScreen(COL_BG);
+  gfx_setTextSize(1); gfx_setTextColor(COL_LIT,COL_BG); line(T(L_FD_WENT_BACK),VH/2-40);
+  gfx_setTextSize(2); gfx_setTextColor(COL_AMBER,COL_BG); line(g_fdNoteGame,VH/2-24);
+  gfx_setTextSize(1);
+  if(g_fdNoteUndone){ gfx_setTextColor((uint16_t)0xE8C4,COL_BG); line(T(L_FRESH_UNDONE),VH/2+6); }
+  else if(g_fdNoteNew.length()){   // the new game's name is cut, not the words around it
+    String nm=g_fdNoteNew, l=T(L_FD_OFF_BEFORE); l.replace("%1",nm);
+    while(nm.length()>1&&gfx_textWidth(l)>VW-16){ nm.remove(nm.length()-1); l=T(L_FD_OFF_BEFORE); l.replace("%1",nm); }
+    gfx_setTextColor(COL_LIT,COL_BG); line(l,VH/2+6); }
+  gfx_flush(); msgHold();
+  r0=millis(); while(Touch_ReadFrame()&&millis()-r0<1500) delay(10);
 }
 
 // A home-network join on its strongest access point. Arduino's default join is a fast scan that takes the FIRST access
@@ -8071,7 +8204,12 @@ static void doFleetPick(){
         auto fit=[&](String s)->String{ if(isFd) while(s.length()>1&&gfx_textWidth(s)>actX-44-6) s.remove(s.length()-1); return s; };
         gfx_setTextColor(inkFor(bg),bg);gfx_setCursor(44,y+7);gfx_print(fit(p.name.length()?p.name:("Dongle "+String(i+1))));
         uint16_t sub=(inkFor(bg)==TFT_BLACK)?COL_MID:COL_DIM;
-        gfx_setTextColor(p.loaded?COL_GREEN:sub,bg);gfx_setCursor(44,y+23);gfx_print(fit(p.loaded?(String("* ")+(p.disk.length()?p.disk:String("disk"))):String("empty")));
+        // fd3: its disk is not in flash yet (the beacon's "stored"): STORING... after the disk's name, which is cut for it
+        const String sto=fdShowStoring(isFd,p.loaded,p.stored)?String("  ")+T(L_FD_STORING):String();
+        String dl=p.loaded?(String("* ")+(p.disk.length()?p.disk:String("disk"))):String("empty");
+        if(sto.length()) while(dl.length()>1&&gfx_textWidth(dl+sto)>actX-44-6) dl.remove(dl.length()-1);
+        gfx_setTextColor(p.loaded?COL_GREEN:sub,bg);gfx_setCursor(44,y+23);gfx_print(fit(dl));
+        if(sto.length()){ gfx_setTextColor(COL_AMBER,bg); gfx_print(sto); }
         gfx_setTextColor(sub,bg);gfx_setCursor(44,y+35);gfx_print(fit(pfRowInfo(p)));
         if(isFd) fleetDrawWp(i,actX,y+9,actW,rowH-22,bg);   // its write protect as its beacon says; a tap asks for the other state
 #if defined(GTI_FLEET)
@@ -9177,7 +9315,7 @@ void loop(){
   // The FluxDrive target changed (a beacon, a fling or eject, it appeared or went quiet): repaint what shows it, on the
   // main screen only. Settings and every modal redraw the main screen in full when they leave it.
   { static char fdShown[256]=""; char now[256]; const int ft=pfFluxTarget();
-    if(ft<0) now[0]=0; else { const PfPeer&p=g_pfPeers[ft]; snprintf(now,sizeof now,"%s|%c|%c|%s|%s|%s|%s",p.id.c_str(),p.loaded?'L':'l',p.wp?'W':'w',p.tag.c_str(),p.name.c_str(),p.ip.c_str(),p.disk.c_str()); }   // fd2: + its write protect (NOW PLAYING's WP) and save tag (START FRESH)
+    if(ft<0) now[0]=0; else { const PfPeer&p=g_pfPeers[ft]; snprintf(now,sizeof now,"%s|%c|%c|%c|%s|%s|%s|%s",p.id.c_str(),p.loaded?'L':'l',p.wp?'W':'w',fdShowStoring(true,p.loaded,p.stored)?'S':'s',p.tag.c_str(),p.name.c_str(),p.ip.c_str(),p.disk.c_str()); }   // fd2: + its write protect (NOW PLAYING's WP) and save tag (START FRESH); fd3: + STORING... (NOW PLAYING, the status bar)
     if(strcmp(now,fdShown)){ strcpy(fdShown,now);
       if(!g_info_showing){ if(g_car_active) drawCarousel(); else { drawStatusBar(); drawListAndCover(); } gfx_flush(); } } }
   { static String mdnsShown; if(pfMdnsName()!=mdnsShown){ mdnsShown=pfMdnsName();
@@ -9204,6 +9342,11 @@ void loop(){
     if(g_wifiNotice==1) hwMsg("No WiFi found","using ESP-NOW instead",COL_AMBER,2500);
     else                hwMsg("WiFi lost","tap MODE for ESP-NOW",COL_AMBER,2500);
     g_wifiNotice=0; drawFullUI(); gfx_flush();
+  }
+  if(g_fdNote && !g_info_showing){   // fd3: a FluxDrive went back to the disk before (fdCommitWatch): say so on the main screen
+    g_fdNote=false; fdNoteUI();
+    if(g_car_active) drawCarousel(); else drawFullUI();
+    gfx_flush();
   }
   { static uint32_t _sgT=0; if(g_sdg.pending_report && millis()-_sgT>2000){ _sgT=millis(); sdGuardReport(false); } }   // lab14g
   if(g_espnow_link_just_established){g_espnow_link_just_established=false;

@@ -897,6 +897,189 @@ static void test_fd_fresh_mark_lines_round_trip_and_refuse_garbage() {
   CHECK(fdFreshFormat(m, nullptr, 10) == -1);
 }
 
+// ---- The commit window (fd3): FluxDrive says when the disk in it is in flash (its beacon's "stored") ------------------
+
+// "stored" is false only when the beacon says so. A beacon without it - a Webby, a FluxDrive older than writing 10 - counts
+// as stored: the panel knows of no commit window there.
+static void test_fd_stored_field_missing_counts_as_stored() {
+  CHECK(!fdStoredField("false"));
+  CHECK(fdStoredField("true"));
+  CHECK(fdStoredField(""));                                            // not in the beacon (pfJf gives "")
+  CHECK(fdStoredField(nullptr));
+  CHECK(fdStoredField("False") && fdStoredField("falsey") && fdStoredField("0"));   // only FluxDrive's own word means "not yet"
+}
+
+// "STORING..." (NOW PLAYING, the fleet row) and "do not switch off yet" (the status bar): a FluxDrive holding a disk that is
+// not in flash yet. An empty FluxDrive says stored false as well and never shows it; no other board ever does.
+static void test_fd_storing_shows_only_with_a_disk_not_yet_stored() {
+  CHECK(fdShowStoring(true, true, false));
+  CHECK(!fdShowStoring(true, true, true));                             // stored: nothing to wait for
+  CHECK(!fdShowStoring(true, false, false));                           // empty (an eject inside the window)
+  CHECK(!fdShowStoring(true, false, true));
+  CHECK(!fdShowStoring(false, true, false));                           // a Webby
+}
+
+// The fleet manager repaints a FluxDrive row when its STORING... comes or goes.
+static void test_the_row_signature_follows_storing() {
+  char a[120], b[120];
+  CHECK(fdRowSig("fluxdrive", true, true, "Lemmings", a, sizeof(a), false) > 0);
+  CHECK(fdRowSig("fluxdrive", true, true, "Lemmings", b, sizeof(b), false, true) > 0 && std::strcmp(a, b) != 0);   // storing
+  CHECK(fdRowSig("fluxdrive", true, true, "Lemmings", b, sizeof(b), false, false) > 0 && std::strcmp(a, b) == 0);  // default: not
+  CHECK(fdRowSig("fluxdrive", true, true, "Lemmings", a, sizeof(a), true, true) > 0 &&
+        fdRowSig("fluxdrive", true, true, "Lemmings", b, sizeof(b), true, false) > 0 && std::strcmp(a, b) != 0);   // WP on as well
+  CHECK(fdRowSig("fluxdrive", true, true, "Lemmings", a, sizeof(a), true, true) > 0 &&
+        fdRowSig("fluxdrive", true, true, "Lemmings", b, sizeof(b), false, true) > 0 && std::strcmp(a, b) != 0);   // WP still counts
+  CHECK(fdRowSig("supermini", true, true, "Lemmings", a, sizeof(a), false, true) == 0 && a[0] == 0);
+}
+
+// Until the disk a fling sent is stored, the panel keeps the record that fling replaced (prev). What a beacon of that
+// FluxDrive means for it (cur: its record now; the beacon's load_id, loaded and stored):
+//  Restore  - a disk in it with prev's uid: switched off before the new disk was stored, FluxDrive went back to prev;
+//  DropPrev - a disk in it with cur's uid, and stored: prev can never come back;
+//  Keep     - anything else (not stored yet, empty, another disk, no uid, nothing kept).
+static const FdSaveRecord kCur = fdRec("A1B2C3D4E5F6", 43, "/ADF/H.adf", "/ADF/H.adf", "80FE");
+static const FdSaveRecord kPrev = fdRec("A1B2C3D4E5F6", 42, "/ADF/G.sav.80FE.adf", "/ADF/G.adf", "80FE");
+
+static void test_fd_revert_check_restore_when_the_beacon_reports_prev() {
+  CHECK(fdRevertCheck(&kCur, &kPrev, 42, true, true) == FdRevert::Restore);    // loaded from flash at its boot: stored
+  CHECK(fdRevertCheck(&kCur, &kPrev, 42, true, false) == FdRevert::Restore);   // whatever it says of stored
+  CHECK(fdRevertCheck(nullptr, &kPrev, 42, true, true) == FdRevert::Restore);  // the new record gone meanwhile: still back
+  FdSaveRecord hi = kPrev; hi.uid = 4294967295u;
+  CHECK(fdRevertCheck(&kCur, &hi, 4294967295u, true, true) == FdRevert::Restore);   // the whole 32 bits
+}
+
+static void test_fd_revert_check_drop_prev_when_the_new_uid_is_stored() {
+  CHECK(fdRevertCheck(&kCur, &kPrev, 43, true, true) == FdRevert::DropPrev);
+  FdSaveRecord hi = kCur; hi.uid = 4294967295u;
+  CHECK(fdRevertCheck(&hi, &kPrev, 4294967295u, true, true) == FdRevert::DropPrev);
+}
+
+static void test_fd_revert_check_keep_while_the_new_uid_is_not_stored() {
+  CHECK(fdRevertCheck(&kCur, &kPrev, 43, true, false) == FdRevert::Keep);     // its commit runs (8-82 s), or gave up
+}
+
+static void test_fd_revert_check_keep_without_prev() {
+  CHECK(fdRevertCheck(&kCur, nullptr, 43, true, true) == FdRevert::Keep);
+  CHECK(fdRevertCheck(&kCur, nullptr, 42, true, true) == FdRevert::Keep);
+  CHECK(fdRevertCheck(nullptr, nullptr, 42, true, true) == FdRevert::Keep);
+  FdSaveRecord z = kPrev; z.uid = 0;                                   // a uid 0 matches nothing, not even "none"
+  CHECK(fdRevertCheck(&kCur, &z, 0, true, true) == FdRevert::Keep);
+  CHECK(fdRevertCheck(&kCur, &z, 43, true, true) == FdRevert::Keep);
+}
+
+// An eject inside the window says stored false because the drive is empty, and FluxDrive keeps an ejected disk's uid:
+// neither drops prev (nor deletes a START FRESH backup) nor brings it back.
+static void test_fd_revert_check_keep_when_not_loaded() {
+  CHECK(fdRevertCheck(&kCur, &kPrev, 43, false, false) == FdRevert::Keep);
+  CHECK(fdRevertCheck(&kCur, &kPrev, 43, false, true) == FdRevert::Keep);
+  CHECK(fdRevertCheck(&kCur, &kPrev, 42, false, true) == FdRevert::Keep);
+  CHECK(fdRevertCheck(&kCur, &kPrev, 42, false, false) == FdRevert::Keep);
+  CHECK(fdRevertCheck(&kCur, &kPrev, 0, false, false) == FdRevert::Keep);
+}
+
+static void test_fd_revert_check_keep_for_anything_else() {
+  CHECK(fdRevertCheck(&kCur, &kPrev, 44, true, true) == FdRevert::Keep);     // a third disk (a PC push, another panel)
+  CHECK(fdRevertCheck(&kCur, &kPrev, 44, true, false) == FdRevert::Keep);
+  CHECK(fdRevertCheck(&kCur, &kPrev, 0, true, true) == FdRevert::Keep);      // no uid in the beacon
+  CHECK(fdRevertCheck(nullptr, &kPrev, 0, true, true) == FdRevert::Keep);    // ... not even with no new record
+  CHECK(fdRevertCheck(nullptr, &kPrev, 43, true, true) == FdRevert::Keep);   // no new record: nothing says which disk is new
+  FdSaveRecord c32 = kCur, p32 = kPrev; c32.uid = 0x00010043u; p32.uid = 0x00010042u;   // uids are 32 bits, all of them count
+  CHECK(fdRevertCheck(&c32, &p32, 0x00020042u, true, true) == FdRevert::Keep);
+  CHECK(fdRevertCheck(&c32, &p32, 0x00020043u, true, true) == FdRevert::Keep);
+  CHECK(fdRevertCheck(&c32, &p32, 0x00010042u, true, true) == FdRevert::Restore);
+  FdSaveRecord other = kCur; std::strcpy(other.id, "0123456789AB");          // records of two FluxDrives are not a pair
+  CHECK(fdRevertCheck(&other, &kPrev, 42, true, true) == FdRevert::Keep);
+  CHECK(fdRevertCheck(&other, &kPrev, 43, true, true) == FdRevert::Keep);
+  const FdSaveRecord same = kPrev;                                     // the "new" record is the kept one: no revert
+  CHECK(fdRevertCheck(&same, &kPrev, 42, true, false) == FdRevert::Keep);
+  CHECK(fdRevertCheck(&same, &kPrev, 42, true, true) == FdRevert::DropPrev);
+}
+
+// At a fling, the record kept as the one the new disk replaced: the one already kept (its disk is the last this panel saw
+// stored; the disk in between never was, so a power cut brings the older one back), else the record the fling replaces.
+// None for a first fling, a record without a uid, or the new disk itself.
+static void test_fd_prev_at_fling_keeps_the_last_disk_known_stored() {
+  const FdSaveRecord a = fdRec("A1B2C3D4E5F6", 41, "/ADF/F.adf", "/ADF/F.adf", "80FE");
+  const FdSaveRecord b = fdRec("A1B2C3D4E5F6", 42, "/ADF/G.adf", "/ADF/G.adf", "80FE");
+  CHECK(fdPrevAtFling(&b, nullptr, 43) == &b);                         // B was stored (nothing kept): B's record is kept
+  CHECK(fdPrevAtFling(&b, &a, 43) == &a);                              // a second fling before B was seen stored: A stays
+  CHECK(fdPrevAtFling(nullptr, &a, 43) == &a);
+  CHECK(fdPrevAtFling(nullptr, nullptr, 43) == nullptr);               // the first fling to it
+  CHECK(fdPrevAtFling(&b, nullptr, 42) == nullptr);                    // the same uid is not a replaced disk
+  CHECK(fdPrevAtFling(&b, &a, 41) == &b);
+  FdSaveRecord z = b; z.uid = 0;
+  CHECK(fdPrevAtFling(&z, nullptr, 43) == nullptr);
+  CHECK(fdPrevAtFling(&b, &z, 43) == &b);                              // a kept record without a uid is none
+}
+
+// START FRESH on a FluxDrive that gets the original now: the own save is renamed to its .bak and this entry stays in RAM
+// (FluxDrive id, the fresh disk's uid, the uid of the disk it replaced, the own save, the .bak, the image, the save tag).
+static void test_fd_fresh_pending_is_made_whole_or_not_at_all() {
+  const char* own = "/ADF/G.sav.80FE.adf";
+  const char* bak = "/ADF/G.sav.80FE.bak.adf";
+  const char* img = "/ADF/G.adf";
+  FdFreshPending p; std::memset(&p, 0x5A, sizeof p);
+  CHECK(fdFreshPendingSet(p, "A1B2C3D4E5F6", 43, 42, own, bak, img, "80FE"));
+  CHECK(std::strcmp(p.id, "A1B2C3D4E5F6") == 0 && p.fresh_uid == 43 && p.prior_uid == 42 && std::strcmp(p.own, own) == 0 &&
+        std::strcmp(p.bak, bak) == 0 && std::strcmp(p.image, img) == 0 && std::strcmp(p.tag, "80FE") == 0);
+  const FdFreshPending keep = p;
+  char p159[160]; fdLongPath(p159, 159);
+  char p160[161]; fdLongPath(p160, 160);
+  CHECK(fdFreshPendingSet(p, "A1B2C3D4E5F6", 43, 42, p159, bak, img, "80FE") && std::strcmp(p.own, p159) == 0);
+  p = keep;
+  struct Bad { const char *id; uint32_t fresh, prior; const char *own, *bak, *img, *tag; } bad[] = {
+    { "A1B2C3D4E5F6", 0, 42, own, bak, img, "80FE" },                  // no fresh uid (no uid in the ack)
+    { "A1B2C3D4E5F6", 43, 0, own, bak, img, "80FE" },                  // no prior uid
+    { "A1B2C3D4E5F6", 42, 42, own, bak, img, "80FE" },                 // the same disk
+    { "", 43, 42, own, bak, img, "80FE" },
+    { "a1b2c3d4e5f6", 43, 42, own, bak, img, "80FE" },
+    { "A1B2C3D4E5F6A", 43, 42, own, bak, img, "80FE" },
+    { nullptr, 43, 42, own, bak, img, "80FE" },
+    { "A1B2C3D4E5F6", 43, 42, "ADF/G.sav.80FE.adf", bak, img, "80FE" },
+    { "A1B2C3D4E5F6", 43, 42, own, "", img, "80FE" },
+    { "A1B2C3D4E5F6", 43, 42, own, bak, nullptr, "80FE" },
+    { "A1B2C3D4E5F6", 43, 42, own, bak, "/ADF/G\t.adf", "80FE" },
+    { "A1B2C3D4E5F6", 43, 42, p160, bak, img, "80FE" },                // does not fit whole: a cut path names another file
+    { "A1B2C3D4E5F6", 43, 42, own, p160, img, "80FE" },
+    { "A1B2C3D4E5F6", 43, 42, own, bak, p160, "80FE" },
+    { "A1B2C3D4E5F6", 43, 42, own, bak, img, "80fe" },
+    { "A1B2C3D4E5F6", 43, 42, own, bak, img, "80FE0" },
+    { "A1B2C3D4E5F6", 43, 42, own, bak, img, nullptr },
+  };
+  for (const Bad& x : bad)
+    CHECK(!fdFreshPendingSet(p, x.id, x.fresh, x.prior, x.own, x.bak, x.img, x.tag) && std::memcmp(&p, &keep, sizeof p) == 0);
+}
+
+// What a beacon of that FluxDrive means for a pending START FRESH: the fresh disk is in it and stored - done, the .bak goes
+// (DropPrev); the disk START FRESH replaced is in it again - undone, the .bak is its save again (Restore); else Keep. An
+// eject inside the window keeps it.
+static void test_fd_fresh_pending_check() {
+  FdFreshPending p; std::memset(&p, 0, sizeof p);
+  CHECK(fdFreshPendingSet(p, "A1B2C3D4E5F6", 43, 42, "/ADF/G.sav.80FE.adf", "/ADF/G.sav.80FE.bak.adf", "/ADF/G.adf", "80FE"));
+  CHECK(fdFreshPendingCheck(&p, 43, true, true) == FdRevert::DropPrev);
+  CHECK(fdFreshPendingCheck(&p, 43, true, false) == FdRevert::Keep);
+  CHECK(fdFreshPendingCheck(&p, 42, true, true) == FdRevert::Restore);
+  CHECK(fdFreshPendingCheck(&p, 42, true, false) == FdRevert::Restore);
+  CHECK(fdFreshPendingCheck(&p, 43, false, false) == FdRevert::Keep);   // ejected inside the window: the .bak stays
+  CHECK(fdFreshPendingCheck(&p, 42, false, true) == FdRevert::Keep);
+  CHECK(fdFreshPendingCheck(&p, 44, true, true) == FdRevert::Keep);     // a third disk
+  CHECK(fdFreshPendingCheck(&p, 0, true, true) == FdRevert::Keep);
+  CHECK(fdFreshPendingCheck(nullptr, 43, true, true) == FdRevert::Keep);
+}
+
+// The START FRESH confirm says "reset the Amiga afterwards" for a DOS disk: AmigaDOS takes two disks with the same name
+// and date as one volume. A DOS disk's boot block starts "DOS" and a flags byte 0-7.
+static void test_fd_dos_boot_block() {
+  const uint8_t ofs[4] = { 'D', 'O', 'S', 0 }, ffs[4] = { 'D', 'O', 'S', 1 }, dc[4] = { 'D', 'O', 'S', 7 };
+  const uint8_t f8[4] = { 'D', 'O', 'S', 8 }, ndos[4] = { 'N', 'D', 'O', 'S' }, kick[4] = { 'K', 'I', 'C', 'K' };
+  const uint8_t low[4] = { 'd', 'o', 's', 0 }, dxs[4] = { 'D', 'X', 'S', 0 }, xos[4] = { 'X', 'O', 'S', 0 }, dox[4] = { 'D', 'O', 'X', 0 };
+  CHECK(fdIsDosBoot(ofs, 4) && fdIsDosBoot(ffs, 4) && fdIsDosBoot(dc, 4));
+  CHECK(!fdIsDosBoot(f8, 4) && !fdIsDosBoot(ndos, 4) && !fdIsDosBoot(kick, 4) && !fdIsDosBoot(low, 4));
+  CHECK(!fdIsDosBoot(dxs, 4) && !fdIsDosBoot(xos, 4) && !fdIsDosBoot(dox, 4));
+  CHECK(!fdIsDosBoot(ofs, 3));                                         // a short read
+  CHECK(!fdIsDosBoot(nullptr, 4));
+}
+
 int main() {
   test_fluxdrive_is_told_apart_by_its_beacon_board();
   test_only_a_dd_adf_goes_to_a_fluxdrive();
@@ -959,6 +1142,19 @@ int main() {
   test_fd_after_start_fresh_the_original_is_sent();
   test_fd_fresh_marks_are_added_found_and_dropped();
   test_fd_fresh_mark_lines_round_trip_and_refuse_garbage();
+  test_fd_stored_field_missing_counts_as_stored();
+  test_fd_storing_shows_only_with_a_disk_not_yet_stored();
+  test_the_row_signature_follows_storing();
+  test_fd_revert_check_restore_when_the_beacon_reports_prev();
+  test_fd_revert_check_drop_prev_when_the_new_uid_is_stored();
+  test_fd_revert_check_keep_while_the_new_uid_is_not_stored();
+  test_fd_revert_check_keep_without_prev();
+  test_fd_revert_check_keep_when_not_loaded();
+  test_fd_revert_check_keep_for_anything_else();
+  test_fd_prev_at_fling_keeps_the_last_disk_known_stored();
+  test_fd_fresh_pending_is_made_whole_or_not_at_all();
+  test_fd_fresh_pending_check();
+  test_fd_dos_boot_block();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }

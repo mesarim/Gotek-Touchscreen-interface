@@ -102,14 +102,16 @@ inline bool fdKeepNamePrefix(const char* board, int targets, int full_text_px, i
 }
 
 // What the fleet manager compares to decide whether to repaint: for a FluxDrive the Amiga's power, whether it holds a
-// disk, the disk's name and its write protect (the row's WP key, v2 writing); for any other board nothing (its row
-// repaints when its id list changes, as before).
-// Writes "" or "|<A|a><L|l><W|w><disk>;" into out (cut to cap-1) and returns the length.
-inline size_t fdRowSig(const char* board, bool amiga, bool loaded, const char* disk, char* out, size_t cap, bool wp = false) {
+// disk, the disk's name, its write protect (the row's WP key, v2 writing) and whether the row says STORING... (fd3, the
+// commit window: fdShowStoring); for any other board nothing (its row repaints when its id list changes, as before).
+// Writes "" or "|<A|a><L|l><W|w><S|s><disk>;" into out (cut to cap-1) and returns the length.
+inline size_t fdRowSig(const char* board, bool amiga, bool loaded, const char* disk, char* out, size_t cap, bool wp = false,
+                       bool storing = false) {
   if (out == nullptr || cap == 0) return 0;
   out[0] = 0;
   if (!fdIsFluxDrive(board)) return 0;
-  const int n = snprintf(out, cap, "|%c%c%c%s;", amiga ? 'A' : 'a', loaded ? 'L' : 'l', wp ? 'W' : 'w', disk ? disk : "");
+  const int n = snprintf(out, cap, "|%c%c%c%c%s;", amiga ? 'A' : 'a', loaded ? 'L' : 'l', wp ? 'W' : 'w', storing ? 'S' : 's',
+                         disk ? disk : "");
   if (n < 0) { out[0] = 0; return 0; }
   return (size_t)n >= cap ? cap - 1 : (size_t)n;
 }
@@ -537,4 +539,86 @@ inline const char* fdWpFailText(int reply, bool ran_out) {
   if (reply == 0x00) return "no disk in it";
   if (reply < 0) return ran_out ? FD_WP_BUSY : "no reply";
   return "refused";
+}
+
+// ---- The commit window (fd3, spec section 6) --------------------------------------------------------------------------
+// FluxDrive writes a new disk to flash in steps, only while the Amiga's motor is off: about 8 s idle, up to 82 s while a game
+// loads. A power cut before the last step brings the PREVIOUS disk back, with its uid and unsaved map. Its beacon's "stored"
+// says when that window is closed: true once the disk in it is the one a power cut would bring back (loaded from flash at its
+// boot, or its commit finished); false while a new disk's commit runs, after a commit gave up, and with no disk in it. It
+// stays true during a journal compaction, and FluxDrive beacons at once when it turns true.
+
+// The beacon's "stored" value as pfJf reads it: false only for FluxDrive's own "false". Missing ("") counts as stored: a
+// Webby and a FluxDrive older than writing 10 never say it, and the panel knows of no commit window there.
+inline bool fdStoredField(const char* v) { return !(v != nullptr && strcmp(v, "false") == 0); }
+
+// "STORING..." (NOW PLAYING, the fleet row) and "do not switch off yet" (the status bar): a FluxDrive holding a disk that is
+// not in flash yet. An empty FluxDrive also says stored false, and never shows it.
+inline bool fdShowStoring(bool is_fd, bool loaded, bool stored) { return is_fd && loaded && !stored; }
+
+// Until the disk a fling sent is stored, the panel keeps in RAM the record that fling replaced (prev; panel_fleet.h). What a
+// beacon of that FluxDrive (its load_id, loaded, stored) means for it, with cur its record now:
+//  Restore  - a disk in it whose uid is prev's: it was switched off before the new disk was stored and went back to prev.
+//             prev is the record again (its writes are fetched as before), and the panel says so.
+//  DropPrev - a disk in it whose uid is cur's, and stored: prev can never come back; forget it.
+//  Keep     - anything else: the new disk's commit still runs or gave up, no disk in it (an eject inside the window says
+//             stored false and keeps the ejected uid: it neither drops prev nor brings it back), another disk, no uid.
+// Only "loaded && stored && uid == cur's" says the new disk is safe. cur and prev belong to one FluxDrive (the same id).
+enum class FdRevert : uint8_t { Keep, DropPrev, Restore };
+// The same on bare uids (0 = none): fdRevertCheck's records, and a pending START FRESH's fresh and prior disk.
+inline FdRevert fdRevertUids(uint32_t cur_uid, uint32_t prev_uid, uint32_t beacon_uid, bool loaded, bool stored) {
+  if (prev_uid == 0 || !loaded || beacon_uid == 0) return FdRevert::Keep;
+  if (beacon_uid == cur_uid) return stored ? FdRevert::DropPrev : FdRevert::Keep;   // the new disk (never a revert)
+  return beacon_uid == prev_uid ? FdRevert::Restore : FdRevert::Keep;
+}
+inline FdRevert fdRevertCheck(const FdSaveRecord* cur, const FdSaveRecord* prev, uint32_t beacon_uid, bool loaded, bool stored) {
+  if (prev == nullptr) return FdRevert::Keep;
+  if (cur != nullptr && strncmp(cur->id, prev->id, sizeof cur->id) != 0) return FdRevert::Keep;   // two FluxDrives: no pair
+  return fdRevertUids(cur ? cur->uid : 0, prev->uid, beacon_uid, loaded, stored);
+}
+
+// A fling to a FluxDrive replaces its record `old` with the new disk's (new_uid). Which record is kept as prev: the one kept
+// already (`kept`), if any - the disk between it and this fling was never seen stored, so a power cut brings kept's disk back,
+// not that one -, else `old`. nullptr: nothing to keep (a first fling, no uid, or the new disk itself).
+inline const FdSaveRecord* fdPrevAtFling(const FdSaveRecord* old, const FdSaveRecord* kept, uint32_t new_uid) {
+  if (kept != nullptr && kept->uid != 0 && kept->uid != new_uid) return kept;
+  if (old != nullptr && old->uid != 0 && old->uid != new_uid) return old;
+  return nullptr;
+}
+
+// START FRESH on a FluxDrive inside a commit window: its own save is renamed to its .bak, not deleted, and this stays in RAM
+// until the window closes. fresh_uid: the disk whose storing makes the start fresh final (the original START FRESH sent it);
+// prior_uid: the disk it replaced, which a power cut can bring back; own, bak: Game.sav.<tag>.adf and Game.sav.<tag>.bak.adf;
+// image: the game's file (its started-fresh mark); tag: the FluxDrive's save tag.
+struct FdFreshPending { char id[13]; uint32_t fresh_uid, prior_uid; char own[160], bak[160], image[160]; char tag[5]; };
+// Whole or not at all (p left as it was): an id (upper-case hex, 1-12), two different uids that are not 0, three SD paths
+// from the root without control characters that fit whole, a save tag.
+inline bool fdFreshPendingSet(FdFreshPending& p, const char* id, uint32_t fresh_uid, uint32_t prior_uid, const char* own,
+                              const char* bak, const char* image, const char* tag) {
+  if (id == nullptr || own == nullptr || bak == nullptr || image == nullptr || !fdSaveTagOk(tag)) return false;
+  if (fresh_uid == 0 || prior_uid == 0 || fresh_uid == prior_uid) return false;
+  FdFreshPending t;
+  memset(&t, 0, sizeof t);
+  if (strlen(id) >= sizeof t.id || strlen(own) >= sizeof t.own || strlen(bak) >= sizeof t.bak || strlen(image) >= sizeof t.image)
+    return false;
+  strcpy(t.id, id); strcpy(t.own, own); strcpy(t.bak, bak); strcpy(t.image, image); strcpy(t.tag, tag);
+  t.fresh_uid = fresh_uid; t.prior_uid = prior_uid;
+  if (!fdRecHexField(t.id, sizeof t.id, 1, sizeof t.id - 1) || !fdRecPathField(t.own, sizeof t.own) ||
+      !fdRecPathField(t.bak, sizeof t.bak) || !fdRecPathField(t.image, sizeof t.image))
+    return false;
+  p = t;
+  return true;
+}
+// What a beacon of that FluxDrive means for a pending START FRESH: DropPrev - the fresh disk is in it and stored: done, the
+// .bak goes; Restore - the disk it replaced is in it again: undone, the .bak is the own save again, the started-fresh mark
+// goes; Keep - anything else (an eject inside the window too).
+inline FdRevert fdFreshPendingCheck(const FdFreshPending* p, uint32_t beacon_uid, bool loaded, bool stored) {
+  return p == nullptr ? FdRevert::Keep : fdRevertUids(p->fresh_uid, p->prior_uid, beacon_uid, loaded, stored);
+}
+
+// The START FRESH confirm says "reset the Amiga afterwards" for a DOS disk (spec section 6, same-volume twins: AmigaDOS takes
+// two disks with the same name and date as one volume and may keep cached files across the swap). b: the image's first n
+// bytes. An AmigaDOS boot block starts "DOS" and a flags byte 0-7 (OFS, FFS, INTL, DIRCACHE and the long-name variants).
+inline bool fdIsDosBoot(const uint8_t* b, size_t n) {
+  return b != nullptr && n >= 4 && b[0] == 'D' && b[1] == 'O' && b[2] == 'S' && b[3] < 8;
 }

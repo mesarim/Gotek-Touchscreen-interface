@@ -70,8 +70,10 @@ static String pfRefusedMsg(const char *board) {
 // amiga: a FluxDrive's beacon says whether the Amiga it is drive DF0 of is powered (a dongle never says; false).
 // dirty, wp, tag, loadId: a FluxDrive's saves (v2 writing): the unsaved sectors of the disk it holds, its write protect,
 // its save tag (Game.sav.<tag>.adf) and the disk's uid ("load_id"). Every other board: 0, false, "", 0.
+// stored (fd3, the commit window): the disk in it is in flash (fdStoredField: a beacon without "stored" counts as stored,
+// so every other board and an older FluxDrive: true); storedKnown: its beacon says "stored" at all.
 struct PfPeer { String id, name, ip, board, fw, disk; uint16_t tcp; bool hd, loaded, amiga, lk, lkd, enr; uint32_t seen;   // #lock: lk=lock-capable, lkd=currently locked, enr=enroll window open
-                uint16_t dirty; bool wp; String tag; uint32_t loadId; };
+                uint16_t dirty; bool wp; String tag; uint32_t loadId; bool stored, storedKnown; };
 static PfPeer   g_pfPeers[PF_MAX_PEERS];
 static int      g_pfPeerN = 0;
 static WiFiUDP  g_pfUdp;
@@ -132,10 +134,10 @@ static String pfRowInfo(const PfPeer &p) {
 }
 static String pfPeerLabel(const PfPeer &p) { return p.name.length() ? p.name : p.ip; }   // how the screen names a peer
 // What the fleet manager compares to know a row needs repainting besides the id list: empty for every board but a
-// FluxDrive, whose Amiga state, disk and write protect (its WP key) change without its id changing.
+// FluxDrive, whose Amiga state, disk, write protect (its WP key) and STORING... (fd3) change without its id changing.
 static String pfRowSig(const PfPeer &p) {
-  char b[96];
-  fdRowSig(p.board.c_str(), p.amiga, p.loaded, p.disk.c_str(), b, sizeof(b), p.wp);
+  char b[96]; const char *bd = p.board.c_str();
+  fdRowSig(bd, p.amiga, p.loaded, p.disk.c_str(), b, sizeof(b), p.wp, fdShowStoring(fdIsFluxDrive(bd), p.loaded, p.stored));
   return String(b);
 }
 
@@ -318,6 +320,7 @@ static void pfUpsert(const String &j) {
   { const long d = pfJf(j, "dirty").toInt(); p->dirty = d <= 0 ? 0 : d > 65535 ? 65535 : (uint16_t)d; }   // FluxDrive's saves
   p->wp = pfJf(j, "wp") == "true"; p->tag = pfJf(j, "tag");
   p->loadId = (uint32_t)strtoul(pfJf(j, "load_id").c_str(), nullptr, 10);   // decimal, up to 4294967295 (toInt would cut it)
+  { const String st = pfJf(j, "stored"); p->storedKnown = st.length() > 0; p->stored = fdStoredField(st.c_str()); }   // fd3
 #if defined(GTI_FLEET)   // a default screen neither reads nor acts on the lock keys
   p->lk = pfJf(j, "lk") == "1"; p->lkd = pfJf(j, "lkd") == "1";   // #lock: lock-capable + currently-locked
   p->enr = pfJf(j, "enr") == "1";                                 // #lock: enroll window open -> the screen offers to CLAIM
@@ -342,6 +345,10 @@ static void pfSendBeacon() {
   g_pfUdp.endPacket();
 }
 
+// fd3, the commit window: in the sketch (next to the LAN saves). After the beacons of a pass: what they say for the record
+// a fling replaced and for a pending START FRESH (fdRevertCheck, fdFreshPendingCheck). Every caller of pfService - the
+// main loop, the screensavers, the fleet manager - runs it so.
+static void fdCommitWatch();
 // Call every loop() pass. Opens the socket once STA WiFi is up; drops it and
 // the roster when the network goes away (or we are on ESP-NOW instead).
 static void pfService() {
@@ -367,6 +374,7 @@ static void pfService() {
     // keeps no roster. Empty roster => pfVisibleCount()==0 => disks mount on our own USB port.
     if (g_wireless_mode && g_link_home) pfUpsert(s);
   }
+  fdCommitWatch();  // fd3: a FluxDrive's disk stored, or the previous one back after a power cut
   pfElect();        // #clubday: our own name, and whether we also answer gotekomega.local (lowest default MAC)
   pfApplyMdns();    // re-register if it changed — no reboot
   pfApplyAlias();   // ... add or drop the shared name to match the election
@@ -412,7 +420,7 @@ static String pfRosterJson() {
          ",\"disk\":\"" + pfJesc(p.disk) + "\",\"tcp\":" + String(p.tcp) +
          (fdIsFluxDrive(p.board.c_str()) ? String(",\"amiga\":") + (p.amiga ? "true" : "false") +
             ",\"load_id\":" + String(p.loadId) + ",\"dirty\":" + String(p.dirty) + ",\"wp\":" + (p.wp ? "true" : "false") +
-            ",\"tag\":\"" + pfJesc(p.tag) + "\"" : String("")) +
+            ",\"stored\":" + (p.stored ? "true" : "false") + ",\"tag\":\"" + pfJesc(p.tag) + "\"" : String("")) +
 #if defined(GTI_FLEET)   // the roster drops the lock columns
          ",\"lk\":" + (p.lk ? "true" : "false") + ",\"lkd\":" + (p.lkd ? "true" : "false") +
          ",\"mine\":" + (pfIsMine(p.id) ? "true" : "false") +
@@ -528,11 +536,14 @@ static void pfDropQueuedBeacons() {
 // A disk went to ip and was acked (FluxDrive acks after the mount). A FluxDrive holds it from now on, under the name it
 // was sent with ("DISK.ADF" = "DISK" when none was), so the screen does not show the old disk until the next beacon.
 // Its uid is the ack's (0 = not read) and nothing of it is unsaved yet: a beacon queued before the ack (the old disk's
-// dirty count) must not start a fetch.
+// dirty count) must not start a fetch. fd3: nor is it in flash yet (its commit starts now) when its beacon speaks of
+// "stored" at all: the old disk's "stored" must not read as the new disk's (fdCommitWatch would forget the replaced record).
 static void pfNoteFling(const String &ip, const String &sent, uint32_t uid) {
   for (int i = 0; i < g_pfPeerN; i++) { PfPeer &p = g_pfPeers[i]; if (p.ip != ip) continue;
     g_pfLastFlingId = p.id;
-    if (fdIsFluxDrive(p.board.c_str())) { p.loaded = true; p.disk = sent.length() ? sent : String("DISK"); p.dirty = 0; p.loadId = uid; pfDropQueuedBeacons(); }
+    if (fdIsFluxDrive(p.board.c_str())) { p.loaded = true; p.disk = sent.length() ? sent : String("DISK"); p.dirty = 0; p.loadId = uid;
+      if (p.storedKnown) p.stored = false;
+      pfDropQueuedBeacons(); }
     return; }
 }
 // An eject was acked: a FluxDrive is empty from now on (its next beacon says so too), with nothing it can still hand
@@ -919,6 +930,58 @@ static void pfFreshClear(const String &tag, const String &image) {
   gLog("[saves] FluxDrive %s: %s has an own save again - no longer started fresh%s\n", tag.c_str(), image.c_str(),
        onCard ? "" : " (NOT written to the card)");
 }
+// ── fd3, the commit window: what the panel keeps in RAM until a FluxDrive's new disk is stored (spec section 6) ──
+// Per FluxDrive id: the record the last single-target fling to it replaced (fluxdrive_peer.h fdPrevAtFling), and a START
+// FRESH whose own save waits as its .bak (FdFreshPending). The sketch's fdCommitWatch forgets them once the new disk is stored
+// and puts them back when FluxDrive reports the replaced disk again (switched off before the new one was stored). RAM only
+// (the controller's call): a panel restart inside the window loses them. Both tables are allocated in PSRAM when first
+// needed (pfWinReady), one entry per FluxDrive like the save records; a full table forgets the entry kept longest.
+static FdSaveRecord   *g_pfPrev = nullptr;
+static int             g_pfPrevN = 0;
+static FdFreshPending *g_pfPend = nullptr;
+static int             g_pfPendN = 0;
+static bool pfWinReady() {
+  if (!g_pfPrev) g_pfPrev = (FdSaveRecord *)ps_calloc(PF_FDSAVES_MAX, sizeof(FdSaveRecord));
+  if (!g_pfPend) g_pfPend = (FdFreshPending *)ps_calloc(PF_FDSAVES_MAX, sizeof(FdFreshPending));
+  return g_pfPrev && g_pfPend;
+}
+static FdSaveRecord *pfPrevFor(const String &id) {
+  for (int i = 0; i < g_pfPrevN; i++) if (id == g_pfPrev[i].id) return &g_pfPrev[i];
+  return nullptr;
+}
+static void pfPrevDrop(const String &id) {
+  for (int i = 0; i < g_pfPrevN; i++) if (id == g_pfPrev[i].id) {
+    for (int k = i + 1; k < g_pfPrevN; k++) g_pfPrev[k - 1] = g_pfPrev[k];
+    g_pfPrevN--; return; }
+}
+// r becomes its FluxDrive's kept record (the one before goes). false = no RAM for the table: nothing is kept.
+static bool pfPrevPut(const FdSaveRecord &r) {
+  if (!pfWinReady()) return false;
+  const FdSaveRecord c = r;   // r may live in this table
+  pfPrevDrop(String(c.id));
+  if (g_pfPrevN >= PF_FDSAVES_MAX) { for (int k = 1; k < g_pfPrevN; k++) g_pfPrev[k - 1] = g_pfPrev[k]; g_pfPrevN--; }
+  g_pfPrev[g_pfPrevN++] = c;
+  return true;
+}
+static FdFreshPending *pfPendFor(const String &id) {
+  for (int i = 0; i < g_pfPendN; i++) if (id == g_pfPend[i].id) return &g_pfPend[i];
+  return nullptr;
+}
+static void pfPendDrop(const String &id) {
+  for (int i = 0; i < g_pfPendN; i++) if (id == g_pfPend[i].id) {
+    for (int k = i + 1; k < g_pfPendN; k++) g_pfPend[k - 1] = g_pfPend[k];
+    g_pfPendN--; return; }
+}
+// p becomes its FluxDrive's pending START FRESH (an earlier one of it is forgotten: its .bak stays on the card as a backup).
+static bool pfPendPut(const FdFreshPending &p) {
+  if (!pfWinReady()) return false;
+  const FdFreshPending c = p;
+  pfPendDrop(String(c.id));
+  if (g_pfPendN >= PF_FDSAVES_MAX) { for (int k = 1; k < g_pfPendN; k++) g_pfPend[k - 1] = g_pfPend[k]; g_pfPendN--; }
+  g_pfPend[g_pfPendN++] = c;
+  return true;
+}
+
 // In the sketch, next to the ESP-NOW save fetch: before a FluxDrive's disk goes (another disk, an eject) its unsaved
 // writes are fetched (1 fetched, 0 nothing to fetch, -1 failed) - except before START FRESH's fling of the original
 // (fresh, fdFetchFirstNeeded); a single-target fling to a FluxDrive sends its own save (fdStageFor / fdUnstage around the
