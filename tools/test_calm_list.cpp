@@ -1,0 +1,168 @@
+// Host test for firmware/Gotek_JC3248/calm_list.h (the calm list: search row, 48 px rows, the letter grid, the row chip, the
+// short "<game> . D<n>" form) and firmware/Gotek_JC3248/game_sort.h (the library sort). Pure C++. Run with tools/test_calm_list.sh.
+#include "calm_list.h"
+#include "game_sort.h"
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#include <string>
+#include <vector>
+#include <algorithm>
+
+static int g_fail = 0, g_run = 0;
+#define CHECK(cond) do { \
+  ++g_run; \
+  if (!(cond)) { ++g_fail; \
+    std::printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); } \
+} while (0)
+
+static void test_search_row() {
+  ClSearchRow r = clSearchRow(CuRect{8, 48, 464, 48});
+  CHECK(r.filter.w == 72 && cuRight(r.filter) == 472 && r.filter.h == 48 && r.filter.y == 48);
+  CHECK(r.az.w == 72 && cuRight(r.az) == r.filter.x - 8);
+  CHECK(r.search.x == 8 && cuRight(r.search) == r.az.x - 8 && r.search.w == 464 - 72 - 72 - 16);
+  CuRect rs[3] = {r.search, r.az, r.filter};
+  CHECK(cuHit(rs, 3, 100, 60) == 0 && cuHit(rs, 3, 340, 60) == 1 && cuHit(rs, 3, 450, 90) == 2);
+  CHECK(cuHit(rs, 3, 100, 100) == -1);
+}
+
+static void test_rows() {
+  CHECK(CL_ROW_H == 48 && CL_ROW_PITCH == 52);
+  // list window from y 104 to 256 (152 px): 2 full rows of pitch 52 plus most of a third
+  CHECK(clMaxScroll(0, 152) == 0 && clMaxScroll(2, 152) == 0 && clMaxScroll(3, 152) == 4);
+  CHECK(clMaxScroll(95, 152) == 95 * 52 - 152);
+  CHECK(clRowAt(0, 104, 104, 95) == 0 && clRowAt(0, 104, 155, 95) == 0 && clRowAt(0, 104, 156, 95) == 1);
+  CHECK(clRowAt(0, 104, 103, 95) == -1);   // above the list
+  CHECK(clRowAt(100, 104, 104, 95) == 1);  // scrolled: 100 px = row 1 (pitch 52) starts at 52, 100 is inside row 1
+  CHECK(clRowAt(0, 104, 255, 2) == -1);    // below the last row
+  CHECK(clRowAt(0, 104, 104 + 52 + 20, 2) == 1);
+  CuRect r = clRowRect(2, 30, 104, 8, 464);
+  CHECK(r.x == 8 && r.w == 464 && r.h == 48 && r.y == 104 + 2 * 52 - 30);
+  CHECK(clFirstVisible(0) == 0 && clFirstVisible(51) == 0 && clFirstVisible(52) == 1 && clFirstVisible(-5) == 0);
+}
+
+static void test_letter_grid() {
+  CHECK(std::strlen(CL_LETTERS) == 27 && CL_LETTERS[0] == 'A' && CL_LETTERS[25] == 'Z' && CL_LETTERS[26] == '#');
+  CuRect c0 = clLetterCell(0, 480, 60), c6 = clLetterCell(6, 480, 60), c7 = clLetterCell(7, 480, 60), c26 = clLetterCell(26, 480, 60);
+  CHECK(c0.w == 64 && c0.h == 48 && c0.y == 60);
+  CHECK(c0.x == 10 && cuRight(c6) == 470);   // 7 cells of 64 and gaps of 2 centred on 480
+  CHECK(c7.y == 60 + 50 && c7.x == c0.x);
+  CHECK(c26.y == 60 + 3 * 50 && c26.x == c0.x + 5 * 66);   // '#' is the 27th: row 4, column 6
+  CHECK(cuBottom(c26) <= 320 - 8);
+  CHECK(clLetterAt(480, 60, c0.x + 5, c0.y + 5) == 0);
+  CHECK(clLetterAt(480, 60, c26.x + 63, c26.y + 47) == 26);
+  CHECK(clLetterAt(480, 60, c6.x + 64, c6.y + 5) == -1);   // the 2 px gap
+  CHECK(clLetterAt(480, 60, 5, 100) == -1);                 // left of the grid
+  CHECK(clLetterAt(480, 60, 475, 100) == -1);               // right of it
+  CHECK(clLetterAt(480, 60, c7.x + 5, c7.y + 5) == 7);
+  // the 28th slot is empty
+  CuRect slot27{c0.x + 6 * 66, 60 + 3 * 50, 64, 48};
+  CHECK(clLetterAt(480, 60, slot27.x + 5, slot27.y + 5) == -1);
+  CHECK(clLetterIndex('A') == 0 && clLetterIndex('z') == 25 && clLetterIndex('#') == 26 && clLetterIndex('5') == 26 && clLetterIndex(0) == 26);
+}
+
+static void test_split_disk() {
+  char g[64]; int d;
+  CHECK(clSplitDisk("Lemmings 1 - Disk 2", g, sizeof g, &d) && std::strcmp(g, "Lemmings 1") == 0 && d == 2);
+  CHECK(clSplitDisk("Monkey Island - Disk 12", g, sizeof g, &d) && std::strcmp(g, "Monkey Island") == 0 && d == 12);
+  CHECK(!clSplitDisk("Lemmings 1-1", g, sizeof g, &d) && std::strcmp(g, "Lemmings 1-1") == 0 && d == 0);
+  CHECK(!clSplitDisk("Disk 2", g, sizeof g, &d) && std::strcmp(g, "Disk 2") == 0);   // no game part: not a suffix
+  CHECK(!clSplitDisk("A - Disk x", g, sizeof g, &d) && d == 0);
+  CHECK(!clSplitDisk("A - Disk 2 more", g, sizeof g, &d));
+  CHECK(!clSplitDisk("A - Disk ", g, sizeof g, &d));
+  CHECK(!clSplitDisk("", g, sizeof g, &d) && g[0] == 0);
+  CHECK(!clSplitDisk(nullptr, g, sizeof g, &d) && g[0] == 0);
+  char small[6];
+  CHECK(clSplitDisk("Lemmings - Disk 1", small, sizeof small, &d) && std::strcmp(small, "Lemmi") == 0 && d == 1);   // cut, never overrun
+  // the truncation: the game part gives way, " . D<n>" stays
+  CHECK(clFitDisk(12, 6, 150, 1) == 12);             // room for the whole thing
+  CHECK(clFitDisk(30, 6, 150, 1) == 20);             // 150 px at 6 px a char = 25 chars; the tail " . D2" is 5 of them
+  CHECK(clFitDisk(30, 6, 150, 2) == 19);             // " . D12": one more
+  CHECK(clFitDisk(30, 6, 20, 1) == 0);               // no room even for the tail: the game part goes
+  CHECK(clFitDisk(0, 6, 150, 1) == 0);
+  CHECK(clTailChars(1) == 5 && clTailChars(2) == 6);
+}
+
+static void test_row_chip() {
+  ClChip c = clRowChip(1, false, false, false, false, "");
+  CHECK(c.kind == CL_CHIP_NONE);
+  c = clRowChip(3, false, false, false, false, "");
+  CHECK(c.kind == CL_CHIP_DISKS && std::strcmp(c.text, "3 disks") == 0);
+  c = clRowChip(2, false, false, false, false, "");
+  CHECK(c.kind == CL_CHIP_DISKS && std::strcmp(c.text, "2 disks") == 0);
+  c = clRowChip(2, false, false, false, true, "");   // loaded in the wired Gotek: it beats the disk count
+  CHECK(c.kind == CL_CHIP_LOADED && std::strcmp(c.text, "loaded") == 0);
+  c = clRowChip(1, false, false, false, true, "A500");   // one dongle: its name
+  CHECK(c.kind == CL_CHIP_LOADED && std::strcmp(c.text, "A500") == 0);
+  c = clRowChip(1, false, false, false, true, "A very long dongle name");
+  CHECK(c.kind == CL_CHIP_LOADED && std::strlen(c.text) <= 9);
+  c = clRowChip(1, true, true, false, true, "");     // a split FluxDrive: which drives
+  CHECK(c.kind == CL_CHIP_LOADED && std::strcmp(c.text, "DF0") == 0);
+  c = clRowChip(1, true, false, true, true, "");
+  CHECK(std::strcmp(c.text, "DF1") == 0);
+  c = clRowChip(2, true, true, true, true, "");
+  CHECK(std::strcmp(c.text, "DF0 DF1") == 0);
+  c = clRowChip(2, true, false, false, false, "");   // split but not loaded: back to the disk count
+  CHECK(c.kind == CL_CHIP_DISKS);
+  c = clRowChip(1, false, false, false, true, nullptr);
+  CHECK(std::strcmp(c.text, "loaded") == 0);
+}
+
+// ---- game_sort.h: the library sort, the same order as std::stable_sort with the same comparator ---------------------
+struct Item { std::string name; int idx; };
+static int itemLess(size_t i, size_t j, void* ctx) { auto& v = *(std::vector<Item>*)ctx; return gsNameLess(v[i].name.c_str(), v[i].idx, v[j].name.c_str(), v[j].idx); }
+static void itemSwap(size_t i, size_t j, void* ctx) { auto& v = *(std::vector<Item>*)ctx; std::swap(v[i], v[j]); }
+
+static void test_name_less() {
+  CHECK(gsNameLess("abc", 5, "ABD", 1));
+  CHECK(!gsNameLess("ABD", 1, "abc", 5));
+  CHECK(!gsNameLess("abc", 1, "ABC", 1));          // the same name, the same index: not less
+  CHECK(gsNameLess("abc", 1, "ABC", 2));           // the same name: file order (index) decides
+  CHECK(!gsNameLess("abc", 2, "ABC", 1));
+  CHECK(gsNameLess("", 9, "a", 1));
+  CHECK(gsNameLess("Zebra", 1, "apple2", 2) == false);   // case-insensitive: apple2 < Zebra
+}
+
+static void test_sort_matches_the_old_order() {
+  srand(7);
+  for (int round = 0; round < 40; round++) {
+    const int n = round == 0 ? 0 : (round == 1 ? 1 : (round == 2 ? 2 : rand() % 400));
+    std::vector<Item> v;
+    static const char* words[] = {"Lemmings", "lemmings", "Zool", "ZOOL", "Turrican", "Alien Breed", "alien breed", "Xenon", "2 Disk Thing", "#hash", "Beast", "beast"};
+    for (int i = 0; i < n; i++) {
+      std::string s = words[rand() % 12]; if (rand() % 3 == 0) s += " " + std::to_string(rand() % 30);
+      v.push_back({s, i});
+    }
+    std::vector<Item> ref = v;
+    std::stable_sort(ref.begin(), ref.end(), [](const Item& a, const Item& b) { return gsNameLess(a.name.c_str(), a.idx, b.name.c_str(), b.idx) != 0; });
+    gsHeapSort(v.size(), itemLess, itemSwap, &v);
+    bool same = v.size() == ref.size();
+    for (size_t i = 0; same && i < v.size(); i++) same = v[i].idx == ref[i].idx;
+    CHECK(same);
+  }
+}
+
+static void test_sort_counts() {
+  // a heapsort of n items does O(n log n) work: a million-item guard against a quadratic mistake
+  const int n = 20000; std::vector<Item> v; for (int i = 0; i < n; i++) v.push_back({std::to_string((i * 7919) % n), i});
+  long cmps = 0;
+  struct Ctx { std::vector<Item>* v; long* c; } cx{&v, &cmps};
+  gsHeapSort(v.size(), [](size_t i, size_t j, void* c) { auto* x = (Ctx*)c; (*x->c)++; return gsNameLess((*x->v)[i].name.c_str(), (*x->v)[i].idx, (*x->v)[j].name.c_str(), (*x->v)[j].idx); },
+             [](size_t i, size_t j, void* c) { auto* x = (Ctx*)c; std::swap((*x->v)[i], (*x->v)[j]); }, &cx);
+  CHECK(cmps < (long)n * 40);
+  bool sorted = true; for (int i = 1; i < n; i++) if (gsNameLess(v[i].name.c_str(), v[i].idx, v[i - 1].name.c_str(), v[i - 1].idx)) sorted = false;
+  CHECK(sorted);
+}
+
+int main() {
+  test_search_row();
+  test_rows();
+  test_letter_grid();
+  test_split_disk();
+  test_row_chip();
+  test_name_less();
+  test_sort_matches_the_old_order();
+  test_sort_counts();
+  std::printf("%d checks, %d failed\n", g_run, g_fail);
+  return g_fail ? 1 : 0;
+}
