@@ -194,12 +194,51 @@ inline bool fdUiLoaded(const FdUiView& v, int gi, const char* gname, int gdisks,
 // A screen rectangle: x, y its top-left pixel, w x h its size.
 struct FdRect { int x, y, w, h; };
 
-// A touch ends on NOW PLAYING: is it the EJECT of the FluxDrive target's disk? Only a tap (the finger did not move past
-// the drag threshold: the bar sits right under the list, so a flick of its bottom row can start in it), inside the bar
-// as drawn (now_on), with a target (fleet mode) that holds a disk.
-inline bool fdBarEjects(bool now_on, int x, int y, FdRect bar, bool target, bool loaded, bool moved) {
-  if (!now_on || !target || !loaded || moved) return false;
+// A touch ends on NOW PLAYING: does it open the DRIVE INFO screen (fd4 round 2; the bar never ejects)? Only a tap (the finger did
+// not move past the drag threshold: the bar sits right under the list, so a flick of its bottom row can start in it), inside the
+// bar as drawn (now_on), with a FluxDrive target (fleet mode) whose bar shows a disk (shows: fdBarShows).
+inline bool fdBarOpensInfo(bool now_on, int x, int y, FdRect bar, bool target, bool shows, bool moved) {
+  if (!now_on || !target || !shows || moved) return false;
   return x >= bar.x && x < bar.x + bar.w && y >= bar.y && y < bar.y + bar.h;
+}
+
+// ---- The DRIVE INFO screen (fd4 round 2): one block per drive, EJECT per drive with a disk, BACK ------------------------------
+// Full screen vw x vh: a title line (the FluxDrive's name) above y=34; a block per drive (DF0, and DF1 while its beacon says df1),
+// at most 96 high with 6 between, each with its caption on top, the disk's name (a tap target) on the left and an EJECT key
+// (92 x 32) at the right, both only while the drive holds a disk; a BACK key (120 x 36) at the foot. The same for both
+// orientations and the compact layout: only vw and vh differ.
+#define FD_INFO_NONE   0
+#define FD_INFO_BACK   1
+#define FD_INFO_EJECT0 2
+#define FD_INFO_EJECT1 3
+#define FD_INFO_NAME0  4
+#define FD_INFO_NAME1  5
+struct FdInfoLayout { int blocks; FdRect back, block[2], name[2], eject[2]; bool hasEject[2]; };
+inline void fdInfoLayout(int vw, int vh, bool df1, bool loaded0, bool loaded1, FdInfoLayout* o) {
+  const int top = 34, gap = 6, ejW = 92, ejH = 32;
+  o->blocks = df1 ? 2 : 1;
+  o->back = FdRect{(vw - 120) / 2, vh - 44, 120, 36};
+  int bh = (o->back.y - gap - top - (o->blocks - 1) * gap) / o->blocks;
+  if (bh > 96) bh = 96;
+  const bool has[2] = {loaded0, df1 && loaded1};
+  for (int i = 0; i < 2; i++) {
+    const int y = top + i * (bh + gap);
+    o->block[i] = FdRect{8, y, vw - 16, bh};
+    o->hasEject[i] = i < o->blocks && has[i];
+    o->eject[i] = FdRect{vw - 108, y + (bh - ejH) / 2, ejW, ejH};
+    o->name[i] = FdRect{16, y + 18, (vw - 108 - 8) - 16, bh - 22};
+    if (i >= o->blocks) { o->block[i] = FdRect{0, 0, 0, 0}; o->name[i] = FdRect{0, 0, 0, 0}; o->eject[i] = FdRect{0, 0, 0, 0}; }
+  }
+}
+inline bool fdInRect(FdRect r, int x, int y) { return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h; }
+// What a tap at x, y means on that screen (FD_INFO_*): EJECT and the name count only for a drive that holds a disk.
+inline int fdInfoTap(const FdInfoLayout& l, int x, int y) {
+  if (fdInRect(l.back, x, y)) return FD_INFO_BACK;
+  for (int i = 0; i < l.blocks && i < 2; i++) {
+    if (l.hasEject[i] && fdInRect(l.eject[i], x, y)) return i ? FD_INFO_EJECT1 : FD_INFO_EJECT0;
+    if (l.hasEject[i] && fdInRect(l.name[i], x, y)) return i ? FD_INFO_NAME1 : FD_INFO_NAME0;
+  }
+  return FD_INFO_NONE;
 }
 
 // A command got no reply because the wait ran out (waited_ms of wait_ms), not because the connection closed early. A

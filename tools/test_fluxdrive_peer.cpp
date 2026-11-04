@@ -326,7 +326,7 @@ static void test_ui_without_a_target_shows_what_is_staged_here() {
 static void test_ui_an_empty_fluxdrive_shows_nothing_loaded() {
   FdUiView v = { true, false, "Lemmings", true, 4, 0, "Lemmings" };
   int d = 9;
-  CHECK(!fdUiLoaded(v, 4, "Lemmings", 1, &d) && d == -1);           // staged here, but the FluxDrive is empty
+  CHECK(!fdUiLoaded(v, 4, "Lemmings", 1, &d) && d == -1);           // staged here, but the bar shows nothing (both drives empty)
   v.tloaded = true; v.tdisk = "";                                     // "loaded" without a name: nothing matches
   CHECK(!fdUiLoaded(v, 4, "Lemmings", 1, &d));
   v.tdisk = nullptr;
@@ -379,27 +379,27 @@ static void test_ui_a_name_is_matched_whole() {
 // A tap on NOW PLAYING ejects the FluxDrive target's disk. A drag that starts there must not: the bar sits right under
 // the list, so a flick of the bottom row begun a few px low starts in it. The bar here: LIST_X 150, NOW_Y 258, LIST_W
 // 300, NOW_PLAY_H 22, so x 150..449, y 258..279.
-static void test_a_tap_on_now_playing_ejects() {
+static void test_a_tap_on_now_playing_opens_the_info() {
   const FdRect bar = { 150, 258, 300, 22 };
-  CHECK(fdBarEjects(true, 300, 268, bar, true, true, false));
-  CHECK(fdBarEjects(true, 150, 258, bar, true, true, false));       // its top-left pixel
-  CHECK(fdBarEjects(true, 449, 279, bar, true, true, false));       // its bottom-right pixel
+  CHECK(fdBarOpensInfo(true, 300, 268, bar, true, true, false));
+  CHECK(fdBarOpensInfo(true, 150, 258, bar, true, true, false));       // its top-left pixel
+  CHECK(fdBarOpensInfo(true, 449, 279, bar, true, true, false));       // its bottom-right pixel
 }
 
-static void test_a_tap_beside_now_playing_does_not_eject() {
+static void test_a_tap_beside_now_playing_does_not_open_it() {
   const FdRect bar = { 150, 258, 300, 22 };
-  CHECK(!fdBarEjects(true, 149, 268, bar, true, true, false));      // the cover side
-  CHECK(!fdBarEjects(true, 450, 268, bar, true, true, false));      // the A-Z bar
-  CHECK(!fdBarEjects(true, 300, 257, bar, true, true, false));      // the list's bottom row
-  CHECK(!fdBarEjects(true, 300, 280, bar, true, true, false));      // the bottom bar
+  CHECK(!fdBarOpensInfo(true, 149, 268, bar, true, true, false));      // the cover side
+  CHECK(!fdBarOpensInfo(true, 450, 268, bar, true, true, false));      // the A-Z bar
+  CHECK(!fdBarOpensInfo(true, 300, 257, bar, true, true, false));      // the list's bottom row
+  CHECK(!fdBarOpensInfo(true, 300, 280, bar, true, true, false));      // the bottom bar
 }
 
-static void test_only_a_tap_with_a_loaded_target_ejects() {
+static void test_only_a_tap_with_a_showing_target_opens_the_info() {
   const FdRect bar = { 150, 258, 300, 22 };
-  CHECK(!fdBarEjects(true, 300, 268, bar, true, true, true));       // the finger moved: a drag, not a tap
-  CHECK(!fdBarEjects(true, 300, 268, bar, false, true, false));     // no FluxDrive target
-  CHECK(!fdBarEjects(true, 300, 268, bar, true, false, false));     // the FluxDrive is empty
-  CHECK(!fdBarEjects(false, 300, 268, bar, true, true, false));     // no bar drawn (COMPACT)
+  CHECK(!fdBarOpensInfo(true, 300, 268, bar, true, true, true));       // the finger moved: a drag, not a tap
+  CHECK(!fdBarOpensInfo(true, 300, 268, bar, false, true, false));     // no FluxDrive target
+  CHECK(!fdBarOpensInfo(true, 300, 268, bar, true, false, false));     // the bar shows nothing (both drives empty)
+  CHECK(!fdBarOpensInfo(false, 300, 268, bar, true, true, false));     // no bar drawn (COMPACT)
 }
 
 // A FluxDrive holds an eject while the Amiga reads and runs it later: the panel says "busy" for that. Only a reply wait
@@ -1399,6 +1399,78 @@ static void test_df1_bar_text() {
   CHECK(std::strlen(o) == 9);                                           // cut to the buffer
 }
 
+// ---- Round 2: the DRIVE INFO screen a tap on NOW PLAYING opens ----------------------------------------------------------
+
+static bool rectIs(FdRect r, int x, int y, int w, int h) { return r.x == x && r.y == y && r.w == w && r.h == h; }
+static bool rectsOverlap(FdRect a, FdRect b) { return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h; }
+
+static void test_drive_info_layout_landscape_with_df1() {
+  FdInfoLayout l;
+  fdInfoLayout(480, 320, true, true, true, &l);
+  CHECK(l.blocks == 2);
+  CHECK(rectIs(l.back, 180, 276, 120, 36));
+  CHECK(rectIs(l.block[0], 8, 34, 464, 96) && rectIs(l.block[1], 8, 136, 464, 96));
+  CHECK(l.hasEject[0] && l.hasEject[1]);
+  CHECK(rectIs(l.eject[0], 372, 66, 92, 32) && rectIs(l.eject[1], 372, 168, 92, 32));
+  CHECK(rectIs(l.name[0], 16, 52, 348, 74));
+  CHECK(!rectsOverlap(l.name[0], l.eject[0]) && !rectsOverlap(l.block[1], l.back));
+}
+
+static void test_drive_info_layout_portrait_and_one_drive() {
+  FdInfoLayout l;
+  fdInfoLayout(320, 480, true, true, true, &l);
+  CHECK(rectIs(l.back, 100, 436, 120, 36) && rectIs(l.block[1], 8, 136, 304, 96));
+  CHECK(rectIs(l.eject[0], 212, 66, 92, 32) && rectIs(l.name[0], 16, 52, 188, 74));
+  fdInfoLayout(320, 480, false, true, true, &l);                         // DF1 not on: one block, DF1's loaded flag does not count
+  CHECK(l.blocks == 1 && l.hasEject[0] && !l.hasEject[1]);
+  CHECK(fdInfoTap(l, 100, 150) == FD_INFO_NONE);                          // where DF1's block would be
+  fdInfoLayout(480, 272, true, true, true, &l);                           // a short screen: the blocks shrink, never touch BACK
+  CHECK(l.block[0].h < 96 && l.block[1].y + l.block[1].h <= l.back.y);
+}
+
+static void test_drive_info_empty_drive_has_no_eject_or_name() {
+  FdInfoLayout l;
+  fdInfoLayout(480, 320, true, false, true, &l);
+  CHECK(!l.hasEject[0] && l.hasEject[1]);
+  CHECK(fdInfoTap(l, 400, 80) == FD_INFO_NONE);                           // where DF0's EJECT would be
+  CHECK(fdInfoTap(l, 100, 80) == FD_INFO_NONE);                           // DF0's name: nothing to select
+  CHECK(fdInfoTap(l, 400, 180) == FD_INFO_EJECT1);
+  CHECK(fdInfoTap(l, 100, 180) == FD_INFO_NAME1);
+}
+
+static void test_drive_info_tap() {
+  FdInfoLayout l;
+  fdInfoLayout(480, 320, true, true, true, &l);
+  CHECK(fdInfoTap(l, 200, 290) == FD_INFO_BACK);
+  CHECK(fdInfoTap(l, 180, 276) == FD_INFO_BACK && fdInfoTap(l, 299, 311) == FD_INFO_BACK);
+  CHECK(fdInfoTap(l, 300, 290) == FD_INFO_NONE && fdInfoTap(l, 200, 275) == FD_INFO_NONE);
+  CHECK(fdInfoTap(l, 372, 66) == FD_INFO_EJECT0 && fdInfoTap(l, 463, 97) == FD_INFO_EJECT0);
+  CHECK(fdInfoTap(l, 372, 65) == FD_INFO_NONE && fdInfoTap(l, 464, 80) == FD_INFO_NONE);
+  CHECK(fdInfoTap(l, 400, 180) == FD_INFO_EJECT1);
+  CHECK(fdInfoTap(l, 20, 60) == FD_INFO_NAME0 && fdInfoTap(l, 300, 120) == FD_INFO_NAME0);
+  CHECK(fdInfoTap(l, 20, 170) == FD_INFO_NAME1);
+  CHECK(fdInfoTap(l, 20, 40) == FD_INFO_NONE);                            // the DF0 caption line
+  CHECK(fdInfoTap(l, 2, 2) == FD_INFO_NONE && fdInfoTap(l, 240, 20) == FD_INFO_NONE);
+  CHECK(fdInfoTap(l, 479, 319) == FD_INFO_NONE && fdInfoTap(l, -1, 80) == FD_INFO_NONE);
+}
+
+// What the screen is for: a FluxDrive target with a disk in a drive (not a dongle, not an empty one). NOW PLAYING never ejects.
+static void test_drive_info_opens_from_the_bar_only_when_it_shows() {
+  const FdRect bar = { 150, 258, 300, 22 };
+  CHECK(fdBarOpensInfo(true, 300, 268, bar, true, fdBarShows(true, false, true, true), false));    // only DF1 holds a disk
+  CHECK(!fdBarOpensInfo(true, 300, 268, bar, true, fdBarShows(true, false, false, true), false));  // DF1 off, DF0 empty
+}
+
+// The carousel's INSERT key, 170 x 34, is cut like the list's: halves of 83, gap 4.
+static void test_carousel_split_key() {
+  const FdRect ins = { 155, 244, 170, 34 };
+  FdRect h[2];
+  fdInsertHalves(ins, 4, h);
+  CHECK(rectIs(h[0], 155, 244, 83, 34) && rectIs(h[1], 242, 244, 83, 34));
+  CHECK(fdInsertHit(ins, 4, true, 200, 260) == 0 && fdInsertHit(ins, 4, true, 300, 260) == 1 && fdInsertHit(ins, 4, true, 154, 260) == -1);
+  CHECK(fdInsertHit(ins, 4, false, 300, 260) == 0);
+}
+
 int main() {
   test_fluxdrive_is_told_apart_by_its_beacon_board();
   test_only_a_dd_adf_goes_to_a_fluxdrive();
@@ -1433,9 +1505,9 @@ int main() {
   test_ui_a_stale_staging_gives_way_to_the_fluxdrive();
   test_ui_the_fluxdrive_holds_a_disk_not_staged_here();
   test_ui_a_name_is_matched_whole();
-  test_a_tap_on_now_playing_ejects();
-  test_a_tap_beside_now_playing_does_not_eject();
-  test_only_a_tap_with_a_loaded_target_ejects();
+  test_a_tap_on_now_playing_opens_the_info();
+  test_a_tap_beside_now_playing_does_not_open_it();
+  test_only_a_tap_with_a_showing_target_opens_the_info();
   test_only_a_full_wait_without_a_reply_is_busy();
   test_a_fluxdrive_push_gets_up_to_16_segments_of_send_buffer();
   test_every_other_board_keeps_the_default_send_buffer();
@@ -1491,6 +1563,12 @@ int main() {
   test_df1_record_round_trip_and_old_lines();
   test_df1_fetch_due();
   test_df1_bar_text();
+  test_drive_info_layout_landscape_with_df1();
+  test_drive_info_layout_portrait_and_one_drive();
+  test_drive_info_empty_drive_has_no_eject_or_name();
+  test_drive_info_tap();
+  test_drive_info_opens_from_the_bar_only_when_it_shows();
+  test_carousel_split_key();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }
