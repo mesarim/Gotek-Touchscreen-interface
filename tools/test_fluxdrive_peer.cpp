@@ -1471,6 +1471,87 @@ static void test_carousel_split_key() {
   CHECK(fdInsertHit(ins, 4, false, 300, 260) == 0);
 }
 
+// ---- Round 4: "<game> - Disk <n>" - what a multi-disk game is sent under, and how the drive's reported name is read back ----
+
+static void test_send_name_of_a_multi_disk_game_has_the_disk() {
+  char o[130];
+  CHECK(fdSendName("Lemmings 1", 2, 1, o, sizeof o) > 0 && std::strcmp(o, "Lemmings 1 - Disk 2") == 0);
+  CHECK(fdSendName("Lemmings 1", 2, 0, o, sizeof o) > 0 && std::strcmp(o, "Lemmings 1 - Disk 1") == 0);
+  CHECK(fdSendName("Monkey Island", 14, 11, o, sizeof o) > 0 && std::strcmp(o, "Monkey Island - Disk 12") == 0);   // two digits
+  fdSendName("Pinball Dreams", 1, 0, o, sizeof o);                      // one disk: the plain name, exactly as before
+  CHECK(std::strcmp(o, "Pinball Dreams") == 0);
+  fdSendName("Pinball Dreams", 0, 0, o, sizeof o);
+  CHECK(std::strcmp(o, "Pinball Dreams") == 0);
+  fdSendName("Lemmings 1", 2, -1, o, sizeof o);                         // no valid disk: the plain name
+  CHECK(std::strcmp(o, "Lemmings 1") == 0);
+  fdSendName("Lemmings 1", 2, 2, o, sizeof o);                          // past the last disk: the plain name
+  CHECK(std::strcmp(o, "Lemmings 1") == 0);
+  char longName[200]; std::memset(longName, 'x', 150); longName[150] = 0;
+  const size_t n = fdSendName(longName, 3, 2, o, 121);                  // SET_NAME carries 120 bytes: the game is cut, the disk stays
+  CHECK(n == 120 && std::strcmp(o + 120 - 9, " - Disk 3") == 0 && o[0] == 'x');
+  fdSendName(longName, 1, 0, o, 121);
+  CHECK(std::strlen(o) == 120 && o[119] == 'x');
+}
+
+static void test_reported_name_suffix() {
+  const char* b; size_t bl; int n;
+  fdSplitDiskName("Lemmings 1 - Disk 2", &b, &bl, &n);
+  CHECK(n == 2 && bl == 10 && std::strncmp(b, "Lemmings 1", 10) == 0);
+  fdSplitDiskName("Lemmings 1", &b, &bl, &n);                           // a real name ending in a digit: no suffix
+  CHECK(n == 0 && bl == 10);
+  fdSplitDiskName("Disk Cruncher", &b, &bl, &n);                        // merely contains Disk
+  CHECK(n == 0 && bl == 13);
+  fdSplitDiskName("Game - Disk Two", &b, &bl, &n); CHECK(n == 0);
+  fdSplitDiskName("Game - Disk", &b, &bl, &n); CHECK(n == 0);
+  fdSplitDiskName("Game - Disk 0", &b, &bl, &n); CHECK(n == 0);
+  fdSplitDiskName("Game - Disk 2x", &b, &bl, &n); CHECK(n == 0);
+  fdSplitDiskName(" - Disk 2", &b, &bl, &n); CHECK(n == 0);             // nothing left of the game
+  fdSplitDiskName("Game - Disk 12", &b, &bl, &n); CHECK(n == 12 && bl == 4);
+  fdSplitDiskName("Game - Disk 1234", &b, &bl, &n); CHECK(n == 0);      // not a disk number
+  fdSplitDiskName("Game - Disk 3.adf", &b, &bl, &n); CHECK(n == 3 && bl == 4);   // the extension and blanks do not count
+  fdSplitDiskName("  game - disk 3  ", &b, &bl, &n); CHECK(n == 3 && bl == 4);
+  fdSplitDiskName("", &b, &bl, &n); CHECK(n == 0 && bl == 0);
+  fdSplitDiskName(nullptr, &b, &bl, &n); CHECK(n == 0 && bl == 0);
+}
+
+static void test_reported_name_matches_a_game() {
+  int d = 99;
+  CHECK(fdMatchDiskName("Lemmings 1 - Disk 2", "Lemmings 1", 2, &d) == 2 && d == 1);
+  CHECK(fdMatchDiskName("lemmings 1 - disk 1.adf", "Lemmings 1", 2, &d) == 2 && d == 0);
+  CHECK(fdMatchDiskName("Lemmings 1 - Disk 3", "Lemmings 1", 2, &d) == 0);              // a disk the game does not have
+  CHECK(fdMatchDiskName("Lemmings 1 - Disk 2", "Lemmings 2", 2, &d) == 0);
+  CHECK(fdMatchDiskName("Lemmings 1 - Disk 2", "Lemmings 1", 1, &d) == 0);              // a one-disk game is never sent a suffix
+  CHECK(fdMatchDiskName("Lemmings 1", "Lemmings 1", 2, &d) == 1 && d == -1);            // no suffix: as before (disk not known)
+  CHECK(fdMatchDiskName("Lemmings 1", "Lemmings 1", 1, &d) == 1);
+  CHECK(fdMatchDiskName("Lemmings", "Lemmings 1", 2, &d) == 0);                         // names match whole
+  CHECK(fdMatchDiskName("Cannon Fodder - Disk 2", "Cannon Fodder - Disk 2", 1, &d) == 1);   // a game really named so
+  CHECK(fdMatchDiskName("", "Lemmings 1", 2, &d) == 0);
+  CHECK(fdMatchDiskName(nullptr, "Lemmings 1", 2, &d) == 0);
+  CHECK(fdMatchDiskName("Lemmings 1 - Disk 2", "Lemmings 1", 2, nullptr) == 2);
+}
+
+static void test_ui_loaded_understands_the_disk_suffix() {
+  int disk = -2;
+  // Lemmings 1 (2 disks), disk 1 in DF0, disk 2 in DF1, as the beacon names them; nothing staged here
+  FdUiView v0 = {true, true, "Lemmings 1 - Disk 1", false, -1, -1, ""};
+  FdUiView v1 = {true, true, "Lemmings 1 - Disk 2", false, -1, -1, ""};
+  CHECK(fdUiLoaded(v0, 5, "Lemmings 1", 2, &disk) && disk == 0);
+  CHECK(fdUiLoaded(v1, 5, "Lemmings 1", 2, &disk) && disk == 1);
+  CHECK(!fdUiLoaded(v1, 6, "Lemmings 2", 2, &disk));
+  // staged here: disk 2 was the last sent; DF1 holds it, DF0 holds disk 1 - the staging counts for DF1 only
+  FdUiView s1 = {true, true, "Lemmings 1 - Disk 2", true, 5, 1, "Lemmings 1 - Disk 2"};
+  FdUiView s0 = {true, true, "Lemmings 1 - Disk 1", true, 5, 1, "Lemmings 1 - Disk 2"};
+  CHECK(fdUiLoaded(s1, 5, "Lemmings 1", 2, &disk) && disk == 1);
+  CHECK(!fdUiLoaded(s1, 7, "Lemmings 1", 2, &disk));                                 // the staged game only, not every game of that name
+  CHECK(fdUiLoaded(s0, 5, "Lemmings 1", 2, &disk) && disk == 0);                      // stale staging gives way to the drive's own disk
+  // old sends (no suffix) keep their behaviour
+  FdUiView old = {true, true, "Lemmings 1", false, -1, -1, ""};
+  CHECK(fdUiLoaded(old, 5, "Lemmings 1", 2, &disk) && disk == -1);
+  CHECK(fdUiLoaded(old, 8, "Lemmings 1", 1, &disk) && disk == 0);
+  FdUiView oldStaged = {true, true, "Lemmings 1", true, 5, 1, "Lemmings 1"};
+  CHECK(fdUiLoaded(oldStaged, 5, "Lemmings 1", 2, &disk) && disk == 1);
+}
+
 int main() {
   test_fluxdrive_is_told_apart_by_its_beacon_board();
   test_only_a_dd_adf_goes_to_a_fluxdrive();
@@ -1569,6 +1650,10 @@ int main() {
   test_drive_info_tap();
   test_drive_info_opens_from_the_bar_only_when_it_shows();
   test_carousel_split_key();
+  test_send_name_of_a_multi_disk_game_has_the_disk();
+  test_reported_name_suffix();
+  test_reported_name_matches_a_game();
+  test_ui_loaded_understands_the_disk_suffix();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }

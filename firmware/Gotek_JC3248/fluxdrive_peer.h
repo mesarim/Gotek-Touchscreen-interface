@@ -157,6 +157,64 @@ inline bool fdSameDiskName(const char* a, const char* b) {
   return true;
 }
 
+// ---- A multi-disk game is sent as "<game> - Disk <n>" (fd4 round 4) ------------------------------------------------------------
+// With two disks of one game in DF0 and DF1 the FluxDrive would report the same name twice. A game with more than one disk is
+// sent (SET_NAME) as "<game> - Disk <n>", n counting from 1; a one-disk game keeps its plain name. The panel reads a reported
+// name back the same way: a trailing " - Disk <n>" (n = 1 to 999) says which disk of the game it is; a name without it
+// (an older send, the FluxDrive's stick or web page) names the game only, as before.
+
+// The name to send (SET_NAME carries at most cap-1 bytes): the game, with " - Disk <n>" when disks > 1 and disk0 (0-based) is
+// one of them. When it does not fit, the game's name is cut and the disk stays. Returns the length.
+inline size_t fdSendName(const char* game, int disks, int disk0, char* out, size_t cap) {
+  if (out == nullptr || cap == 0) return 0;
+  const char* g = game ? game : "";
+  char suffix[16]; suffix[0] = 0;
+  if (disks > 1 && disk0 >= 0 && disk0 < disks) snprintf(suffix, sizeof suffix, " - Disk %d", disk0 + 1);
+  const size_t sl = strlen(suffix);
+  size_t gl = strlen(g);
+  if (sl >= cap) { out[0] = 0; return 0; }
+  if (gl + sl > cap - 1) gl = cap - 1 - sl;
+  memcpy(out, g, gl); memcpy(out + gl, suffix, sl); out[gl + sl] = 0;
+  return gl + sl;
+}
+
+// A reported disk name split: *base / *blen the game's part (blanks and ".adf" around the whole name do not count), *n the disk
+// number 1..999 of a trailing " - Disk <n>" (case does not matter), or 0 when it has none (then the base is the whole name).
+inline void fdSplitDiskName(const char* s, const char** base, size_t* blen, int* n) {
+  fdNameCore(s, base, blen);
+  *n = 0;
+  const char* p = *base; const size_t len = *blen;
+  size_t i = len, digits = 0;
+  while (i > 0 && p[i - 1] >= '0' && p[i - 1] <= '9') { i--; digits++; }
+  if (digits < 1 || digits > 3 || i < 9) return;
+  static const char tag[] = " - disk ";
+  for (size_t k = 0; k < 8; k++) if (fdNameLower(p[i - 8 + k]) != tag[k]) return;
+  int v = 0;
+  for (size_t k = i; k < len; k++) v = v * 10 + (p[k] - '0');
+  if (v < 1) return;
+  size_t bl = i - 8;
+  while (bl && fdNameBlank(p[bl - 1])) bl--;
+  if (bl == 0) return;
+  *blen = bl; *n = v;
+}
+
+// Does a reported disk name (beacon "disk" / "disk1") name this game (gdisks disks)? 0 = no. 1 = the whole name is the game's
+// (no suffix; *disk = -1, the caller applies the old rule). 2 = "<game> - Disk <n>" of a game that has that disk (*disk = n-1).
+inline int fdMatchDiskName(const char* reported, const char* game, int gdisks, int* disk) {
+  int none; if (disk == nullptr) disk = &none;
+  *disk = -1;
+  if (fdSameDiskName(reported, game)) return 1;
+  const char* b; size_t bl; int n;
+  fdSplitDiskName(reported, &b, &bl, &n);
+  if (n < 1 || gdisks < 2 || n > gdisks) return 0;
+  const char* g; size_t gl;
+  fdNameCore(game, &g, &gl);
+  if (gl == 0 || gl != bl) return 0;
+  for (size_t i = 0; i < gl; i++) if (fdNameLower(b[i]) != fdNameLower(g[i])) return 0;
+  *disk = n - 1;
+  return 2;
+}
+
 // A peer is still heard: its last beacon is less than stale_ms old (now and seen are millis(); the wrap is handled).
 inline bool fdHeard(uint32_t now, uint32_t seen, uint32_t stale_ms) { return (uint32_t)(now - seen) < stale_ms; }
 
@@ -186,8 +244,10 @@ inline bool fdUiLoaded(const FdUiView& v, int gi, const char* gname, int gdisks,
     *disk = v.sdisk;
     return true;
   }
-  if (!fdSameDiskName(v.tdisk, gname)) return false;
-  *disk = gdisks <= 1 ? 0 : -1;
+  int d;
+  const int m = fdMatchDiskName(v.tdisk, gname, gdisks, &d);   // fd4 round 4: "<game> - Disk <n>" says which disk of the game
+  if (m == 0) return false;
+  *disk = m == 2 ? d : (gdisks <= 1 ? 0 : -1);
   return true;
 }
 
