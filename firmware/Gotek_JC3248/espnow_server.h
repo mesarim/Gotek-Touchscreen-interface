@@ -1,6 +1,7 @@
 // espnow_server.h — ESP-NOW pairing + WiFi TCP disk transfer, Waveshare side
 #pragma once
 #include <Arduino.h>
+#include <WiFiClient.h>   // saveExchange takes the open connection
 
 // ESP-NOW packet types (control only — no data transfer)
 #define PKT_PAIR_HELLO   0x05  // Waveshare → broadcast: I exist
@@ -55,6 +56,7 @@ bool espnowXiaoOnline(); // true if heard from XIAO in last 30s
 
 // ── Save writeback (v4.8.0) ─────────────────────────────────────────────────
 extern volatile uint8_t  g_espnow_dongle_caps;   // pad[0] of PAIR_REPLY: save proto version (0 = old dongle)
+extern volatile uint8_t  g_espnow_dongle_kind;   // pad[2] of PAIR_REPLY: board kind, 1 SuperMini, 2 Zero, 3 XIAO, 4 FluxDrive; 0 = unknown (old dongle or old pairing)
 extern volatile uint8_t  g_espnow_dongle_board;  // pad[1] of PAIR_REPLY: 1 = HD-capable (XIAO 8MB, 2MB ramdisk); 0 = DD-only / old dongle
 extern volatile uint32_t g_espnow_load_id;       // load_id from the last FLING's TCP ack (0 = old dongle)
 extern volatile bool     g_espnow_dirty;         // dongle beaconed unsaved writes
@@ -69,6 +71,11 @@ typedef bool (*SavePersistCb)(uint32_t load_id, uint32_t img_size,
                               const uint8_t* map, uint16_t mapLen,
                               const uint8_t* packed, uint32_t nSectors);
 bool espnowFetchSave(SavePersistCb persist);
+// The GET_SAVE exchange itself, on a connection the caller opened (and stops): espnowFetchSave over the dongle's own
+// access point, and the LAN fetch from a FluxDrive over home Wi-Fi. Same bytes, same persist-before-ack rule. The waits
+// (from the last byte that came): replyMs for the header, the map and the CRC, sectorsMs for the sectors; espnowFetchSave
+// keeps 5 s and 30 s, the LAN fetch before a swap waits as long as a push would for a FluxDrive the Amiga holds.
+bool saveExchange(WiFiClient& client, SavePersistCb persist, uint32_t replyMs = 5000, uint32_t sectorsMs = 30000, int drive = 0);   // drive 1: GET_SAVE_DRIVE 1 (fd4)
 
 // API
 void   espnowBegin();
