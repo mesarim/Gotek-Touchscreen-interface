@@ -1223,6 +1223,182 @@ static void test_fd_dos_boot_block() {
   CHECK(!fdIsDosBoot(nullptr, 4));
 }
 
+// ---- DF1 from the touchscreen (A600-lab2i-fd4): the wire frames, the split INSERT, the record key, the fetch, the bar ----
+
+static bool frameIs(const uint8_t* f, size_t n, const uint8_t* want, size_t wn) { return n == wn && std::memcmp(f, want, n) == 0; }
+
+// The new commands carry the drive as one byte after the escape; the old ones (drive 0) are sent byte for byte as before.
+static void test_df1_frames() {
+  uint8_t f[6];
+  const uint8_t setd1[] = {0xFF, 0xFF, 0xFF, 0xFF, 0x11, 0x01};
+  CHECK(fdDriveFrame(FD_CMD_SET_DRIVE, 1, f) == 6 && frameIs(f, 6, setd1, 6));
+  const uint8_t setd0[] = {0xFF, 0xFF, 0xFF, 0xFF, 0x11, 0x00};
+  CHECK(fdDriveFrame(FD_CMD_SET_DRIVE, 0, f) == 6 && frameIs(f, 6, setd0, 6));
+  const uint8_t save0[] = {0xFF, 0xFF, 0xFF, 0xFF, 0x01};
+  CHECK(fdSaveFrame(0, f) == 5 && frameIs(f, 5, save0, 5));                 // DF0: GET_SAVE exactly as before
+  const uint8_t save1[] = {0xFF, 0xFF, 0xFF, 0xFF, 0x12, 0x01};
+  CHECK(fdSaveFrame(1, f) == 6 && frameIs(f, 6, save1, 6));
+  const uint8_t ej0[] = {0xFF, 0xFF, 0xFF, 0xFF, 0x03};
+  CHECK(fdEjectFrame(0, f) == 5 && frameIs(f, 5, ej0, 5));                  // DF0: EJECT exactly as before
+  const uint8_t ej1[] = {0xFF, 0xFF, 0xFF, 0xFF, 0x13, 0x01};
+  CHECK(fdEjectFrame(1, f) == 6 && frameIs(f, 6, ej1, 6));
+  CHECK(fdSaveFrame(7, f) == 5);                                            // anything but 1 is DF0
+}
+
+// SET_DRIVE must be acked before a push: without the ack the disk would land in DF0.
+static void test_df1_set_drive_answer() {
+  CHECK(fdSetDriveFail(0x01, false) == nullptr);
+  CHECK(std::strcmp(fdSetDriveFail(0x00, false), "DF1 is off on the FluxDrive") == 0);
+  CHECK(fdSetDriveFail(-1, true) != nullptr && std::strcmp(fdSetDriveFail(-1, true), fdBusyText()) == 0);
+  CHECK(fdSetDriveFail(-1, false) != nullptr);                              // closed early, no ack: still not a go
+  CHECK(fdSetDriveFail(0x05, false) != nullptr);
+  CHECK(fdSetDriveFail(0x02, false) != nullptr);
+}
+
+// The split: a single FluxDrive that is the target and whose beacon says df1. Anything else stays one INSERT.
+static void test_df1_split_decision() {
+  CHECK(fdInsertSplit(true, true, true));
+  CHECK(!fdInsertSplit(false, true, true));      // several peers (the fleet manager), or a dongle
+  CHECK(!fdInsertSplit(true, false, true));      // the single FluxDrive is not the one the screen speaks for
+  CHECK(!fdInsertSplit(true, true, false));      // an older FluxDrive, or DF1 off
+  CHECK(!fdInsertSplit(false, false, false));
+}
+
+static void test_df1_split_halves_fill_the_button() {
+  const FdRect ins = {4, 244, 142, 28};
+  FdRect h[2];
+  fdInsertHalves(ins, 4, h);
+  CHECK(h[0].x == 4 && h[0].w == 69 && h[0].y == 244 && h[0].h == 28);
+  CHECK(h[1].x == 4 + 69 + 4 && h[1].w == 142 - 69 - 4 && h[1].y == 244 && h[1].h == 28);
+  CHECK(h[0].x + h[0].w + 4 == h[1].x && h[1].x + h[1].w == ins.x + ins.w);   // nothing lost, nothing past the button
+  const FdRect strip = {234, 120, 66, 26};                                    // compact portrait, the narrowest
+  fdInsertHalves(strip, 2, h);
+  CHECK(h[0].w == 32 && h[1].x == 234 + 32 + 2 && h[1].w == 32 && h[1].x + h[1].w == 300);
+  const FdRect odd = {0, 0, 81, 20};
+  fdInsertHalves(odd, 3, h);
+  CHECK(h[0].w == 39 && h[1].w == 39 && h[1].x + h[1].w == 81);
+}
+
+static void test_df1_insert_hit() {
+  const FdRect ins = {4, 244, 142, 28};
+  CHECK(fdInsertHit(ins, 4, false, 10, 250) == 0);              // one INSERT: DF0, wherever inside
+  CHECK(fdInsertHit(ins, 4, false, 140, 270) == 0);
+  CHECK(fdInsertHit(ins, 4, false, 3, 250) == -1);              // outside
+  CHECK(fdInsertHit(ins, 4, false, 146, 250) == -1);
+  CHECK(fdInsertHit(ins, 4, false, 10, 243) == -1);
+  CHECK(fdInsertHit(ins, 4, false, 10, 272) == -1);
+  CHECK(fdInsertHit(ins, 4, true, 4, 244) == 0);                // split: left half DF0, right half DF1
+  CHECK(fdInsertHit(ins, 4, true, 72, 260) == 0);
+  CHECK(fdInsertHit(ins, 4, true, 74, 260) == 0);               // the gap goes to the nearer half (the middle line)
+  CHECK(fdInsertHit(ins, 4, true, 75, 260) == 1);
+  CHECK(fdInsertHit(ins, 4, true, 77, 260) == 1);
+  CHECK(fdInsertHit(ins, 4, true, 145, 271) == 1);
+  CHECK(fdInsertHit(ins, 4, true, 146, 260) == -1);
+  CHECK(fdInsertHit(ins, 4, true, 3, 260) == -1);
+}
+
+// A tap on a drive's half: eject when the selected disk is what the drive holds, otherwise load it (a clean swap).
+static void test_df1_tap_decision() {
+  CHECK(!fdInsertTapEjects(false, -1, 0));      // the game is not in that drive: load
+  CHECK(!fdInsertTapEjects(false, 0, 0));
+  CHECK(fdInsertTapEjects(true, -1, 0));        // in it, disk not known here: eject
+  CHECK(fdInsertTapEjects(true, 1, 1));         // in it, that very disk: eject
+  CHECK(!fdInsertTapEjects(true, 0, 1));        // another disk of the game selected: swap to it
+}
+
+static void test_df1_half_text() {
+  const char *a = nullptr, *b = nullptr;
+  fdHalfText(0, false, &a, &b); CHECK(std::strcmp(a, "DF0") == 0 && b == nullptr);
+  fdHalfText(1, false, &a, &b); CHECK(std::strcmp(a, "DF1") == 0 && b == nullptr);
+  fdHalfText(0, true, &a, &b);  CHECK(std::strcmp(a, "EJECT") == 0 && std::strcmp(b, "DF0") == 0);
+  fdHalfText(1, true, &a, &b);  CHECK(std::strcmp(a, "EJECT") == 0 && std::strcmp(b, "DF1") == 0);
+}
+
+// The save record is keyed by FluxDrive and drive: "<12 hex>" for DF0 (the old key), "<12 hex>:1" for DF1.
+static void test_df1_record_key() {
+  char k[20];
+  CHECK(fdRecKey("A1B2C3D4E5F6", 0, k, sizeof k) && std::strcmp(k, "A1B2C3D4E5F6") == 0);
+  CHECK(fdRecKey("A1B2C3D4E5F6", 1, k, sizeof k) && std::strcmp(k, "A1B2C3D4E5F6:1") == 0);
+  CHECK(!fdRecKey("A1B2C3D4E5F6", 1, k, 14) && k[0] == 0);                // does not fit whole
+  CHECK(fdRecKey("A1B2C3D4E5F6", 1, k, 15));
+  CHECK(!fdRecKey(nullptr, 0, k, sizeof k));
+  CHECK(!fdRecKey("A1B2C3D4E5F6", 0, nullptr, 0));
+  CHECK(fdRecKeyDrive("A1B2C3D4E5F6") == 0);
+  CHECK(fdRecKeyDrive("A1B2C3D4E5F6:1") == 1);
+  CHECK(fdRecKeyDrive("") == 0);
+  CHECK(fdRecKeyDrive(nullptr) == 0);
+  char b[16];
+  CHECK(fdRecKeyBase("A1B2C3D4E5F6:1", b, sizeof b) && std::strcmp(b, "A1B2C3D4E5F6") == 0);
+  CHECK(fdRecKeyBase("A1B2C3D4E5F6", b, sizeof b) && std::strcmp(b, "A1B2C3D4E5F6") == 0);
+  CHECK(!fdRecKeyBase("A1B2C3D4E5F6:1", b, 12));
+}
+
+static void test_df1_record_round_trip_and_old_lines() {
+  const FdSaveRecord d1 = fdRec("A1B2C3D4E5F6:1", 77, "/ADF/G.sav.80FE.adf", "/ADF/G.adf", "80FE");
+  char line[400];
+  CHECK(fdRecordFormat(d1, line, sizeof line) > 0);
+  CHECK(std::strcmp(line, "A1B2C3D4E5F6:1\t77\t80FE\t/ADF/G.sav.80FE.adf\t/ADF/G.adf") == 0);
+  FdSaveRecord r;
+  std::memset(&r, 0, sizeof r);
+  CHECK(fdRecordParse(line, r) && fdRecSame(r, d1));
+  // a file written before DF1 existed parses as DF0's records, unchanged
+  FdSaveRecord old;
+  CHECK(fdRecordParse("A1B2C3D4E5F6\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf", old));
+  CHECK(std::strcmp(old.id, "A1B2C3D4E5F6") == 0 && fdRecKeyDrive(old.id) == 0);
+  // what is not a drive key is refused
+  FdSaveRecord keep = old;
+  CHECK(!fdRecordParse("A1B2C3D4E5F6:2\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf", r));
+  CHECK(!fdRecordParse("A1B2C3D4E5F6:\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf", r));
+  CHECK(!fdRecordParse("A1B2C3D4E5F6:0\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf", r));
+  CHECK(!fdRecordParse("A1B2C3D4E5F6:11\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf", r));
+  CHECK(!fdRecordParse(":1\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf", r));
+  CHECK(!fdRecordParse("A1B2C3D4E5F67:1\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf", r));   // 13 hex digits
+  CHECK(!fdRecordParse("a1b2c3d4e5f6:1\t42\t80FE\t/ADF/G.adf\t/ADF/G.adf", r));    // lower case
+  CHECK(fdRecSame(old, keep));
+  // made whole from a fling
+  FdSaveRecord s;
+  CHECK(fdRecordSet(s, "A1B2C3D4E5F6:1", 9, "/ADF/H.adf", "/ADF/H.adf", "80FE") && std::strcmp(s.id, "A1B2C3D4E5F6:1") == 0);
+  CHECK(!fdRecordSet(s, "A1B2C3D4E5F6:1:1", 9, "/ADF/H.adf", "/ADF/H.adf", "80FE"));
+  // DF0 and DF1 of one FluxDrive are two records
+  FdSaveRecord d0 = fdRec("A1B2C3D4E5F6", 76, "/ADF/F.adf", "/ADF/F.adf", "80FE");
+  CHECK(std::strcmp(d0.id, d1.id) != 0);
+}
+
+// What the loop fetches next: DF0 first, then DF1 (only while its beacon says df1), each by its own dirty count and uid.
+static void test_df1_fetch_due() {
+  const FdSaveRecord r0 = fdRec("A1B2C3D4E5F6", 42, "/ADF/G.adf", "/ADF/G.adf", "80FE");
+  const FdSaveRecord r1 = fdRec("A1B2C3D4E5F6:1", 43, "/ADF/H.adf", "/ADF/H.adf", "80FE");
+  CHECK(fdDueDrive(true, 5, 42, &r0, true, 3, 43, &r1) == 0);          // both: DF0 first
+  CHECK(fdDueDrive(true, 0, 42, &r0, true, 3, 43, &r1) == 1);          // only DF1 has writes
+  CHECK(fdDueDrive(true, 5, 42, &r0, true, 0, 43, &r1) == 0);
+  CHECK(fdDueDrive(true, 0, 42, &r0, true, 0, 43, &r1) == -1);
+  CHECK(fdDueDrive(true, 0, 42, &r0, true, 3, 99, &r1) == -1);         // DF1 holds a disk this panel did not send
+  CHECK(fdDueDrive(true, 0, 42, &r0, true, 3, 43, nullptr) == -1);     // no record for DF1
+  CHECK(fdDueDrive(true, 5, 41, &r0, true, 3, 43, &r1) == 1);          // DF0's record is for another disk, DF1's is fine
+  CHECK(fdDueDrive(true, 0, 42, &r0, false, 3, 43, &r1) == -1);        // DF1 off: its keys mean nothing
+  CHECK(fdDueDrive(false, 5, 42, &r0, true, 3, 43, &r1) == -1);        // not a FluxDrive, or not heard
+}
+
+static void test_df1_bar_text() {
+  char o[200];
+  CHECK(!fdBarShows(false, false, false, false));
+  CHECK(fdBarShows(true, false, false, false) == false);
+  CHECK(fdBarShows(true, true, false, false));                          // DF0 as today
+  CHECK(fdBarShows(true, true, true, true));
+  CHECK(fdBarShows(true, false, true, true));                           // only DF1 holds a disk
+  CHECK(!fdBarShows(true, false, false, true));                         // DF1 off: its keys are not looked at
+  fdBarCompose("Pinball Dreams", true, "Pinball Dreams 2", true, true, o, sizeof o);
+  CHECK(std::strcmp(o, "Pinball Dreams  DF1: Pinball Dreams 2") == 0);
+  fdBarCompose("Lemmings", true, "", false, true, o, sizeof o);         // DF1 empty: DF0's disk alone, as today
+  CHECK(std::strcmp(o, "Lemmings") == 0);
+  fdBarCompose("Lemmings", true, "Ignored", true, false, o, sizeof o);  // DF1 off
+  CHECK(std::strcmp(o, "Lemmings") == 0);
+  fdBarCompose("", false, "Monkey Island", true, true, o, sizeof o);
+  CHECK(std::strcmp(o, "DF1: Monkey Island") == 0);
+  fdBarCompose("A", true, "BBBBBBBBBBBB", true, true, o, 10);
+  CHECK(std::strlen(o) == 9);                                           // cut to the buffer
+}
+
 int main() {
   test_fluxdrive_is_told_apart_by_its_beacon_board();
   test_only_a_dd_adf_goes_to_a_fluxdrive();
@@ -1304,6 +1480,17 @@ int main() {
   test_fd_two_games_started_fresh_in_one_window();
   test_fd_pending_table_full_evicts_the_oldest();
   test_fd_dos_boot_block();
+  test_df1_frames();
+  test_df1_set_drive_answer();
+  test_df1_split_decision();
+  test_df1_split_halves_fill_the_button();
+  test_df1_insert_hit();
+  test_df1_tap_decision();
+  test_df1_half_text();
+  test_df1_record_key();
+  test_df1_record_round_trip_and_old_lines();
+  test_df1_fetch_due();
+  test_df1_bar_text();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }

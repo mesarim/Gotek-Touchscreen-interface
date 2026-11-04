@@ -285,13 +285,14 @@ inline int fdCfgSwitch(const char* line, const char* key) {
 
 // What the panel keeps about the last disk a single-target fling put in a FluxDrive, one line per FluxDrive in
 // /GTI/fdsaves.txt, so that after either side restarts it still knows where a fetched save belongs (spec section 6):
-//  id    the FluxDrive's beacon id (its STA MAC, 12 upper-case hex digits);
+//  id    the FluxDrive's beacon id (its STA MAC, 12 upper-case hex digits) for DF0, or that id and ":1" for DF1 (fd4:
+//        fdRecKey; a file written before DF1 has only DF0 keys, which parse as before);
 //  uid   the disk's uid from the push ack (0x01 + LE32), which is the beacon's "load_id" while it holds that disk;
 //  sent  the SD file whose bytes went out (its own save, the cable save or the image), the base the save is built on;
 //  orig  the library image behind it, which names the save: Game.sav.<tag>.adf;
 //  tag   the FluxDrive's save tag (its beacon "tag": softAP MAC bytes 4-5, upper-case hex).
 // The line: id TAB uid TAB tag TAB sent TAB orig (uid in decimal). FAT names cannot hold a TAB or a control character.
-struct FdSaveRecord { char id[13]; uint32_t uid; char sent[160]; char orig[160]; char tag[5]; };
+struct FdSaveRecord { char id[16]; uint32_t uid; char sent[160]; char orig[160]; char tag[5]; };
 
 inline bool fdRecUpperHex(char c) { return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'); }
 // A string held in a fixed array: it ends inside the array, and its length is in [lo, hi].
@@ -314,9 +315,18 @@ inline bool fdRecPathField(const char* s, size_t cap) {
   for (size_t i = 0; i < n; i++) if ((unsigned char)s[i] < 0x20 || s[i] == 0x7F) return false;
   return true;
 }
+// A record key (fd4): 1 to 12 upper-case hex digits (a FluxDrive's id; DF0), or those and ":1" (DF1).
+inline bool fdRecKeyValid(const char* s, size_t cap) {
+  size_t n;
+  if (!fdRecStrLen(s, cap, 1, cap - 1, &n)) return false;
+  if (n >= 3 && s[n - 2] == ':' && s[n - 1] == '1') n -= 2;
+  if (n < 1 || n > 12) return false;
+  for (size_t i = 0; i < n; i++) if (!fdRecUpperHex(s[i])) return false;
+  return true;
+}
 // A record that can be written and matched: an id, a uid (0 = none: matches nothing), a 4-digit tag, two SD paths.
 inline bool fdRecordValid(const FdSaveRecord& r) {
-  return fdRecHexField(r.id, sizeof r.id, 1, sizeof r.id - 1) && r.uid != 0 && fdRecHexField(r.tag, sizeof r.tag, 4, 4) &&
+  return fdRecKeyValid(r.id, sizeof r.id) && r.uid != 0 && fdRecHexField(r.tag, sizeof r.tag, 4, 4) &&
          fdRecPathField(r.sent, sizeof r.sent) && fdRecPathField(r.orig, sizeof r.orig);
 }
 
@@ -376,11 +386,123 @@ inline bool fdRecordSet(FdSaveRecord& r, const char* id, uint32_t uid, const cha
   return true;
 }
 
+// ---- DF1 from the touchscreen (fd4): the drive in the key, the wire frames, the split INSERT, the bar -------------------------
+//
+// FluxDrive has a second drive, DF1. A beacon with "df1":1 says it is on, and carries loaded1, disk1, load_id1, dirty1, wp1 and
+// stored1 beside the DF0 keys. The panel speaks to DF1 with three commands after the escape, each with the drive as one byte;
+// the old commands keep meaning DF0 and are sent byte for byte as before.
+#define FD_CMD_SET_DRIVE    0x11   // the drive for the NEXT push and CLAIM from this sender (one-shot): 0x01 ok, 0x00 bad or DF1 off
+#define FD_CMD_GET_SAVE_DRV 0x12   // GET_SAVE for a drive
+#define FD_CMD_EJECT_DRIVE  0x13   // EJECT for a drive
+
+// FF FF FF FF cmd drive (drive 1 = DF1, anything else DF0) into out[6]. Returns 6.
+inline size_t fdDriveFrame(uint8_t cmd, int drive, uint8_t* out) {
+  out[0] = out[1] = out[2] = out[3] = 0xFF; out[4] = cmd; out[5] = (uint8_t)(drive == 1 ? 1 : 0);
+  return 6;
+}
+// GET_SAVE (DF0: the old 5 bytes, 0x01) or GET_SAVE_DRIVE 1. Returns the length.
+inline size_t fdSaveFrame(int drive, uint8_t* out) {
+  if (drive == 1) return fdDriveFrame(FD_CMD_GET_SAVE_DRV, 1, out);
+  out[0] = out[1] = out[2] = out[3] = 0xFF; out[4] = 0x01;
+  return 5;
+}
+// EJECT (DF0: the old 5 bytes, 0x03) or EJECT_DRIVE 1. Returns the length.
+inline size_t fdEjectFrame(int drive, uint8_t* out) {
+  if (drive == 1) return fdDriveFrame(FD_CMD_EJECT_DRIVE, 1, out);
+  out[0] = out[1] = out[2] = out[3] = 0xFF; out[4] = 0x03;
+  return 5;
+}
+
+// What the answer to SET_DRIVE 1 means: nullptr = go (0x01); otherwise why not, and nothing may be pushed (a push without it
+// would land in DF0 and replace the disk the Amiga is using). 0x00: DF1 went off meanwhile. No answer: busy (the wait ran out)
+// or "no reply".
+inline const char* fdSetDriveFail(int reply, bool ran_out) {
+  if (reply == 0x01) return nullptr;
+  if (reply == 0x00) return "DF1 is off on the FluxDrive";
+  if (reply < 0) return ran_out ? fdBusyText() : "no reply to SET_DRIVE";
+  return "refused";
+}
+
+// The INSERT button is cut in two (DF0 | DF1) only for a single FluxDrive (single: exactly one peer in reach, and it is one)
+// that the screen speaks for (is_target: it is what pfFluxTarget picks) and whose beacon says df1.
+inline bool fdInsertSplit(bool single, bool is_target, bool df1) { return single && is_target && df1; }
+
+// The two halves of the INSERT rectangle with `gap` pixels between: the left gets (w - gap) / 2, the right the rest.
+inline void fdInsertHalves(FdRect ins, int gap, FdRect* out) {
+  const int lw = (ins.w - gap) / 2;
+  out[0] = FdRect{ins.x, ins.y, lw, ins.h};
+  out[1] = FdRect{ins.x + lw + gap, ins.y, ins.w - lw - gap, ins.h};
+}
+// A touch at x, y: the drive whose button it is (0, or 1 for the right half of a split button), -1 = outside the button.
+// The gap between the halves goes to the nearer half (the middle of the button is the line).
+inline int fdInsertHit(FdRect ins, int gap, bool split, int x, int y) {
+  (void)gap;
+  if (x < ins.x || x >= ins.x + ins.w || y < ins.y || y >= ins.y + ins.h) return -1;
+  if (!split) return 0;
+  return x < ins.x + ins.w / 2 ? 0 : 1;
+}
+// A tap on a drive's INSERT/EJECT: eject when the selected game is in that drive (loaded) and the selected disk is the one it
+// holds (ld = the disk of the game that is in, -1 = not known here); otherwise load the selected disk into it (a clean swap).
+inline bool fdInsertTapEjects(bool loaded, int ld, int disk_sel) { return loaded && (ld < 0 || ld == disk_sel); }
+// A half's label: DF0 / DF1 while it inserts; EJECT over the drive's name while it ejects (bottom = nullptr: one line).
+inline void fdHalfText(int drive, bool eject, const char** top, const char** bottom) {
+  const char* d = drive == 1 ? "DF1" : "DF0";
+  if (eject) { *top = "EJECT"; *bottom = d; } else { *top = d; *bottom = nullptr; }
+}
+
+// A record key: the FluxDrive's id for DF0, "<id>:1" for DF1. False (out ""): it does not fit whole.
+inline bool fdRecKey(const char* id, int drive, char* out, size_t cap) {
+  if (out == nullptr || cap == 0) return false;
+  out[0] = 0;
+  if (id == nullptr) return false;
+  const int w = snprintf(out, cap, drive == 1 ? "%s:1" : "%s", id);
+  if (w < 0 || (size_t)w >= cap) { out[0] = 0; return false; }
+  return true;
+}
+// The drive a record key is for: 1 when it ends in ":1", else 0.
+inline int fdRecKeyDrive(const char* key) {
+  if (key == nullptr) return 0;
+  const size_t n = strlen(key);
+  return (n >= 3 && key[n - 2] == ':' && key[n - 1] == '1') ? 1 : 0;
+}
+// The FluxDrive id of a record key (the key without ":1") into out. False when it does not fit.
+inline bool fdRecKeyBase(const char* key, char* out, size_t cap) {
+  if (key == nullptr || out == nullptr || cap == 0) return false;
+  size_t n = strlen(key);
+  if (fdRecKeyDrive(key)) n -= 2;
+  if (n >= cap) { out[0] = 0; return false; }
+  memcpy(out, key, n); out[n] = 0;
+  return true;
+}
+
+// NOW PLAYING shows while the DF0 target holds a disk, or (fd4) its DF1 does (only while df1 is on).
+inline bool fdBarShows(bool target, bool loaded0, bool df1, bool loaded1) { return target && (loaded0 || (df1 && loaded1)); }
+// The disk line of NOW PLAYING: DF0's disk as today; with a disk in DF1 too "<disk0>  DF1: <disk1>"; DF1 alone "DF1: <disk1>".
+// Cut to cap-1 characters.
+inline void fdBarCompose(const char* disk0, bool loaded0, const char* disk1, bool loaded1, bool df1, char* out, size_t cap) {
+  if (out == nullptr || cap == 0) return;
+  const bool show1 = df1 && loaded1;
+  const char* d0 = disk0 ? disk0 : "";
+  const char* d1 = disk1 ? disk1 : "";
+  if (loaded0 && show1) snprintf(out, cap, "%s  DF1: %s", d0, d1);
+  else if (show1) snprintf(out, cap, "DF1: %s", d1);
+  else snprintf(out, cap, "%s", d0);
+}
+
 // Fetch this FluxDrive's unsaved sectors now? Only when there are some (its beacon's "dirty") and they belong to the disk
 // this panel sent it: a record (rec) whose uid is the beacon's "load_id". Another disk (a PC push, its web page) or none
 // in the drive: no.
 inline bool fdShouldFetch(uint16_t dirty, uint32_t beacon_uid, const FdSaveRecord* rec) {
   return dirty > 0 && rec != nullptr && beacon_uid != 0 && rec->uid == beacon_uid;
+}
+// Which drive of a FluxDrive has unsaved writes to fetch now (fd4): DF0 first (dirty0, load_id against its record), then DF1
+// while its beacon says df1 (dirty1, load_id1 against the ":1" record). -1 = none, or not a FluxDrive in reach (is_fd_heard).
+inline int fdDueDrive(bool is_fd_heard, uint16_t dirty0, uint32_t uid0, const FdSaveRecord* rec0,
+                      bool df1, uint16_t dirty1, uint32_t uid1, const FdSaveRecord* rec1) {
+  if (!is_fd_heard) return -1;
+  if (fdShouldFetch(dirty0, uid0, rec0)) return 0;
+  if (df1 && fdShouldFetch(dirty1, uid1, rec1)) return 1;
+  return -1;
 }
 // Before a swap (another disk flung to it, or an eject), fetch? Whenever the disk in it is the one this panel sent it: it
 // holds one (the beacon's "loaded"; an ejected disk's sectors cannot be fetched, though FluxDrive keeps its uid) and its
