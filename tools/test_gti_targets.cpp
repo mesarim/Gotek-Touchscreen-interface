@@ -249,6 +249,27 @@ static void test_info_layout() {
   CHECK(L0.cards == 0 && L0.maxScroll == 0);
 }
 
+static void test_disk_tap() {
+  // a tap on a disk key SELECTS the disk whenever more than one drive is reachable; it swaps only with exactly one, a game loaded, hot-swap on
+  CHECK(gtDiskTap(1, true, true) == GT_DISK_SWAP);
+  CHECK(gtDiskTap(1, false, true) == GT_DISK_SELECT);     // nothing loaded: just select
+  CHECK(gtDiskTap(1, true, false) == GT_DISK_SELECT);     // HOTSWAP off: just select (the INSERT key does the swap)
+  CHECK(gtDiskTap(2, true, true) == GT_DISK_SELECT);      // FluxDrive DF0 + DF1: never swap into DF0 behind the user's back
+  CHECK(gtDiskTap(3, true, true) == GT_DISK_SELECT);
+  CHECK(gtDiskTap(5, false, true) == GT_DISK_SELECT);
+  CHECK(gtDiskTap(0, true, true) == GT_DISK_SELECT);      // no drive reachable
+  // the counts the screen really has: a FluxDrive with DF1 on is two targets, with DF1 off one
+  GtInputs in = fleet(); GtTarget t[GT_MAX_TARGETS];
+  GtPeerIn f = flux("FluxDrive", true, "Monkey Island - Disk 1"); f.df1 = true; f.loaded1 = false;
+  CHECK(gtDiskTap(gtBuildTargets(in, &f, 1, t, GT_MAX_TARGETS), true, true) == GT_DISK_SELECT);
+  f.df1 = false;
+  CHECK(gtDiskTap(gtBuildTargets(in, &f, 1, t, GT_MAX_TARGETS), true, true) == GT_DISK_SWAP);
+  GtPeerIn two[2] = { dongle("A", true, "X"), dongle("B", false, "") };
+  CHECK(gtDiskTap(gtBuildTargets(in, two, 2, t, GT_MAX_TARGETS), true, true) == GT_DISK_SELECT);
+  CHECK(gtDiskTap(gtBuildTargets(in, two, 1, t, GT_MAX_TARGETS), true, true) == GT_DISK_SWAP);   // one dongle
+  CHECK(gtDiskTap(gtBuildTargets(wired(true, "Lemmings"), nullptr, 0, t, GT_MAX_TARGETS), true, true) == GT_DISK_SWAP);   // the wired Gotek
+}
+
 int main() {
   test_screen_in_a_gotek();
   test_espnow_paired_dongle();
@@ -264,6 +285,7 @@ int main() {
   test_top_bar();
   test_strip_tap();
   test_info_layout();
+  test_disk_tap();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }

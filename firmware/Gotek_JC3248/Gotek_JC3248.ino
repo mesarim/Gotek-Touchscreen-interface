@@ -4701,6 +4701,21 @@ static void calmText(int x,int y,String s,int w,int size,uint16_t fg,uint16_t bg
   const int sz=calmFit(s,w,size);
   gfx_setTextSize(sz); gfx_setTextColor(fg,bg); gfx_setCursor(x,y); gfx_print(s);
 }
+// A tap on a disk key (gtDiskTap, host-tested): with more than one drive reachable it only SELECTS the disk (which drive it goes
+// into is the INSERT key's business); with exactly one drive, a game loaded and HOTSWAP on (the reel always) it swaps: eject, then insert.
+static bool calmDiskSwap(bool gameLoaded,bool hotswap){
+  const int n=calmBuildTargets(g_gtBuf,GT_MAX_TARGETS);
+  return gtDiskTap(n,gameLoaded,hotswap)==GT_DISK_SWAP;
+}
+// The swap itself: a real eject first so the Amiga sees a disk change, then the insert. The wired Gotek and the ESP-NOW dongle:
+// doUnload (USB detach, EJECT to the dongle); one dongle of the fleet: its EJECT command, quietly; a FluxDrive ejects on its own side
+// when the push comes. This panel's staging goes either way (the reel always did that).
+static void calmSwapTo(const String&file,int drive){
+  const int n=calmBuildTargets(g_gtBuf,GT_MAX_TARGETS);
+  if(n==1&&g_gtBuf[0].peer>=0&&g_gtBuf[0].kind==GT_DONGLE){ String err; pfSendCommand(g_pfPeers[g_gtBuf[0].peer].ip,g_pfPeers[g_gtBuf[0].peer].tcp,PF_CMD_EJECT,err); }
+  if(g_loaded) doUnload();
+  doLoadSelected(file,String(),nullptr,drive);
+}
 static inline uint16_t calmCardBg(){ return (g_neo||skinSlotOk(skin::S_PANEL))?COL_BG:COL_PANEL; }   // the colour behind text on a card
 // The drive strip: one wide card, two halves, or two cards and "+N". A card: the caption (DF0 / DF1 / the dongle's name /
 // "Gotek") in the accent colour, what it holds (or "empty", dimmed), a link dot for a dongle or a FluxDrive, and a word
@@ -6238,10 +6253,10 @@ static void carHandleTap(uint16_t px,uint16_t py){
     int gi=g_car_list[ci]; auto&gm=g_games[gi];
     if(d<(int)gm.disk_indices.size()){
       int ld=-1; if(uiLoadedAs(gi,&ld)){
-        if(d!=ld){                                   // clean swap: flush saves + eject, then reload the chosen disk (no fleet EJECT: the disk replaces it)
-          if(g_loaded) doUnload();                   // nothing staged here (a FluxDrive game after a restart): no USB detach
+        if(!calmDiskSwap(true,true)) g_disk_sel=d;   // more than one drive: only select the disk, INSERT picks the drive
+        else if(d!=ld){                              // one drive: clean swap - flush saves + eject, then insert the chosen disk
           g_sel=gi;g_disk_sel=d;g_disk_page=0;
-          doLoadSelected(g_files[gm.disk_indices[d]]);
+          calmSwapTo(g_files[gm.disk_indices[d]],0);
         }
       } else { g_disk_sel=d; }                        // not loaded yet — just select; INSERT will mount it
       if(g_car_active){drawCarousel();gfx_flush();}
@@ -10251,14 +10266,14 @@ static void handleTap(uint16_t px,uint16_t py){
       DiskGrid L=diskGrid(game.disk_count);
       if(L.multiPage){int pby=L.gridY+L.gridH+L.pageGap;if(py>=(uint16_t)pby&&py<(uint16_t)(pby+L.pageBtnH)&&px>=(uint16_t)L.gx&&px<(uint16_t)(L.gx+L.gridW)){g_disk_page=(g_disk_page+1)%L.pages;drawCoverPanel();gfx_flush();return;}}
       for(int d=L.pageStart;d<L.pageEnd;d++){int slot=d-L.pageStart,col=slot%L.COLS,row=slot/L.COLS;int bx=L.gx+col*(L.dbw+L.dgap),by=L.gridY+row*(L.dbh+L.dgap);
-        if(px>=(uint16_t)bx&&px<(uint16_t)(bx+L.dbw)&&py>=(uint16_t)by&&py<(uint16_t)(by+L.dbh)){g_disk_sel=d;if(g_hotswap&&uiShowsLoaded(g_sel))doLoadSelected(g_files[game.disk_indices[g_disk_sel]]);else{drawCoverPanel();gfx_flush();}return;}}
+        if(px>=(uint16_t)bx&&px<(uint16_t)(bx+L.dbw)&&py>=(uint16_t)by&&py<(uint16_t)(by+L.dbh)){g_disk_sel=d;if(calmDiskSwap(uiShowsLoaded(g_sel),g_hotswap))calmSwapTo(g_files[game.disk_indices[g_disk_sel]],0);else{drawCoverPanel();gfx_flush();}return;}}
     } else if(COVER_ON&&g_portrait&&g_step_on){
       if(px>=(uint16_t)g_step_x&&px<(uint16_t)(g_step_x+g_step_w)&&py>=(uint16_t)(g_step_y-6)&&py<(uint16_t)(g_step_y+g_step_h)){
         if(px<(uint16_t)(g_step_x+g_step_w/2))g_disk_sel=(g_disk_sel-1+game.disk_count)%game.disk_count;   // left half = prev
         else g_disk_sel=(g_disk_sel+1)%game.disk_count;                                                    // right half = next
-        if(g_hotswap&&uiShowsLoaded(g_sel))doLoadSelected(g_files[game.disk_indices[g_disk_sel]]);else{drawCoverPanel();gfx_flush();}return;}
+        if(calmDiskSwap(uiShowsLoaded(g_sel),g_hotswap))calmSwapTo(g_files[game.disk_indices[g_disk_sel]],0);else{drawCoverPanel();gfx_flush();}return;}
     } else if(STRIP_ON){
-      if(px<(uint16_t)INS_X&&py>=(uint16_t)STRIP_Y&&py<(uint16_t)(STRIP_Y+STRIP_H)){if(px<(uint16_t)(INS_X/2))g_disk_sel=(g_disk_sel-1+game.disk_count)%game.disk_count;else g_disk_sel=(g_disk_sel+1)%game.disk_count;if(g_hotswap&&uiShowsLoaded(g_sel))doLoadSelected(g_files[game.disk_indices[g_disk_sel]]);else{drawActionStrip();gfx_flush();}return;}
+      if(px<(uint16_t)INS_X&&py>=(uint16_t)STRIP_Y&&py<(uint16_t)(STRIP_Y+STRIP_H)){if(px<(uint16_t)(INS_X/2))g_disk_sel=(g_disk_sel-1+game.disk_count)%game.disk_count;else g_disk_sel=(g_disk_sel+1)%game.disk_count;if(calmDiskSwap(uiShowsLoaded(g_sel),g_hotswap))calmSwapTo(g_files[game.disk_indices[g_disk_sel]],0);else{drawActionStrip();gfx_flush();}return;}
     }
   }}
 

@@ -233,3 +233,12 @@ inline int gtInfoTap(const GtInfoLayout& L, int x, int y, const bool* hasDisk) {
   }
   return GT_INFO_NONE;
 }
+
+// ---- A tap on a disk key (A600-calm3 fix) -------------------------------------------------------------------------------
+// With more than one drive reachable (a FluxDrive with DF1 on, two dongles, ...) a disk key only SELECTS the disk: which drive it
+// goes into is the INSERT key's business. The direct swap (eject, then insert the tapped disk) stays for exactly one drive
+// (the wired Gotek, one dongle, a FluxDrive with DF1 off), with the game loaded and HOTSWAP on (the reel always passes true).
+enum { GT_DISK_SELECT = 0, GT_DISK_SWAP = 1 };
+inline int gtDiskTap(int targetCount, bool gameLoaded, bool hotswap) {
+  return (targetCount == 1 && gameLoaded && hotswap) ? GT_DISK_SWAP : GT_DISK_SELECT;
+}
