@@ -72,7 +72,7 @@
 // GTI_WEB_TAP: POST /api/tap = a virtual finger (test hook for walking the screens with /api/screenshot). TEST BUILDS ONLY:
 // release builds must drop this line (and we will remove it before any release). It sits up here, not next to
 // GTI_WEB_SCREENSHOT, because Touch_ReadFrame below consults it.
-#define GTI_WEB_TAP 1
+//#define GTI_WEB_TAP 1   // off in releases; uncomment for a test build
 #define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
 #define PF_MDNS_ALIAS "gotekomega"     // pf4: the shared name one screen ALSO answers to, next to its own GTi-XXXX.
                                        // Must match what the dongles cede (their portal points users here).
