@@ -31,6 +31,11 @@
 #undef MOTOSHORT
 #undef MOTOLONG
 #include <PNGdec.h>      // cover art may be PNG as well as JPEG (v4.8.4) — needs the "PNGdec" library (Larry Bank) installed
+// gti-skins: the .gts skin container and the atlas slot table (shared with the host tests, no Arduino includes).
+#include "../shared/skin_gts.h"
+#include "../shared/skin_draw.h"
+#include "../shared/skin_names.h"
+#include <new>
 #include <Wire.h>
 #include "../shared/cracktro_gti.h"   // .gti cracktro file format (host-testable, no Arduino deps)
 #include <vector>
@@ -50,7 +55,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-lab2i-JC3248"   // A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-skin1-JC3248"  // A600-skin1-JC3248 (Dimmy, 16 Oct): skins - one .gts file (colours + PNG atlas + optional JPEG backgrounds) makes your own look; made and uploaded in the web page's Theme Editor, NEO is the starter |A600-theme1-JC3248 (Dimmy+Mez, 7 Oct): one THEME section - Settings has one THEME row; its page holds NEO ON/OFF, the classic themes and your own themes from /GTI/THEMES (made in the web page's Themes tab + Theme Editor, which the panel now serves); a card from before NEO keeps its own theme | A600-neo2g-JC3248 // A600-neo2-JC3248 (Dimmy, 6 Oct): NEO keys - one see-through button/panel look on every screen (list rows, cover panel, settings, bottom bars, carousel, text reader); INSERT amber, EJECT muted red, on/off as an edge + dot; the reader keeps the web page answering | A600-neo1-JC3248 (Dimmy, 6 Oct): NEO preview on branch neo-style - NEO theme + switch, background picture, NEO web pages | A600-lab1-JC3248 (Mez, 5 Oct): LANGUAGE and THEME open a pick page in Settings - every choice as its own button (languages in their own name, themes in their own colour), tap one and you are back where you were; the current one is marked > < | was A600 (4 Oct 2026, pre-Kickstart release) = 5.9.41-lab15q-JC3248, renamed only (no code change) | lab15q: Polish screen text corrected by 8-Bitz (ROLKA, TERAZ GRA, WSZYSTKIE, ULUBIONE...); the reel bar's ALL/FAV/MOST word shrinks when it is too long for its button | lab15p: ESP-NOW mode - the GTi's own Wi-Fi is now GTi_Omega-XXXX, password gotekXXXX (was an OPEN, unnamed ESP_xxxxxx), and serves the GTi web page at 192.168.4.1; Settings shows the name + password | lab15o: Polish (LANG=PL) and Czech (LANG=CS) on the screen + NL/PL/CS in the web page's language list; the STANDALONE banner centres on the translated word | lab15l+m (from the 4.3" S3): the list cover picture drawn as big as the frame allows (tile letterbox + black PAL bands cut off), frame hugs the picture | lab15j: tap the game text in the list (title + description) = the whole .nfo full-screen in the manual reader (scroll, SIZE, TOP, CLOSE) | lab15i: each dongle keeps its OWN save file (Game.sav.XXXX.adf, XXXX = last 4 hex of the dongle MAC) - two Amigas on the same game (cable + dongle, or two dongles) never mix their saves | lab15h: FIX the lab15e/f/g freeze on disk insert (the Gotek's read took the SD lock twice - SD_MMC.readRAW already goes through the locked driver); includes lab15b-g
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -2534,6 +2539,13 @@ static const int CUSTOM_IDX=NUM_THEMES;
 static Theme g_custom={"CUSTOM",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 static String g_custom_name="";
 static volatile bool g_theme_redraw=false;   // a web theme change: loop() redraws the current screen
+static bool g_custom_gts=false;   // gti-skins: the custom slot is a skin (/GTI/THEMES/<g_custom_name>.gts)
+static void skinSync();           // gti-skins: loads / drops the skin the look calls for (after the theme code)
+static bool g_skin_ready=false;   // gti-skins: false = skinSync waits (boot until the library is built, and during loadConfig)
+struct SkinHold{ bool was; SkinHold():was(g_skin_ready){ g_skin_ready=false; } ~SkinHold(){ g_skin_ready=was; } };
+static String skinPath(const String&n);
+static bool skinLoad(const String&name,String&err);
+static bool skinPeek(const String&n,struct Theme&t);
 static void applyTheme(int idx){
   const int neoIdx=NUM_THEMES-1;                  // NEO is the last entry of THEMES[]
   if(idx!=CUSTOM_IDX&&(idx<0||idx>=neoIdx))idx=0;
@@ -2543,6 +2555,7 @@ static void applyTheme(int idx){
   COL_DIM=t.dim;COL_MID=t.mid;COL_LIT=t.lit;COL_GREEN=t.green;COL_ORANGE=t.orange;
   COL_AMBER=t.amber;COL_BLUE=t.blue;COL_NOW=t.now;COL_ACCENT=t.accent;COL_CIRC=t.circ;COL_CIRC_TEXT=t.circ_text;
   g_neo=g_neo_on; g_txt_key=COL_BG;
+  skinSync();
 }
 
 // ── A600-theme1-JC3248: custom themes (spec 2026-10-07-gti-theme-section-design.md) ──
@@ -2606,24 +2619,261 @@ static bool readThemeFile(const String&n,String&j){
 }
 static bool loadCustomTheme(const String&name){   // fills g_custom; false = missing or no colours (caller falls back)
   String n=name; n.toUpperCase(); String j; Theme t=g_custom;
+  // gti-skins: <NAME>.gts wins over <NAME>.json. Live (g_skin_ready) the skin loads now, so a refusal keeps the
+  // current look (skinLoad logs why); at boot only its colours are read and skinSync loads it once NEO is known.
+  if(themeNameOk(n)&&!themeReserved(n)&&SD_MMC.exists(skinPath(n).c_str())){
+    if(g_skin_ready){ String err; if(!skinLoad(n,err))return false; g_custom_gts=true; return true; }
+    if(!skinPeek(n,t)){ gLog("[theme] skin %s: missing or unreadable - NAVY instead\n",n.c_str()); return false; }
+    g_custom=t; g_custom_name=n; g_custom_gts=true; return true;
+  }
   if(!readThemeFile(n,j)||!themeFromStyle(j,t)){ gLog("[theme] custom theme %s: missing or unreadable - NAVY instead\n",n.c_str()); return false; }
-  g_custom=t; g_custom_name=n; return true;
+  g_custom=t; g_custom_name=n; g_custom_gts=false; return true;
 }
-static int listCustomThemes(String*out,int maxN){   // names in /GTI/THEMES/*.json, sorted, max maxN
-  int n=0; File d=SD_MMC.open("/GTI/THEMES"); if(!d||!d.isDirectory())return 0;
-  for(File f=d.openNextFile();f&&n<maxN;f=d.openNextFile()){
+
+// ── gti-skins: a skin (/GTI/THEMES/<NAME>.gts, spec 2026-10-16-gti-skins-design.md) loaded into PSRAM ──
+// skinLoad reads the file whole, checks it, takes its colours into g_custom and decodes the atlas (RGB565 in
+// host order + an 8-bit alpha plane) and, if the skin has one, the JPEG background for this screen's size and
+// orientation (RGB565 host order). An atlas failure leaves the current look alone, logs one [skin] line and
+// says why in err; a background failure only drops the background. fillBack/clearBack and the key code draw from it.
+static bool g_skin_on=false;
+static String g_skin_err="";   // the last skinLoad refusal (cleared by skinLoad / themeActivate): the web activate route answers 400 with it
+static const char* g_skin_fail_tail=" - look unchanged";   // skinSync says " - NAVY instead" while it calls skinLoad
+static skin::Atlas g_skin;
+static uint16_t* g_skin_bg=nullptr;
+static bool g_skin_bg_tile=false;
+static uint16_t g_skin_bg_w=0,g_skin_bg_h=0;
+static uint8_t g_skin_slot_ok=0; static bool g_skin_slot_known=false;   // skinSlotOk's per-atlas answer, reset by skinUnload
+static String g_skin_name="";
+static uint8_t g_skin_bg_for=0;   // the gts::BgId (gW x gH) the background was picked for; skinReloadBackground on a change
+static String skinPath(const String&n){ return String("/GTI/THEMES/")+n+".gts"; }
+// IHDR straight from the bytes (gts::parse already checked the PNG signature): size, bit depth, colour type, interlace.
+static bool skinPngHead(const uint8_t*p,uint32_t n,int&w,int&h,int&bits,int&type,int&lace){
+  if(n<33||memcmp(p+12,"IHDR",4)!=0)return false;
+  w=(int)(((uint32_t)p[16]<<24)|((uint32_t)p[17]<<16)|((uint32_t)p[18]<<8)|p[19]);
+  h=(int)(((uint32_t)p[20]<<24)|((uint32_t)p[21]<<16)|((uint32_t)p[22]<<8)|p[23]);
+  bits=p[24]; type=p[25]; lace=p[28]; return w>0&&h>0;
+}
+// PNGdec keeps two rows in one fixed buffer (PNG_MAX_BUFFERED_PIXELS bytes): row one at index 15, row two at the
+// next index that is 15 mod 16. open() only checks one row, so a wider picture overruns into the input buffer
+// and stops after two rows. The 256 px RGBA atlas row (1024 bytes) fits; backgrounds are JPEG for this reason.
+static bool skinRowFits(int w,int bits,int type){
+  int ch=(type==2)?3:(type==4)?2:(type==6)?4:1;
+  long pitch=((long)w*ch*bits+7)/8;
+  long second=pitch+16; second+=15-(second&15);
+  return second+pitch+1<=(long)PNG_MAX_BUFFERED_PIXELS;
+}
+// The checks a skin file must pass before its atlas is decoded: skinLoad and the web upload (skinCommit) share
+// them, so the panel refuses a file with the same plain words the loader would log. t gets the manifest colours.
+static bool skinCheck(const uint8_t*buf,size_t sz,gts::View&v,struct Theme&t,int&aw,int&ah,String&why){
+  gts::Err e=gts::parse(buf,sz,v);
+  if(e!=gts::OK){ why=gts::errText(e); return false; }
+  if(v.slotVer!=skin::SLOT_VER){ why=String("slot version ")+v.slotVer+", this firmware takes "+skin::SLOT_VER; return false; }
+  String j; j.reserve(v.manifest.n); for(uint32_t i=0;i<v.manifest.n;i++)j+=(char)v.manifest.p[i];
+  if(!themeFromStyle(j,t)){ why="no #RRGGBB colours in the manifest"; return false; }
+  int ab,at,al;
+  if(!skinPngHead(v.atlas.p,v.atlas.n,aw,ah,ab,at,al)){ why="atlas PNG header unreadable"; return false; }
+  if(aw!=skin::ATLAS_W||ah!=skin::ATLAS_H){ why=String("atlas is ")+aw+"x"+ah+", expected "+skin::ATLAS_W+"x"+skin::ATLAS_H; return false; }
+  if(at!=PNG_PIXEL_TRUECOLOR_ALPHA||ab!=8){ why="atlas is not 8-bit RGBA"; return false; }
+  if(al){ why="atlas is interlaced, save it without interlacing"; return false; }
+  if(!skinRowFits(aw,ab,at)){ why="atlas rows too wide for the PNG decoder"; return false; }
+  return true;
+}
+struct SkinDec { PNG* png; uint16_t* rgb; uint8_t* a; int w,h,rows; };
+static int skinAtlasLine(PNGDRAW*d){   // 8-bit RGBA row -> RGB565 + alpha
+  SkinDec*k=(SkinDec*)d->pUser;
+  if(d->y<0||d->y>=k->h||d->iWidth!=k->w||d->iPixelType!=PNG_PIXEL_TRUECOLOR_ALPHA||d->iBpp!=8)return 0;
+  const uint8_t*s=d->pPixels; uint16_t*o=k->rgb+(size_t)d->y*k->w; uint8_t*a=k->a+(size_t)d->y*k->w;
+  for(int x=0;x<k->w;x++,s+=4){ o[x]=(uint16_t)(((s[0]&0xF8)<<8)|((s[1]&0xFC)<<3)|(s[2]>>3)); a[x]=s[3]; }
+  k->rows++; return 1;
+}
+// kp is a SkinDec* (void* because the Arduino auto-prototypes land above the struct).
+static bool skinDecodeAtlas(void*kp,const gts::Chunk&c){
+  SkinDec&k=*(SkinDec*)kp;
+  if(k.png->openRAM((uint8_t*)c.p,(int)c.n,skinAtlasLine)!=PNG_SUCCESS)return false;
+  bool ok=k.png->getWidth()==k.w&&k.png->getHeight()==k.h;
+  k.rows=0;
+  if(ok)ok=k.png->decode(&k,0)==PNG_SUCCESS&&k.rows==k.h;
+  k.png->close(); return ok;
+}
+// The size a background id promises (gts::BgId); false for an unknown id.
+static bool skinBgSize(uint8_t id,int&w,int&h){
+  switch(id){ case gts::BG_480x320: w=480;h=320; return true; case gts::BG_320x480: w=320;h=480; return true;
+    case gts::BG_480x272: w=480;h=272; return true; case gts::BG_272x480: w=272;h=480; return true; }
+  return false;
+}
+struct SkinJpg { uint16_t* rgb; int w,h; };
+static int skinBgBlock(JPEGDRAW*d){    // one MCU block, RGB565 host order, clipped to the picture
+  SkinJpg*k=(SkinJpg*)d->pUser; if(!k||!k->rgb)return 0;
+  int cw=d->iWidth; if(d->x<0||d->x>=k->w)return 1; if(d->x+cw>k->w)cw=k->w-d->x;
+  for(int yy=0;yy<d->iHeight;yy++){ int row=d->y+yy; if(row<0||row>=k->h)continue;
+    memcpy(&k->rgb[(size_t)row*k->w+d->x],&d->pPixels[(size_t)yy*d->iWidth],(size_t)cw*2); }
+  return 1;
+}
+// Decodes background chunk c (must be exactly ew x eh) into a fresh PSRAM buffer. nullptr + why on failure.
+static uint16_t* skinDecodeBg(const gts::Chunk&c,int ew,int eh,String&why){
+  void*jm=ps_malloc(sizeof(JPEGDEC)); if(!jm){ why="not enough memory"; return nullptr; }
+  JPEGDEC*jd=new(jm) JPEGDEC;   // own decoder: the cover decode keeps the shared jpegdec
+  uint16_t*out=nullptr;
+  if(!jd->openRAM((uint8_t*)c.p,(int)c.n,skinBgBlock)){ why="background is not a baseline JPEG"; }
+  // JPEGDEC opens a progressive file but decodes only an eighth-scale thumbnail of it: refuse it here.
+  else if(jd->getJPEGType()==JPEG_MODE_PROGRESSIVE){ why="background is a progressive JPEG, save it as baseline"; jd->close(); }
+  else {
+    int jw=jd->getWidth(),jh=jd->getHeight();
+    if(jw!=ew||jh!=eh){ why=String("background is ")+jw+"x"+jh+", expected "+ew+"x"+eh; jd->close(); }
+    else if(!(out=(uint16_t*)ps_malloc((size_t)ew*eh*2))){ why="not enough memory"; jd->close(); }
+    else {
+      memset(out,0,(size_t)ew*eh*2);
+      SkinJpg k={out,ew,eh}; jd->setUserPointer(&k);
+      int rc=jd->decode(0,0,0); jd->close();
+      if(!rc){ why="background JPEG is damaged"; free(out); out=nullptr; }
+    }
+  }
+  jd->~JPEGDEC(); free(jm); return out;
+}
+static void skinUnload(){
+  g_skin_on=false;
+  free(g_skin.rgb); free(g_skin.a); g_skin=skin::Atlas();
+  free(g_skin_bg); g_skin_bg=nullptr; g_skin_bg_tile=false; g_skin_bg_w=g_skin_bg_h=0; g_skin_name="";
+  g_skin_slot_known=false;
+  g_skin_bg_for=0;
+}
+// The atlas checks are fatal; the background is optional: one that fails is dropped (one [skin] line) and
+// g_skin_bg_tile says "no picture for this screen: tile the atlas TILE slot" (false when that slot is fully
+// transparent too: then the colours).
+static bool skinLoad(const String&name,String&err){
+  String n=name; n.toUpperCase();
+  uint8_t*buf=nullptr; PNG*png=nullptr; uint16_t*rgb=nullptr; uint8_t*alpha=nullptr;
+  auto fail=[&](String m)->bool{
+    if(png){ png->~PNG(); free(png); }
+    free(buf); free(rgb); free(alpha);
+    err=m; g_skin_err=m; gLog("[skin] %s: %s%s\n",n.c_str(),err.c_str(),g_skin_fail_tail); return false;
+  };
+  g_skin_err="";
+  if(!themeNameOk(n))return fail("name: A-Z, 0-9 and _ only, max 16, not starting with a digit");
+  if(themeReserved(n))return fail("that name belongs to a built-in theme");
+  const uint32_t psBefore=ESP.getFreePsram();
+  File f=SD_MMC.open(skinPath(n).c_str(),FILE_READ);
+  if(!f)return fail("no such skin on the SD card");
+  size_t sz=f.size();
+  if(sz==0){ f.close(); return fail("the skin file is empty"); }
+  if(sz>gts::MAX_FILE){ f.close(); return fail(String("file is ")+(unsigned)sz+" bytes, the limit is "+(unsigned)gts::MAX_FILE); }
+  buf=(uint8_t*)ps_malloc(sz);
+  if(!buf){ f.close(); return fail("not enough memory"); }
+  size_t got=f.read(buf,sz); f.close();
+  if(got!=sz)return fail("could not read the SD card");
+  gts::View v; Theme t=g_custom; int aw,ah; String why;
+  if(!skinCheck(buf,sz,v,t,aw,ah,why))return fail(why);
+  // Memory guard: what stays allocated after the load must leave the runtime reserve free (same floor the
+  // library build keeps, LIB_RUNTIME_RESERVE) at the peak: the file buffer (already taken), the decoder and the
+  // new atlas are held together, so none of them counts as freed. A loaded skin's buffers go before the new ones.
+  const size_t atlasBytes=(size_t)aw*ah*3;
+  const size_t oldBytes=(g_skin.rgb?(size_t)g_skin.w*g_skin.h*3:0)+(g_skin_bg?(size_t)g_skin_bg_w*g_skin_bg_h*2:0);
+  const size_t freeAfter=(size_t)ESP.getFreePsram()+oldBytes;
+  if(freeAfter<atlasBytes+sizeof(PNG)+(size_t)LIB_RUNTIME_RESERVE)return fail("not enough memory");
+  void*pm=ps_malloc(sizeof(PNG)); if(pm)png=new(pm) PNG;   // own decoder: the cover decode keeps the shared pngdec
+  rgb=(uint16_t*)ps_malloc((size_t)aw*ah*2); alpha=(uint8_t*)ps_malloc((size_t)aw*ah);
+  if(!png||!rgb||!alpha)return fail("not enough memory");
+  SkinDec k={png,rgb,alpha,aw,ah,0};
+  if(!skinDecodeAtlas(&k,v.atlas))return fail("atlas PNG is damaged");
+  png->~PNG(); free(png); png=nullptr;
+  // The background for this screen's size and orientation, if the skin has one. Not fatal.
+  uint16_t*bgbuf=nullptr; int bw=0,bh=0; const uint8_t want=gts::bgIdFor(gW,gH);
+  for(int i=0;i<v.nBg;i++){
+    if(!want||v.bgId[i]!=want||!skinBgSize(want,bw,bh))continue;
+    String why;
+    if((size_t)ESP.getFreePsram()+oldBytes<(size_t)bw*bh*2+(size_t)LIB_RUNTIME_RESERVE)why="not enough memory";
+    else bgbuf=skinDecodeBg(v.bg[i],bw,bh,why);
+    if(!bgbuf){ gLog("[skin] %s: background dropped (%s) - tile or colours instead\n",n.c_str(),why.c_str()); bw=bh=0; }
+    break;
+  }
+  // No picture: the atlas TILE slot, unless it is fully transparent (then the colours).
+  bool tileOk=false; const skin::Slot&ts=skin::SLOTS[skin::S_TILE];
+  for(int y=ts.y;y<ts.y+ts.h&&!tileOk;y++)for(int x=ts.x;x<ts.x+ts.w;x++)if(alpha[(size_t)y*aw+x]){ tileOk=true; break; }
+  free(buf); buf=nullptr;
+  skinUnload();
+  g_skin.w=(uint16_t)aw; g_skin.h=(uint16_t)ah; g_skin.rgb=rgb; g_skin.a=alpha;
+  g_skin_bg=bgbuf; g_skin_bg_w=(uint16_t)bw; g_skin_bg_h=(uint16_t)bh; g_skin_bg_tile=(bgbuf==nullptr&&tileOk);
+  g_custom=t; g_custom_name=n; g_skin_name=n; g_skin_on=true;
+  g_skin_bg_for=want;
+  gLog("[skin] %s loaded: atlas %dx%d, background %s %dx%d, NEO %s\n",n.c_str(),aw,ah,bgbuf?"picture":(tileOk?"tile":"colours"),bw,bh,g_neo_on?"on":"off");
+  gLog("[skin] psram %u -> %u\n",(unsigned)psBefore,(unsigned)ESP.getFreePsram());
+  return true;
+}
+// A skin's colours from its manifest only (the 8 header bytes + the manifest, never the atlas): the THEME page
+// and the boot config read this; skinSync decodes the atlas when the skin is shown.
+static bool skinManifest(const String&n,String&j){   // the manifest JSON text (also the web editor's style)
+  File f=SD_MMC.open(skinPath(n).c_str(),FILE_READ); if(!f)return false;
+  uint8_t h[8]; int ml=(f.read(h,8)==8)?skin::manifestLen(h,8):-1;
+  j=""; if(ml>0){ j.reserve(ml); while(ml-->0&&f.available())j+=(char)f.read(); }
+  f.close(); return j.length()>0;
+}
+static bool skinPeek(const String&n,Theme&t){
+  String j; return skinManifest(n,j)&&themeFromStyle(j,t);
+}
+// A new orientation (gW x gH) wants another background picture: decode that one from the card, drop the old one
+// first (less PSRAM at the peak). A failure only drops the picture; the draw falls back to the tile or colours.
+static void skinReloadBackground(){
+  const uint8_t want=gts::bgIdFor(gW,gH);
+  if(!g_skin_on||want==g_skin_bg_for)return;
+  free(g_skin_bg); g_skin_bg=nullptr; g_skin_bg_w=g_skin_bg_h=0; g_skin_bg_for=want;
+  if(!want)return;
+  String why; uint8_t*buf=nullptr; size_t sz=0;
+  File f=SD_MMC.open(skinPath(g_skin_name).c_str(),FILE_READ);
+  if(!f)why="the skin file is gone";
+  else { sz=f.size();
+    if(!sz||sz>gts::MAX_FILE)why="the skin file changed";
+    else if(!(buf=(uint8_t*)ps_malloc(sz)))why="not enough memory";
+    else if(f.read(buf,sz)!=sz)why="could not read the SD card";
+    f.close(); }
+  gts::View v{}; if(!why.length()&&gts::parse(buf,sz,v)!=gts::OK)why="the skin file changed";
+  int bw=0,bh=0;
+  for(int i=0;!why.length()&&i<v.nBg;i++){
+    if(v.bgId[i]!=want||!skinBgSize(want,bw,bh))continue;
+    if((size_t)ESP.getFreePsram()<(size_t)bw*bh*2+(size_t)LIB_RUNTIME_RESERVE)why="not enough memory";
+    else if((g_skin_bg=skinDecodeBg(v.bg[i],bw,bh,why))){ g_skin_bg_w=(uint16_t)bw; g_skin_bg_h=(uint16_t)bh; }
+    break;
+  }
+  free(buf);
+  if(why.length())gLog("[skin] %s: background dropped (%s) - tile or colours instead\n",g_skin_name.c_str(),why.c_str());
+  else gLog("[skin] %s: background for %dx%d: %s\n",g_skin_name.c_str(),gW,gH,g_skin_bg?"picture":"none in the skin, tile or colours");
+}
+// The look calls for a skin when NEO is off and the custom slot is a .gts: then it is loaded (and its background
+// matches the orientation); any other look has none. A skin that will not load (damaged, too big for the PSRAM
+// left) falls back to NAVY, as a missing JSON theme does; skinLoad logged the one line saying why.
+static void skinSync(){
+  if(!g_skin_ready)return;
+  const bool want=!g_neo_on&&g_theme_idx==CUSTOM_IDX&&g_custom_gts;
+  if(!want){ if(g_skin_on)skinUnload(); return; }
+  if(g_skin_on&&g_skin_name==g_custom_name){ skinReloadBackground(); return; }
+  String err; g_skin_fail_tail=" - NAVY instead"; const bool ok=skinLoad(g_custom_name,err); g_skin_fail_tail=" - look unchanged";
+  if(ok)return;
+  g_custom_gts=false; g_custom_name=""; applyTheme(0);
+}
+// Names in /GTI/THEMES/*.json and *.gts, each once, sorted, max maxN (8). A .json name is upper-cased as before
+// skins (old cards keep their list); a .gts name counts only as written: lower case there is not a theme.
+static int listCustomThemes(String*out,int maxN){
+  const int CAP=24; String jn[CAP],gn[CAP]; int nj=0,ng=0;
+  File d=SD_MMC.open("/GTI/THEMES"); if(!d||!d.isDirectory())return 0;
+  for(File f=d.openNextFile();f;f=d.openNextFile()){
     String fn=f.name(); int sl=fn.lastIndexOf('/'); if(sl>=0)fn=fn.substring(sl+1);
     bool dir=f.isDirectory(); f.close(); if(dir)continue;
-    String up=fn; up.toUpperCase(); if(!up.endsWith(".JSON"))continue;
-    String nm=up.substring(0,up.length()-5); if(!themeNameOk(nm)||themeReserved(nm))continue;
-    int k=n; while(k>0&&out[k-1]>nm){ out[k]=out[k-1]; k--; } out[k]=nm; n++;
+    String up=fn; up.toUpperCase();
+    if(up.endsWith(".JSON")){ String nm=up.substring(0,up.length()-5); if(nj<CAP&&themeNameOk(nm)&&!themeReserved(nm))jn[nj++]=nm; }
+    else if(up.endsWith(".GTS")){ String nm=fn.substring(0,fn.length()-4); if(ng<CAP&&themeNameOk(nm)&&!themeReserved(nm))gn[ng++]=nm; }
   }
-  d.close(); return n;
+  d.close();
+  const char*jp[CAP]; const char*gp[CAP];
+  for(int i=0;i<nj;i++)jp[i]=jn[i].c_str();
+  for(int i=0;i<ng;i++)gp[i]=gn[i].c_str();
+  char nm[8][skin::NAME_LEN+1]; if(maxN>8)maxN=8;
+  int n=skin::mergeNames(jp,nj,gp,ng,nm,maxN);
+  for(int i=0;i<n;i++)out[i]=nm[i];
+  return n;
 }
 static String themeName(){ return g_neo_on?String("NEO"):(g_theme_idx==CUSTOM_IDX?g_custom_name:String(THEMES[g_theme_idx].name)); }
 // Pick one theme by name, live, and remember it in CONFIG.TXT. NEO = the NEO switch on; any other = NEO off.
 static bool themeActivate(const String&name){
-  String n=name; n.toUpperCase();
+  String n=name; n.toUpperCase(); g_skin_err="";
   if(n=="NEO"){ g_neo_on=true; applyTheme(g_theme_idx); saveConfigKey("NEO","ON"); return true; }
   int ci=classicIdx(n);
   if(ci<0&&!loadCustomTheme(n))return false;
@@ -2634,6 +2884,7 @@ static bool themeActivate(const String&name){
 static bool themeStyleJson(const String&name,String&out){
   String n=name; n.toUpperCase();
   int ci=(n=="NEO")?NUM_THEMES-1:classicIdx(n);
+  if(ci<0&&themeNameOk(n)&&!themeReserved(n)&&skinManifest(n,out))return true;   // gti-skins: a .gts wins, as in loadCustomTheme
   if(ci<0)return readThemeFile(n,out);
   const Theme&t=THEMES[ci]; char b[200];
   snprintf(b,sizeof(b),"{\"fill\":\"#%06lX\",\"light\":\"#%06lX\",\"dark\":\"#%06lX\",\"text\":\"#%06lX\",\"accent\":\"#%06lX\",\"bevel\":\"flat\",\"bevelW\":1,\"radius\":6,\"scale\":2}",
@@ -2648,13 +2899,97 @@ static bool themeSaveStyle(const String&name,const String&body,String&err){
   if(!SD_MMC.exists("/GTI/THEMES"))SD_MMC.mkdir("/GTI/THEMES");
   File f=SD_MMC.open(themePath(n).c_str(),FILE_WRITE); if(!f){ err="could not write the SD card"; return false; }
   f.print(body); f.close();
-  if(!g_neo_on&&g_theme_idx==CUSTOM_IDX&&g_custom_name==n){ loadCustomTheme(n); applyTheme(CUSTOM_IDX); g_theme_redraw=true; }
+  if(!g_neo_on&&g_theme_idx==CUSTOM_IDX&&g_custom_name==n&&!g_custom_gts){ loadCustomTheme(n); applyTheme(CUSTOM_IDX); g_theme_redraw=true; }
   return true;
 }
 static String themeListJson(){
   String j="{\"themes\":[\"NEO\""; for(int i=0;i<NUM_THEMES-1;i++){ j+=",\""; j+=THEMES[i].name; j+="\""; }
-  String c[8]; int nc=listCustomThemes(c,8); for(int i=0;i<nc;i++){ j+=",\""+c[i]+"\""; }
-  j+="],\"active\":\""+themeName()+"\"}"; return j;
+  String c[8],sk; int nc=listCustomThemes(c,8); for(int i=0;i<nc;i++){ j+=",\""+c[i]+"\""; if(SD_MMC.exists(skinPath(c[i]).c_str()))sk+=String(sk.length()?",\"":"\"")+c[i]+"\""; }
+  j+="],\"skins\":["+sk+"],\"active\":\""+themeName()+"\"}"; return j;   // gti-skins: skins = the custom names that are a .gts (the web Delete skin button)
+}
+
+// ── gti-skins: the web panel's skin upload / download / delete (web_panel.h /api/skins/<NAME>/...) ──
+// An upload arrives in chunks (max 4096 bytes each) appended to /GTI/THEMES/<NAME>.gts.part; commit checks the
+// whole file as skinLoad would and only then renames it to <NAME>.gts. listCustomThemes ignores .gts.part and .gts.old, so an
+// interrupted upload never shows up. These run from the web handlers, on the loop task like every SD user here.
+static bool skinUpName(const String&n,String&err){
+  if(!themeNameOk(n)){ err="name: A-Z, 0-9 and _ only, max 16, not starting with a digit"; return false; }
+  if(themeReserved(n)){ err="that name belongs to a built-in theme"; return false; }
+  return true;
+}
+static String skinPartPath(const String&n){ return skinPath(n)+".part"; }
+// The active look is this skin (shown, or picked with NEO on top of it).
+static bool skinIsActive(const String&n){ return g_theme_idx==CUSTOM_IDX&&g_custom_gts&&g_custom_name==n; }
+static bool skinWriteChunk(const String&name,uint32_t off,const uint8_t*d,size_t n,String&err){
+  String nm=name; nm.toUpperCase(); if(!skinUpName(nm,err))return false;
+  if((uint64_t)off+(uint64_t)n>(uint64_t)gts::MAX_FILE){ err=String("file is over the limit of ")+(unsigned)gts::MAX_FILE+" bytes"; return false; }
+  const String p=skinPartPath(nm);
+  if(off==0){
+    if(!SD_MMC.exists("/GTI"))SD_MMC.mkdir("/GTI");
+    if(!SD_MMC.exists("/GTI/THEMES"))SD_MMC.mkdir("/GTI/THEMES");
+  } else {
+    File r=SD_MMC.open(p.c_str(),FILE_READ);
+    const bool inOrder=r&&!r.isDirectory()&&(uint32_t)r.size()==off; if(r)r.close();
+    if(!inOrder){ err="out of order"; return false; }
+  }
+  File f=SD_MMC.open(p.c_str(),off==0?FILE_WRITE:FILE_APPEND);
+  if(!f){ err=String("could not write the SD card (")+strerror(errno)+")"; return false; }
+  const size_t w=n?f.write(d,n):0; f.close();
+  if(w!=n){ err=String("could not write the SD card (")+strerror(errno)+")"; return false; }
+  return true;
+}
+static bool skinCommit(const String&name,String&err){
+  String nm=name; nm.toUpperCase(); if(!skinUpName(nm,err))return false;
+  const String p=skinPartPath(nm);
+  uint8_t*buf=nullptr;
+  auto fail=[&](String m)->bool{ free(buf); SD_MMC.remove(p.c_str()); err=m; gLog("[skin] upload %s refused: %s\n",nm.c_str(),m.c_str()); return false; };
+  File f=SD_MMC.open(p.c_str(),FILE_READ);
+  if(!f||f.isDirectory()){ if(f)f.close(); err="nothing uploaded for this name"; return false; }
+  const size_t sz=f.size();
+  if(sz==0){ f.close(); return fail("the skin file is empty"); }
+  if(sz>gts::MAX_FILE){ f.close(); return fail(String("file is ")+(unsigned)sz+" bytes, the limit is "+(unsigned)gts::MAX_FILE); }
+  buf=(uint8_t*)ps_malloc(sz);
+  if(!buf){ f.close(); return fail("not enough memory"); }
+  const size_t got=f.read(buf,sz); f.close();
+  if(got!=sz)return fail("could not read the SD card");
+  gts::View v; Theme t=g_custom; int aw,ah; String why;
+  if(!skinCheck(buf,sz,v,t,aw,ah,why))return fail(why);
+  free(buf); buf=nullptr;
+  // FAT rename does not replace: the old file steps aside as <NAME>.gts.old (never listed) until the .part is in
+  // place, then goes. A failed rename puts the old one back and keeps the .part: there is always a copy.
+  const String g=skinPath(nm),o=g+".old"; const bool had=SD_MMC.exists(g.c_str());
+  auto keep=[&]()->bool{ err="could not write the SD card, upload again"; gLog("[skin] upload %s refused: %s\n",nm.c_str(),err.c_str()); return false; };
+  if(had){ if(SD_MMC.exists(o.c_str()))SD_MMC.remove(o.c_str()); if(!SD_MMC.rename(g.c_str(),o.c_str()))return keep(); }
+  if(!SD_MMC.rename(p.c_str(),g.c_str())){ if(had)SD_MMC.rename(o.c_str(),g.c_str()); return keep(); }
+  if(had)SD_MMC.remove(o.c_str());
+  gLog("[skin] upload %s stored (%u bytes)\n",nm.c_str(),(unsigned)sz);
+  // Replacing the skin on screen: drop the old atlas and load the new file (skinSync falls back to NAVY if it
+  // will not load). With NEO on top nothing is shown, so only the colours are refreshed for later.
+  if(skinIsActive(nm)){
+    if(g_neo_on){ Theme pt=g_custom; if(skinPeek(nm,pt))g_custom=pt; }
+    else { skinUnload(); skinSync(); g_theme_redraw=true; }
+  }
+  return true;
+}
+static bool skinOpenFile(const String&name,fs::File&f){
+  String nm=name; nm.toUpperCase(); String err; if(!skinUpName(nm,err))return false;
+  f=SD_MMC.open(skinPath(nm).c_str(),FILE_READ);
+  if(f&&f.isDirectory()){ f.close(); return false; }
+  return (bool)f;
+}
+// Removes <NAME>.gts and any leftover .part / .gts.old. The active skin falls back to NAVY the way skinSync does when a skin
+// will not load (atlas freed by applyTheme -> skinSync). CONFIG.TXT keeps THEME=<NAME>: at boot that is a missing
+// theme, NAVY with one log line, as for a deleted .json theme.
+static bool skinDelete(const String&name){
+  String nm=name; nm.toUpperCase(); String err; if(!skinUpName(nm,err))return false;
+  const String p=skinPartPath(nm),g=skinPath(nm);
+  bool any=false;
+  if(SD_MMC.exists(p.c_str())){ SD_MMC.remove(p.c_str()); any=true; }
+  if(SD_MMC.exists((g+".old").c_str()))SD_MMC.remove((g+".old").c_str());   // a replace cut off by a power loss
+  if(SD_MMC.exists(g.c_str())){ if(!SD_MMC.remove(g.c_str()))return false; any=true;
+    if(skinIsActive(nm)){ g_custom_gts=false; g_custom_name=""; applyTheme(0); g_theme_redraw=true; }
+    gLog("[skin] %s deleted\n",nm.c_str()); }
+  return any;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2667,7 +3002,7 @@ static String themeListJson(){
 #define NEO_GRAD_TO_RGB   36,22,64      // purple, bottom right
 #define NEO_TRACE_RGB     90,120,200    // faint circuit traces
 static uint16_t* g_neo_bg=NULL; static int g_neo_bg_rot=-1;
-struct NeoScope{ bool on; NeoScope():on(g_neo){ if(on)g_neo_depth++; } ~NeoScope(){ if(on)g_neo_depth--; } };
+struct NeoScope{ bool on; NeoScope():on(g_neo||g_skin_on){ if(on)g_neo_depth++; } ~NeoScope(){ if(on)g_neo_depth--; } };
 static inline uint16_t rgb565(int r,int g,int b){ return (uint16_t)(((r>>3)<<11)|((g>>2)<<5)|(b>>3)); }
 static inline uint16_t mix565(uint16_t a,uint16_t b,int wa){   // wa 0..256 = weight of a
   int wb=256-wa;
@@ -2720,8 +3055,9 @@ static void gfx_fillBg(int x,int y,int w,int h){        // like gfx_fillRect, bu
   for(int py=py0;py<py1;py++) memcpy(&framebuffer[(size_t)py*LCD_WIDTH+px0],&g_neo_bg[(size_t)py*LCD_WIDTH+px0],(size_t)(px1-px0)*2);
 }
 static inline bool neoBgOk(){ return g_neo&&g_neo_bg&&g_neo_bg_rot==g_rot; }
-static void fillBack(int x,int y,int w,int h){ if(neoBgOk())gfx_fillBg(x,y,w,h); else gfx_fillRect(x,y,w,h,COL_BG); }
-static void clearBack(){ neoBgEnsure(); if(neoBgOk())memcpy(framebuffer,g_neo_bg,(size_t)LCD_WIDTH*LCD_HEIGHT*2); else gfx_fillScreen(COL_BG); }
+static void skinBackFill(int x,int y,int w,int h); static void skinBackAll();   // gti-skins: defined after the NEO keys
+static void fillBack(int x,int y,int w,int h){ if(g_skin_on){ skinBackFill(x,y,w,h); return; } if(neoBgOk())gfx_fillBg(x,y,w,h); else gfx_fillRect(x,y,w,h,COL_BG); }
+static void clearBack(){ if(g_skin_on){ skinBackAll(); return; } neoBgEnsure(); if(neoBgOk())memcpy(framebuffer,g_neo_bg,(size_t)LCD_WIDTH*LCD_HEIGHT*2); else gfx_fillScreen(COL_BG); }
 
 // ── A600-neo2-JC3248: NEO keys - one button/panel look on every screen (Dimmy, 6 Oct) ──
 // A key = the panel colour laid see-through over the background picture (the traces show faintly) + a 1 px edge.
@@ -2792,12 +3128,98 @@ static void neoRing(int x,int y,int w,int h,int r,uint16_t c){   // rounded outl
     gfx_hline(x+b,y+j,len,c); gfx_hline(x+w-b-len,y+j,len,c); gfx_hline(x+b,y+h-1-j,len,c); gfx_hline(x+w-b-len,y+h-1-j,len,c); }
 }
 static void neoKey(int x,int y,int w,int h,int r,uint16_t edge){ neoPanel(x,y,w,h,r); neoRing(x,y,w,h,r,edge); }
+
+// ── gti-skins: drawing from a loaded skin (g_skin_on; NEO is off then) ──
+// Logical (x,y) is framebuffer[m.base+x*m.sx+y*m.sy] (skin::rotMap = fb_setPixel's mapping, host-tested), so
+// no switch per pixel. Atlas pixels are blended over the framebuffer, which holds byte-swapped RGB565.
+static bool skinSlotOk(int id){   // inside the atlas and not fully transparent, worked out once per loaded atlas
+  if(!g_skin_on||!g_skin.rgb||id<0||id>=skin::S_COUNT)return false;
+  if(!g_skin_slot_known){ g_skin_slot_ok=0; g_skin_slot_known=true;
+    for(int k=0;k<skin::S_COUNT;k++){ const skin::Slot&s=skin::SLOTS[k]; if(s.x+s.w>g_skin.w||s.y+s.h>g_skin.h)continue;
+      bool any=!g_skin.a; for(int y=s.y;y<s.y+s.h&&!any;y++)for(int x=s.x;x<s.x+s.w;x++)if(g_skin.a[(size_t)y*g_skin.w+x]){ any=true; break; }
+      if(any)g_skin_slot_ok|=(uint8_t)(1u<<k); } }
+  return (g_skin_slot_ok>>id)&1;
+}
+struct SkinPut { uint16_t* fb; skin::RotMap m; int x0,y0,x1,y1;
+  inline void operator()(int x,int y,uint16_t c,uint8_t a)const{
+    if(!a||x<x0||x>=x1||y<y0||y>=y1)return;
+    uint16_t&d=fb[m.base+x*m.sx+y*m.sy];
+    d=(a==255)?swap16(c):swap16(skin::blend565(c,a,swap16(d)));
+  }
+};
+// One atlas slot 9-sliced over (x,y,w,h), clipped; the loop runs along the framebuffer's contiguous axis.
+static void skinSlot(int id,int x,int y,int w,int h){
+  if(w<=0||h<=0||!framebuffer||!g_skin.rgb)return;
+  SkinPut p={framebuffer,skin::rotMap(g_rot,LCD_WIDTH,LCD_HEIGHT),g_clip_x0,g_clip_y0,g_clip_x1,g_clip_y1};
+  const skin::Slot&s=skin::SLOTS[id];
+  if(p.m.sx==1||p.m.sx==-1)skin::drawSlice(g_skin,s,x,y,w,h,p); else skin::drawSliceColumns(g_skin,s,x,y,w,h,p);
+}
+// Background: 1 = the picture (only when it was loaded for this orientation), 2 = a usable atlas TILE slot (also
+// after rotating away from the picture's orientation), 0 = COL_BG.
+static int skinBackKind(){
+  if(g_skin_bg&&g_skin_bg_w==gW&&g_skin_bg_h==gH)return 1;
+  if(g_skin.rgb&&skinSlotOk(skin::S_TILE))return 2;
+  return 0;
+}
+static void skinBackRect(int vx0,int vy0,int vx1,int vy1){   // logical rect, already clipped
+  if(vx0>=vx1||vy0>=vy1||!framebuffer)return;
+  const int kind=skinBackKind();
+  if(!kind){ gfx_fillRect(vx0,vy0,vx1-vx0,vy1-vy0,COL_BG); return; }
+  const skin::RotMap m=skin::rotMap(g_rot,LCD_WIDTH,LCD_HEIGHT);
+  auto run=[&](auto px){
+    if(m.sx==1||m.sx==-1){ for(int y=vy0;y<vy1;y++){ uint16_t*d=framebuffer+m.base+vx0*m.sx+y*m.sy; for(int x=vx0;x<vx1;x++,d+=m.sx)*d=px(x,y); } }
+    else { for(int x=vx0;x<vx1;x++){ uint16_t*d=framebuffer+m.base+x*m.sx+vy0*m.sy; for(int y=vy0;y<vy1;y++,d+=m.sy)*d=px(x,y); } }
+  };
+  if(kind==1){ const uint16_t*bg=g_skin_bg; const int bw=gW; run([&](int x,int y){ return swap16(bg[(size_t)y*bw+x]); }); return; }
+  const skin::Slot&ts=skin::SLOTS[skin::S_TILE]; const uint16_t base=COL_BG;
+  const uint16_t*rgb=g_skin.rgb; const uint8_t*al=g_skin.a; const int aw=g_skin.w;
+  run([&](int x,int y){ size_t i=(size_t)(ts.y+y%ts.h)*aw+ts.x+x%ts.w; return swap16(skin::blend565(rgb[i],al?al[i]:(uint8_t)255,base)); });
+}
+static void skinBackFill(int x,int y,int w,int h){
+  skinBackRect(max(g_clip_x0,x),max(g_clip_y0,y),min(g_clip_x1,x+w),min(g_clip_y1,y+h));
+}
+static void skinBackAll(){ if(!skinBackKind())gfx_fillScreen(COL_BG); else skinBackRect(0,0,gW,gH); }
+// The PANEL slot over (x,y,w,h) on a fresh background, drawn only inside (cx,cy,cw,ch) (part of a panel can be
+// restored). No usable slot: the classic COL_PANEL fill.
+static void skinPanelClip(int x,int y,int w,int h,int cx,int cy,int cw,int ch){
+  const int s0=g_clip_x0,s1=g_clip_y0,s2=g_clip_x1,s3=g_clip_y1;
+  g_clip_x0=max(s0,cx); g_clip_y0=max(s1,cy); g_clip_x1=min(s2,cx+cw); g_clip_y1=min(s3,cy+ch);
+  if(skinSlotOk(skin::S_PANEL)){
+    skinBackRect(max(g_clip_x0,x),max(g_clip_y0,y),min(g_clip_x1,x+w),min(g_clip_y1,y+h));
+    skinSlot(skin::S_PANEL,x,y,w,h); }
+  else gfx_fillRect(x,y,w,h,COL_PANEL);
+  g_clip_x0=s0; g_clip_y0=s1; g_clip_x1=s2; g_clip_y1=s3;
+}
+static void skinPanel(int x,int y,int w,int h){ skinPanelClip(x,y,w,h,x,y,w,h); }
+// A key face blended over what the caller cleared. false = no usable KEY_UP: the caller draws the classic key.
+// KEY_DOWN is used for pressed when the skin has it (no screen redraws a key pressed yet).
+static bool skinKey(int x,int y,int w,int h,bool pressed){
+  const int id=(pressed&&skinSlotOk(skin::S_KEY_DOWN))?skin::S_KEY_DOWN:skin::S_KEY_UP;
+  if(!skinSlotOk(id))return false;
+  skinSlot(id,x,y,w,h); return true;
+}
+// The selected list row; without a usable ROW_SEL the classic selected row.
+static void skinRow(int x,int y,int w,int h){
+  if(skinSlotOk(skin::S_ROW_SEL))skinSlot(skin::S_ROW_SEL,x,y,w,h);
+  else { gfx_fillRoundRect(x,y,w,h,4,COL_SEL); gfx_drawRoundRect(x,y,w,h,4,COL_AMBER); }
+}
+static inline bool skinKeys(){ return skinSlotOk(skin::S_KEY_UP); }   // keys are drawn from the skin (BUTTONS= only styles a missing KEY_UP)
+// A skin key plus its role edge (only when the edge is not the default COL_SEP). The ring follows the KEY_UP
+// corner size, not the caller's pill radius r. false = no skin key drawn: the caller draws NEO or classic.
+static bool skinKeyEdge(int x,int y,int w,int h,int r,uint16_t edge){
+  (void)r;
+  if(!g_skin_on||!skinKey(x,y,w,h,false))return false;
+  if(edge!=COL_SEP)neoRing(x,y,w,h,skin::SLOTS[skin::S_KEY_UP].border,edge);
+  return true;
+}
 // One call for a coloured key that turns into a NEO key: returns the text background to print the label with.
 static uint16_t keyFill(int x,int y,int w,int h,int r,uint16_t bc,uint16_t neoEdge){
+  if(skinKeyEdge(x,y,w,h,r,neoEdge))return COL_BG;
   if(g_neo){ neoKey(x,y,w,h,r,neoEdge); return COL_BG; }
   gfx_fillRoundRect(x,y,w,h,r,bc); return bc;
 }
 static inline uint16_t btnInk(uint16_t bc,uint16_t neoInk){ return g_neo?neoInk:inkFor(bc); }
+static inline uint16_t skinKeyInk(uint16_t bc,uint16_t neoInk){ return skinKeys()?COL_LIT:btnInk(bc,neoInk); }   // skin key: the manifest text colour
 
 static void saveConfigKey(const String&key,const String&val){
   uint32_t _t0=millis();   // lab15a2
@@ -3427,6 +3849,7 @@ static void sdGuardReport(bool always){
 // gfx_ wrappers above and logs through gLog(), which is defined just above this.
 #include "battery.h"
 static void loadConfig(){
+  SkinHold _skh;   // gti-skins: NEO=/THEME= settle first; the caller's relayout() runs skinSync
   g_neo_on=true; applyTheme(0);
   bool sawNeo=false, sawTheme=false;   // A600-theme1: a card with THEME= but no NEO= is from before NEO - keep its theme (Mez)
   File f=SD_MMC.open("/CONFIG.TXT",FILE_READ);if(!f)return;
@@ -3554,6 +3977,7 @@ static void relayout(){
     INS_W=(g_portrait?66:80);INS_H=26;INS_X=VW-INS_W-6;INS_Y=STRIP_Y+((STRIP_H-INS_H)/2);
   }
   applyFont(g_font);
+  skinSync();   // gti-skins: after loadConfig and on a rotation (the background follows gW x gH)
 }
 
 // ── Smooth-scroll / A-Z index helpers ──
@@ -4115,8 +4539,8 @@ static void drawCoverPanel(){
   g_manual_bw=0;   // v4.9.2: cleared each draw; set below only if this game has a .rtfm
   g_nfo_bw=0;      // lab15j: same for the .nfo text tap area (set only when a description is drawn)
   if(!COVER_ON)return;
-  NeoScope _ns; const uint16_t PB=g_neo?COL_BG:COL_PANEL;   // A600-neo2: see-through panel, labels without a box
-  if(g_neo)neoPanel(COVER_X,COVER_Y,COVER_W,COVER_H,0); else gfx_fillRect(COVER_X,COVER_Y,COVER_W,COVER_H,COL_PANEL);if(g_games.empty())return;
+  NeoScope _ns; const uint16_t PB=(g_neo||skinSlotOk(skin::S_PANEL))?COL_BG:COL_PANEL;   // A600-neo2: see-through panel, labels without a box
+  if(g_skin_on)skinPanel(COVER_X,COVER_Y,COVER_W,COVER_H); else if(g_neo)neoPanel(COVER_X,COVER_Y,COVER_W,COVER_H,0); else gfx_fillRect(COVER_X,COVER_Y,COVER_W,COVER_H,COL_PANEL);if(g_games.empty())return;
   auto&game=g_games[g_sel];
   if(!game.jpg_path.length()){String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg))game.jpg_path=jpg;else game.jpg_path="?";}
   static int lastNfoSel=-1;static String cachedNfoBlurb="";static bool cachedHasSav=false;static bool cachedHD=false;static String cachedManual="";
@@ -4150,7 +4574,7 @@ static void drawCoverPanel(){
          int px,py,pw,ph; tilePicRect(_t,CAR_TILE,px,py,pw,ph);
          int bw=COVER_ART_W-4,bh=COVER_ART_H-4,dw=bw,dh=(ph*bw)/pw; if(dh>bh){dh=bh;dw=(pw*bh)/ph;} if(dw<1)dw=1; if(dh<1)dh=1;
          aw=dw+4;ah=dh+4;ax=COVER_ART_X+(COVER_ART_W-aw)/2;ay=COVER_ART_Y+(COVER_ART_H-ah)/2;
-         if(g_neo)neoPanel(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,0); else gfx_fillRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,COL_PANEL);
+         if(g_skin_on)skinPanelClip(COVER_X,COVER_Y,COVER_W,COVER_H,COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2); else if(g_neo)neoPanel(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,0); else gfx_fillRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,COL_PANEL);
          gfx_fillRoundRect(ax,ay,aw,ah,5,COL_BAR); gfx_drawRoundRect(ax-1,ay-1,aw+2,ah+2,6,COL_ACCENT);
          g_cb_sx0=px;g_cb_sy0=py;g_cb_sw=pw;g_cb_sh=ph;
          carBlit(_t,CAR_TILE,ax+aw/2,ay+ah/2,dw,dh,0);
@@ -4187,7 +4611,8 @@ static void drawCoverPanel(){
     else{gfx_setTextSize(1);gfx_setTextColor(cachedHD?COL_ORANGE:COL_DIM,PB);gfx_setCursor(12,COVER_Y+COVER_H-58);gfx_print(cachedHD?"HD 1.76MB - needs A3000/A4000":g_mode==MODE_ADF?"Single disk  -  ADF 880KB":g_mode==MODE_DSK?"Single disk  -  DSK":"Single disk");}
   }
   // INSERT/EJECT
-  if(g_neo){   // A600-neo2: INSERT = the amber main action, EJECT = a muted red key
+  if(skinKeyEdge(INS_X,INS_Y,INS_W,INS_H,10,isL?(uint16_t)NEO_RED:COL_AMBER)){ gfx_setTextSize(2); gfx_setTextColor(COL_LIT,COL_BG); }
+  else if(g_neo){   // A600-neo2: INSERT = the amber main action, EJECT = a muted red key
     if(isL){ neoKey(INS_X,INS_Y,INS_W,INS_H,10,NEO_RED); gfx_setTextSize(2); gfx_setTextColor(NEO_RED_INK,COL_BG); }
     else   { gfx_fillRoundRect(INS_X,INS_Y,INS_W,INS_H,10,COL_AMBER); gfx_setTextSize(2); gfx_setTextColor(COL_BG,COL_AMBER); }
   } else {
@@ -4268,7 +4693,7 @@ static void drawInfoPanel(){
         add(String(cur?"> ":"")+THEMES[i].name+(cur?" <":""), THEMES[i].accent, TFT_WHITE, (uint8_t)(IA_PICK0+i)); }   // each theme in its own colour
       g_pick_nc=listCustomThemes(g_pick_custom,8);
       for(int i=0;i<g_pick_nc;i++){ bool cur=(!g_neo_on&&g_theme_idx==CUSTOM_IDX&&g_custom_name==g_pick_custom[i]);
-        Theme t=g_custom; String j; uint16_t col=COL_ACCENT; if(readThemeFile(g_pick_custom[i],j)&&themeFromStyle(j,t))col=t.accent;
+        Theme t=g_custom; String j; uint16_t col=COL_ACCENT; if(SD_MMC.exists(skinPath(g_pick_custom[i]).c_str())?skinPeek(g_pick_custom[i],t):(readThemeFile(g_pick_custom[i],j)&&themeFromStyle(j,t)))col=t.accent;   // gti-skins: a skin's colours from its manifest, no atlas
         add(String(cur?"> ":"")+g_pick_custom[i]+(cur?" <":""), col, TFT_WHITE, (uint8_t)(IA_PICK0+NUM_THEMES-1+i)); } }
     if(g_info_pick==3){ for(int i=0;i<CRK_PICK_N;i++){ bool cur=(i==g_cracktro);
         add(String(cur?"> ":"")+CRK_PICK_NAME[i]+(cur?" <":""), cur?COL_GREEN:COL_BLUE, cur?TFT_BLACK:TFT_WHITE, (uint8_t)(IA_PICK0+i)); }
@@ -4350,10 +4775,11 @@ static void drawInfoPanel(){
     // nav/reel bars); FLAT = the original v5.6.7 dim-fill + bright double border.
     uint16_t kc=g_ii[i2].bg, kfill, kink;
     bool dot=false; uint16_t dotc=0; bool dotOn=false;
-    if(g_neo){                                   // A600-neo2: every setting is the same NEO key; the edge + a dot say on/off
+    if(g_neo||skinKeys()){                       // A600-neo2: every setting is the same NEO key; the edge + a dot say on/off
       bool on=(kc==COL_GREEN), off=(kc==COL_BAR), bad=(kc==(uint16_t)0x8000||kc==(uint16_t)0xE8C4);
       uint16_t edge=on?COL_GREEN:bad?(uint16_t)NEO_RED:off?mix565(COL_SEP,COL_PANEL,140):COL_SEP;
-      neoKey(bx,by,colW,bh,10,edge); kfill=COL_BG; kink=on?COL_LIT:bad?(uint16_t)NEO_RED_INK:off?COL_DIM:COL_LIT;
+      if(!skinKeyEdge(bx,by,colW,bh,10,edge))neoKey(bx,by,colW,bh,10,edge);
+      kfill=COL_BG; kink=on?COL_LIT:bad?(uint16_t)NEO_RED_INK:off?COL_DIM:COL_LIT;
       if((on||off)&&g_ii[i2].act!=IA_NONE&&g_ii[i2].act!=IA_MODE&&g_ii[i2].act!=IA_DONGLE&&g_ii[i2].act<IA_PICKBACK){ dot=true; dotOn=on; dotc=on?COL_GREEN:COL_DIM; }   // neo2g: no dot on MODE / dongle / pick rows
     } else if(g_btn_pill){
       kfill=kc; kink=inkFor(kc);                 // inkFor (not the row's fg) so every theme stays readable
@@ -4396,7 +4822,7 @@ static void drawModeBar(){
     { uint16_t tb=keyFill(LIST_X+4,STATUS_H+2,104,14,7,COL_ACCENT,COL_AMBER); gfx_setTextColor(COL_AMBER,tb); }   // A600-neo2
     gfx_setCursor(LIST_X+4+(104-gfx_textWidth(nm))/2,STATUS_H+6);gfx_print(nm); }
   }
-  { uint16_t tb=keyFill(LIST_X+112,STATUS_H+2,62,14,7,COL_BLUE,COL_SEP); gfx_setTextColor(g_neo?COL_LIT:TFT_WHITE,tb); } gfx_setCursor(LIST_X+118,STATUS_H+6);gfx_print("USR-DSK");   // v4.9.7 user-disk manager
+  { uint16_t tb=keyFill(LIST_X+112,STATUS_H+2,62,14,7,COL_BLUE,COL_SEP); gfx_setTextColor((g_neo||skinKeys())?COL_LIT:TFT_WHITE,tb); } gfx_setCursor(LIST_X+118,STATUS_H+6);gfx_print("USR-DSK");   // v4.9.7 user-disk manager
   gfx_setTextColor(COL_MID,COL_BAR);String gt=String(g_games.size())+" "+gamesWord();gfx_setCursor(mbR-gfx_textWidth(gt)-6,STATUS_H+6);gfx_print(gt);
 }
 
@@ -4418,6 +4844,7 @@ static void drawFileList(){
     if(neoRows){ fillBack(LIST_X+2,y,LIST_W-4,2); fillBack(LIST_X+2,y+LIST_ITEM_H-2,LIST_W-4,2); }   // the gaps between rows
     if(g_neo){ neoPanel(LIST_X+2,y+2,LIST_W-4,LIST_ITEM_H-4,6,neoRows);   // A600-neo2: see-through rows with a gap, selected = amber edge
       if(sel){ neoRing(LIST_X+2,y+2,LIST_W-4,LIST_ITEM_H-4,6,COL_AMBER); neoRing(LIST_X+3,y+3,LIST_W-6,LIST_ITEM_H-6,5,COL_AMBER); } }
+    else if(sel&&g_skin_on)skinRow(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2);
     else if(sel){gfx_fillRoundRect(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,4,COL_SEL);gfx_drawRoundRect(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,4,COL_AMBER);}
     else gfx_fillRoundRect(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,3,COL_PANEL);
     uint16_t acCol=ld?COL_GREEN:(sel?COL_AMBER:COL_ACCENT);if(!g_neo||ld)gfx_fillRect(LIST_X+(g_neo?5:3),y+(g_neo?8:3),3,LIST_ITEM_H-(g_neo?16:4),acCol);   // NEO: only the loaded game keeps its green bar
@@ -4428,7 +4855,7 @@ static void drawFileList(){
     gfx_setTextSize(g_name_sz);gfx_setTextColor(sel||ld?TFT_BLACK:COL_CIRC_TEXT,sel?COL_AMBER:COL_CIRC);
     char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setCursor(cx-(5*g_name_sz)/2,cy-(7*g_name_sz)/2);gfx_print(ib);   // A600-neo2c: centre the visible 5x7 glyph, not its 6x8 cell
     }
-    int nx=cx+r+6;gfx_setTextSize(g_name_sz);gfx_setTextColor(sel?TFT_WHITE:COL_LIT,g_neo?COL_BG:(sel?COL_SEL:COL_PANEL));
+    int nx=cx+r+6;gfx_setTextSize(g_name_sz);gfx_setTextColor(sel?TFT_WHITE:COL_LIT,(g_neo||(sel&&skinSlotOk(skin::S_ROW_SEL)))?COL_BG:(sel?COL_SEL:COL_PANEL));
     int maxNW=LIST_W-(nx-LIST_X)-8-(game.disk_count>1?36:0);
     if(sel&&gfx_textWidth(game.name)>maxNW){
       // marquee: bounce the full selected name within its lane (offset 0..max), clipped horizontally
@@ -4448,12 +4875,13 @@ static void drawFileList(){
 static void drawNowPlayingBar(){
   if(!NOW_ON)return;
   int y=NOW_Y;
-  if(g_loaded&&g_loaded_name.length()){NeoScope _ns; const uint16_t nb=g_neo?COL_BG:COL_NOW;   // A600-neo2: a NEO key with a green edge
-    if(g_neo){fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);neoKey(LIST_X+2,y,LIST_W-4,NOW_PLAY_H,6,COL_GREEN);}
+  if(g_loaded&&g_loaded_name.length()){NeoScope _ns; const uint16_t nb=(g_neo||skinKeys())?COL_BG:COL_NOW;   // A600-neo2: a NEO key with a green edge
+    if(skinKeys()){fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);skinKeyEdge(LIST_X+2,y,LIST_W-4,NOW_PLAY_H,6,COL_GREEN);}
+    else if(g_neo){fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);neoKey(LIST_X+2,y,LIST_W-4,NOW_PLAY_H,6,COL_GREEN);}
     else{gfx_fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_NOW);gfx_drawRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_GREEN);}
     gfx_fillCircle(LIST_X+8,y+NOW_PLAY_H/2,3,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(COL_GREEN,nb);gfx_setCursor(LIST_X+16,y+3);gfx_print(T(L_NOW_PLAYING));
     if(g_wireless_mode&&g_link_home&&g_pfTargetName.length()) gfx_print(" > "+g_pfTargetName);   // #console: which dongle this went to
-    gfx_setTextColor(g_neo?COL_LIT:TFT_WHITE,nb);gfx_setCursor(LIST_X+16,y+12);String n=g_loaded_display.length()?g_loaded_display:g_loaded_name;while(gfx_textWidth(n)>LIST_W-24&&n.length()>3)n=n.substring(0,n.length()-1);gfx_print(n);}
+    gfx_setTextColor((g_neo||skinKeys())?COL_LIT:TFT_WHITE,nb);gfx_setCursor(LIST_X+16,y+12);String n=g_loaded_display.length()?g_loaded_display:g_loaded_name;while(gfx_textWidth(n)>LIST_W-24&&n.length()>3)n=n.substring(0,n.length()-1);gfx_print(n);}
   else{NeoScope _ns;fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);gfx_setTextSize(1);gfx_setTextColor(COL_MID,COL_BG);gfx_setCursor(LIST_X+8,y+NOW_PLAY_H/2-4);gfx_print(tapHint());}   // A600-neo2d: hint only, the count is in the mode bar
 }
 
@@ -4467,7 +4895,7 @@ static void drawAZBar(){
   int letTop=AZ_TOP+AZ_SRCH_H;                      // v4.8.2: reserve a cell for the search magnifier
   int barH=togY-letTop;
   NeoScope _ns;   // A600-neo2
-  if(g_neo)neoPanel(AZ_X,AZ_TOP,AZ_W,AZ_H,0); else gfx_fillRect(AZ_X,AZ_TOP,AZ_W,AZ_H,COL_PANEL);
+  if(g_skin_on)skinPanel(AZ_X,AZ_TOP,AZ_W,AZ_H); else if(g_neo)neoPanel(AZ_X,AZ_TOP,AZ_W,AZ_H,0); else gfx_fillRect(AZ_X,AZ_TOP,AZ_W,AZ_H,COL_PANEL);
   drawMagnifier(AZ_X+AZ_W/2,AZ_TOP+AZ_SRCH_H/2,COL_AMBER);
   gfx_hline(AZ_X,AZ_TOP+AZ_SRCH_H-1,AZ_W,COL_SEP);
   char p0[27],p1[27];int n0=azHalf(0,p0),n1=azHalf(1,p1);
@@ -4478,11 +4906,11 @@ static void drawAZBar(){
   gfx_setTextSize(lsz);
   for(int i=0;i<hn;i++){char letter=half[i];int ly=letTop+i*letterH;if(ly+letterH>togY)break;
     if(letter==g_active_letter){gfx_fillRect(AZ_X,ly,AZ_W,letterH,COL_AMBER);gfx_setTextColor(TFT_BLACK,COL_AMBER);}
-    else gfx_setTextColor(COL_DIM,g_neo?COL_BG:COL_PANEL);
+    else gfx_setTextColor(COL_DIM,(g_neo||skinSlotOk(skin::S_PANEL))?COL_BG:COL_PANEL);
     gfx_setCursor(AZ_X+(AZ_W-6*lsz)/2,ly+(letterH-8*lsz)/2);char lb[2]={letter,0};gfx_print(lb);}
   // Toggle button — taller, fills the strip bottom
   { uint16_t tb=keyFill(AZ_X+1,togY+1,AZ_W-2,azBottom-togY-2,5,COL_ACCENT,COL_SEP);
-  gfx_setTextSize(1);gfx_setTextColor(g_neo?COL_LIT:TFT_WHITE,tb); }
+  gfx_setTextSize(1);gfx_setTextColor((g_neo||skinKeys())?COL_LIT:TFT_WHITE,tb); }
   const char*blbl=g_az_page==0?"N-Z":"A-M";
   gfx_setCursor(AZ_X+(AZ_W-gfx_textWidth(blbl))/2,togY+(AZ_TOG_H-8)/2);gfx_print(blbl);
   int maxOff=(int)g_games.size()-ITEMS_VIS;if(maxOff>0){int thumbH=max(4,barH*ITEMS_VIS/(int)g_games.size());int thumbY=AZ_TOP+(barH-thumbH)*g_scroll/maxOff;gfx_fillRect(AZ_X-2,thumbY,2,thumbH,COL_BLUE);}
@@ -4520,16 +4948,16 @@ static void drawCarouselIcon(int cx,int cy,uint16_t col){
 static void drawBottomBar(){
   const uint16_t bg=TFT_BLACK, ink=TFT_WHITE;
   NeoScope _ns;   // A600-neo2
-  int y=VH-BOTTOM_H;if(g_neo)fillBack(0,y,VW,BOTTOM_H);else gfx_fillRect(0,y,VW,BOTTOM_H,bg);gfx_hline(0,y,VW,COL_SEP);
+  int y=VH-BOTTOM_H;if(g_neo||skinKeys())fillBack(0,y,VW,BOTTOM_H);else gfx_fillRect(0,y,VW,BOTTOM_H,bg);gfx_hline(0,y,VW,COL_SEP);
   const int nb=4;int bw=VW/nb;
   String blbl[4]={String("< ")+T(L_PREV),String(T(L_NEXT))+" >",String(T(L_REEL)),String(T(L_INFO))};
-  if(g_btn_pill||g_neo){                                            // 5.9.x: coloured pill buttons (matches the reel bar); A600-neo2: NEO keys
+  if(g_btn_pill||g_neo||skinKeys()){                                            // 5.9.x: coloured pill buttons (matches the reel bar); A600-neo2: NEO keys
     static const uint16_t cols[4]={COL_BLUE,COL_BLUE,COL_AMBER,COL_GREEN};
     int pad=5, bh=BOTTOM_H-2*pad, r=bh/2, by=y+pad;
     int ts=2; for(int i=0;i<nb;i++){gfx_setTextSize(2); if(gfx_textWidth(blbl[i])>bw-2*pad-18){ts=1;break;}}
     gfx_setTextSize(ts);
     for(int i=0;i<nb;i++){
-      uint16_t bc=cols[i], ic=btnInk(bc,COL_LIT); int bx=i*bw+pad, w=bw-2*pad, tw=gfx_textWidth(blbl[i]), th=8*ts;
+      uint16_t bc=cols[i], ic=skinKeyInk(bc,COL_LIT); int bx=i*bw+pad, w=bw-2*pad, tw=gfx_textWidth(blbl[i]), th=8*ts;
       bc=keyFill(bx,by,w,bh,g_neo?10:r,bc,COL_SEP);
       if(i==2){ int total=16+tw,sx=bx+(w-total)/2; drawCarouselIcon(sx+7,by+bh/2,ic);
         gfx_setTextColor(ic,bc); gfx_setCursor(sx+16,by+(bh-th)/2); gfx_print(blbl[i]); }
@@ -4910,6 +5338,7 @@ static void carRuntimeRelease(){
 }
 static void carMicroInit(){
   neoReserve();   // A600-neo2g: NEO's 2 x 300 KB come out of PSRAM first, so the runtime reserve below stays whole
+  if(!g_neo_on){ g_skin_ready=true; skinSync(); }   // gti-skins: likewise the skin (CONFIG.TXT is read by now); a no-op once loaded
   carMicroFree();
   int n=(int)g_games.size(); if(!n)return;
   int dim=(n<=1000)?32:(n<=1800)?24:16;
@@ -5258,7 +5687,8 @@ static void drawCarousel(){
      g_car_ins_w=170;g_car_ins_h=34;
      g_car_ins_x=(VW-g_car_ins_w)/2;g_car_ins_y=VH-BOTTOM_H-42;
      uint16_t bf=isLd?(uint16_t)0x4000:(uint16_t)0x0340, bb=isLd?(uint16_t)0xE8C4:COL_GREEN, bi=TFT_WHITE;
-     if(g_neo){ if(isLd){ neoKey(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,10,NEO_RED); bf=COL_BG; bi=NEO_RED_INK; }   // A600-neo2: EJECT = muted red key
+     if(skinKeyEdge(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,10,isLd?(uint16_t)NEO_RED:COL_AMBER)){ bf=COL_BG; bi=COL_LIT; }
+     else if(g_neo){ if(isLd){ neoKey(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,10,NEO_RED); bf=COL_BG; bi=NEO_RED_INK; }   // A600-neo2: EJECT = muted red key
                 else { gfx_fillRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,10,COL_AMBER); bf=COL_AMBER; bi=COL_BG; } }   // INSERT = the amber main action
      else {
      gfx_fillRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,8,bf);
@@ -5267,21 +5697,21 @@ static void drawCarousel(){
      const char*lbl=isLd?T(L_EJECT):T(L_INSERT);int tw=gfx_textWidth(lbl);
      gfx_setCursor(g_car_ins_x+(g_car_ins_w-tw)/2,g_car_ins_y+(g_car_ins_h-16)/2);gfx_print(lbl);}
   }
-  if(g_btn_pill||g_neo){                                      // 5.8.3: coloured rounded pill buttons; A600-neo2: NEO keys
+  if(g_btn_pill||g_neo||skinKeys()){                                      // 5.8.3: coloured rounded pill buttons; A600-neo2: NEO keys
     int y=VH-BOTTOM_H; fillBack(0,y,VW,BOTTOM_H); gfx_hline(0,y,VW,COL_SEP);
     int bw=VW/3, pad=5, bh=BOTTOM_H-2*pad, r=bh/2, by=y+pad;
     gfx_setTextSize(2);
     if(g_neo)r=10;
-    { uint16_t bc=COL_BLUE, ic=btnInk(bc,COL_LIT); int bx=0*bw+pad, w=bw-2*pad;
+    { uint16_t bc=COL_BLUE, ic=skinKeyInk(bc,COL_LIT); int bx=0*bw+pad, w=bw-2*pad;
       bc=keyFill(bx,by,w,bh,r,bc,COL_SEP);
       int tw=gfx_textWidth(T(L_LIST)),total=16+tw,sx=bx+(w-total)/2;
       drawListIcon(sx+7,by+bh/2,ic); gfx_setTextColor(ic,bc);
       gfx_setCursor(sx+16,by+(bh-16)/2); gfx_print(T(L_LIST)); }
-    { uint16_t bc=COL_AMBER, ic=btnInk(bc,COL_AMBER); int bx=1*bw+pad, w=bw-2*pad;
+    { uint16_t bc=COL_AMBER, ic=skinKeyInk(bc,COL_AMBER); int bx=1*bw+pad, w=bw-2*pad;
       bc=keyFill(bx,by,w,bh,r,bc,COL_AMBER); String sl=carSrcName(); int ts=2; if(gfx_textWidth(sl)>w-bh){ts=1;gfx_setTextSize(1);}   // lab15q: long words fit the pill
       int tw=gfx_textWidth(sl);
       gfx_setTextColor(ic,bc); gfx_setCursor(bx+(w-tw)/2,by+(bh-8*ts)/2); gfx_print(sl); gfx_setTextSize(2); }
-    { uint16_t bc=COL_GREEN, ic=btnInk(bc,COL_LIT); int bx=2*bw+pad, w=bw-2*pad;
+    { uint16_t bc=COL_GREEN, ic=skinKeyInk(bc,COL_LIT); int bx=2*bw+pad, w=bw-2*pad;
       bc=keyFill(bx,by,w,bh,r,bc,COL_SEP);
       int tw=gfx_textWidth(T(L_ROLL)),ds=16,total=ds+4+tw,sx=bx+(w-total)/2;
       int dx=sx+ds/2,dy2=by+bh/2;
@@ -7105,9 +7535,10 @@ static void doManual(const String& path,const char* title=nullptr){   // lab15j:
       { int pct=ms>0?(int)(scroll*100/ms):100; String s=String(pct)+"%"; gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR); gfx_setCursor(VW/2-gfx_textWidth(s)/2,7); gfx_print(s); }   // v2: % moved to top bar
       { String nm=g_games.empty()?String(""):g_games[g_sel].name; while(gfx_textWidth(nm)>VW/2-24&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
         gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR); gfx_setCursor(VW-gfx_textWidth(nm)-6,7); gfx_print(nm); }
-      int by=VH-botH; if(g_neo)fillBack(0,by,VW,botH); else gfx_fillRect(0,by,VW,botH,COL_BAR); gfx_hline(0,by,VW,COL_SEP);
+      int by=VH-botH; if(g_neo||skinKeys())fillBack(0,by,VW,botH); else gfx_fillRect(0,by,VW,botH,COL_BAR); gfx_hline(0,by,VW,COL_SEP);
       auto btn=[&](int idx,const String& lab,uint16_t bg,uint16_t brd,uint16_t ink){ int x=idx*bw;
-        if(g_neo){ bool red=(bg==(uint16_t)0x8000); neoKey(x+3,by+4,bw-6,botH-8,8,red?(uint16_t)NEO_RED:brd==COL_AMBER?COL_AMBER:COL_SEP); bg=COL_BG; if(red)ink=NEO_RED_INK; else ink=COL_LIT; }
+        if(skinKeyEdge(x+3,by+4,bw-6,botH-8,8,bg==(uint16_t)0x8000?(uint16_t)NEO_RED:brd==COL_AMBER?COL_AMBER:COL_SEP)){ bg=COL_BG; ink=COL_LIT; }
+        else if(g_neo){ bool red=(bg==(uint16_t)0x8000); neoKey(x+3,by+4,bw-6,botH-8,8,red?(uint16_t)NEO_RED:brd==COL_AMBER?COL_AMBER:COL_SEP); bg=COL_BG; if(red)ink=NEO_RED_INK; else ink=COL_LIT; }
         else { gfx_fillRoundRect(x+3,by+4,bw-6,botH-8,6,bg); gfx_drawRoundRect(x+3,by+4,bw-6,botH-8,6,brd); }
         gfx_setTextSize(1); gfx_setTextColor(ink,bg); gfx_setCursor(x+(bw-gfx_textWidth(lab))/2,by+(botH-8)/2); gfx_print(lab); };
       { String sl=String(T(L_CFG_FONT))+": "+fontName(g_font); gfx_setTextSize(1); if(gfx_textWidth(sl)>bw-12)sl=fontName(g_font);   // A600-neo2g: portrait keys are narrow
@@ -8127,6 +8558,7 @@ void setup(){
   MSC.vendorID("ESP32");MSC.productID("RAMDISK");MSC.productRevision("1.0");
   MSC.onRead(onRead);MSC.onWrite(onWrite);MSC.mediaPresent(true);
   MSC.begin(TOTAL_SECTORS,512);g_usb_announced=TOTAL_SECTORS;USB.begin();hardDetach();
+  g_skin_ready=true; skinSync();   // gti-skins: a cold build already loaded the skin in carMicroInit, before the micro-thumb budget (as NEO's neoReserve); this loads it on a warm boot, no-op if loaded
   bool bootCar=(g_car_bootmode==1)||(g_car_bootmode==2&&readLastView()==1);   // v4.8.6: CAROUSEL= 0=list / 1=reel / LAST=restore
   if(bootCar&&!g_games.empty())carEnter();else{drawFullUI();gfx_flush();}
   bcSet(BC_READY,(uint32_t)g_games.size());   // lab14e: boot finished - a crash from here on is not a library-load crash
@@ -8354,14 +8786,14 @@ static void drawInfoBottomBar(){
   struct{const char*l;bool on;}bb[5]={
     {"<",g_info_page>0},{">",g_info_page<g_info_pages-1},   // A600-neo2d: arrows (PAGE n/m is in the header)
     {"",false},{"",false},{T(L_CLOSE),true}};
-  if(g_neo){ NeoScope _ns; fillBack(0,y,VW,BOTTOM_H); gfx_hline(0,y,VW,COL_SEP); }   // A600-neo2: NEO keys on the background
-  if(g_btn_pill||g_neo){   // 5.9.30: this bar was hardcoded flat, so PILL left the settings screen half-styled
+  if(g_neo||skinKeys()){ NeoScope _ns; fillBack(0,y,VW,BOTTOM_H); gfx_hline(0,y,VW,COL_SEP); }   // A600-neo2: NEO keys on the background
+  if(g_btn_pill||g_neo||skinKeys()){   // 5.9.30: this bar was hardcoded flat, so PILL left the settings screen half-styled
     NeoScope _ns;
     static const uint16_t pc[5]={COL_BLUE,COL_BLUE,COL_BG,COL_BG,COL_ACCENT};
     int pad=5, bh2=BOTTOM_H-2*pad, r=bh2/2, by=y+pad;
     for(int i=0;i<5;i++){
       if(!bb[i].l[0])continue;
-      uint16_t bc=bb[i].on?pc[i]:COL_BAR, ic=btnInk(bc,bb[i].on?COL_LIT:COL_DIM);      // inactive PAGE key = dim capsule, not just dim text
+      uint16_t bc=bb[i].on?pc[i]:COL_BAR, ic=skinKeys()?(bb[i].on?COL_LIT:COL_DIM):btnInk(bc,bb[i].on?COL_LIT:COL_DIM);      // inactive PAGE key = dim capsule, not just dim text
       int bx=i*bw+pad, w=bw-2*pad;
       bc=keyFill(bx,by,w,bh2,g_neo?10:r,bc,bb[i].on?COL_SEP:mix565(COL_SEP,COL_PANEL,140));
       int sz=2; gfx_setTextSize(sz); int tw=gfx_textWidth(bb[i].l);
