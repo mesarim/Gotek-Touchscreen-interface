@@ -3,6 +3,8 @@
 #include "gti_targets.h"
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
+using std::min;
 
 static int g_fail = 0, g_run = 0;
 #define CHECK(cond) do { \
@@ -174,6 +176,79 @@ static void test_strip_hit() {
   CHECK(cuHit(rs, 3, 450, 280) == 2);
 }
 
+static void test_frame_geometry() {
+  CHECK(GT_TOPBAR_H == 40 && GT_CONTENT_TOP == 48);
+  CHECK(GT_STRIP_H == 48 && GT_STRIP_Y == 320 - 8 - 48);
+  CHECK(GT_CONTENT_BOTTOM == GT_STRIP_Y - 8);
+  CuRect s = gtStripArea(480, 320);
+  CHECK(s.x == 8 && s.y == 264 && s.w == 464 && s.h == 48);
+  CuRect c = gtContentArea(480, 320);   // between the top bar and the strip
+  CHECK(c.x == 0 && c.y == 48 && c.w == 480 && cuBottom(c) == 256);
+}
+
+static void test_top_bar() {
+  GtTopBar b = gtTopBarLayout(480);
+  CHECK(b.listTab.x == 8 && b.listTab.h == 48 && b.listTab.y == 0);   // drawn 40, touch 48
+  CHECK(b.reelTab.x == cuRight(b.listTab) && b.reelTab.y == 0 && b.reelTab.h == 48);
+  CHECK(b.gear.w == 48 && b.gear.h == 48 && cuRight(b.gear) == 472 && b.gear.y == 0);
+  CHECK(b.count.x >= cuRight(b.reelTab) && cuRight(b.count) == b.gear.x - 8);
+  CHECK(gtTopBarTap(b, 20, 20) == GT_TB_LIST);
+  CHECK(gtTopBarTap(b, cuRight(b.listTab) + 5, 47) == GT_TB_REEL);
+  CHECK(gtTopBarTap(b, 450, 10) == GT_TB_GEAR);
+  CHECK(gtTopBarTap(b, 300, 20) == GT_TB_NONE);
+  CHECK(gtTopBarTap(b, 20, 48) == GT_TB_NONE);   // below the touch row: the list's
+  CHECK(gtTopBarTap(b, 450, 48) == GT_TB_NONE);
+}
+
+static void test_strip_tap() {
+  GtStrip s2 = gtStripLayout(CuRect{8, 264, 464, 48}, 2);
+  CHECK(gtStripTap(s2, 20, 280) == 0 && gtStripTap(s2, 300, 280) == 1);
+  CHECK(gtStripTap(s2, 240, 280) == GT_STRIP_NONE);   // the gap
+  CHECK(gtStripTap(s2, 20, 250) == GT_STRIP_NONE);
+  GtStrip s1 = gtStripLayout(CuRect{8, 264, 464, 48}, 1);
+  CHECK(gtStripTap(s1, 470, 300) == 0);
+  GtStrip s5 = gtStripLayout(CuRect{8, 264, 464, 48}, 5);
+  CHECK(gtStripTap(s5, 450, 290) == GT_STRIP_MORE);
+  CHECK(gtStripTap(gtStripLayout(CuRect{8, 264, 464, 48}, 0), 100, 280) == GT_STRIP_NONE);
+}
+
+static void test_info_layout() {
+  const bool ej[4] = {true, true, true, true};
+  GtInfoLayout L = gtInfoLayout(480, 320, 2, 0, ej);
+  CHECK(L.back.x == 8 && L.back.y >= 0 && L.back.h == 48 && L.back.w >= 48);
+  CHECK(L.view.y >= cuBottom(L.back) + 4 && cuBottom(L.view) == 312);
+  CHECK(L.cards == 2 && L.maxScroll == 0);
+  CHECK(L.card[0].x == 8 && L.card[0].w == 464 && L.card[0].h == GT_INFO_CARD_H);
+  CHECK(L.card[1].y == L.card[0].y + GT_INFO_CARD_H + 8);
+  CHECK(L.eject[0].w == 112 && L.eject[0].h == 48 && cuRight(L.eject[0]) == 472 - 8);
+  CHECK(L.eject[0].y == L.card[0].y + (GT_INFO_CARD_H - 48) / 2);
+  CHECK(L.name[0].x == 16 && cuRight(L.name[0]) <= L.eject[0].x - 8);
+  CHECK(gtInfoTap(L, L.back.x + 5, L.back.y + 5, ej) == GT_INFO_BACK);
+  CHECK(gtInfoTap(L, L.eject[1].x + 5, L.eject[1].y + 5, ej) == GT_INFO_EJECT + 1);
+  CHECK(gtInfoTap(L, L.name[0].x + 5, L.name[0].y + 2, ej) == GT_INFO_NAME + 0);
+  CHECK(gtInfoTap(L, 300, 3, ej) == GT_INFO_NONE);
+  // an empty drive has no Eject: its key area does nothing
+  const bool e2[4] = {true, false, false, false};
+  GtInfoLayout L2 = gtInfoLayout(480, 320, 2, 0, e2);
+  CHECK(gtInfoTap(L2, L2.eject[1].x + 5, L2.eject[1].y + 5, e2) == GT_INFO_NONE);
+  CHECK(gtInfoTap(L2, L2.eject[0].x + 5, L2.eject[0].y + 5, e2) == GT_INFO_EJECT + 0);
+  // three or more: scrolls
+  GtInfoLayout L3 = gtInfoLayout(480, 320, 4, 0, ej);
+  CHECK(L3.cards == 4 && L3.maxScroll == 4 * (GT_INFO_CARD_H + 8) - 8 - (L3.view.h));
+  GtInfoLayout L3b = gtInfoLayout(480, 320, 4, 9999, ej);   // clamped
+  CHECK(L3b.scroll == L3b.maxScroll && L3b.card[0].y == L3.card[0].y - L3.maxScroll);
+  CHECK(gtInfoScrollFor(4, 2, L3.view.h) == min(2 * (GT_INFO_CARD_H + 8), L3.maxScroll));
+  CHECK(gtInfoScrollFor(4, 0, L3.view.h) == 0);
+  CHECK(gtInfoScrollFor(2, 1, L.view.h) == 0);   // everything fits: nothing to scroll
+  // a card scrolled partly under the header cannot be tapped there
+  GtInfoLayout L4 = gtInfoLayout(480, 320, 4, 60, ej);
+  CHECK(L4.eject[0].y < L4.view.y);
+  CHECK(gtInfoTap(L4, L4.eject[0].x + 5, L4.view.y - 2, ej) == GT_INFO_NONE);
+  CHECK(gtInfoTap(L4, L4.eject[1].x + 5, L4.eject[1].y + 5, ej) == GT_INFO_EJECT + 1);
+  GtInfoLayout L0 = gtInfoLayout(480, 320, 0, 0, ej);
+  CHECK(L0.cards == 0 && L0.maxScroll == 0);
+}
+
 int main() {
   test_screen_in_a_gotek();
   test_espnow_paired_dongle();
@@ -185,6 +260,10 @@ int main() {
   test_strip_layout();
   test_load_layout();
   test_strip_hit();
+  test_frame_geometry();
+  test_top_bar();
+  test_strip_tap();
+  test_info_layout();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }

@@ -148,3 +148,88 @@ inline GtLoadKeys gtLoadLayout(const CuRect& area, int n) {
   k.key[0] = GtLoadKey{area, n == 1 ? 0 : -1}; k.n = 1; k.picker = (n >= 3);
   return k;
 }
+
+// ---- The frame (A600-calm2): top bar, drive strip, Drive info -----------------------------------------------------
+// Landscape 480 x 320: the top bar is drawn 40 px high but its touch row is 48; content from y 48 to 256; the drive
+// strip (48 px) at y 264, 8 px above the bottom edge. Every browsing screen has the same three bands.
+#define GT_TOPBAR_H        40
+#define GT_CONTENT_TOP     48
+#define GT_STRIP_H         48
+#define GT_STRIP_Y         (320 - CU_MARGIN - GT_STRIP_H)      // 264
+#define GT_CONTENT_BOTTOM  (GT_STRIP_Y - CU_GAP)               // 256
+
+inline CuRect gtStripArea(int w, int h) { return CuRect{CU_MARGIN, h - CU_MARGIN - GT_STRIP_H, w - 2 * CU_MARGIN, GT_STRIP_H}; }
+inline CuRect gtContentArea(int w, int h) { return CuRect{0, GT_CONTENT_TOP, w, h - CU_MARGIN - GT_STRIP_H - CU_GAP - GT_CONTENT_TOP}; }
+
+// Top bar: [List][Reel] tabs at the left, the count text to the right of them, the Settings key at the right edge.
+// The rects are touch areas (48 high); the drawing inside is 40.
+struct GtTopBar { CuRect listTab, reelTab, count, gear; };
+enum { GT_TB_NONE = 0, GT_TB_LIST, GT_TB_REEL, GT_TB_GEAR };
+inline GtTopBar gtTopBarLayout(int w) {
+  GtTopBar b;
+  b.listTab = CuRect{CU_MARGIN, 0, 80, CU_KEY};
+  b.reelTab = CuRect{CU_MARGIN + 80, 0, 80, CU_KEY};
+  b.gear    = CuRect{w - CU_MARGIN - CU_KEY, 0, CU_KEY, CU_KEY};
+  const int cx = cuRight(b.reelTab);
+  b.count   = CuRect{cx, 0, b.gear.x - CU_GAP - cx, CU_KEY};
+  return b;
+}
+inline int gtTopBarTap(const GtTopBar& b, int x, int y) {
+  if (cuContains(b.listTab, x, y)) return GT_TB_LIST;
+  if (cuContains(b.reelTab, x, y)) return GT_TB_REEL;
+  if (cuContains(b.gear, x, y))    return GT_TB_GEAR;
+  return GT_TB_NONE;
+}
+
+// A tap on the drive strip: the card (0 or 1), the "+N" key, or nothing.
+#define GT_STRIP_NONE (-1)
+#define GT_STRIP_MORE (-2)
+inline int gtStripTap(const GtStrip& s, int x, int y) {
+  for (int i = 0; i < s.cards; i++) if (cuContains(s.card[i], x, y)) return i;
+  if (s.more && cuContains(s.moreKey, x, y)) return GT_STRIP_MORE;
+  return GT_STRIP_NONE;
+}
+
+// Drive info: Back at the top left, one card per drive below it (caption, the disk's name at size 3, one status line
+// at size 2, Eject at the right as a danger key 112 x 48), scrolling when more than two. Card i is at
+// view.y + i * (card height + gap) - scroll. hasDisk[i] says drive i holds a disk (Eject and the name tap exist then).
+#define GT_INFO_CARD_H 88
+#define GT_INFO_EJECT_W 112
+struct GtInfoLayout {
+  CuRect back, view; int cards, scroll, maxScroll;
+  CuRect card[GT_MAX_TARGETS], eject[GT_MAX_TARGETS], name[GT_MAX_TARGETS];
+};
+enum { GT_INFO_NONE = 0, GT_INFO_BACK = 1, GT_INFO_EJECT = 100, GT_INFO_NAME = 200 };   // + the card's index
+inline int gtInfoMaxScroll(int n, int viewH) { const int t = n * (GT_INFO_CARD_H + CU_GAP) - CU_GAP - viewH; return t > 0 ? t : 0; }
+// The scroll that brings drive `first` to the top of the view (clamped): the "+N" key opens Drive info at the third.
+inline int gtInfoScrollFor(int n, int first, int viewH) {
+  const int want = first * (GT_INFO_CARD_H + CU_GAP), mx = gtInfoMaxScroll(n, viewH);
+  return want < mx ? want : mx;
+}
+inline GtInfoLayout gtInfoLayout(int w, int h, int n, int scroll, const bool* hasDisk) {
+  GtInfoLayout L; memset(&L, 0, sizeof L);
+  L.back = CuRect{CU_MARGIN, 4, 104, CU_KEY};
+  const int vy = cuBottom(L.back) + CU_GAP;
+  L.view = CuRect{CU_MARGIN, vy, w - 2 * CU_MARGIN, h - CU_MARGIN - vy};
+  L.cards = n < 0 ? 0 : (n > GT_MAX_TARGETS ? GT_MAX_TARGETS : n);
+  L.maxScroll = gtInfoMaxScroll(L.cards, L.view.h);
+  L.scroll = scroll < 0 ? 0 : (scroll > L.maxScroll ? L.maxScroll : scroll);
+  for (int i = 0; i < L.cards; i++) {
+    const int y = L.view.y + i * (GT_INFO_CARD_H + CU_GAP) - L.scroll;
+    L.card[i]  = CuRect{L.view.x, y, L.view.w, GT_INFO_CARD_H};
+    L.eject[i] = CuRect{cuRight(L.card[i]) - CU_GAP - GT_INFO_EJECT_W, y + (GT_INFO_CARD_H - CU_KEY) / 2, GT_INFO_EJECT_W, CU_KEY};
+    L.name[i]  = CuRect{L.card[i].x + CU_GAP, y + 26, L.eject[i].x - CU_GAP - (L.card[i].x + CU_GAP), 28};
+  }
+  (void)hasDisk;
+  return L;
+}
+inline int gtInfoTap(const GtInfoLayout& L, int x, int y, const bool* hasDisk) {
+  if (cuContains(L.back, x, y)) return GT_INFO_BACK;
+  if (!cuContains(L.view, x, y)) return GT_INFO_NONE;   // a card scrolled under the header cannot be tapped there
+  for (int i = 0; i < L.cards; i++) {
+    if (hasDisk == nullptr || !hasDisk[i]) continue;
+    if (cuContains(L.eject[i], x, y)) return GT_INFO_EJECT + i;
+    if (cuContains(L.name[i], x, y))  return GT_INFO_NAME + i;
+  }
+  return GT_INFO_NONE;
+}
