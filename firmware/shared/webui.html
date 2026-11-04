@@ -1920,8 +1920,9 @@ function gtsJpegInfo(b){
 }
 // GTS-END
 var skinOn=false;   // "has_skins":true in /api/system/info; absent = no skin card (OMEGAWARE, other panels)
-// The starter = NEO in the slots (Gotek_JC3248.ino: NEO row of THEMES[], NEO_*): panel colour at 196/255, 1 px edge,
-// radius 10; tile = NEO background + faint trace; icons in COL_LIT. labelled = the slot map (names on grey).
+// The starter = the calm NEO look in the slots (Gotek_JC3248.ino calmKey / calmCard / calmRow: NEO row of THEMES[], NEO_*):
+// panel colour at 196/255, 1 px edge, radius 8 for keys and cards, 4 for the selected row (amber ring); tile = NEO background +
+// faint trace; icons in COL_LIT. labelled = the slot map (names on grey).
 function gtsDrawStarter(c,labelled){
   const S={},A=196/255,cells=(s,k,f)=>{for(let i=0;i<s.w*s.h/k/k;i++)f(s.x+i%(s.w/k)*k,s.y+(i/(s.w/k)|0)*k,i);};
   GTS_SLOTS.forEach(s=>S[s.n]=s);c.clearRect(0,0,256,192);c.lineWidth=1;
@@ -1933,7 +1934,7 @@ function gtsDrawStarter(c,labelled){
     c.strokeStyle='#fff6';cells(S.ICONS,16,(x,y)=>box({x,y,w:16,h:16},0));cells(S.ICONS_2X,32,(x,y)=>box({x,y,w:32,h:32},0));
     c.fillStyle='#fff';GTS_SLOTS.forEach(s=>c.fillText(s.n,s.x+2,s.y+2));return;
   }
-  [['KEY_UP',0,10],['KEY_DOWN',1,10],['PANEL',0,10],['ROW_SEL',1,6]].forEach(([n,on,r])=>{const s=S[n],x=s.x+.5,y=s.y+.5,w=s.w-1,h=s.h-1;
+  [['KEY_UP',0,8],['KEY_DOWN',1,8],['PANEL',0,8],['ROW_SEL',1,4]].forEach(([n,on,r])=>{const s=S[n],x=s.x+.5,y=s.y+.5,w=s.w-1,h=s.h-1;
     c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();
     c.fillStyle=on?`rgba(57,44,16,${A})`:`rgba(16,24,49,${A})`;c.fill();c.strokeStyle=on?'#f7b231':'#42598c';c.stroke();});   // COL_SEL/amber, COL_PANEL/COL_SEP
   const t=S.TILE;c.fillStyle='#171333';c.fillRect(t.x,t.y,t.w,t.h);c.fillStyle='#21234a';

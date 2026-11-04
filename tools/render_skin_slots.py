@@ -11,10 +11,10 @@ from pathlib import Path
 HEADER = Path(__file__).resolve().parent.parent / "firmware" / "shared" / "skin_draw.h"
 
 USE = {
-    "KEY_UP": "Key face, normal. Every button, stretched to its size (9-slice).",
-    "KEY_DOWN": "Key face, pressed. Same size and border as KEY_UP.",
-    "PANEL": "Cover and info panel background (9-slice).",
-    "ROW_SEL": "The selected row in a list (9-slice).",
+    "KEY_UP": "Every key (Back, Load, the A-Z key, the Settings key, a stepper arrow ...), stretched to its size (9-slice). A primary, danger or selected key is this face with a coloured ring (amber, red) drawn over it.",
+    "KEY_DOWN": "Key face, pressed. Same size and border as KEY_UP. Reserved: the calm screens do not draw a pressed key yet, so for now it only shows in the editor's starter.",
+    "PANEL": "Every card: a drive card in the strip and in Drive info, a setting row, the search field, the program screen's stepper, an unselected list row (9-slice).",
+    "ROW_SEL": "The selected list row, and the current choice in a choice list (9-slice).",
     "TILE": "Tiny repeating background, used when the skin has no background picture for the screen's size and orientation.",
     "ICONS": "Icon grid, 8 x 2 cells of 16 x 16. Reserved for a later version: the screen does not draw it yet.",
     "ICONS_2X": "Icon grid for large screens, 8 x 2 cells of 32 x 32. Reserved for a later version: the screen does not draw it yet.",

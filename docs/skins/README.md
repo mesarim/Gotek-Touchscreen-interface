@@ -1,17 +1,17 @@
 # GTi skins
 
-A skin is your own look for the GTi screen, in one file. You draw it as an ordinary picture in any paint program, import it in the web page, and the screen shows it live. Colours, key shapes, the panel behind the cover and the selected row in a list can all change. A skin is shared as a single `.gts` file: post it in Discord, mail it, or drop it on the SD card.
+A skin is your own look for the GTi screen, in one file. You draw it as an ordinary picture in any paint program, import it in the web page, and the screen shows it live. Colours, key shapes, the cards, the rows and the selected row in a list can all change. A skin is shared as a single `.gts` file: post it in Discord, mail it, or drop it on the SD card.
 
 Skins work on the JC3248 screen only for now (the 3.5 inch GTi). The format is the same for every screen, so the other screens can follow without changing your skins.
 
-Firmware: `A600-skin1-JC3248` or later.
+Firmware: `A600-skin1-JC3248` or later. The calm screens (A600-calm1 and later) draw from the same slots; the section "What the calm screens draw from a skin" below says which part uses which slot. A `.gts` made for `A600-skin1` still loads and looks right: no slot was added, moved or dropped.
 
 ## The four steps
 
 1. **Download the starter.** Open the GTi's web page, go to the **Themes** tab, open the Theme Editor and press **Download starter skin**. You get `GTI_STARTER.png`: NEO, the default look, laid out in the slots below. The page draws it itself, so this works on a phone that is only connected to the GTi's own Wi-Fi and has no internet.
 2. **Edit the PNG.** Paint over it in any program that keeps transparency. Keep the size (256 x 192 pixels) and keep the slots where they are. Press **Download slot map** to get `GTI_SLOT_MAP.png`: the same picture with every slot labelled, so you can see what goes where (a copy is in this folder as `slot-map.png`). Set the colours in the editor (the same colour fields as a colour theme). They colour everything the skin leaves alone, and the key text uses the `text` colour, so if you draw light keys, pick a dark text colour.
 3. **Import it.** Type a name (A-Z, 0-9 and `_`, at most 16, not starting with a digit), press **Import skin (PNG or .gts)** and pick your file. A `.gts` that someone else made works the same way. The page checks the file first and tells you in plain words what is wrong, for example "atlas is 300 px wide, expected 256", before anything is sent to the screen.
-4. **It shows up live.** Activate it (Save & activate) or pick it on the screen: Settings, THEME. Your skin sits in the list next to the colour themes. Choosing a skin switches NEO off, because the skin replaces the NEO look. To go back, pick NEO or any colour theme.
+4. **It shows up live.** Activate it (Save & activate) or pick it on the screen: Settings > Screen > Theme. Your skin sits in the list next to the colour themes. Choosing a skin switches NEO off, because the skin replaces the NEO look. To go back, pick NEO or any colour theme.
 
 To change a skin you already have, enter its name and press **Export skin**: the page gives you the `.gts`, the atlas PNG and each background picture, and loads the colours into the editor.
 
@@ -29,10 +29,10 @@ Slot list version 1, atlas 256 x 192 pixels.
 
 | Slot | x | y | width | height | 9-slice border | What it is |
 |---|---|---|---|---|---|---|
-| `KEY_UP` | 0 | 0 | 48 | 48 | 10 | Key face, normal. Every button, stretched to its size (9-slice). |
-| `KEY_DOWN` | 48 | 0 | 48 | 48 | 10 | Key face, pressed. Same size and border as KEY_UP. |
-| `PANEL` | 96 | 0 | 48 | 48 | 10 | Cover and info panel background (9-slice). |
-| `ROW_SEL` | 144 | 0 | 48 | 32 | 8 | The selected row in a list (9-slice). |
+| `KEY_UP` | 0 | 0 | 48 | 48 | 10 | Every key (Back, Load, the A-Z key, the Settings key, a stepper arrow ...), stretched to its size (9-slice). A primary, danger or selected key is this face with a coloured ring (amber, red) drawn over it. |
+| `KEY_DOWN` | 48 | 0 | 48 | 48 | 10 | Key face, pressed. Same size and border as KEY_UP. Reserved: the calm screens do not draw a pressed key yet, so for now it only shows in the editor's starter. |
+| `PANEL` | 96 | 0 | 48 | 48 | 10 | Every card: a drive card in the strip and in Drive info, a setting row, the search field, the program screen's stepper, an unselected list row (9-slice). |
+| `ROW_SEL` | 144 | 0 | 48 | 32 | 8 | The selected list row, and the current choice in a choice list (9-slice). |
 | `TILE` | 0 | 64 | 64 | 64 | - | Tiny repeating background, used when the skin has no background picture for the screen's size and orientation. |
 | `ICONS` | 64 | 64 | 128 | 32 | - | Icon grid, 8 x 2 cells of 16 x 16. Reserved for a later version: the screen does not draw it yet. |
 | `ICONS_2X` | 0 | 128 | 256 | 64 | - | Icon grid for large screens, 8 x 2 cells of 32 x 32. Reserved for a later version: the screen does not draw it yet. |
@@ -42,6 +42,28 @@ Slot list version 1, atlas 256 x 192 pixels.
 `neo-starter.png` in this folder is the starter as the page draws it, for anyone who wants it without opening the web page.
 
 Icons: the icon area exists in the starter and in the slot list, but the screen does not draw icons from a skin yet. Anything you paint there is ignored for now. The cells are reserved for a later version, so a skin made today will keep working then. Do not rely on icons.
+
+## What the calm screens draw from a skin
+
+The calm layout (landscape and portrait) is built from a few parts. This is the slot each part uses, so you know what to paint:
+
+| Part | Drawn from | Notes |
+|---|---|---|
+| Key, normal (Back, Load, A-Z, the Settings gear, a stepper arrow, a choice of the filter list) | `KEY_UP` | The label uses the manifest's `text` colour. |
+| Key, pressed | `KEY_DOWN` | Reserved: no calm screen shows a pressed key yet. |
+| Key, primary (Load) | `KEY_UP` with an amber ring | The ring is drawn by the screen over your art; the label is amber. |
+| Key, danger (Eject, Restart) | `KEY_UP` with a red ring | Ring and light-red label drawn by the screen. |
+| Key or option, selected | `KEY_UP` with an amber ring | Used for "in DF1" on the program screen and the current favourites key. |
+| Card: a drive card in the strip, a Drive info card, a setting row, the search field, the load box | `PANEL` | The text on a card is drawn straight over it. |
+| List row, not selected | `PANEL` | |
+| List row, selected | `ROW_SEL` | The same slot marks the current choice in the filter, language and theme lists. |
+| Chip ("2 disks", "DF0", "WP") | no slot | A small outlined label in the theme colours: grey, green (a drive holds it), amber (primary), red (danger). |
+| Switch | no slot | An amber track with a white knob when on. |
+| Tab bar (List / Reel, Settings tabs) | no slot | The active tab is amber with a 3 px underline. |
+| Glyphs (star, gear, the dots of "...", the magnifier) | no slot | Drawn by the screen. The `ICONS` cells stay reserved. |
+| Background | `TILE` or a background picture | As before. |
+
+`GTI_STARTER.png` (the web page's **Download starter skin**) is drawn in this calm NEO look: keys and cards with a radius of 8 and a thin blue-grey outline, the selected row with an amber ring and a radius of 4. Paint over it and the screens follow.
 
 ## Backgrounds
 
@@ -59,13 +81,13 @@ The screen uses the picture that matches its size and the way it is held when th
 
 ## Fallbacks: a skin cannot hurt
 
-- A missing or empty slot is drawn the classic way (the colour theme and the `BTNSTYLE=` setting), piece by piece.
+- A missing or empty slot is drawn the classic way (the colour theme: a flat fill with a thin outline), piece by piece.
 - A file that is damaged or does not fit is refused with a plain message in the web page, and refused again by the screen if it ever got that far. The look stays as it was. At boot a `.gts` that cannot be read falls back to NAVY, with one line in the log.
 - If the screen is short of memory, the skin is refused with "not enough memory". What you then see depends on when it happens:
   - picking the skin (web page or THEME page): the look stays as it was, and the web page shows the reason;
   - at boot, after a RESCAN, or when the skin on screen is replaced by an upload: NAVY, with one log line ending `- NAVY instead`.
   A background that does not fit is dropped alone: the skin still loads, with the tile.
-- The state markers the screen draws itself (the green edge for on, the `> <` marks, the INSERT and EJECT colours) are drawn over the skin art, so a skin cannot hide them.
+- The state markers the screen draws itself (the amber ring of a selected row or key, the red ring of a danger key such as Eject, the green chips and link dots, the amber switch) are drawn over the skin art, so a skin cannot hide them.
 - A background for the wrong size is skipped, never shown stretched.
 
 ## Numbers
