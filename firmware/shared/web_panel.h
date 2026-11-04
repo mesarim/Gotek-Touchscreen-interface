@@ -767,6 +767,16 @@ static void webPanelRegister() {
     webPanelHttp.send(200, "application/json", j);
   });
 #endif
+#if defined(GTI_WEB_TAP)
+  // POST /api/tap?x=..&y=..[&hold=ms]: a virtual finger in screen coordinates (as /api/screenshot shows them). Only
+  // queued here; the loop's frame reader presses it (vtapQueue). {"ok":false,...} when busy or out of range.
+  webPanelHttp.on("/api/tap", HTTP_POST, [](){
+    if(!webPanelHttp.hasArg("x")||!webPanelHttp.hasArg("y")){ webPanelHttp.send(400,"application/json","{\"ok\":false,\"error\":\"x and y required\"}"); return; }
+    const long hold=webPanelHttp.hasArg("hold")?webPanelHttp.arg("hold").toInt():0;
+    if(vtapQueue((int)webPanelHttp.arg("x").toInt(),(int)webPanelHttp.arg("y").toInt(),hold<0?0:(uint32_t)hold)) webPanelHttp.send(200,"application/json","{\"ok\":true}");
+    else webPanelHttp.send(409,"application/json","{\"ok\":false,\"error\":\"busy or out of range\"}");
+  });
+#endif
 #if defined(GTI_THEMES)
   webPanelHttp.on("/api/themes/list",     HTTP_GET, hThemesList);
   webPanelHttp.on("/api/themes/geometry", HTTP_GET, hThemesGeometry);

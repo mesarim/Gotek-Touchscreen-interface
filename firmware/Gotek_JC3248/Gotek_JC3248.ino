@@ -46,6 +46,8 @@
 #include <sys/stat.h>
 #include <sys/time.h>   // lab15d: settimeofday (clock starts at the build time)
 #include <errno.h>      // lab15d: save-failure detail
+#include "calm_ui.h"       // A600-calm1: the calm layout grid and rectangle helpers (host-tested)
+#include "gti_targets.h"   // A600-calm1: the drives the screen can reach, strip and load-key layouts (host-tested)
 #include "gti_fatwalk.h"   // 5.9.41-lab14: read .nfo heads straight off the directory entry (no open-by-name)
 #include "gti_sdguard.h"   // lab14g: FatFs metadata guard between FatFs and the SD driver
 #include "gti_pathlist.h"  // lab15a: the disk-image list, compact (each folder once, each file name once)
@@ -55,7 +57,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-lab2i-fd4s-JC3248"   // A600-lab2i-fd4s (4 Nov 2026): skins (gti-skins, PR #29) and FluxDrive DF1 (fluxdrive-panel) together, the base of the calm layout | A600-lab2i-fd4 (4 Nov 2026): FluxDrive DF1 (a multi-disk game is sent as "<game> - Disk <n>" and read back, so each drive shows and ejects its own disk) - the INSERT key is cut in two, DF0 | DF1, for a single FluxDrive with DF1 on (a dongle, an older FluxDrive, DF1 off or several peers keep the one INSERT): each half loads or ejects its own drive (SET_DRIVE 1 before the push, EJECT_DRIVE 1), the reel's INSERT key is cut the same way, NOW PLAYING adds "DF1: <disk>" and no longer ejects: a tap on it opens a DRIVE INFO screen (a block per drive with its disk, WP/STORING/unsaved chips and an EJECT key; a tap on a disk name selects its game in the list), and DF1 saves are fetched over the LAN (GET_SAVE_DRIVE 1) into Game.sav.<tag>.adf with their own record key "<id>:1" in fdsaves.txt (old files stay valid); the commit window and START FRESH stay DF0 only | A600-skin1-JC3248 (Dimmy, 16 Oct): skins - one .gts file (colours + PNG atlas + optional JPEG backgrounds) makes your own look; made and uploaded in the web page's Theme Editor, NEO is the starter | A600-lab2i-fd3 (26 Oct 2026): FluxDrive's commit window - STORING... until the disk is in flash, a revert to the previous disk puts its record back, START FRESH keeps a backup until then | A600-lab2i-fd2 (25 Oct 2026): FluxDrive saves (writing): fetched over the LAN, write protect, start fresh | A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-calm1-JC3248"   // A600-calm1 (4 Nov 2026): the calm layout building blocks - POST /api/tap (a virtual finger, test builds only), calm_ui.h (grid), gti_targets.h (drives, strip and load-key layouts), the calm UI primitives; nothing visible changes yet | A600-lab2i-fd4s (4 Nov 2026): skins (gti-skins, PR #29) and FluxDrive DF1 (fluxdrive-panel) together, the base of the calm layout | A600-lab2i-fd4 (4 Nov 2026): FluxDrive DF1 (a multi-disk game is sent as "<game> - Disk <n>" and read back, so each drive shows and ejects its own disk) - the INSERT key is cut in two, DF0 | DF1, for a single FluxDrive with DF1 on (a dongle, an older FluxDrive, DF1 off or several peers keep the one INSERT): each half loads or ejects its own drive (SET_DRIVE 1 before the push, EJECT_DRIVE 1), the reel's INSERT key is cut the same way, NOW PLAYING adds "DF1: <disk>" and no longer ejects: a tap on it opens a DRIVE INFO screen (a block per drive with its disk, WP/STORING/unsaved chips and an EJECT key; a tap on a disk name selects its game in the list), and DF1 saves are fetched over the LAN (GET_SAVE_DRIVE 1) into Game.sav.<tag>.adf with their own record key "<id>:1" in fdsaves.txt (old files stay valid); the commit window and START FRESH stay DF0 only | A600-skin1-JC3248 (Dimmy, 16 Oct): skins - one .gts file (colours + PNG atlas + optional JPEG backgrounds) makes your own look; made and uploaded in the web page's Theme Editor, NEO is the starter | A600-lab2i-fd3 (26 Oct 2026): FluxDrive's commit window - STORING... until the disk is in flash, a revert to the previous disk puts its record back, START FRESH keeps a backup until then | A600-lab2i-fd2 (25 Oct 2026): FluxDrive saves (writing): fetched over the LAN, write protect, start fresh | A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -64,6 +66,10 @@
 // The wire contract is unchanged either way, so the two builds interoperate.
 //#define GTI_FLEET 1
 
+// GTI_WEB_TAP: POST /api/tap = a virtual finger (test hook for walking the screens with /api/screenshot). TEST BUILDS ONLY:
+// release builds must drop this line (and we will remove it before any release). It sits up here, not next to
+// GTI_WEB_SCREENSHOT, because Touch_ReadFrame below consults it.
+#define GTI_WEB_TAP 1
 #define GTI_WEB_REV "r1"   // OMEGAWARE build rev - shown on the status bar and appended to the web firmware string. Bump on every flash.
 #define PF_MDNS_ALIAS "gotekomega"     // pf4: the shared name one screen ALSO answers to, next to its own GTi-XXXX.
                                        // Must match what the dongles cede (their portal points users here).
@@ -604,7 +610,7 @@ static void displayInit(){
 // ── Touch (from Dimi) ──
 static uint8_t gTouchPts=0;static uint16_t gTouchX=0,gTouchY=0;
 static void touchInit(){Wire.begin(TOUCH_SDA,TOUCH_SCL,400000);}
-static bool Touch_ReadFrame(){
+static bool Touch_ReadReal(){
   uint8_t cmd[11]={0xb5,0xab,0xa5,0x5a,0x00,0x00,0x00,0x08,0x00,0x00,0x00};
   Wire.beginTransmission(TOUCH_ADDR);Wire.write(cmd,11);
   if(Wire.endTransmission()!=0){gTouchPts=0;return false;}
@@ -627,6 +633,34 @@ static bool Touch_ReadFrame(){
   }
   gTouchPts=1; return true;
 }
+#if defined(GTI_WEB_TAP)
+// A virtual finger (POST /api/tap). The web handler only QUEUES (vtapQueue); the frame reader below, which runs on the
+// loop task like every other touch read, turns it into a finger: down at (x,y) for hold ms (at least VTAP_MIN_MS),
+// then VTAP_GAP_MS of no touch, so the main loop, the reel's tap/drag machine and every modal screen see the same
+// frames a real finger gives and handleTap / the hold logic run unchanged. A real finger on the glass wins.
+#define VTAP_MIN_MS 90
+#define VTAP_GAP_MS 80
+#define VTAP_MAX_MS 10000
+static struct { volatile uint8_t st; volatile uint16_t x,y; volatile uint32_t hold; uint32_t t0; } g_vtap={0,0,0,0,0};   // st: 0 idle, 1 queued, 2 down, 3 gap
+static bool vtapQueue(int x,int y,uint32_t holdMs){
+  if(g_vtap.st!=0||x<0||y<0||x>=gW||y>=gH) return false;
+  if(holdMs<VTAP_MIN_MS)holdMs=VTAP_MIN_MS; if(holdMs>VTAP_MAX_MS)holdMs=VTAP_MAX_MS;
+  g_vtap.x=(uint16_t)x; g_vtap.y=(uint16_t)y; g_vtap.hold=holdMs; g_vtap.st=1; return true;
+}
+static bool Touch_ReadFrame(){
+  if(Touch_ReadReal()) return true;
+  const uint32_t now=millis();
+  if(g_vtap.st==1){ g_vtap.t0=now; g_vtap.st=2; }
+  if(g_vtap.st==2){
+    if(now-g_vtap.t0<g_vtap.hold){ gTouchX=g_vtap.x; gTouchY=g_vtap.y; gTouchPts=1; return true; }
+    g_vtap.t0=now; g_vtap.st=3;
+  }
+  if(g_vtap.st==3 && now-g_vtap.t0>=VTAP_GAP_MS) g_vtap.st=0;
+  gTouchPts=0; return false;
+}
+#else
+static inline bool Touch_ReadFrame(){ return Touch_ReadReal(); }
+#endif
 static bool getTouchXY(uint16_t*x,uint16_t*y){if(!gTouchPts)return false;*x=constrain(gTouchX,0,gW-1);*y=constrain(gTouchY,0,gH-1);return true;}
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -3243,6 +3277,112 @@ static uint16_t keyFill(int x,int y,int w,int h,int r,uint16_t bc,uint16_t neoEd
 }
 static inline uint16_t btnInk(uint16_t bc,uint16_t neoInk){ return g_neo?neoInk:inkFor(bc); }
 static inline uint16_t skinKeyInk(uint16_t bc,uint16_t neoInk){ return skinKeys()?COL_LIT:btnInk(bc,neoInk); }   // skin key: the manifest text colour
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── calm UI primitives (A600-calm1; docs/ui/plan.md phase 1) ──
+// The building blocks of the calm layout: key, card, row, chip, toggle, tabs, stepper. Geometry comes from calm_ui.h
+// (an 8 px grid, touch areas of 48 px); text is ONLY ever size 2 / 3 / 4 (16 / 24 / 32 px). Each is skin-aware the
+// way the existing keys are: a skin's KEY_UP / KEY_DOWN / PANEL / ROW_SEL when it has them (skinKeys / g_skin_on), the
+// NEO look when g_neo, the colour theme's flat look otherwise. Nothing calls them yet (phase 2 does).
+enum CalmStyle { CALM_NORMAL = 0, CALM_PRIMARY, CALM_DANGER, CALM_SELECTED };
+#define CALM_R 8   // corner radius of keys, cards and rows
+
+// The text size a label gets: want, or a step down (never below 2) so it fits w; at 2 a too long label is cut.
+static int calmFit(String&s,int w,int want){
+  int sz=want<CU_TS_SMALL?CU_TS_SMALL:(want>CU_TS_BIG?CU_TS_BIG:want);
+  while(sz>CU_TS_SMALL&&(int)s.length()*6*sz>w)sz--;
+  while(s.length()>1&&(int)s.length()*6*sz>w)s.remove(s.length()-1);
+  return sz;
+}
+// A label centred in (x,y,w,h) at the given size (see calmFit); bg is the colour behind it.
+static void calmLabel(int x,int y,int w,int h,String s,int size,uint16_t fg,uint16_t bg){
+  const int sz=calmFit(s,w-8,size);
+  gfx_setTextSize(sz); gfx_setTextColor(fg,bg);
+  gfx_setCursor(x+(w-gfx_textWidth(s))/2,y+(h-8*sz)/2); gfx_print(s);
+}
+// A key. normal = grey face; primary = the amber main action; danger = red (Eject, Restart, Start fresh); selected =
+// amber ring on the normal face (a chosen option). pressed = the face of a finger on it (skin: KEY_DOWN).
+static void calmKey(const CuRect&r,const char*label,CalmStyle st=CALM_NORMAL,bool pressed=false,int size=CU_TS_MID){
+  NeoScope _ns;
+  const uint16_t edge=st==CALM_PRIMARY?COL_AMBER:st==CALM_DANGER?(uint16_t)NEO_RED:st==CALM_SELECTED?COL_AMBER:COL_SEP;
+  uint16_t fg=st==CALM_DANGER?(uint16_t)NEO_RED_INK:st==CALM_PRIMARY?COL_AMBER:COL_LIT, bg=COL_BG;
+  if(skinKeys()){ skinKey(r.x,r.y,r.w,r.h,pressed); if(edge!=COL_SEP)neoRing(r.x,r.y,r.w,r.h,skin::SLOTS[skin::S_KEY_UP].border,edge); }
+  else if(g_neo){
+    if(st==CALM_PRIMARY){ const uint16_t f=pressed?COL_ORANGE:COL_AMBER; gfx_fillRoundRect(r.x,r.y,r.w,r.h,CALM_R,f); fg=COL_BG; bg=f; }
+    else { neoKey(r.x,r.y,r.w,r.h,CALM_R,edge); if(pressed)gfx_fillRoundRect(r.x+2,r.y+2,r.w-4,r.h-4,CALM_R-2,COL_SEL); }
+  } else {
+    uint16_t face=st==CALM_PRIMARY?COL_AMBER:st==CALM_DANGER?(uint16_t)0x4000:COL_PANEL;
+    if(pressed)face=st==CALM_PRIMARY?COL_ORANGE:COL_SEL;
+    gfx_fillRoundRect(r.x,r.y,r.w,r.h,CALM_R,face); neoRing(r.x,r.y,r.w,r.h,CALM_R,edge);
+    fg=st==CALM_PRIMARY?COL_BG:st==CALM_DANGER?(uint16_t)0xE8C4:COL_LIT; bg=face;
+  }
+  calmLabel(r.x,r.y,r.w,r.h,label,size,fg,bg);
+}
+// A card: the panel one drive, one setting group or one program sits on. The caller draws its content on it.
+static void calmCard(const CuRect&r){
+  NeoScope _ns;
+  if(g_skin_on)skinPanel(r.x,r.y,r.w,r.h);
+  else if(g_neo){ neoPanel(r.x,r.y,r.w,r.h,CALM_R,true); neoRing(r.x,r.y,r.w,r.h,CALM_R,COL_SEP); }
+  else { gfx_fillRoundRect(r.x,r.y,r.w,r.h,CALM_R,COL_PANEL); neoRing(r.x,r.y,r.w,r.h,CALM_R,COL_SEP); }
+}
+// A list row (48 px high in the list): the selected one carries the amber ring (skin: ROW_SEL).
+static void calmRow(const CuRect&r,bool selected){
+  NeoScope _ns;
+  if(selected){
+    if(g_skin_on)skinRow(r.x,r.y,r.w,r.h);
+    else if(g_neo)neoKey(r.x,r.y,r.w,r.h,CALM_R/2,COL_AMBER);
+    else { gfx_fillRoundRect(r.x,r.y,r.w,r.h,CALM_R/2,COL_SEL); neoRing(r.x,r.y,r.w,r.h,CALM_R/2,COL_AMBER); }
+  } else {
+    if(g_skin_on)skinPanel(r.x,r.y,r.w,r.h);
+    else if(g_neo)neoPanel(r.x,r.y,r.w,r.h,CALM_R/2,true);
+    else gfx_fillRoundRect(r.x,r.y,r.w,r.h,CALM_R/2,COL_PANEL);
+  }
+}
+// A chip: a small label (size 2, 24 px high) with its own frame; normal = grey, primary = amber fill (a status that
+// matters), danger = red (WP, unsaved), selected = green (loaded, a drive holds it). Returns its width so a caller can
+// place the next one (a gap of CU_GAP / 2 is enough).
+static int calmChip(int x,int y,const char*text,CalmStyle st=CALM_NORMAL){
+  NeoScope _ns;
+  const String s=text; const int w=(int)s.length()*6*CU_TS_SMALL+12, h=24;
+  const uint16_t edge=st==CALM_PRIMARY?COL_AMBER:st==CALM_DANGER?(uint16_t)NEO_RED:st==CALM_SELECTED?COL_GREEN:COL_SEP;
+  const uint16_t fg=st==CALM_PRIMARY?COL_BG:st==CALM_DANGER?(uint16_t)NEO_RED_INK:st==CALM_SELECTED?COL_GREEN:COL_MID;
+  const uint16_t face=st==CALM_PRIMARY?COL_AMBER:COL_BG;
+  gfx_fillRoundRect(x,y,w,h,6,face); if(st!=CALM_PRIMARY)neoRing(x,y,w,h,6,edge);
+  gfx_setTextSize(CU_TS_SMALL); gfx_setTextColor(fg,face); gfx_setCursor(x+6,y+(h-8*CU_TS_SMALL)/2); gfx_print(s);
+  return w;
+}
+// A switch at the right end of rect r (a pill of 56 x 32, centred vertically; the hit area is the caller's 48 px row).
+static void calmToggle(const CuRect&r,bool on){
+  NeoScope _ns;
+  const int w=56,h=32,x=r.x+r.w-w,y=r.y+(r.h-h)/2;
+  gfx_fillRoundRect(x,y,w,h,h/2,on?COL_AMBER:COL_SEP);
+  gfx_fillCircle(on?x+w-h/2:x+h/2,y+h/2,h/2-4,on?(uint16_t)TFT_WHITE:COL_MID);
+}
+// A tab bar in rect r: the labels (at most 8) in equal columns at size 2, the active one in amber with a 3 px bar under
+// it, a hairline along the bottom. The hit rect of tab i is cuCols(r,n,0,...)[i].
+static void calmTabs(const CuRect&r,const char* const*labels,int n,int active){
+  NeoScope _ns;
+  if(n<1)return;
+  CuRect c[8]; if(n>8)n=8; cuCols(r,n,0,c);
+  gfx_hline(r.x,r.y+r.h-1,r.w,COL_SEP);
+  for(int i=0;i<n;i++){
+    const bool a=(i==active);
+    calmLabel(c[i].x,c[i].y,c[i].w,c[i].h-3,labels[i],CU_TS_SMALL,a?COL_AMBER:COL_MID,COL_BG);
+    if(a)gfx_fillRect(c[i].x+8,r.y+r.h-3,c[i].w-16,3,COL_AMBER);
+  }
+}
+// A stepper "[<] text [>]" (the disk stepper, "Disk 2 of 3"): arrows from cuStepper, the text in a card between. An
+// arrow with nothing to step to is drawn dim (the caller ignores its hit).
+static void calmStepper(const CuRect&r,const char*text,bool canPrev=true,bool canNext=true){
+  CuRect l,m,rt; cuStepper(r,&l,&m,&rt);
+  calmKey(l,"<",CALM_NORMAL,false,CU_TS_MID); calmKey(rt,">",CALM_NORMAL,false,CU_TS_MID);
+  NeoScope _ns;
+  if(!canPrev){ gfx_fillRoundRect(l.x+6,l.y+6,l.w-12,l.h-12,4,COL_BG); calmLabel(l.x,l.y,l.w,l.h,"<",CU_TS_MID,COL_DIM,COL_BG); }
+  if(!canNext){ gfx_fillRoundRect(rt.x+6,rt.y+6,rt.w-12,rt.h-12,4,COL_BG); calmLabel(rt.x,rt.y,rt.w,rt.h,">",CU_TS_MID,COL_DIM,COL_BG); }
+  calmCard(m);
+  calmLabel(m.x,m.y,m.w,m.h,text,CU_TS_MID,COL_LIT,(g_neo||g_skin_on)?COL_BG:COL_PANEL);
+}
+// ── end of the calm UI primitives ──
 
 static void saveConfigKey(const String&key,const String&val){
   uint32_t _t0=millis();   // lab15a2
@@ -6677,6 +6817,21 @@ static int fdSingleFluxPeer(){
   int vn=0,only=-1; for(int i=0;i<g_pfPeerN;i++) if(pfPeerVisible(g_pfPeers[i])){vn++;only=i;}
   return (vn==1&&fdIsFluxDrive(g_pfPeers[only].board.c_str()))?only:-1;
 }
+// A600-calm1: the drives the screen can reach (gti_targets.h), from the live state - the adapter between PfPeer / the
+// config flags and the pure inputs (the header lists which state maps to which input). Not used by a screen yet.
+static int calmBuildTargets(GtTarget*out,int max){
+  GtInputs in={}; in.wireless=g_wireless_mode; in.link_home=g_link_home; in.wifi_up=(WiFi.status()==WL_CONNECTED);
+  const String ln=g_loaded_display.length()?g_loaded_display:g_loaded_name;
+  in.loaded=g_loaded&&ln.length(); in.loaded_name=ln.c_str();
+  String en; if(g_wireless_mode&&!g_link_home&&espnowIsPaired()){ en=getDongleName(espnowGetXiaoMac()); }
+  in.espnow_paired=g_wireless_mode&&!g_link_home&&espnowIsPaired(); in.espnow_linked=in.espnow_paired&&g_espnow_started; in.espnow_name=en.c_str();
+  GtPeerIn pi[PF_MAX_PEERS]; String nm[PF_MAX_PEERS];
+  const uint32_t now=millis(); int n=0;
+  if(g_wireless_mode&&g_link_home) for(;n<g_pfPeerN&&n<PF_MAX_PEERS;n++){ const PfPeer&p=g_pfPeers[n]; nm[n]=pfPeerLabel(p);
+    pi[n]=GtPeerIn{nm[n].c_str(),p.board.c_str(),pfPeerVisible(p),fdHeard(now,p.seen,fdStaleMs(p.board.c_str(),PF_STALE_MS)),
+                   p.loaded,p.disk.c_str(),p.wp,p.stored,p.dirty,p.df1,p.loaded1,p.disk1.c_str(),p.wp1,p.stored1,p.dirty1}; }
+  return gtBuildTargets(in,pi,n,out,max);
+}
 // The FluxDrive whose unsaved writes can be fetched now: fleet mode, SAVES on, fdShouldFetch (its beacon's dirty count and
 // load_id against its record), and that beacon at most FD_FETCH_FRESH_MS old. FluxDrive beacons every 2.5 s while sectors
 // are unsaved and none at all while the Amiga's motor runs: an older dirty count means the Amiga is reading (a fetch
@@ -7157,6 +7312,7 @@ static bool doLoadWebdav(const String&remotePath,const String&showName){
 // Merge step 2: the shared web interface + OTA, served over HOME_SSID when
 // WEBUI=ON. Placed here because it calls doLoadWebdav and the disk builders.
 #define GTI_WEB_SD_FILES 1   // 5.9.9: WiFi SD file-access endpoints (JC3.5 only for now)
+// (GTI_WEB_TAP, the virtual finger, is defined at the top of this file; release builds drop it.)
 #define GTI_WEB_SCREENSHOT 1 // GET /api/screenshot = BMP of the current screen (shotWriteBmp)
 // A600-neo2e: GET /api/neobench - NEO vs flat draw times on this screen (Mez's condition for NEO).
 // Draws every look in turn (the screen flashes for about a second), then puts the current screen back.
