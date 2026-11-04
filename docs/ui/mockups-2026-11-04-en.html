@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GTi panel mockups</title>
+<style>
+:root{
+  --bg:#0b1220; --card:#131c2f; --card2:#18233a; --line:#2a3754; --text:#e9edf5; --dim:#8b95ab;
+  --acc:#f5a524; --accInk:#1a1204; --ok:#4ade80; --warn:#f59e0b; --danger:#f87171;
+  --s:16px; --m:24px; --l:32px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#05080f;color:var(--text);font-family:Consolas,"DejaVu Sans Mono",monospace;font-weight:700;padding:16px}
+h1{font-size:20px;margin:0 0 4px}
+p.lead{color:var(--dim);font-size:14px;font-weight:400;max-width:980px;margin-bottom:16px;line-height:1.4}
+.grid{display:flex;flex-wrap:wrap;gap:24px}
+.wrap{width:480px}
+.cap{font-size:14px;margin:0 0 6px;color:var(--acc)}
+.note{font-size:13px;font-weight:400;color:var(--dim);margin-top:6px;line-height:1.35}
+.screen{width:480px;height:320px;background:var(--bg);position:relative;overflow:hidden;border:1px solid #333;
+  background-image:radial-gradient(circle at 80% 0%,#16213a 0,transparent 60%)}
+.abs{position:absolute}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px}
+.key{background:var(--card2);border:1px solid var(--line);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:var(--s)}
+.key.pri{background:var(--acc);color:var(--accInk);border-color:var(--acc)}
+.key.dan{color:var(--danger);border-color:#7f2d2d}
+.key.on{border-color:var(--acc);color:var(--acc)}
+.s{font-size:var(--s)} .m{font-size:var(--m)} .l{font-size:var(--l)}
+.dim{color:var(--dim)} .ok{color:var(--ok)} .acc{color:var(--acc)}
+.row{display:flex;align-items:center}
+.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip{font-size:var(--s);padding:0 6px;border-radius:4px;border:1px solid var(--line);color:var(--dim);line-height:20px}
+.chip.df{border-color:var(--ok);color:var(--ok)}
+.cover{border-radius:6px;background:linear-gradient(135deg,#2b6cb0,#38a169 55%,#d69e2e);display:flex;align-items:flex-end;justify-content:flex-start;padding:6px;font-size:12px;color:#fff8}
+.tog{width:52px;height:28px;border-radius:14px;background:#2a3754;position:relative}
+.tog::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#8b95ab}
+.tog.on{background:var(--acc)} .tog.on::after{left:27px;background:#fff}
+.tab{height:40px;display:flex;align-items:center;justify-content:center;font-size:var(--s);color:var(--dim);border-bottom:2px solid transparent}
+.tab.on{color:var(--text);border-bottom-color:var(--acc)}
+/* the shared top bar and drive strip */
+.top{left:0;top:0;width:480px;height:40px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 8px;gap:8px}
+.drives{left:8px;bottom:8px;width:464px;height:48px;display:flex;gap:8px}
+.drive{flex:1;display:flex;align-items:center;gap:8px;padding:0 8px;min-width:0}
+.drive .lab{font-size:var(--s);color:var(--acc)}
+</style>
+</head>
+<body>
+<h1>GTi touchscreen: proposed layout (480 x 320, actual size)</h1>
+<p class="lead">One font, three sizes (16 / 24 / 32 px), every touch area at least 48 px (the drawing may be smaller, the touch area not), an 8 px grid. Always on screen: at the top where you are (List / Reel / Settings), at the bottom the drives. Browsing and choosing are split: the list only browses, the program screen has the actions. Eject only happens in Drive info, never by accident.</p>
+
+<div class="grid">
+
+<!-- 1. LIST -->
+<div class="wrap">
+<div class="cap">1. List (browse)</div>
+<div class="screen">
+  <div class="abs top">
+    <div class="tab on" style="width:72px">List</div>
+    <div class="tab" style="width:72px">Reel</div>
+    <div style="flex:1"></div>
+    <span class="s dim">95 programs</span>
+    <div class="key" style="width:40px;height:32px">&#9881;</div>
+  </div>
+  <div class="abs row" style="left:8px;top:48px;width:464px;height:40px;gap:8px">
+    <div class="key" style="flex:1;justify-content:flex-start;padding-left:12px;height:40px;color:var(--dim)">&#128269;&nbsp;Search</div>
+    <div class="key" style="width:64px;height:40px">A-Z</div>
+    <div class="key" style="width:96px;height:40px">All &#9662;</div>
+  </div>
+  <div class="abs" style="left:8px;top:96px;width:464px">
+    <div class="row card" style="height:48px;margin-bottom:4px;padding:0 12px;gap:8px"><span class="m ell" style="flex:1">Leander</span><span class="chip">3 disks</span></div>
+    <div class="row card" style="height:48px;margin-bottom:4px;padding:0 12px;gap:8px"><span class="m ell" style="flex:1">Legend of Billy the Kid</span><span class="chip">2 disks</span></div>
+    <div class="row card" style="height:48px;margin-bottom:4px;padding:0 12px;gap:8px;border-color:var(--acc)"><span class="m ell" style="flex:1">Lemmings 1</span><span class="chip df">DF0 DF1</span></div>
+    <div class="row card" style="height:48px;padding:0 12px;gap:8px;opacity:.55"><span class="m ell" style="flex:1">Lemmings 2</span><span class="chip">3 disks</span></div>
+  </div>
+  <div class="abs drives">
+    <div class="drive card"><span class="lab">DF0</span><span class="s ell">Lemmings 1 &middot; D1</span></div>
+    <div class="drive card"><span class="lab">DF1</span><span class="s ell">Lemmings 1 &middot; D2</span></div>
+  </div>
+</div>
+<div class="note">Rows of 48 px, 3 visible plus the edge of the next (showing that it scrolls). Tap a row: program screen. "A-Z" opens a letter grid, "All" picks Games / Tools / Demos / Own disks. The green chip says which drive holds the program. The drives always at the bottom; tap = Drive info.</div>
+</div>
+
+<!-- 2. PROGRAM -->
+<div class="wrap">
+<div class="cap">2. Program (choose and load)</div>
+<div class="screen">
+  <div class="abs top">
+    <div class="key" style="width:72px;height:32px">&#8249; List</div>
+    <span class="m ell" style="flex:1">Lemmings 1</span>
+  </div>
+  <div class="abs cover" style="left:8px;top:48px;width:176px;height:136px">cover</div>
+  <div class="abs" style="left:192px;top:48px;width:280px">
+    <div class="s dim">Psygnosis &middot; 1991</div>
+    <div class="s dim" style="margin-top:4px">Game &middot; 2 disks &middot; A500</div>
+    <div class="row" style="margin-top:16px;gap:8px">
+      <div class="key" style="width:48px;height:48px" >&#8249;</div>
+      <div class="card row" style="flex:1;height:48px;justify-content:center"><span class="m">Disk 2</span><span class="s dim">&nbsp;of 2</span></div>
+      <div class="key" style="width:48px;height:48px;opacity:.4">&#8250;</div>
+    </div>
+    <div class="s dim" style="margin-top:8px">Disk 2 is in DF1</div>
+  </div>
+  <div class="abs row" style="left:8px;top:192px;width:464px;height:56px;gap:8px">
+    <div class="key pri m" style="flex:1;height:56px">Load into DF0</div>
+    <div class="key m" style="flex:1;height:56px;color:var(--ok);border-color:var(--ok)">&#10003; in DF1</div>
+  </div>
+  <div class="abs drives">
+    <div class="drive card"><span class="lab">DF0</span><span class="s ell">Lemmings 1 &middot; D1</span></div>
+    <div class="drive card"><span class="lab">DF1</span><span class="s ell">Lemmings 1 &middot; D2</span></div>
+  </div>
+</div>
+<div class="note">The disk is chosen with a stepper (48 x 48 arrows), not three tiny keys. Two big load keys: which drive. If this disk is already in a drive, that key says so (no eject here). Manual / START FRESH go behind a "..." key in the header (not drawn).</div>
+</div>
+
+<!-- 3. REEL -->
+<div class="wrap">
+<div class="cap">3. Reel (browse by cover)</div>
+<div class="screen">
+  <div class="abs top">
+    <div class="tab" style="width:72px">List</div>
+    <div class="tab on" style="width:72px">Reel</div>
+    <div style="flex:1"></div>
+    <span class="s dim">33 / 95</span>
+    <div class="key" style="width:40px;height:32px">&#9881;</div>
+  </div>
+  <div class="abs cover" style="left:24px;top:64px;width:80px;height:120px;opacity:.35"></div>
+  <div class="abs cover" style="left:136px;top:48px;width:208px;height:152px">cover</div>
+  <div class="abs cover" style="left:376px;top:64px;width:80px;height:120px;opacity:.35"></div>
+  <div class="abs" style="left:8px;top:208px;width:464px;text-align:center"><span class="m">Lemmings 2</span> <span class="s dim">&middot; 3 disks</span></div>
+  <div class="abs drives">
+    <div class="drive card"><span class="lab">DF0</span><span class="s ell">Lemmings 1 &middot; D1</span></div>
+    <div class="drive card"><span class="lab">DF1</span><span class="s ell">Lemmings 1 &middot; D2</span></div>
+  </div>
+</div>
+<div class="note">Swipe = next cover; tap the cover = the same program screen as from the list. No keys under the cover any more: the reel only browses. The dice (random) can be a swipe up or an entry in "All &#9662;".</div>
+</div>
+
+<!-- 4. DRIVE INFO -->
+<div class="wrap">
+<div class="cap">4. Drive info (tap the drive strip)</div>
+<div class="screen">
+  <div class="abs top">
+    <div class="key" style="width:72px;height:32px">&#8249; Back</div>
+    <span class="m ell" style="flex:1">fluxdrive-62a4</span>
+    <span class="s ok">&#9679; online</span>
+  </div>
+  <div class="abs card" style="left:8px;top:48px;width:464;width:464px;height:120px;padding:8px 12px">
+    <div class="s acc">DF0</div>
+    <div class="l ell" style="margin-top:4px;width:300px">Lemmings 1</div>
+    <div class="s dim ell" style="margin-top:4px;width:320px">Disk 1 &middot; stored &middot; 3 saved</div>
+    <div class="abs key dan s" style="right:12px;top:36px;width:112px;height:48px">Eject</div>
+  </div>
+  <div class="abs card" style="left:8px;top:176px;width:464px;height:120px;padding:8px 12px">
+    <div class="s acc">DF1 <span class="chip" style="margin-left:8px">WP</span></div>
+    <div class="l ell" style="margin-top:4px;width:300px">Lemmings 1</div>
+    <div class="s dim" style="margin-top:4px">Disk 2 &middot; stored</div>
+    <div class="abs key dan s" style="right:12px;top:36px;width:112px;height:48px">Eject</div>
+  </div>
+</div>
+<div class="note">Exactly the card of the FluxDrive web page: label, large name, one status line, one action at the right. Eject has a red border and sits far from "Back". Tap the name: the program screen of that disk.</div>
+</div>
+
+<!-- 5. SETTINGS -->
+<div class="wrap">
+<div class="cap">5. Settings (tabs, rows with switches)</div>
+<div class="screen">
+  <div class="abs top" style="padding-right:0">
+    <div class="key" style="width:48px;height:32px">&#8249;</div>
+    <div class="tab on" style="width:88px">Screen</div>
+    <div class="tab" style="width:88px">Wi-Fi</div>
+    <div class="tab" style="width:88px">Drives</div>
+    <div class="tab" style="width:88px">System</div>
+  </div>
+  <div class="abs" style="left:8px;top:48px;width:464px">
+    <div class="card row" style="height:56px;padding:0 12px;margin-bottom:8px"><div style="flex:1"><div class="m">Theme</div><div class="s dim">NEO</div></div><span class="m dim">&#8250;</span></div>
+    <div class="card row" style="height:56px;padding:0 12px;margin-bottom:8px"><div style="flex:1"><div class="m">Language</div><div class="s dim">English</div></div><span class="m dim">&#8250;</span></div>
+    <div class="card row" style="height:56px;padding:0 12px;margin-bottom:8px"><div style="flex:1"><div class="m">Covers in list</div><div class="s dim">A picture with every row</div></div><div class="tog on"></div></div>
+    <div class="card row" style="height:56px;padding:0 12px"><div style="flex:1"><div class="m">Cracktro</div><div class="s dim">Intro at start-up</div></div><div class="tog on"></div></div>
+  </div>
+</div>
+<div class="note">A setting = label + value or switch, never a key. Four tabs instead of three mixed pages. Restart, SD reset, firmware update and test tools live together in "System", at the bottom, behind a confirmation.</div>
+</div>
+
+<!-- 6. LETTER GRID -->
+<div class="wrap">
+<div class="cap">6. A-Z (letter grid)</div>
+<div class="screen">
+  <div class="abs top">
+    <div class="key" style="width:72px;height:32px">&#8249; List</div>
+    <span class="m">Jump to letter</span>
+  </div>
+  <div class="abs" style="left:8px;top:48px;width:464px;display:grid;grid-template-columns:repeat(7,1fr);gap:4px">
+    <div class="key m" style="height:48px">A</div><div class="key m" style="height:48px">B</div><div class="key m" style="height:48px">C</div><div class="key m" style="height:48px">D</div><div class="key m" style="height:48px">E</div><div class="key m" style="height:48px">F</div><div class="key m" style="height:48px">G</div>
+    <div class="key m" style="height:48px">H</div><div class="key m" style="height:48px;opacity:.35">I</div><div class="key m" style="height:48px">J</div><div class="key m" style="height:48px">K</div><div class="key m on" style="height:48px">L</div><div class="key m" style="height:48px">M</div><div class="key m" style="height:48px">N</div>
+    <div class="key m" style="height:48px">O</div><div class="key m" style="height:48px">P</div><div class="key m" style="height:48px;opacity:.35">Q</div><div class="key m" style="height:48px">R</div><div class="key m" style="height:48px">S</div><div class="key m" style="height:48px">T</div><div class="key m" style="height:48px">U</div>
+    <div class="key m" style="height:48px">V</div><div class="key m" style="height:48px">W</div><div class="key m" style="height:48px;opacity:.35">X</div><div class="key m" style="height:48px">Y</div><div class="key m" style="height:48px">Z</div><div class="key m" style="height:48px">#</div><div class="key m" style="height:48px;opacity:.35"> </div>
+  </div>
+</div>
+<div class="note">27 cells of 64 x 48 instead of a column of 10 x 14. Letters without programs are dimmed. Tap = back to the list at that letter.</div>
+</div>
+
+</div>
+
+<h1 style="margin-top:32px">Other setups: the drive strip and the load key follow what is there</h1>
+<p class="lead">Most GTi screens sit directly in a Gotek (screen only) or send to one dongle: one drive, no DF0/DF1. The bottom strip and the load keys show "drives" (whatever can be reached): 1 drive = one wide card and one load key, 2 = two halves, 3 or more = a picker.</p>
+
+<div class="grid">
+
+<!-- 7. SCREEN ONLY -->
+<div class="wrap">
+<div class="cap">7. Screen only (in the Gotek)</div>
+<div class="screen">
+  <div class="abs top">
+    <div class="key" style="width:72px;height:32px">&#8249; List</div>
+    <span class="m ell" style="flex:1">Lemmings 1</span>
+  </div>
+  <div class="abs cover" style="left:8px;top:48px;width:176px;height:136px">cover</div>
+  <div class="abs" style="left:192px;top:48px;width:280px">
+    <div class="s dim">Psygnosis &middot; 1991</div>
+    <div class="s dim" style="margin-top:4px">Game &middot; 2 disks &middot; A500</div>
+    <div class="row" style="margin-top:16px;gap:8px">
+      <div class="key" style="width:48px;height:48px;opacity:.4">&#8249;</div>
+      <div class="card row" style="flex:1;height:48px;justify-content:center"><span class="m">Disk 1</span><span class="s dim">&nbsp;of 2</span></div>
+      <div class="key" style="width:48px;height:48px">&#8250;</div>
+    </div>
+  </div>
+  <div class="abs row" style="left:8px;top:192px;width:464px;height:56px">
+    <div class="key pri m" style="flex:1;height:56px">Load</div>
+  </div>
+  <div class="abs drives">
+    <div class="drive card"><span class="lab">Gotek</span><span class="s ell">Workbench 1.3</span></div>
+  </div>
+</div>
+<div class="note">One drive: one full-width load key and one wide card at the bottom (tap = Drive info with one card). No DF0/DF1: the screen does not know which drive the Gotek is in the Amiga.</div>
+</div>
+
+<!-- 8. ONE DONGLE -->
+<div class="wrap">
+<div class="cap">8. One dongle</div>
+<div class="screen">
+  <div class="abs top">
+    <div class="tab on" style="width:72px">List</div>
+    <div class="tab" style="width:72px">Reel</div>
+    <div style="flex:1"></div>
+    <span class="s dim">95 programs</span>
+    <div class="key" style="width:40px;height:32px">&#9881;</div>
+  </div>
+  <div class="abs row" style="left:8px;top:48px;width:464px;height:40px;gap:8px">
+    <div class="key" style="flex:1;justify-content:flex-start;padding-left:12px;height:40px;color:var(--dim)">&#128269;&nbsp;Search</div>
+    <div class="key" style="width:64px;height:40px">A-Z</div>
+    <div class="key" style="width:96px;height:40px">All &#9662;</div>
+  </div>
+  <div class="abs" style="left:8px;top:96px;width:464px">
+    <div class="row card" style="height:48px;margin-bottom:4px;padding:0 12px;gap:8px"><span class="m ell" style="flex:1">Leander</span><span class="chip">3 disks</span></div>
+    <div class="row card" style="height:48px;margin-bottom:4px;padding:0 12px;gap:8px;border-color:var(--acc)"><span class="m ell" style="flex:1">Lemmings 1</span><span class="chip df">loaded</span></div>
+    <div class="row card" style="height:48px;margin-bottom:4px;padding:0 12px;gap:8px"><span class="m ell" style="flex:1">Lemmings 2</span><span class="chip">3 disks</span></div>
+  </div>
+  <div class="abs drives">
+    <div class="drive card"><span class="lab">A500</span><span class="s ell">Lemmings 1 &middot; D1</span><span style="flex:1"></span><span class="s ok">&#9679;</span></div>
+  </div>
+</div>
+<div class="note">The bottom card carries the dongle's name (as set, here "A500") and a dot for the link. Tap = Drive info for that dongle, with Eject and the saves.</div>
+</div>
+
+<!-- 9. SEVERAL DONGLES -->
+<div class="wrap">
+<div class="cap">9. Several dongles (three here)</div>
+<div class="screen">
+  <div class="abs top">
+    <div class="key" style="width:72px;height:32px">&#8249; List</div>
+    <span class="m ell" style="flex:1">Lemmings 1</span>
+  </div>
+  <div class="abs cover" style="left:8px;top:48px;width:176px;height:136px">cover</div>
+  <div class="abs" style="left:192px;top:48px;width:280px">
+    <div class="s dim">Psygnosis &middot; 1991</div>
+    <div class="s dim" style="margin-top:4px">Game &middot; 2 disks &middot; A500</div>
+    <div class="row" style="margin-top:16px;gap:8px">
+      <div class="key" style="width:48px;height:48px;opacity:.4">&#8249;</div>
+      <div class="card row" style="flex:1;height:48px;justify-content:center"><span class="m">Disk 1</span><span class="s dim">&nbsp;of 2</span></div>
+      <div class="key" style="width:48px;height:48px">&#8250;</div>
+    </div>
+  </div>
+  <div class="abs row" style="left:8px;top:192px;width:464px;height:56px">
+    <div class="key pri m" style="flex:1;height:56px">Load into&hellip; &#9662;</div>
+  </div>
+  <div class="abs drives">
+    <div class="drive card" style="flex:1.2"><span class="lab">A500</span><span class="s ell">Lemmings 1</span></div>
+    <div class="drive card" style="flex:1.2"><span class="lab">A1200</span><span class="s ell dim">empty</span></div>
+    <div class="drive card" style="flex:0 0 72px;justify-content:center"><span class="s">+1 &#8250;</span></div>
+  </div>
+</div>
+<div class="note">Three or more: "Load into…" opens a picker (screen 10). The strip fits two cards plus "+1"; tapping it lists all drives. With two dongles: two load keys side by side, like DF0 | DF1.</div>
+</div>
+
+<!-- 10. TARGET PICKER -->
+<div class="wrap">
+<div class="cap">10. "Load into…" picker (3+ drives)</div>
+<div class="screen">
+  <div class="abs top">
+    <div class="key" style="width:72px;height:32px">&#8249; Back</div>
+    <span class="m ell" style="flex:1">Load Lemmings 1 &middot; D1 into</span>
+  </div>
+  <div class="abs" style="left:8px;top:48px;width:464px">
+    <div class="card row" style="height:56px;padding:0 12px;margin-bottom:8px"><div style="flex:1;min-width:0"><div class="m">A500</div><div class="s dim ell">now: Lemmings 1 &middot; D1</div></div><span class="s ok">&#9679;</span></div>
+    <div class="card row" style="height:56px;padding:0 12px;margin-bottom:8px"><div style="flex:1;min-width:0"><div class="m">A1200</div><div class="s dim ell">empty</div></div><span class="s ok">&#9679;</span></div>
+    <div class="card row" style="height:56px;padding:0 12px;margin-bottom:8px"><div style="flex:1;min-width:0"><div class="m">fluxdrive-62a4 &middot; DF0</div><div class="s dim ell">now: Workbench 1.3</div></div><span class="s ok">&#9679;</span></div>
+    <div class="card row" style="height:56px;padding:0 12px;opacity:.5"><div style="flex:1;min-width:0"><div class="m">fluxdrive-62a4 &middot; DF1</div><div class="s dim ell">now: Lemmings 1 &middot; D2</div></div><span class="s dim">&#9679;</span></div>
+  </div>
+</div>
+<div class="note">One row per drive, with what is in it now (so you see what you replace). A FluxDrive gives two rows (DF0 and DF1). Tap = load. A drive that cannot be reached is dimmed.</div>
+</div>
+
+</div>
+</body>
+</html>
