@@ -7039,6 +7039,22 @@ static void msgHold(){
   while(Touch_ReadFrame()&&getTouchXY(&tx,&ty)&&millis()-t0<10000) delay(30);      // finger still down: wait for release
   while(millis()-t0<10000){ if(Touch_ReadFrame()&&getTouchXY(&tx,&ty)) break; delay(30); }
 }
+// The load's progress bar: a thin bar and a percentage at the foot of the message area (the cover column in the classic layout),
+// fed by the bytes sent of the image (panel_fleet.h calls g_pfProgress per 8 KB chunk) or copied from the card (wired). It is only
+// redrawn when the percentage moves by 2.
+static int g_lpLast=-1;
+static void loadProgressStart(){ g_lpLast=-1; }
+static void loadProgress(uint32_t done,uint32_t total){
+  if(!total) return;
+  const int pct=(int)((uint64_t)done*100/total);
+  if(pct==g_lpLast||(g_lpLast>=0&&pct<100&&pct-g_lpLast<2)) return;
+  g_lpLast=pct;
+  const int x=6,w=MSG_W-12,y=MSG_Y+MSG_H-24,h=10;
+  gfx_fillRect(x-1,y-14,w+2,h+16,COL_PANEL);
+  gfx_setTextSize(1); gfx_setTextColor(COL_LIT,COL_PANEL); gfx_setCursor(x,y-12); gfx_print(String(pct)+"%");
+  gfx_fillRect(x,y,w,h,COL_BAR); gfx_fillRect(x,y,(w*pct)/100,h,COL_GREEN); gfx_drawRect(x-1,y-1,w+2,h+2,COL_SEP);
+  gfx_flush();
+}
 static bool doLoadSelected(const String&adfPath,const String&freshId,bool*sent,int drive){
   if(sent)*sent=false;
   // fd4: DF1 only of the single FluxDrive whose beacon says df1 (the split INSERT's right half): nothing is loaded or sent otherwise.
@@ -7146,7 +7162,8 @@ static bool doLoadSelected(const String&adfPath,const String&freshId,bool*sent,i
     g_alias=false;
     {String pn=presentName(adfPath);build_volume(pn.c_str(),fsz);}   // v5.2: GEN keeps the real name+ext so FlashFloppy detects the format; lab14q: LONGNAME
     uint8_t*dst=g_disk+DATA_LBA*512;uint8_t*buf=(uint8_t*)malloc(16384);uint32_t remain=fsz;
-    while(remain&&buf){size_t n=remain>16384?16384:remain;int rd=f.read(buf,n);if(rd<=0)break;memcpy(dst+copied,buf,rd);remain-=rd;copied+=rd;}
+    loadProgressStart();
+    while(remain&&buf){size_t n=remain>16384?16384:remain;int rd=f.read(buf,n);if(rd<=0)break;memcpy(dst+copied,buf,rd);remain-=rd;copied+=rd;loadProgress(copied,fsz);}
     if(buf)free(buf);f.close();
     if(copied!=fsz){   // S10: a short SD read (or no buffer) used to fall through and fling whatever g_disk held, under the new name
       gLog("[load] wireless copy FAILED: %u of %u bytes read from %s%s\n",(unsigned)copied,(unsigned)fsz,loadPath.c_str(),buf?"":" (no buffer)");
@@ -7242,6 +7259,7 @@ static bool doLoadSelected(const String&adfPath,const String&freshId,bool*sent,i
       fleetWaitHint(p.board.c_str());
       String nm=g_loaded_display.length()?g_loaded_display:g_loaded_name; if(nm.length()){String ne;pfSendName(p.ip,p.tcp,nm,ne);}
       String err; uint32_t uid=0; bool ok;
+      loadProgressStart(); g_pfProgress=loadProgress;   // the bar under the message: bytes sent of the image
       if(drive==1){   // fd4: SET_DRIVE 1 first, and the push only when it was acked (else the disk would land in DF0). A refusal the push never
         // reached (the claim, a lock) would leave the one-shot waiting for the next push from here: it is cleared again (SET_DRIVE 0).
         const char*bad=fdRefuseImage(p.board.c_str(),g_img_bytes);
@@ -7249,6 +7267,7 @@ static bool doLoadSelected(const String&adfPath,const String&freshId,bool*sent,i
         else if(!(ok=pfSendDrive(p.ip,p.tcp,1,err))){}
         else { ok=pfSendDisk(p.ip,p.tcp,err,&uid,1); if(!ok){ String e2; pfSendDrive(p.ip,p.tcp,0,e2,true); } }
       } else ok=pfSendDisk(p.ip,p.tcp,err,&uid);
+      g_pfProgress=nullptr;
       if(ok)fdRecordFling(p.ip,uid,g_loaded_path,fresh,drive);   // one target: a FluxDrive's record of the disk it holds now (its own save when it has one; any other board: nothing); fresh: START FRESH keeps the replaced record of the same game
       if(sent)*sent=ok;
       hwMsg(ok?"Sent":"Not sent",(ok?p.name:err).c_str(),ok?COL_GREEN:COL_AMBER,ok?1200:2200);

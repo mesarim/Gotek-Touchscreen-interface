@@ -614,6 +614,8 @@ struct PfRadioAwake {
 // loadId (optional): a FluxDrive's ack carries the disk's uid (0x01 + LE32), the key of the panel's save record; 0 for any
 // other board (its ack's load id is not read, as before) or when it did not come.
 // drive (fd4): 1 = the disk went to a FluxDrive's DF1 (SET_DRIVE 1 was acked just before: pfSendDrive); the roster notes it there.
+// A600-calm3: the load screen's progress bar. Set by the sketch around a send; called after every chunk with (bytes sent, image size).
+static void (*g_pfProgress)(uint32_t sent, uint32_t total) = nullptr;
 static bool pfSendDisk(const String &ip, uint16_t port, String &err, uint32_t *loadId = nullptr, int drive = 0) {
   if (loadId) *loadId = 0;
 #if defined(GTI_FLEET)
@@ -670,6 +672,7 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err, uint32_t *l
     // A FluxDrive does not read while the Amiga's motor runs: the transfer stalls until the load is over.
     if (w == 0) { if (millis() - stall > fdStallLimitMs(bd)) { err = fdIsFluxDrive(bd) ? fdBusyText() : "send stalled"; c.stop(); return false; } delay(2); continue; }
     sent += w; stall = millis();
+    if (g_pfProgress) g_pfProgress(sent, size);
   }
   pfNoteTarget(ip);
   g_pfLastMs = millis() - tSend0; g_pfLastBytes = size;
