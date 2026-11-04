@@ -3554,7 +3554,7 @@ static void loadConfig(){
 #define VH gH
 #define STATUS_H   20
 #define MODE_BAR_H 18
-#define NOW_PLAY_H 22
+#define NOW_PLAY_H 32   // as tall as the A-M toggle key (AZ_TOG_H); NOW_Y, LIST_BOTTOM and the bar's tap rectangle all follow it
 #define BOTTOM_H   40
 #define AZ_W       30
 // Layout is computed by relayout() for the current rotation + compact mode.
@@ -4573,7 +4573,7 @@ static void drawNowPlayingBar(){
   if(fp?fdBarShows(true,fp->loaded,fp->df1,fp->loaded1):(g_loaded&&g_loaded_name.length())){NeoScope _ns; const uint16_t nb=g_neo?COL_BG:COL_NOW;   // fd4: also while only its DF1 holds a disk   // A600-neo2: a NEO key with a green edge
     if(g_neo){fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);neoKey(LIST_X+2,y,LIST_W-4,NOW_PLAY_H,6,COL_GREEN);}
     else{gfx_fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_NOW);gfx_drawRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_GREEN);}
-    gfx_fillCircle(LIST_X+8,y+NOW_PLAY_H/2,3,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(COL_GREEN,nb);gfx_setCursor(LIST_X+16,y+3);gfx_print(T(L_NOW_PLAYING));
+    gfx_fillCircle(LIST_X+8,y+NOW_PLAY_H/2,3,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(COL_GREEN,nb);gfx_setCursor(LIST_X+16,y+7);gfx_print(T(L_NOW_PLAYING));
     const int wpW=(fp&&fp->wp)?gfx_textWidth("WP")+6:0;   // fd2: the FluxDrive target's write protect is on (its beacon's "wp"): a WP chip at the right
     // fd3: the disk it holds is not in flash yet (its beacon's "stored"): a STORING... chip, left of the WP chip
     const int stW=(fp&&fdShowStoring(true,fp->loaded,fp->stored))?gfx_textWidth(T(L_FD_STORING))+6:0;
@@ -4582,9 +4582,9 @@ static void drawNowPlayingBar(){
       if(chipW){ const int room=LIST_W-24-chipW-gfx_textWidth(T(L_NOW_PLAYING)); while(lb.length()&&gfx_textWidth(lb)>room)lb.remove(lb.length()-1); }
       gfx_print(lb); }
     else if(g_wireless_mode&&g_link_home&&g_pfTargetName.length()) gfx_print(" > "+g_pfTargetName);   // #console: which dongle this went to
-    if(wpW){ const int cx=LIST_X+LIST_W-8-wpW; gfx_fillRoundRect(cx,y+2,wpW,10,2,COL_AMBER); gfx_setTextColor(TFT_BLACK,COL_AMBER); gfx_setCursor(cx+3,y+3); gfx_print("WP"); }
-    if(stW){ const int cx=LIST_X+LIST_W-8-chipW; gfx_fillRoundRect(cx,y+2,stW,10,2,COL_AMBER); gfx_setTextColor(TFT_BLACK,COL_AMBER); gfx_setCursor(cx+3,y+3); gfx_print(T(L_FD_STORING)); }
-    gfx_setTextColor(g_neo?COL_LIT:TFT_WHITE,nb);gfx_setCursor(LIST_X+16,y+12);
+    if(wpW){ const int cx=LIST_X+LIST_W-8-wpW; gfx_fillRoundRect(cx,y+6,wpW,10,2,COL_AMBER); gfx_setTextColor(TFT_BLACK,COL_AMBER); gfx_setCursor(cx+3,y+7); gfx_print("WP"); }
+    if(stW){ const int cx=LIST_X+LIST_W-8-chipW; gfx_fillRoundRect(cx,y+6,stW,10,2,COL_AMBER); gfx_setTextColor(TFT_BLACK,COL_AMBER); gfx_setCursor(cx+3,y+7); gfx_print(T(L_FD_STORING)); }
+    gfx_setTextColor(g_neo?COL_LIT:TFT_WHITE,nb);gfx_setCursor(LIST_X+16,y+17);
     String n;
     if(fp){   // fd4: DF0's disk as today, DF1's after it ("DF1: <name>") when DF1 holds one too; a line too long cuts the longer name first
       String a=fp->disk,b=fp->disk1; const bool both=fp->loaded&&fp->df1&&fp->loaded1;

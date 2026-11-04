@@ -377,25 +377,25 @@ static void test_ui_a_name_is_matched_whole() {
 }
 
 // A tap on NOW PLAYING ejects the FluxDrive target's disk. A drag that starts there must not: the bar sits right under
-// the list, so a flick of the bottom row begun a few px low starts in it. The bar here: LIST_X 150, NOW_Y 258, LIST_W
-// 300, NOW_PLAY_H 22, so x 150..449, y 258..279.
+// the list, so a flick of the bottom row begun a few px low starts in it. The bar here: LIST_X 150, NOW_Y 248, LIST_W
+// 300, NOW_PLAY_H 32 (as tall as the A-M key), so x 150..449, y 248..279.
 static void test_a_tap_on_now_playing_opens_the_info() {
-  const FdRect bar = { 150, 258, 300, 22 };
+  const FdRect bar = { 150, 248, 300, 32 };
   CHECK(fdBarOpensInfo(true, 300, 268, bar, true, true, false));
-  CHECK(fdBarOpensInfo(true, 150, 258, bar, true, true, false));       // its top-left pixel
+  CHECK(fdBarOpensInfo(true, 150, 248, bar, true, true, false));       // its top-left pixel
   CHECK(fdBarOpensInfo(true, 449, 279, bar, true, true, false));       // its bottom-right pixel
 }
 
 static void test_a_tap_beside_now_playing_does_not_open_it() {
-  const FdRect bar = { 150, 258, 300, 22 };
+  const FdRect bar = { 150, 248, 300, 32 };
   CHECK(!fdBarOpensInfo(true, 149, 268, bar, true, true, false));      // the cover side
   CHECK(!fdBarOpensInfo(true, 450, 268, bar, true, true, false));      // the A-Z bar
-  CHECK(!fdBarOpensInfo(true, 300, 257, bar, true, true, false));      // the list's bottom row
+  CHECK(!fdBarOpensInfo(true, 300, 247, bar, true, true, false));      // the list's bottom row
   CHECK(!fdBarOpensInfo(true, 300, 280, bar, true, true, false));      // the bottom bar
 }
 
 static void test_only_a_tap_with_a_showing_target_opens_the_info() {
-  const FdRect bar = { 150, 258, 300, 22 };
+  const FdRect bar = { 150, 248, 300, 32 };
   CHECK(!fdBarOpensInfo(true, 300, 268, bar, true, true, true));       // the finger moved: a drag, not a tap
   CHECK(!fdBarOpensInfo(true, 300, 268, bar, false, true, false));     // no FluxDrive target
   CHECK(!fdBarOpensInfo(true, 300, 268, bar, true, false, false));     // the bar shows nothing (both drives empty)
@@ -1456,7 +1456,7 @@ static void test_drive_info_tap() {
 
 // What the screen is for: a FluxDrive target with a disk in a drive (not a dongle, not an empty one). NOW PLAYING never ejects.
 static void test_drive_info_opens_from_the_bar_only_when_it_shows() {
-  const FdRect bar = { 150, 258, 300, 22 };
+  const FdRect bar = { 150, 248, 300, 32 };
   CHECK(fdBarOpensInfo(true, 300, 268, bar, true, fdBarShows(true, false, true, true), false));    // only DF1 holds a disk
   CHECK(!fdBarOpensInfo(true, 300, 268, bar, true, fdBarShows(true, false, false, true), false));  // DF1 off, DF0 empty
 }
