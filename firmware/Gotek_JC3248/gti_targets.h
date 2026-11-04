@@ -197,7 +197,7 @@ inline int gtStripTap(const GtStrip& s, int x, int y) {
 #define GT_INFO_EJECT_W 112
 struct GtInfoLayout {
   CuRect back, view; int cards, scroll, maxScroll;
-  CuRect card[GT_MAX_TARGETS], eject[GT_MAX_TARGETS], name[GT_MAX_TARGETS];
+  CuRect card[GT_MAX_TARGETS], eject[GT_MAX_TARGETS], name[GT_MAX_TARGETS], tap[GT_MAX_TARGETS];   // name: where the text is drawn; tap: the touch area of the disk (the card left of Eject)
 };
 enum { GT_INFO_NONE = 0, GT_INFO_BACK = 1, GT_INFO_EJECT = 100, GT_INFO_NAME = 200 };   // + the card's index
 inline int gtInfoMaxScroll(int n, int viewH) { const int t = n * (GT_INFO_CARD_H + CU_GAP) - CU_GAP - viewH; return t > 0 ? t : 0; }
@@ -219,6 +219,7 @@ inline GtInfoLayout gtInfoLayout(int w, int h, int n, int scroll, const bool* ha
     L.card[i]  = CuRect{L.view.x, y, L.view.w, GT_INFO_CARD_H};
     L.eject[i] = CuRect{cuRight(L.card[i]) - CU_GAP - GT_INFO_EJECT_W, y + (GT_INFO_CARD_H - CU_KEY) / 2, GT_INFO_EJECT_W, CU_KEY};
     L.name[i]  = CuRect{L.card[i].x + CU_GAP, y + 26, L.eject[i].x - CU_GAP - (L.card[i].x + CU_GAP), 28};
+    L.tap[i]   = CuRect{L.card[i].x, y, L.eject[i].x - CU_GAP - L.card[i].x, GT_INFO_CARD_H};
   }
   (void)hasDisk;
   return L;
@@ -229,7 +230,7 @@ inline int gtInfoTap(const GtInfoLayout& L, int x, int y, const bool* hasDisk) {
   for (int i = 0; i < L.cards; i++) {
     if (hasDisk == nullptr || !hasDisk[i]) continue;
     if (cuContains(L.eject[i], x, y)) return GT_INFO_EJECT + i;
-    if (cuContains(L.name[i], x, y))  return GT_INFO_NAME + i;
+    if (cuContains(L.tap[i], x, y))   return GT_INFO_NAME + i;
   }
   return GT_INFO_NONE;
 }
@@ -248,7 +249,7 @@ inline int gtDiskTap(int targetCount, bool gameLoaded, bool hotswap) {
 // for a multi-disk game, the disk stepper "< Disk 2 of 3 >"; one status line ("Disk 2: in DF1"); the load keys (gtLoadLayout over
 // loadArea) in the last 48 px of the content; the drive strip below as on every screen. Rects are touch areas.
 struct GtProgLayout { CuRect back, title, more, cover, details, stepper, status, loadArea; bool hasStepper; };
-enum { GT_PR_NONE = 0, GT_PR_BACK, GT_PR_MORE, GT_PR_PREV, GT_PR_NEXT };
+enum { GT_PR_NONE = 0, GT_PR_BACK, GT_PR_MORE, GT_PR_PREV, GT_PR_NEXT, GT_PR_COVER, GT_PR_DETAILS };
 inline GtProgLayout gtProgLayout(int w, int diskCount) {
   GtProgLayout L; memset(&L, 0, sizeof L);
   L.back  = CuRect{CU_MARGIN, 4, 104, CU_KEY};
@@ -276,6 +277,8 @@ inline int gtProgTap(const GtProgLayout& L, int x, int y) {
     if (cuContains(l, x, y)) return GT_PR_PREV;
     if (cuContains(r, x, y)) return GT_PR_NEXT;
   }
+  if (cuContains(L.cover, x, y)) return GT_PR_COVER;       // the cover, full screen
+  if (cuContains(L.details, x, y)) return GT_PR_DETAILS;   // the description text
   return GT_PR_NONE;
 }
 

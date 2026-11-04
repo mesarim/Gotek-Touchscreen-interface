@@ -228,6 +228,10 @@ static void test_info_layout() {
   CHECK(gtInfoTap(L, L.eject[1].x + 5, L.eject[1].y + 5, ej) == GT_INFO_EJECT + 1);
   CHECK(gtInfoTap(L, L.name[0].x + 5, L.name[0].y + 2, ej) == GT_INFO_NAME + 0);
   CHECK(gtInfoTap(L, 300, 3, ej) == GT_INFO_NONE);
+  // the tap area of a disk's name is the whole left part of its card: at least 48 px each way, not the 28 px of the text
+  CHECK(L.tap[0].h >= 48 && L.tap[0].w >= 48 && L.tap[0].x == L.card[0].x && cuRight(L.tap[0]) <= L.eject[0].x - 8);
+  CHECK(gtInfoTap(L, L.card[0].x + 3, L.card[0].y + 3, ej) == GT_INFO_NAME + 0);
+  CHECK(gtInfoTap(L, L.card[0].x + 3, L.card[0].y + GT_INFO_CARD_H - 3, ej) == GT_INFO_NAME + 0);
   // an empty drive has no Eject: its key area does nothing
   const bool e2[4] = {true, false, false, false};
   GtInfoLayout L2 = gtInfoLayout(480, 320, 2, 0, e2);
@@ -296,9 +300,12 @@ static void test_program_layout() {
   CHECK(gtProgTap(L, L.stepper.x + 5, L.stepper.y + 5) == GT_PR_PREV);
   CHECK(gtProgTap(L, cuRight(L.stepper) - 5, L.stepper.y + 5) == GT_PR_NEXT);
   CHECK(gtProgTap(L, L.stepper.x + L.stepper.w / 2, L.stepper.y + 5) == GT_PR_NONE);   // the text between the arrows
-  CHECK(gtProgTap(L, L.cover.x + 5, L.cover.y + 5) == GT_PR_NONE);
+  CHECK(gtProgTap(L, L.cover.x + 5, L.cover.y + 5) == GT_PR_COVER);       // the cover opens full screen
+  CHECK(gtProgTap(L, L.details.x + 5, L.details.y + 5) == GT_PR_DETAILS);  // the details text opens the description
+  CHECK(L.cover.w >= 48 && L.cover.h >= 48 && L.details.w >= 48 && L.details.h >= 48);   // every touch area is at least 48 px
   GtProgLayout L1 = gtProgLayout(480, 1);
-  CHECK(gtProgTap(L1, 200, 130) == GT_PR_NONE);   // no stepper: nothing there
+  CHECK(gtProgTap(L1, 200, 130) == GT_PR_DETAILS && L1.details.h >= 48);   // no stepper: the details take the room
+  CHECK(gtProgTap(L1, 200, L1.status.y + 2) == GT_PR_NONE);                 // the status line is not a key
 }
 
 static void test_pick_layout() {

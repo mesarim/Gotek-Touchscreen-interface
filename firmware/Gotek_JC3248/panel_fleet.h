@@ -616,8 +616,15 @@ struct PfRadioAwake {
 // drive (fd4): 1 = the disk went to a FluxDrive's DF1 (SET_DRIVE 1 was acked just before: pfSendDrive); the roster notes it there.
 // A600-calm3: the load screen's progress bar. Set by the sketch around a send; called after every chunk with (bytes sent, image size).
 static void (*g_pfProgress)(uint32_t sent, uint32_t total) = nullptr;
-static bool pfSendDisk(const String &ip, uint16_t port, String &err, uint32_t *loadId = nullptr, int drive = 0) {
+// A600-calm4: file != nullptr = stream that SD file (an uncompressed image: the panel sends the raw bytes of the file it loaded) straight
+// into the push in the same 8 KB chunks, instead of the image staged in g_disk. The size is the file's.
+struct PfFileBuf { uint8_t *p; PfFileBuf() : p(nullptr) {} ~PfFileBuf() { if (p) free(p); } };
+static bool pfSendDisk(const String &ip, uint16_t port, String &err, uint32_t *loadId = nullptr, int drive = 0, const String *file = nullptr) {
   if (loadId) *loadId = 0;
+  uint32_t fileBytes = 0;
+  if (file) { struct stat fst; const String vfs = "/sdcard" + *file;
+    if (stat(vfs.c_str(), &fst) != 0 || fst.st_size <= 0) { err = "SD read error"; return false; }
+    fileBytes = (uint32_t)fst.st_size; }
 #if defined(GTI_FLEET)
   if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
 #endif
@@ -629,8 +636,8 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err, uint32_t *l
   // A FluxDrive takes one thing, a DD ADF of 901,120 bytes. Say so before any connection, so nothing is
   // claimed, named or sent for a disk it would only refuse.
   if (fdIsFluxDrive(bd)) {
-    if (!g_loaded || g_img_bytes == 0) { err = "no disk loaded"; return false; }
-    const char *refuse = fdRefuseImage(bd, g_img_bytes);
+    if (!g_loaded || (!file && g_img_bytes == 0)) { err = "no disk loaded"; return false; }
+    const char *refuse = fdRefuseImage(bd, file ? fileBytes : g_img_bytes);
     if (refuse) { err = refuse; return false; }
     // SET_NAME just ran out against this FluxDrive: it is still reading for the Amiga. Say so now; waiting again
     // would keep the person at the screen another two minutes for the same answer.
@@ -639,9 +646,12 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err, uint32_t *l
   // Mainline: say who is sending before sending. A refusal here is the dongle
   // protecting somebody else's disk or unsaved saves, so it stops the fling.
   if (!pfSendClaim(ip, port, false, err)) return false;
-  if (!g_loaded || g_img_bytes == 0) { err = "no disk loaded"; return false; }
-  const uint8_t *data = g_disk + DATA_LBA * 512;
-  const uint32_t size = g_img_bytes;
+  if (!g_loaded || (!file && g_img_bytes == 0)) { err = "no disk loaded"; return false; }
+  const uint8_t *data = file ? nullptr : g_disk + DATA_LBA * 512;
+  const uint32_t size = file ? fileBytes : g_img_bytes;
+  File src; PfFileBuf fb;
+  if (file) { src = SD_MMC.open(file->c_str(), FILE_READ); fb.p = (uint8_t *)malloc(8192);
+    if (!src || !fb.p) { err = "SD read error"; return false; } }
   WiFiClient c;
   if (!c.connect(ip.c_str(), port, 8000)) { err = "connect failed"; return false; }
   c.setNoDelay(true);   // disable Nagle: with the dongle's delayed-ACK, Nagle stalls each window ~200ms and crawls the fling to ~35 KB/s
@@ -655,7 +665,7 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err, uint32_t *l
   const uint8_t hdr[4] = { (uint8_t)(size >> 24), (uint8_t)(size >> 16), (uint8_t)(size >> 8), (uint8_t)size };
   const uint32_t tSend0 = millis();   // time the bulk transfer for the throughput report
   c.write(hdr, 4);
-  uint32_t sent = 0, stall = millis();
+  uint32_t sent = 0, stall = millis(), fbOff = 0, fbLen = 0;
   const uint32_t deadline = millis() + 180000UL;   // hard ceiling: a crawling link must not hold the screen hostage for minutes
   while (sent < size) {
     // A refusal arrives mid-stream: the dongle answers 0x05 and hangs up while we are still
@@ -667,11 +677,17 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err, uint32_t *l
       if (c.available()) { const int r = c.read(); if (r == 0x05) { err = pfRefusedMsg(bd); c.stop(); return false; } }
       err = "connection lost at " + String(sent) + "B"; c.stop(); return false; }
     if ((int32_t)(millis() - deadline) > 0) { err = "too slow - " + String(sent*100/size) + "% in 3 min"; c.stop(); return false; }
-    uint32_t chunk = size - sent; if (chunk > 8192) chunk = 8192;
-    const size_t w = c.write(data + sent, chunk);
+    const uint8_t *src_p; uint32_t chunk;
+    if (file) {   // the file is read into the chunk buffer; a short write (w < have) leaves the rest of it for the next pass
+      if (fbOff >= fbLen) { fbLen = size - sent; if (fbLen > 8192) fbLen = 8192; const int rd = src.read(fb.p, fbLen);
+        if (rd <= 0) { err = "SD read error at " + String(sent) + "B"; c.stop(); return false; }
+        fbLen = (uint32_t)rd; fbOff = 0; }
+      src_p = fb.p + fbOff; chunk = fbLen - fbOff;
+    } else { chunk = size - sent; if (chunk > 8192) chunk = 8192; src_p = data + sent; }
+    const size_t w = c.write(src_p, chunk);
     // A FluxDrive does not read while the Amiga's motor runs: the transfer stalls until the load is over.
     if (w == 0) { if (millis() - stall > fdStallLimitMs(bd)) { err = fdIsFluxDrive(bd) ? fdBusyText() : "send stalled"; c.stop(); return false; } delay(2); continue; }
-    sent += w; stall = millis();
+    sent += w; if (file) fbOff += w; stall = millis();
     if (g_pfProgress) g_pfProgress(sent, size);
   }
   pfNoteTarget(ip);
