@@ -1837,6 +1837,8 @@ async function handleFirmwareFile(file) {
 }
 
 // ══ gti-skins: a skin = one .gts (style JSON + name/author, 256x192 RGBA PNG atlas, JPEG backgrounds) ══
+// The block GTS-BEGIN..GTS-END and gtsDrawStarter (STARTER-BEGIN..STARTER-END) are copied word for word into
+// docs/skins/editor/gts.js (the GitHub Pages skin editor): change one, change the other; tools/test_skin_editor.js fails when they differ.
 // GTS-BEGIN
 // The container of firmware/shared/skin_gts.h. No DOM: tools/gts_fixture.js runs this block in Node.
 const GTS_ATLAS_W=256,GTS_ATLAS_H=192,GTS_SLOT_VER=1,GTS_BG={1:[480,320],2:[320,480],3:[480,272],4:[272,480]};
@@ -1923,6 +1925,7 @@ var skinOn=false;   // "has_skins":true in /api/system/info; absent = no skin ca
 // The starter = the calm NEO look in the slots (Gotek_JC3248.ino calmKey / calmCard / calmRow: NEO row of THEMES[], NEO_*):
 // panel colour at 196/255, 1 px edge, radius 8 for keys and cards, 4 for the selected row (amber ring); tile = NEO background +
 // faint trace; icons in COL_LIT. labelled = the slot map (names on grey).
+// STARTER-BEGIN
 function gtsDrawStarter(c,labelled){
   const S={},A=196/255,cells=(s,k,f)=>{for(let i=0;i<s.w*s.h/k/k;i++)f(s.x+i%(s.w/k)*k,s.y+(i/(s.w/k)|0)*k,i);};
   GTS_SLOTS.forEach(s=>S[s.n]=s);c.clearRect(0,0,256,192);c.lineWidth=1;
@@ -1954,6 +1957,7 @@ function gtsDrawStarter(c,labelled){
   c.fillStyle=c.strokeStyle='#eff3ff';
   [[S.ICONS,1],[S.ICONS_2X,2]].forEach(([s,k])=>cells(s,16*k,(x,y,i)=>{if(icon[i]){c.save();c.translate(x,y);c.scale(k,k);c.lineWidth=1.5;icon[i]();c.restore();}}));
 }
+// STARTER-END
 function gtsCanvas(w,h){const cv=document.createElement('canvas');cv.width=w;cv.height=h;return cv;}
 async function gtsBytes(cv,type,q){return new Uint8Array(await (await new Promise(r=>cv.toBlob(r,type,q))).arrayBuffer());}
 function gtsLink(b,file,t){return `<a class="btn" download="${file}" href="${URL.createObjectURL(new Blob([b]))}">${t}</a>`;}

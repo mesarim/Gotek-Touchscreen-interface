@@ -6,6 +6,8 @@ Skins work on the JC3248 screen only for now (the 3.5 inch GTi). The format is t
 
 Firmware: `A600-skin1-JC3248` or later. The calm screens (A600-calm1 and later) draw from the same slots; the section "What the calm screens draw from a skin" below says which part uses which slot. A `.gts` made for `A600-skin1` still loads and looks right: no slot was added, moved or dropped.
 
+**No paint program handy, or want to see it first?** The [skin editor](../skin-editor.html) (on the GitHub Pages site) draws the real calm screens with your skin as you work, and exports the `.gts`. It runs in your browser and cannot send the file to the GTi itself: import it through the GTi's own page, or copy it to the SD card.
+
 ## The four steps
 
 1. **Download the starter.** Open the GTi's web page, go to the **Themes** tab, open the Theme Editor and press **Download starter skin**. You get `GTI_STARTER.png`: NEO, the default look, laid out in the slots below. The page draws it itself, so this works on a phone that is only connected to the GTi's own Wi-Fi and has no internet.
