@@ -918,14 +918,15 @@ bool   espnowDongleHasKey(){ return _xiao_key.length() > 0; }
 // over home Wi-Fi. True = persisted and acked. replyMs: how long the header, the map and the CRC may keep the panel
 // waiting, sectorsMs the sectors (both counted from the last byte that came); espnowFetchSave uses the defaults, 5 s and
 // 30 s (espnow_server.h), the panel's fetch before a swap a FluxDrive's busy wait (it holds every reply byte while the
-// Amiga's motor runs).
-bool saveExchange(WiFiClient& client, SavePersistCb persist, uint32_t replyMs, uint32_t sectorsMs) {
+// Amiga's motor runs). drive: 1 = DF1 of a FluxDrive (fd4), anything else DF0.
+bool saveExchange(WiFiClient& client, SavePersistCb persist, uint32_t replyMs, uint32_t sectorsMs, int drive) {
   if (!persist) return false;
   bool okAll = false;
   uint8_t* mapBuf = nullptr; uint8_t* packed = nullptr;
   {
-    uint8_t esc[5] = {0xFF,0xFF,0xFF,0xFF, 0x01};   // command escape + GET_SAVE
-    client.write(esc, 5);
+    uint8_t esc[6];   // command escape + GET_SAVE; for DF1 of a FluxDrive (fd4) GET_SAVE_DRIVE 1: the same exchange for that drive
+    const size_t escN = fdSaveFrame(drive, esc);
+    client.write(esc, escN);
     uint8_t hdr[14];
     if (readFull(client, hdr, 14, replyMs) && hdr[0]=='S' && hdr[1]=='V' && hdr[2]=='1') {
       uint32_t loadId  = (uint32_t)hdr[4] | ((uint32_t)hdr[5]<<8) | ((uint32_t)hdr[6]<<16) | ((uint32_t)hdr[7]<<24);

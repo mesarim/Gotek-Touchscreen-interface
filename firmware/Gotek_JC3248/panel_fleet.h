@@ -73,7 +73,10 @@ static String pfRefusedMsg(const char *board) {
 // stored (fd3, the commit window): the disk in it is in flash (fdStoredField: a beacon without "stored" counts as stored,
 // so every other board and an older FluxDrive: true); storedKnown: its beacon says "stored" at all.
 struct PfPeer { String id, name, ip, board, fw, disk; uint16_t tcp; bool hd, loaded, amiga, lk, lkd, enr; uint32_t seen;   // #lock: lk=lock-capable, lkd=currently locked, enr=enroll window open
-                uint16_t dirty; bool wp; String tag; uint32_t loadId; bool stored, storedKnown; };
+                uint16_t dirty; bool wp; String tag; uint32_t loadId; bool stored, storedKnown;
+                // fd4, DF1: a FluxDrive's beacon says "df1":1 while its second drive is on, with loaded1, disk1, load_id1, dirty1, wp1
+                // and stored1 beside the DF0 keys. Every other board, an older FluxDrive, DF1 off: df1 false and the rest empty.
+                bool df1, loaded1, wp1, stored1; String disk1; uint32_t loadId1; uint16_t dirty1; };
 static PfPeer   g_pfPeers[PF_MAX_PEERS];
 static int      g_pfPeerN = 0;
 static WiFiUDP  g_pfUdp;
@@ -321,6 +324,11 @@ static void pfUpsert(const String &j) {
   p->wp = pfJf(j, "wp") == "true"; p->tag = pfJf(j, "tag");
   p->loadId = (uint32_t)strtoul(pfJf(j, "load_id").c_str(), nullptr, 10);   // decimal, up to 4294967295 (toInt would cut it)
   { const String st = pfJf(j, "stored"); p->storedKnown = st.length() > 0; p->stored = fdStoredField(st.c_str()); }   // fd3
+  p->df1 = pfJf(j, "df1") == "1";   // fd4: DF1's keys count only while the beacon says it is on
+  p->loaded1 = p->df1 && pfJf(j, "loaded1") == "true"; p->disk1 = p->df1 ? pfJf(j, "disk1") : String("");
+  p->wp1 = p->df1 && pfJf(j, "wp1") == "true"; p->stored1 = !p->df1 || fdStoredField(pfJf(j, "stored1").c_str());
+  p->loadId1 = p->df1 ? (uint32_t)strtoul(pfJf(j, "load_id1").c_str(), nullptr, 10) : 0;
+  { const long d = p->df1 ? pfJf(j, "dirty1").toInt() : 0; p->dirty1 = d <= 0 ? 0 : d > 65535 ? 65535 : (uint16_t)d; }
 #if defined(GTI_FLEET)   // a default screen neither reads nor acts on the lock keys
   p->lk = pfJf(j, "lk") == "1"; p->lkd = pfJf(j, "lkd") == "1";   // #lock: lock-capable + currently-locked
   p->enr = pfJf(j, "enr") == "1";                                 // #lock: enroll window open -> the screen offers to CLAIM
@@ -538,9 +546,12 @@ static void pfDropQueuedBeacons() {
 // Its uid is the ack's (0 = not read) and nothing of it is unsaved yet: a beacon queued before the ack (the old disk's
 // dirty count) must not start a fetch. fd3: nor is it in flash yet (its commit starts now) when its beacon speaks of
 // "stored" at all: the old disk's "stored" must not read as the new disk's (fdCommitWatch would forget the replaced record).
-static void pfNoteFling(const String &ip, const String &sent, uint32_t uid) {
+static void pfNoteFling(const String &ip, const String &sent, uint32_t uid, int drive = 0) {
   for (int i = 0; i < g_pfPeerN; i++) { PfPeer &p = g_pfPeers[i]; if (p.ip != ip) continue;
     g_pfLastFlingId = p.id;
+    if (drive == 1 && fdIsFluxDrive(p.board.c_str())) { p.loaded1 = true; p.disk1 = sent.length() ? sent : String("DISK"); p.dirty1 = 0; p.loadId1 = uid;   // fd4: DF1 alike
+      if (p.storedKnown) p.stored1 = false;
+      pfDropQueuedBeacons(); return; }
     if (fdIsFluxDrive(p.board.c_str())) { p.loaded = true; p.disk = sent.length() ? sent : String("DISK"); p.dirty = 0; p.loadId = uid;
       if (p.storedKnown) p.stored = false;
       pfDropQueuedBeacons(); }
@@ -548,8 +559,9 @@ static void pfNoteFling(const String &ip, const String &sent, uint32_t uid) {
 }
 // An eject was acked: a FluxDrive is empty from now on (its next beacon says so too), with nothing it can still hand
 // over (an ejected disk's unsaved sectors cannot be fetched). Any other board: nothing changes.
-static void pfNoteEject(const String &ip) {
+static void pfNoteEject(const String &ip, int drive = 0) {
   for (int i = 0; i < g_pfPeerN; i++) if (g_pfPeers[i].ip == ip && fdIsFluxDrive(g_pfPeers[i].board.c_str())) {
+    if (drive == 1) { g_pfPeers[i].loaded1 = false; g_pfPeers[i].disk1 = ""; g_pfPeers[i].dirty1 = 0; pfDropQueuedBeacons(); return; }   // fd4
     g_pfPeers[i].loaded = false; g_pfPeers[i].disk = ""; g_pfPeers[i].dirty = 0; pfDropQueuedBeacons(); return; }
 }
 // The FluxDrive target as an index into g_pfPeers, -1 = none or not in fleet mode (WIRELESS + WiFi, home Wi-Fi up).
@@ -601,7 +613,8 @@ struct PfRadioAwake {
 };
 // loadId (optional): a FluxDrive's ack carries the disk's uid (0x01 + LE32), the key of the panel's save record; 0 for any
 // other board (its ack's load id is not read, as before) or when it did not come.
-static bool pfSendDisk(const String &ip, uint16_t port, String &err, uint32_t *loadId = nullptr) {
+// drive (fd4): 1 = the disk went to a FluxDrive's DF1 (SET_DRIVE 1 was acked just before: pfSendDrive); the roster notes it there.
+static bool pfSendDisk(const String &ip, uint16_t port, String &err, uint32_t *loadId = nullptr, int drive = 0) {
   if (loadId) *loadId = 0;
 #if defined(GTI_FLEET)
   if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
@@ -681,14 +694,15 @@ static bool pfSendDisk(const String &ip, uint16_t port, String &err, uint32_t *l
          (unsigned)(millis() - t0), sbt, awake.was(), awake.lifted ? " (lifted for the push)" : "", (int)WiFi.RSSI());
   }
   if (a != 0x01) { err = (a==0x05) ? pfRefusedMsg(bd) : (a < 0) ? "no ack" : (String(fdDeviceWord(bd)) + " refused"); return false; }   // #lock: 0x05 = the dongle rejected us (not an owner)
-  pfNoteFling(ip, g_loaded_display.length() ? g_loaded_display : g_loaded_name, uid);   // the name every caller sent with SET_NAME
+  pfNoteFling(ip, g_loaded_display.length() ? g_loaded_display : g_loaded_name, uid, drive);   // the name every caller sent with SET_NAME
   if (loadId) *loadId = uid;
   return true;
 }
 
 // ranOut (optional): the reply wait ran out with nothing read, not an early close (fdReplyRanOut). A FluxDrive holds a
 // command while the Amiga reads, so for it that means "busy, it runs later".
-static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &err, bool *ranOut = nullptr) {
+// drive (fd4): 1 with PF_CMD_EJECT = EJECT_DRIVE 1 (DF1 of a FluxDrive); any other command, or 0: as before.
+static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &err, bool *ranOut = nullptr, int drive = 0) {
   if (ranOut) *ranOut = false;
 #if defined(GTI_FLEET)
   if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
@@ -701,15 +715,18 @@ static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &
     if (!pfWriteAuth(c, err)) { c.stop(); return false; }
   }
 #endif
-  const uint8_t f[5] = { 0xFF, 0xFF, 0xFF, 0xFF, cmd };
-  c.write(f, 5);
+  const bool df1Eject = drive == 1 && cmd == PF_CMD_EJECT;
+  uint8_t f[6] = { 0xFF, 0xFF, 0xFF, 0xFF, cmd, 0 };
+  size_t fn = 5;
+  if (df1Eject) fn = fdEjectFrame(1, f);
+  c.write(f, fn);
   const uint32_t t0 = millis();
   while (c.available() < 1 && millis() - t0 < 3000) { if (!c.connected()) break; delay(5); }
   const int a = c.available() >= 1 ? c.read() : -1;
   if (ranOut) *ranOut = fdReplyRanOut(a >= 0, millis() - t0, 3000);
   c.stop();
   // Only 0x01 is success. The dongle answers 0x02 for "refused, unsaved data", 0x05 for "locked".
-  if (a == 0x01) { if (cmd == PF_CMD_EJECT) pfNoteEject(ip); return true; }
+  if (a == 0x01) { if (cmd == PF_CMD_EJECT) pfNoteEject(ip, df1Eject ? 1 : 0); return true; }
   err = (a < 0) ? PF_NO_REPLY : (a == 0x02 && fdHasSaves(pfPeerBoard(ip).c_str())) ? "refused - unsaved data (use force)" : (a == 0x05) ? PF_REFUSED_MSG : "refused";
   return false;
 }
@@ -786,6 +803,41 @@ static bool pfSendName(const String &ip, uint16_t port, const String &name, Stri
   return true;
 }
 
+// fd4: SET_DRIVE for the NEXT push and CLAIM from this panel (FluxDrive keeps it with the sender's address, one-shot, 150 s).
+// Sent just before a push to DF1, after SET_NAME. A push goes on only when this is acked (0x01): without it the disk would land
+// in DF0 (fdSetDriveFail). 0x00 = DF1 went off meanwhile. FluxDrive holds the reply while the Amiga reads, so it waits as SET_NAME
+// does; when SET_NAME ran out against this address (g_pfBusyMemo) it says busy at once. Never sent to any other board.
+// quick: a clear-up (SET_DRIVE 0 after a failed DF1 push): waits 1.5 s only, no busy memo, the answer is of no matter.
+static bool pfSendDrive(const String &ip, uint16_t port, int drive, String &err, bool quick = false) {
+#if defined(GTI_FLEET)
+  if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
+#endif
+  const String board = pfPeerBoard(ip);
+  const char *bd = board.c_str();
+  if (!fdIsFluxDrive(bd)) { err = "not a FluxDrive"; return false; }
+  if (!quick && g_pfBusyMemo.take(ip.c_str(), millis(), FD_BUSY_MEMO_MS)) { err = fdBusyText(); return false; }
+  WiFiClient c;
+  if (!c.connect(ip.c_str(), port, 4000)) { err = "connect failed"; return false; }
+  c.setNoDelay(true);
+#if defined(GTI_FLEET)
+  if (g_panel_token_ok && pfPeerWantsAuth(ip)) {
+    if (!pfWriteAuth(c, err)) { c.stop(); return false; }
+  }
+#endif
+  uint8_t f[6];
+  const size_t fn = fdDriveFrame(FD_CMD_SET_DRIVE, drive, f);
+  c.write(f, fn);
+  const uint32_t t0 = millis();
+  const uint32_t wait = quick ? 1500u : fdReplyWaitMs(bd, 3000);
+  while (c.available() < 1 && millis() - t0 < wait) { if (!c.connected()) break; delay(3); }
+  const int a = c.available() >= 1 ? c.read() : -1;
+  const bool ranOut = fdReplyRanOut(a >= 0, millis() - t0, wait);
+  c.stop();
+  const char *why = fdSetDriveFail(a, ranOut);
+  if (why) { err = why; return false; }
+  return true;
+}
+
 #if defined(GTI_FLEET)   // claim
 // #lock: enroll this panel's token as an owner of the dongle at ip. The dongle's enroll
 // window must be open (short BOOT tap on the dongle). Short best-effort exchange.
@@ -840,7 +892,9 @@ static int          g_pfRecN = 0;
 static FdSaveRecord *pfRecordFor(const String &id) {
   for (int i = 0; i < g_pfRecN; i++) if (id == g_pfRecs[i].id) return &g_pfRecs[i];
   return nullptr;
-}
+}// fd4: the record key of a FluxDrive's drive: its id for DF0 (the key the table always had), "<id>:1" for DF1.
+static String pfRecKey(const PfPeer &p, int drive) { char k[24]; return fdRecKey(p.id.c_str(), drive, k, sizeof k) ? String(k) : String(""); }
+static FdSaveRecord *pfRecordForDrive(const PfPeer &p, int drive) { return pfRecordFor(pfRecKey(p, drive)); }
 // The whole table to the card: a .tmp first, which then replaces the file (a power cut leaves the old file, or the new
 // .tmp that pfRecordsLoad takes). False = the card still has the table as it was.
 static bool pfRecordsWrite() {
@@ -985,10 +1039,10 @@ static bool pfPendPut(const FdFreshPending &p, FdFreshPending *ev, bool *evicted
 // writes are fetched (1 fetched, 0 nothing to fetch, -1 failed) - except before START FRESH's fling of the original
 // (fresh, fdFetchFirstNeeded); a single-target fling to a FluxDrive sends its own save (fdStageFor / fdUnstage around the
 // push) and keeps its record (see there).
-static int    fdFetchFirst(const String &ip, bool ui, bool fresh = false);
+static int    fdFetchFirst(const String &ip, bool ui, bool fresh = false, int drive = 0);
 static String fdStageFor(const String &ip, int targets);
 static void   fdUnstage();
-static void   fdRecordFling(const String &ip, uint32_t uid, const String &sent, bool fresh = false);
+static void   fdRecordFling(const String &ip, uint32_t uid, const String &sent, bool fresh = false, int drive = 0);
 
 // Release the discovery socket + roster. Called from applyRadioMode() on a live MODE switch,
 // so the panel does not keep a UDP listener alive in a mode that has no LAN.

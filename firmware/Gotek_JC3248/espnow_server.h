@@ -75,7 +75,7 @@ bool espnowFetchSave(SavePersistCb persist);
 // access point, and the LAN fetch from a FluxDrive over home Wi-Fi. Same bytes, same persist-before-ack rule. The waits
 // (from the last byte that came): replyMs for the header, the map and the CRC, sectorsMs for the sectors; espnowFetchSave
 // keeps 5 s and 30 s, the LAN fetch before a swap waits as long as a push would for a FluxDrive the Amiga holds.
-bool saveExchange(WiFiClient& client, SavePersistCb persist, uint32_t replyMs = 5000, uint32_t sectorsMs = 30000);
+bool saveExchange(WiFiClient& client, SavePersistCb persist, uint32_t replyMs = 5000, uint32_t sectorsMs = 30000, int drive = 0);   // drive 1: GET_SAVE_DRIVE 1 (fd4)
 
 // API
 void   espnowBegin();
