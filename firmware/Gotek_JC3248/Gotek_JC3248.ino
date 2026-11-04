@@ -50,7 +50,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-lab2i-fd4-JC3248"   // A600-lab2i-fd4 (4 Nov 2026): FluxDrive DF1 - the INSERT key is cut in two, DF0 | DF1, for a single FluxDrive with DF1 on (a dongle, an older FluxDrive, DF1 off or several peers keep the one INSERT): each half loads or ejects its own drive (SET_DRIVE 1 before the push, EJECT_DRIVE 1), NOW PLAYING adds "DF1: <disk>" (its tap-to-eject stays DF0), and DF1 saves are fetched over the LAN (GET_SAVE_DRIVE 1) into Game.sav.<tag>.adf with their own record key "<id>:1" in fdsaves.txt (old files stay valid); the commit window and START FRESH stay DF0 only | A600-lab2i-fd3 (26 Oct 2026): FluxDrive's commit window - STORING... until the disk is in flash, a revert to the previous disk puts its record back, START FRESH keeps a backup until then | A600-lab2i-fd2 (25 Oct 2026): FluxDrive saves (writing): fetched over the LAN, write protect, start fresh | A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-lab2i-fd4-JC3248"   // A600-lab2i-fd4 (4 Nov 2026): FluxDrive DF1 - the INSERT key is cut in two, DF0 | DF1, for a single FluxDrive with DF1 on (a dongle, an older FluxDrive, DF1 off or several peers keep the one INSERT): each half loads or ejects its own drive (SET_DRIVE 1 before the push, EJECT_DRIVE 1), the reel's INSERT key is cut the same way, NOW PLAYING adds "DF1: <disk>" and no longer ejects: a tap on it opens a DRIVE INFO screen (a block per drive with its disk, WP/STORING/unsaved chips and an EJECT key; a tap on a disk name selects its game in the list), and DF1 saves are fetched over the LAN (GET_SAVE_DRIVE 1) into Game.sav.<tag>.adf with their own record key "<id>:1" in fdsaves.txt (old files stay valid); the commit window and START FRESH stay DF0 only | A600-lab2i-fd3 (26 Oct 2026): FluxDrive's commit window - STORING... until the disk is in flash, a revert to the previous disk puts its record back, START FRESH keeps a backup until then | A600-lab2i-fd2 (25 Oct 2026): FluxDrive saves (writing): fetched over the LAN, write protect, start fresh | A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -2930,6 +2930,7 @@ static void drawListAndCover();
 static bool doLoadSelected(const String&p,const String&freshId=String(),bool*sent=nullptr,int drive=0);
 static void doUnload();
 static void doEject(int drive=0);  // EJECT on the touchscreen: doUnload(), and in fleet mode the FluxDrive target first; drive 1 (fd4): DF1 of the FluxDrive only
+static void doDriveInfo();         // fd4 round 2: the full-screen DRIVE INFO of the FluxDrive target (a tap on NOW PLAYING)
 static bool fleetEjectTarget(int drive=0);    // defined with the fleet manager
 static bool g_fdEjectCancelled=false;   // fleetEjectTarget: its saves were not fetched and the answer was CANCEL (nothing ejected)
 
@@ -2950,7 +2951,7 @@ static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=
 enum { LANG_EN=0, LANG_FR, LANG_IT, LANG_ES, LANG_DE, LANG_NL, LANG_PL, LANG_CS, LANG_N };   // lab15o: + Polish, Czech
 static int g_lang=0;
 static const char* const LANG_NAMES[LANG_N]={"EN","FR","IT","ES","DE","NL","PL","CS"};
-enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_CFG_MODE, L_CFG_FONT, L_CFG_LANG, L_CFG_ROTATE, L_CFG_COMPACT, L_CFG_LIBRARY, L_CFG_CATEG, L_CFG_BUTTONS, L_CFG_SAVER, L_CFG_FAVSAVER, L_CFG_HIVEMIND, L_ON, L_OFF, L_PORTRAIT, L_LANDSCAPE, L_FONT_SMALL, L_FONT_NORMAL, L_FONT_LARGE, L_PILL, L_FLAT, L_SLIDES, L_BOUNCE, L_MATRIX, L_CRACKTRO, L_SWITCH_DONGLE, L_SCAN_DONGLES, L_PAGE, L_CLOSE, L_TOP, L_SECTIONS, L_REEL_BORDER, L_COVER_ART, L_LIST_TILE, L_LAST_USED, L_HOME_WIFI, L_WIFI_CHECK, L_SET_UP, L_START_FRESH, L_FRESH_GONE, L_FRESH_ORIG, L_FRESH_SWAP, L_FRESH_DONE, L_FRESH_KEPT, L_WP_LATER, L_FRESH_CABLE, L_FRESH_CHANGED, L_FD_STORING, L_FD_NOT_OFF, L_FD_WENT_BACK, L_FD_OFF_BEFORE, L_FRESH_UNDONE, L_FRESH_RESET, L_STR_N };
+enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_CFG_MODE, L_CFG_FONT, L_CFG_LANG, L_CFG_ROTATE, L_CFG_COMPACT, L_CFG_LIBRARY, L_CFG_CATEG, L_CFG_BUTTONS, L_CFG_SAVER, L_CFG_FAVSAVER, L_CFG_HIVEMIND, L_ON, L_OFF, L_PORTRAIT, L_LANDSCAPE, L_FONT_SMALL, L_FONT_NORMAL, L_FONT_LARGE, L_PILL, L_FLAT, L_SLIDES, L_BOUNCE, L_MATRIX, L_CRACKTRO, L_SWITCH_DONGLE, L_SCAN_DONGLES, L_PAGE, L_CLOSE, L_TOP, L_SECTIONS, L_REEL_BORDER, L_COVER_ART, L_LIST_TILE, L_LAST_USED, L_HOME_WIFI, L_WIFI_CHECK, L_SET_UP, L_START_FRESH, L_FRESH_GONE, L_FRESH_ORIG, L_FRESH_SWAP, L_FRESH_DONE, L_FRESH_KEPT, L_WP_LATER, L_FRESH_CABLE, L_FRESH_CHANGED, L_FD_STORING, L_FD_NOT_OFF, L_FD_WENT_BACK, L_FD_OFF_BEFORE, L_FRESH_UNDONE, L_FRESH_RESET, L_FD_EMPTY, L_FD_UNSAVED, L_STR_N };
 static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_PREV          */ {"PREV","PREC","PREC","ANT","VORH","VORIG","POPRZ","PRED"},
   /*L_NEXT          */ {"NEXT","SUIV","SUCC","SIG","WEIT","VOLG","DALEJ","DALSI"},
@@ -3067,6 +3068,10 @@ static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_FD_OFF_BEFORE*/ {"switched off before %1 was stored","eteint avant que %1 soit enregistre","spento prima che %1 fosse memorizzato","apagado antes de guardar %1","ausgeschaltet, bevor %1 gespeichert war","uitgezet voordat %1 was opgeslagen","wylaczono, zanim %1 zostal zapisany","vypnuto drive, nez se %1 ulozil"},
   /*L_FRESH_UNDONE */ {"START FRESH undone - try again","REPARTIR A ZERO annule - reessayez","RICOMINCIA DA ZERO annullato - riprova","EMPEZAR DE CERO deshecho - intentalo","NEU ANFANGEN rueckgaengig - nochmal","OPNIEUW BEGINNEN ongedaan - probeer opnieuw","ZACZNIJ OD NOWA cofniete - sprobuj ponownie","ZACIT ZNOVU vraceno - zkuste znovu"},
   /*L_FRESH_RESET  */ {"Reset the Amiga afterwards.","Redemarrez l'Amiga ensuite.","Poi riavvia l'Amiga.","Despues reinicia el Amiga.","Danach den Amiga neu starten.","Herstart de Amiga daarna.","Potem zresetuj Amige.","Potom Amigu restartujte."},
+  // A600-lab2i-fd4 round 2: the DRIVE INFO screen. "empty" is a drive without a disk, "unsaved" follows the count of its unsaved sectors.
+  // NL is mine; FR/IT/ES/DE drafts like the rest, PL/CS to be checked by a speaker.
+  /*L_FD_EMPTY     */ {"empty","vide","vuoto","vacio","leer","leeg","pusty","prazdny"},
+  /*L_FD_UNSAVED   */ {"unsaved","non enregistre","non salvato","sin guardar","ungesichert","niet opgeslagen","niezapisane","neulozeno"},
 };
 static inline const char* T(int id){ return LSTR[id][g_lang]; }
 
@@ -5391,6 +5396,11 @@ static void drawCarousel(){
     {bool isLd=uiShowsLoaded(gi);
      g_car_ins_w=170;g_car_ins_h=34;
      g_car_ins_x=(VW-g_car_ins_w)/2;g_car_ins_y=VH-BOTTOM_H-42;
+     if(fdSplitPeer()>=0){   // fd4 round 2: cut in two, DF0 | DF1, as the list's key (drawInsertKeys): each half is INSERT/EJECT for its own drive
+       FdRect h[2]; fdInsertHalves(FdRect{g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h},4,h);
+       for(int d=0;d<2;d++){ const bool ld=uiShowsLoaded(gi,-1,d); const char*t1,*t2; fdHalfText(d,ld,&t1,&t2);
+         drawInsKey(h[d].x,h[d].y,h[d].w,h[d].h,ld,false,ld?T(L_EJECT):t1,t2,true); }
+     } else {
      uint16_t bf=isLd?(uint16_t)0x4000:(uint16_t)0x0340, bb=isLd?(uint16_t)0xE8C4:COL_GREEN, bi=TFT_WHITE;
      if(g_neo){ if(isLd){ neoKey(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,10,NEO_RED); bf=COL_BG; bi=NEO_RED_INK; }   // A600-neo2: EJECT = muted red key
                 else { gfx_fillRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,10,COL_AMBER); bf=COL_AMBER; bi=COL_BG; } }   // INSERT = the amber main action
@@ -5400,6 +5410,7 @@ static void drawCarousel(){
      gfx_setTextSize(2);gfx_setTextColor(bi,bf);
      const char*lbl=isLd?T(L_EJECT):T(L_INSERT);int tw=gfx_textWidth(lbl);
      gfx_setCursor(g_car_ins_x+(g_car_ins_w-tw)/2,g_car_ins_y+(g_car_ins_h-16)/2);gfx_print(lbl);}
+    }
   }
   if(g_btn_pill||g_neo){                                      // 5.8.3: coloured rounded pill buttons; A600-neo2: NEO keys
     int y=VH-BOTTOM_H; fillBack(0,y,VW,BOTTOM_H); gfx_hline(0,y,VW,COL_SEP);
@@ -5537,12 +5548,12 @@ static void carHandleTap(uint16_t px,uint16_t py){
     return;
   }
   // INSERT/EJECT button (checked FIRST — its corners overlap the side zones)
-  if(px>=(uint16_t)g_car_ins_x&&px<(uint16_t)(g_car_ins_x+g_car_ins_w)&&
-     py>=(uint16_t)g_car_ins_y&&py<(uint16_t)(g_car_ins_y+g_car_ins_h)){
+  const int carDrv=fdInsertHit(FdRect{g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h},4,fdSplitPeer()>=0,(int)px,(int)py);   // fd4 round 2: the half tapped is the drive
+  if(carDrv>=0){
     int gi=g_car_list[ci];
     g_sel=gi;g_disk_page=0;setActiveLetter(bucketOf(g_games[gi].name));
-    if(uiShowsLoaded(gi))doEject();
-    else{auto&gm=g_games[gi];int d=(g_disk_sel>=0&&g_disk_sel<(int)gm.disk_indices.size())?g_disk_sel:0;doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[d]]);}
+    if(uiShowsLoaded(gi,-1,carDrv))doEject(carDrv);
+    else{auto&gm=g_games[gi];int d=(g_disk_sel>=0&&g_disk_sel<(int)gm.disk_indices.size())?g_disk_sel:0;doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[d]],String(),nullptr,carDrv);}
     if(g_car_active){drawCarousel();gfx_flush();}        // repaint over the list redraw the loader did
     return;
   }
@@ -8360,6 +8371,77 @@ static void doFleetPick(){
   }
 }
 
+// ── fd4 round 2: DRIVE INFO - what the FluxDrive target holds, a drive at a time ────────────────────────────────────────────
+// Opened by a tap on NOW PLAYING (which never ejects). Title: the FluxDrive's name. A block per drive (DF0, and DF1 while its beacon
+// says df1): the disk's name or "empty", its chips (WP; STORING... for DF0; the unsaved sector count when above 0), and while it holds
+// a disk an EJECT key (the drive's own eject path: its saves fetched first or asked about, then EJECT / EJECT_DRIVE 1; the screen
+// stays and redraws). A tap on a disk's name closes it and selects the game of that disk in the list (the loaded marker's matching,
+// uiLoadedAs), if there is one. BACK closes it, as 2 minutes without a touch do. The layout and what a tap means: fdInfoLayout /
+// fdInfoTap (fluxdrive_peer.h, host-tested), the same in both orientations and the compact layout.
+static FdInfoLayout g_diL;   // the layout as drawn (a member of the sketch, not a parameter: the .ino's auto-prototypes come before fluxdrive_peer.h)
+static void drawDriveInfo(int t){
+  FdInfoLayout&L=g_diL; NeoScope _ns; clearBack();
+  const PfPeer&p=g_pfPeers[t];
+  fdInfoLayout(VW,VH,p.df1,p.loaded,p.loaded1,&L);
+  const uint16_t pbg=g_neo?COL_BG:COL_PANEL;   // the text background on a block (a NEO panel is drawn over the picture: COL_BG is its transparent key)
+  { String ti=pfPeerLabel(p); gfx_setTextSize(2); while(ti.length()>1&&gfx_textWidth(ti)>VW-16) ti.remove(ti.length()-1);
+    gfx_setTextColor(COL_AMBER,COL_BG); gfx_setCursor(8,9); gfx_print(ti); }
+  for(int i=0;i<L.blocks;i++){
+    const FdRect b=L.block[i]; const bool ld=i?p.loaded1:p.loaded; const bool wp=ld&&(i?p.wp1:p.wp); const uint16_t dirty=i?p.dirty1:p.dirty;
+    if(g_neo) neoPanel(b.x,b.y,b.w,b.h,8); else { gfx_fillRoundRect(b.x,b.y,b.w,b.h,8,COL_PANEL); gfx_drawRoundRect(b.x,b.y,b.w,b.h,8,COL_ACCENT); }
+    gfx_setTextSize(1); gfx_setTextColor(COL_ORANGE,pbg); gfx_setCursor(b.x+8,b.y+6); gfx_print(i?"DF1":"DF0");
+    int cx=b.x+8+gfx_textWidth("DF0")+10;
+    auto chip=[&](const String&txt){ const int w=gfx_textWidth(txt)+6; if(cx+w>b.x+b.w-8) return;
+      gfx_fillRoundRect(cx,b.y+4,w,10,2,COL_AMBER); gfx_setTextColor(TFT_BLACK,COL_AMBER); gfx_setCursor(cx+3,b.y+5); gfx_print(txt); cx+=w+4; };
+    gfx_setTextSize(1);
+    if(wp) chip("WP");
+    if(i==0&&fdShowStoring(true,p.loaded,p.stored)) chip(T(L_FD_STORING));
+    if(ld&&dirty>0) chip(String(dirty)+" "+T(L_FD_UNSAVED));
+    const FdRect n=L.name[i]; gfx_setTextSize(2);
+    String dn; if(ld){ dn=i?p.disk1:p.disk; if(!dn.length()) dn="disk"; } else dn=T(L_FD_EMPTY);
+    while(dn.length()>1&&gfx_textWidth(dn)>n.w) dn.remove(dn.length()-1);
+    gfx_setTextColor(ld?COL_GREEN:COL_DIM,pbg); gfx_setCursor(n.x,n.y+(n.h-16)/2); gfx_print(dn);
+    if(L.hasEject[i]){ const FdRect e=L.eject[i];
+      const uint16_t bc=keyFill(e.x,e.y,e.w,e.h,8,(uint16_t)0x4000,NEO_RED); if(!g_neo) gfx_drawRoundRect(e.x,e.y,e.w,e.h,8,(uint16_t)0xE8C4);
+      gfx_setTextColor(g_neo?NEO_RED_INK:(uint16_t)TFT_WHITE,bc); gfx_setTextSize(2); int sz=2; const char*lb=T(L_EJECT); if(gfx_textWidth(lb)>e.w-4){ gfx_setTextSize(1); sz=1; }
+      gfx_setCursor(e.x+(e.w-gfx_textWidth(lb))/2,e.y+(e.h-8*sz)/2); gfx_print(lb); }
+  }
+  { const FdRect k=L.back; const uint16_t bc=keyFill(k.x,k.y,k.w,k.h,8,COL_BAR,COL_SEP);
+    gfx_setTextSize(2); gfx_setTextColor(btnInk(bc,COL_LIT),bc); const char*lb=T(L_BACK);
+    gfx_setCursor(k.x+(k.w-gfx_textWidth(lb))/2,k.y+(k.h-16)/2); gfx_print(lb); }
+  gfx_flush();
+}
+static void doDriveInfo(){
+  const int t0i=pfFluxTarget(); if(t0i<0) return;
+  const String pid=g_pfPeers[t0i].id;
+  String drawn; bool dirty=true, down=false, moved=false; int downX=0,downY=0; uint32_t lastTouch=millis();
+  auto drain=[&](){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); down=false; moved=true; lastTouch=millis(); };
+  int selGame=-1, selDisk=-1;
+  while(true){
+    webPanelService(); pfService(); pfWorker();
+    const int t=pfPeerIdx(pid); if(t<0||!fdIsFluxDrive(g_pfPeers[t].board.c_str())) break;   // it went away
+    { const PfPeer&p=g_pfPeers[t]; String sig=String(p.loaded)+p.disk+"|"+String(p.wp)+String(p.stored)+String(p.dirty)+"|"+String(p.df1)+String(p.loaded1)+p.disk1+"|"+String(p.wp1)+String(p.dirty1)+"|"+p.name+p.ip;
+      if(sig!=drawn){ drawn=sig; dirty=true; } }
+    if(dirty){ dirty=false; drawDriveInfo(t); }
+    bool tt=Touch_ReadFrame(); uint16_t tx=0,ty=0; if(tt)tt=getTouchXY(&tx,&ty);
+    if(tt){ lastTouch=millis(); if(!down){down=true;downX=tx;downY=ty;moved=false;} else if(abs((int)ty-downY)>8||abs((int)tx-downX)>8)moved=true; }
+    else if(down){ down=false;
+      if(!moved){ const int code=fdInfoTap(g_diL,downX,downY);
+        if(code==FD_INFO_BACK) break;
+        else if(code==FD_INFO_EJECT0||code==FD_INFO_EJECT1){ doEject(code==FD_INFO_EJECT1?1:0); drain(); dirty=true; }   // the drive's own eject path; this screen stays
+        else if(code==FD_INFO_NAME0||code==FD_INFO_NAME1){ const int dr=code==FD_INFO_NAME1?1:0;
+          for(int gi=0;gi<(int)g_games.size();gi++){ int ld=-1; if(uiLoadedAs(gi,&ld,dr)){ selGame=gi; selDisk=ld; break; } }
+          if(selGame>=0) break; }   // no game of that name: nothing happens
+      }
+    }
+    if(millis()-lastTouch>120000) break;   // no touch for 2 minutes: back to the list (this screen blocks the screensaver's own timer)
+    delay(15);
+  }
+  if(selGame>=0){ g_sel=selGame; g_disk_sel=selDisk>=0?selDisk:0; g_disk_page=0; g_scrollPx=min((float)(selGame*LIST_ITEM_H),(float)maxScrollPx()); g_inertia_on=false; setActiveLetter(bucketOf(g_games[selGame].name)); }
+  { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }   // a finger held through it must not tap what is under it
+  drawFullUI(); gfx_flush();
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // SETUP
 // ════════════════════════════════════════════════════════════════════════════
@@ -9301,11 +9383,11 @@ static void handleTap(uint16_t px,uint16_t py){
     }
     return;
   }
-  // ── NOW PLAYING, fleet mode: the FluxDrive target holds a disk -> a tap ejects it, whether or not the library knows
-  //    its name (no game to show an EJECT label on). A drag that starts there (a flick of the list's bottom row begun a
-  //    few px low) does not. Otherwise the bar does what it did: nothing. The rule: fdBarEjects.
+  // ── NOW PLAYING, fleet mode: the FluxDrive target's bar shows a disk -> a tap opens its DRIVE INFO screen (it never ejects: the
+  //    EJECT keys are on that screen). A drag that starts there (a flick of the list's bottom row begun a few px low) does not.
+  //    Otherwise the bar does what it did: nothing. The rule: fdBarOpensInfo.
   { const int ft=pfFluxTarget(); const FdRect bar={LIST_X,NOW_Y,LIST_W,NOW_PLAY_H};
-    if(fdBarEjects(NOW_ON,px,py,bar,ft>=0,ft>=0&&g_pfPeers[ft].loaded,g_touch_moved)){ doEject(); return; } }
+    if(fdBarOpensInfo(NOW_ON,px,py,bar,ft>=0,ft>=0&&fdBarShows(true,g_pfPeers[ft].loaded,g_pfPeers[ft].df1,g_pfPeers[ft].loaded1),g_touch_moved)){ doDriveInfo(); return; } }
   // ── v4.9.2: book button on the cover — opens the .rtfm manual full-screen ──
   if(!g_info_showing&&g_manual_bw&&g_manual_path.length()&&px>=(uint16_t)g_manual_bx&&px<(uint16_t)(g_manual_bx+g_manual_bw)&&py>=(uint16_t)g_manual_by&&py<(uint16_t)(g_manual_by+g_manual_bh)){
     doManual(g_manual_path); drawFullUI(); gfx_flush(); return; }
