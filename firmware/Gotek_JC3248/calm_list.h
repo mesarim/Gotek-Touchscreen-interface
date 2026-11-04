@@ -8,14 +8,16 @@
 #include <stdio.h>
 #include "calm_ui.h"
 
-// ---- Search row: [ Search ........ ] [A-Z] [filter] -------------------------------------------------------------------
+// ---- Search row: [ Search ... ] [star] [A-Z] [filter] --------------------------------------------------------------------
+// The star key (48 wide) switches the list between all programs and only the favourites; the search field takes what is left.
 #define CL_KEY_W 72
-struct ClSearchRow { CuRect search, az, filter; };
+struct ClSearchRow { CuRect search, star, az, filter; };
 inline ClSearchRow clSearchRow(const CuRect& area) {
   ClSearchRow r;
   r.filter = CuRect{cuRight(area) - CL_KEY_W, area.y, CL_KEY_W, area.h};
   r.az     = CuRect{r.filter.x - CU_GAP - CL_KEY_W, area.y, CL_KEY_W, area.h};
-  r.search = CuRect{area.x, area.y, r.az.x - CU_GAP - area.x, area.h};
+  r.star   = CuRect{r.az.x - CU_GAP - CU_KEY, area.y, CU_KEY, area.h};
+  r.search = CuRect{area.x, area.y, r.star.x - CU_GAP - area.x, area.h};
   return r;
 }
 
@@ -150,4 +152,23 @@ inline int clConfirmTap(const ClConfirm& c, int x, int y) {
   if (cuContains(c.ok, x, y)) return CL_CF_OK;
   if (cuContains(c.cancel, x, y) || cuContains(c.back, x, y)) return CL_CF_CANCEL;
   return CL_CF_NONE;
+}
+
+// ---- The list's view: all programs, or only the favourites (the star key) ---------------------------------------------------
+// With onlyFav the rows are the favourites in list order; out[] holds their game indices. Without it the list is the library
+// itself and out[] is not used (position = game index).
+inline int clViewBuild(const unsigned char* fav, int n, bool onlyFav, int* out, int cap) {
+  if (!onlyFav) return n;
+  int c = 0;
+  for (int i = 0; i < n && c < cap; i++) if (fav[i]) out[c++] = i;
+  return c;
+}
+inline int clViewGame(const int* view, int count, bool onlyFav, int pos) {   // row position -> game index (-1: none)
+  if (pos < 0 || pos >= count) return -1;
+  return onlyFav ? view[pos] : pos;
+}
+inline int clViewPos(const int* view, int count, bool onlyFav, int gi, int n) {   // game index -> row position (-1: not shown)
+  if (!onlyFav) return (gi >= 0 && gi < n) ? gi : -1;
+  for (int k = 0; k < count; k++) if (view[k] == gi) return k;
+  return -1;
 }

@@ -20,10 +20,12 @@ static void test_search_row() {
   ClSearchRow r = clSearchRow(CuRect{8, 48, 464, 48});
   CHECK(r.filter.w == 72 && cuRight(r.filter) == 472 && r.filter.h == 48 && r.filter.y == 48);
   CHECK(r.az.w == 72 && cuRight(r.az) == r.filter.x - 8);
-  CHECK(r.search.x == 8 && cuRight(r.search) == r.az.x - 8 && r.search.w == 464 - 72 - 72 - 16);
-  CuRect rs[3] = {r.search, r.az, r.filter};
-  CHECK(cuHit(rs, 3, 100, 60) == 0 && cuHit(rs, 3, 340, 60) == 1 && cuHit(rs, 3, 450, 90) == 2);
-  CHECK(cuHit(rs, 3, 100, 100) == -1);
+  CHECK(r.star.w == 48 && r.star.h == 48 && cuRight(r.star) == r.az.x - 8);      // the favourites key: 48 wide, between Search and A-Z
+  CHECK(r.search.x == 8 && cuRight(r.search) == r.star.x - 8 && r.search.w == 464 - 72 - 72 - 48 - 24);
+  CuRect rs[4] = {r.search, r.star, r.az, r.filter};
+  CHECK(cuHit(rs, 4, 100, 60) == 0 && cuHit(rs, 4, r.star.x + 5, 60) == 1 && cuHit(rs, 4, r.az.x + 5, 60) == 2 && cuHit(rs, 4, 450, 90) == 3);
+  CHECK(cuHit(rs, 4, 100, 100) == -1);
+  for (const CuRect& k : rs) CHECK(k.w >= 48 && k.h >= 48);   // every key at least 48 wide
 }
 
 static void test_rows() {
@@ -196,11 +198,26 @@ static void test_portrait_lists() {
   ClConfirm c = clConfirmLayout(320, 480);
   CHECK(c.ok.x - cuRight(c.cancel) >= 16 && cuBottom(c.ok) <= 472 && cuRight(c.ok) <= 312 && c.cancel.w >= 100);
   ClSearchRow r = clSearchRow(CuRect{8, 48, 304, 48});
-  CHECK(r.search.w >= 120 && cuRight(r.search) < r.az.x && cuRight(r.filter) == 312);
+  CHECK(r.search.w >= 80 && r.star.w == 48 && cuRight(r.search) < r.star.x && cuRight(r.star) < r.az.x && cuRight(r.filter) == 312);   // the search field shrinks, the keys do not
+}
+
+static void test_fav_view() {
+  const unsigned char fav[8] = {0, 1, 0, 0, 1, 1, 0, 0};
+  int out[8];
+  CHECK(clViewBuild(fav, 8, false, out, 8) == 8);                    // all: the list as it is (out is not used)
+  CHECK(clViewBuild(fav, 8, true, out, 8) == 3 && out[0] == 1 && out[1] == 4 && out[2] == 5);   // favourites only, in list order
+  const unsigned char none[4] = {0, 0, 0, 0};
+  CHECK(clViewBuild(none, 4, true, out, 8) == 0 && clViewBuild(none, 0, true, out, 8) == 0);
+  int small[2]; CHECK(clViewBuild(fav, 8, true, small, 2) == 2);     // never past its room
+  clViewBuild(fav, 8, true, out, 8);
+  CHECK(clViewGame(out, 3, true, 1) == 4 && clViewGame(out, 3, true, 5) == -1 && clViewGame(out, 8, false, 6) == 6);
+  CHECK(clViewPos(out, 3, true, 5, 8) == 2 && clViewPos(out, 3, true, 4, 8) == 1 && clViewPos(out, 3, true, 2, 8) == -1);   // a game that is not a favourite is not in the view
+  CHECK(clViewPos(out, 8, false, 6, 8) == 6 && clViewPos(out, 8, false, 9, 8) == -1);
 }
 
 int main() {
   test_search_row();
+  test_fav_view();
   test_portrait_lists();
   test_settings_layout();
   test_rows();
