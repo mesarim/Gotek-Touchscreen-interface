@@ -1,6 +1,7 @@
 // Host test for firmware/Gotek_JC3248/gti_targets.h: the drives the screen can reach, and the strip / load-key layouts.
 // Pure C++, no Arduino types. Run with tools/test_gti_targets.sh.
 #include "gti_targets.h"
+#include "calm_list.h"
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
@@ -270,6 +271,60 @@ static void test_disk_tap() {
   CHECK(gtDiskTap(gtBuildTargets(wired(true, "Lemmings"), nullptr, 0, t, GT_MAX_TARGETS), true, true) == GT_DISK_SWAP);   // the wired Gotek
 }
 
+static bool inside(const CuRect& r, int w, int h) { return r.x >= 0 && r.y >= 0 && cuRight(r) <= w && cuBottom(r) <= h && r.w > 0 && r.h > 0; }
+static bool apart(const CuRect& a, const CuRect& b) { return cuRight(a) <= b.x || cuRight(b) <= a.x || cuBottom(a) <= b.y || cuBottom(b) <= a.y; }
+
+static void test_program_layout() {
+  for (int disks = 1; disks <= 3; disks += 2) {
+    GtProgLayout L = gtProgLayout(480, disks);
+    CHECK(L.hasStepper == (disks > 1));
+    // everything sits between the header and the drive strip, nothing overlaps, nothing reaches the strip
+    const CuRect all[] = {L.back, L.more, L.cover, L.details, L.status, L.loadArea};
+    for (const CuRect& r : all) CHECK(inside(r, 480, GT_CONTENT_BOTTOM));
+    if (L.hasStepper) CHECK(inside(L.stepper, 480, GT_CONTENT_BOTTOM));
+    CHECK(L.back.h == 48 && L.more.h == 48 && L.more.w == 48 && L.loadArea.h == 48);
+    CHECK(cuBottom(L.loadArea) == GT_CONTENT_BOTTOM && L.loadArea.x == 8 && L.loadArea.w == 464);
+    CHECK(apart(L.back, L.more) && apart(L.cover, L.details) && apart(L.details, L.status) && apart(L.cover, L.status) && apart(L.status, L.loadArea) && apart(L.cover, L.loadArea));
+    if (L.hasStepper) CHECK(apart(L.stepper, L.details) && apart(L.stepper, L.status) && L.stepper.h == 48 && apart(L.stepper, L.cover));
+    CHECK(L.title.x >= cuRight(L.back) && cuRight(L.title) <= L.more.x);
+    CHECK(L.status.h >= 16);
+  }
+  CHECK(gtProgLayout(480, 2).details.h < gtProgLayout(480, 1).details.h);   // the stepper takes the room of some text
+  GtProgLayout L = gtProgLayout(480, 3);
+  CHECK(gtProgTap(L, L.back.x + 5, L.back.y + 5) == GT_PR_BACK);
+  CHECK(gtProgTap(L, L.more.x + 5, L.more.y + 5) == GT_PR_MORE);
+  CHECK(gtProgTap(L, L.stepper.x + 5, L.stepper.y + 5) == GT_PR_PREV);
+  CHECK(gtProgTap(L, cuRight(L.stepper) - 5, L.stepper.y + 5) == GT_PR_NEXT);
+  CHECK(gtProgTap(L, L.stepper.x + L.stepper.w / 2, L.stepper.y + 5) == GT_PR_NONE);   // the text between the arrows
+  CHECK(gtProgTap(L, L.cover.x + 5, L.cover.y + 5) == GT_PR_NONE);
+  GtProgLayout L1 = gtProgLayout(480, 1);
+  CHECK(gtProgTap(L1, 200, 130) == GT_PR_NONE);   // no stepper: nothing there
+}
+
+static void test_pick_layout() {
+  const bool on[6] = {true, true, true, true, true, true};
+  GtPickLayout L = gtPickLayout(480, 320, 4, 0);
+  CHECK(L.cards == 4 && L.card[0].h == GT_PICK_CARD_H && L.card[1].y == L.card[0].y + GT_PICK_CARD_H + 8);
+  CHECK(L.back.x == 8 && L.view.y >= cuBottom(L.back) + 4 && cuBottom(L.view) == 312);
+  CHECK(L.maxScroll == 4 * (GT_PICK_CARD_H + 8) - 8 - L.view.h);
+  CHECK(gtPickTap(L, L.back.x + 5, L.back.y + 5, on) == GT_PICK_BACK);
+  CHECK(gtPickTap(L, 100, L.card[1].y + 10, on) == GT_PICK_ROW + 1);
+  CHECK(gtPickTap(L, 100, L.card[0].y + GT_PICK_CARD_H + 3, on) == GT_PICK_NONE);   // the gap
+  const bool off[6] = {true, false, true, true, true, true};
+  CHECK(gtPickTap(L, 100, L.card[1].y + 10, off) == GT_PICK_NONE);                  // a drive that cannot be reached
+  GtPickLayout S = gtPickLayout(480, 320, 4, 9999);
+  CHECK(S.scroll == S.maxScroll);
+  CHECK(gtPickTap(S, 100, S.view.y - 3, on) == GT_PICK_NONE);                        // under the header
+  CHECK(gtPickLayout(480, 320, 2, 0).maxScroll == 0);
+}
+
+static void test_chip_words() {
+  ClChip c = clRowChip(3, false, false, false, false, "", "disques", "charge");
+  CHECK(std::strcmp(c.text, "3 disques") == 0);
+  c = clRowChip(1, false, false, false, true, "", "disques", "charge");
+  CHECK(std::strcmp(c.text, "charge") == 0);
+}
+
 int main() {
   test_screen_in_a_gotek();
   test_espnow_paired_dongle();
@@ -286,6 +341,9 @@ int main() {
   test_strip_tap();
   test_info_layout();
   test_disk_tap();
+  test_program_layout();
+  test_pick_layout();
+  test_chip_words();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }

@@ -88,17 +88,18 @@ inline int clFitDisk(int gameLen, int charPx, int widthPx, int digits) {
 // for the wired Gotek); else more than one disk: "<n> disks"; else nothing.
 enum { CL_CHIP_NONE = 0, CL_CHIP_DISKS, CL_CHIP_LOADED };
 struct ClChip { int kind; char text[16]; };
-inline ClChip clRowChip(int diskCount, bool splitPeer, bool df0, bool df1, bool anyLoaded, const char* singleName) {
+inline ClChip clRowChip(int diskCount, bool splitPeer, bool df0, bool df1, bool anyLoaded, const char* singleName,
+                        const char* disksWord = "disks", const char* loadedWord = "loaded") {   // the words are translated by the caller
   ClChip c; c.kind = CL_CHIP_NONE; c.text[0] = 0;
   if (splitPeer && (df0 || df1)) {
     c.kind = CL_CHIP_LOADED;
     strcpy(c.text, df0 && df1 ? "DF0 DF1" : (df0 ? "DF0" : "DF1"));
   } else if (!splitPeer && anyLoaded) {
     c.kind = CL_CHIP_LOADED;
-    if (singleName != nullptr && singleName[0]) { strncpy(c.text, singleName, 9); c.text[9] = 0; } else strcpy(c.text, "loaded");
+    if (singleName != nullptr && singleName[0]) { strncpy(c.text, singleName, 9); c.text[9] = 0; } else { strncpy(c.text, loadedWord, sizeof c.text - 1); c.text[sizeof c.text - 1] = 0; }
   } else if (diskCount > 1) {
     c.kind = CL_CHIP_DISKS;
-    snprintf(c.text, sizeof c.text, "%d disks", diskCount);
+    snprintf(c.text, sizeof c.text, "%d %s", diskCount, disksWord);
   }
   return c;
 }

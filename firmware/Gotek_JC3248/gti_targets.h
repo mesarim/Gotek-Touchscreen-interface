@@ -242,3 +242,62 @@ enum { GT_DISK_SELECT = 0, GT_DISK_SWAP = 1 };
 inline int gtDiskTap(int targetCount, bool gameLoaded, bool hotswap) {
   return (targetCount == 1 && gameLoaded && hotswap) ? GT_DISK_SWAP : GT_DISK_SELECT;
 }
+
+// ---- The program screen (A600-calm4, mockup 2) ---------------------------------------------------------------------------
+// Header: Back, the title, a "..." key (manual, .nfo, START FRESH). Then the cover on the left; at the right the details text and,
+// for a multi-disk game, the disk stepper "< Disk 2 of 3 >"; one status line ("Disk 2: in DF1"); the load keys (gtLoadLayout over
+// loadArea) in the last 48 px of the content; the drive strip below as on every screen. Rects are touch areas.
+struct GtProgLayout { CuRect back, title, more, cover, details, stepper, status, loadArea; bool hasStepper; };
+enum { GT_PR_NONE = 0, GT_PR_BACK, GT_PR_MORE, GT_PR_PREV, GT_PR_NEXT };
+inline GtProgLayout gtProgLayout(int w, int diskCount) {
+  GtProgLayout L; memset(&L, 0, sizeof L);
+  L.back  = CuRect{CU_MARGIN, 4, 104, CU_KEY};
+  L.more  = CuRect{w - CU_MARGIN - CU_KEY, 4, CU_KEY, CU_KEY};
+  L.title = CuRect{cuRight(L.back) + CU_GAP, 4, L.more.x - CU_GAP - (cuRight(L.back) + CU_GAP), CU_KEY};
+  const int top = cuBottom(L.back) + CU_GAP;   // 60
+  L.cover = CuRect{CU_MARGIN, top, 150, 108};
+  const int rx = cuRight(L.cover) + CU_GAP;
+  L.hasStepper = diskCount > 1;
+  if (L.hasStepper) {
+    L.details = CuRect{rx, top, w - CU_MARGIN - rx, 54};
+    L.stepper = CuRect{rx, top + 60, w - CU_MARGIN - rx, CU_KEY};
+  } else {
+    L.details = CuRect{rx, top, w - CU_MARGIN - rx, 108};
+  }
+  L.status   = CuRect{CU_MARGIN, cuBottom(L.cover) + CU_GAP, w - 2 * CU_MARGIN, 16};
+  L.loadArea = CuRect{CU_MARGIN, GT_CONTENT_BOTTOM - CU_KEY, w - 2 * CU_MARGIN, CU_KEY};
+  return L;
+}
+inline int gtProgTap(const GtProgLayout& L, int x, int y) {
+  if (cuContains(L.back, x, y)) return GT_PR_BACK;
+  if (cuContains(L.more, x, y)) return GT_PR_MORE;
+  if (L.hasStepper) {
+    CuRect l, m, r; cuStepper(L.stepper, &l, &m, &r);
+    if (cuContains(l, x, y)) return GT_PR_PREV;
+    if (cuContains(r, x, y)) return GT_PR_NEXT;
+  }
+  return GT_PR_NONE;
+}
+
+// ---- "Load into..." (mockup 10): one row per drive, what is in it now; a drive that cannot be reached is dimmed ---------------
+#define GT_PICK_CARD_H 64
+struct GtPickLayout { CuRect back, view; int cards, scroll, maxScroll; CuRect card[GT_MAX_TARGETS]; };
+enum { GT_PICK_NONE = 0, GT_PICK_BACK = 1, GT_PICK_ROW = 100 };   // + the row's index
+inline GtPickLayout gtPickLayout(int w, int h, int n, int scroll) {
+  GtPickLayout L; memset(&L, 0, sizeof L);
+  L.back = CuRect{CU_MARGIN, 4, 104, CU_KEY};
+  const int vy = cuBottom(L.back) + CU_GAP;
+  L.view = CuRect{CU_MARGIN, vy, w - 2 * CU_MARGIN, h - CU_MARGIN - vy};
+  L.cards = n < 0 ? 0 : (n > GT_MAX_TARGETS ? GT_MAX_TARGETS : n);
+  const int t = L.cards * (GT_PICK_CARD_H + CU_GAP) - CU_GAP - L.view.h;
+  L.maxScroll = t > 0 ? t : 0;
+  L.scroll = scroll < 0 ? 0 : (scroll > L.maxScroll ? L.maxScroll : scroll);
+  for (int i = 0; i < L.cards; i++) L.card[i] = CuRect{L.view.x, L.view.y + i * (GT_PICK_CARD_H + CU_GAP) - L.scroll, L.view.w, GT_PICK_CARD_H};
+  return L;
+}
+inline int gtPickTap(const GtPickLayout& L, int x, int y, const bool* enabled) {
+  if (cuContains(L.back, x, y)) return GT_PICK_BACK;
+  if (!cuContains(L.view, x, y)) return GT_PICK_NONE;
+  for (int i = 0; i < L.cards; i++) if (cuContains(L.card[i], x, y)) return (enabled != nullptr && enabled[i]) ? GT_PICK_ROW + i : GT_PICK_NONE;
+  return GT_PICK_NONE;
+}
