@@ -60,7 +60,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-calm5-JC3248"   // A600-calm5 (4 Nov 2026): the reel shows only covers - a bigger centre cover, the name (size 3) and N disks, a source key in the top bar (all / favourites / most played / the dice), a tap opens the program screen; the description and manual readers get the calm frame (Back, title, text at size 2, page keys); the count says programs | A600-calm4c (4 Nov 2026): a disk's name in Drive info opens that game's program screen on that disk; on the program screen the cover opens full screen and the details text opens the description | A600-calm4b (4 Nov 2026): ONE load screen with one bar (Reading card... / Sending to DF0... NN%); a send to a single fleet drive streams the image from the card instead of staging it in RAM first; the reel has no disk keys and no INSERT/EJECT (a Load key opens the program screen); the battery glyph shows only with BATTERY=ON in Settings | A600-calm4 (4 Nov 2026): the program screen - a tap on a row (or on the reel's centre cover) opens cover, details, the disk stepper and the load keys (one Load, one per drive, or Load into... with a list of every drive and what is in it); the ... key holds the manual, the .nfo text and START FRESH; the new strings are translated; the top bar no longer carries the storing warning (the drive's card does) | A600-calm3 (4 Nov 2026): the calm list - a search row (Search, A-Z, the filter), rows of 48 px with the name at size 3 and a chip (the drive that holds it, or N disks), the letter grid, the filter list (ADF / DSK / GEN / categories / own disks); the left cover column, the A-Z column, the mode bar and the L tiles are gone from the landscape list (a tap on a row opens the reel at that game until the program screen); a disk key only selects when more than one drive is reachable (one drive swaps with a real eject first); a progress bar while a disk loads; the library sort is a host-tested heapsort | A600-calm2 (4 Nov 2026): the calm frame - landscape list and reel get the top bar (List / Reel tabs, the count, the Settings key) and the drive strip (one wide card, two halves, or two cards and +N: caption, the disk it holds, a link dot; a tap opens Drive info) instead of the status bar, NOW PLAYING and the bottom key row; Drive info is one card per drive of any kind (Gotek, dongle, FluxDrive DF0 / DF1) with Eject, scrolling beyond two; the reel keeps its source and ROLL keys on the stage; portrait and the compact layout are unchanged | A600-calm1 (4 Nov 2026): the calm layout building blocks - POST /api/tap (a virtual finger, test builds only), calm_ui.h (grid), gti_targets.h (drives, strip and load-key layouts), the calm UI primitives; nothing visible changes yet | A600-lab2i-fd4s (4 Nov 2026): skins (gti-skins, PR #29) and FluxDrive DF1 (fluxdrive-panel) together, the base of the calm layout | A600-lab2i-fd4 (4 Nov 2026): FluxDrive DF1 (a multi-disk game is sent as "<game> - Disk <n>" and read back, so each drive shows and ejects its own disk) - the INSERT key is cut in two, DF0 | DF1, for a single FluxDrive with DF1 on (a dongle, an older FluxDrive, DF1 off or several peers keep the one INSERT): each half loads or ejects its own drive (SET_DRIVE 1 before the push, EJECT_DRIVE 1), the reel's INSERT key is cut the same way, NOW PLAYING adds "DF1: <disk>" and no longer ejects: a tap on it opens a DRIVE INFO screen (a block per drive with its disk, WP/STORING/unsaved chips and an EJECT key; a tap on a disk name selects its game in the list), and DF1 saves are fetched over the LAN (GET_SAVE_DRIVE 1) into Game.sav.<tag>.adf with their own record key "<id>:1" in fdsaves.txt (old files stay valid); the commit window and START FRESH stay DF0 only | A600-skin1-JC3248 (Dimmy, 16 Oct): skins - one .gts file (colours + PNG atlas + optional JPEG backgrounds) makes your own look; made and uploaded in the web page's Theme Editor, NEO is the starter | A600-lab2i-fd3 (26 Oct 2026): FluxDrive's commit window - STORING... until the disk is in flash, a revert to the previous disk puts its record back, START FRESH keeps a backup until then | A600-lab2i-fd2 (25 Oct 2026): FluxDrive saves (writing): fetched over the LAN, write protect, start fresh | A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-calm6-JC3248"   // A600-calm6 (4 Nov 2026): Settings in the calm look - Back and four tabs (Screen / Wi-Fi / Drives / System), rows with a label, a value or a switch and a grey line that says what it does, actions as keys; Restart, SD card access, the firmware update and the test tools ask first; every row does what its old Settings key did | A600-calm5 (4 Nov 2026): the reel shows only covers - a bigger centre cover, the name (size 3) and N disks, a source key in the top bar (all / favourites / most played / the dice), a tap opens the program screen; the description and manual readers get the calm frame (Back, title, text at size 2, page keys); the count says programs | A600-calm4c (4 Nov 2026): a disk's name in Drive info opens that game's program screen on that disk; on the program screen the cover opens full screen and the details text opens the description | A600-calm4b (4 Nov 2026): ONE load screen with one bar (Reading card... / Sending to DF0... NN%); a send to a single fleet drive streams the image from the card instead of staging it in RAM first; the reel has no disk keys and no INSERT/EJECT (a Load key opens the program screen); the battery glyph shows only with BATTERY=ON in Settings | A600-calm4 (4 Nov 2026): the program screen - a tap on a row (or on the reel's centre cover) opens cover, details, the disk stepper and the load keys (one Load, one per drive, or Load into... with a list of every drive and what is in it); the ... key holds the manual, the .nfo text and START FRESH; the new strings are translated; the top bar no longer carries the storing warning (the drive's card does) | A600-calm3 (4 Nov 2026): the calm list - a search row (Search, A-Z, the filter), rows of 48 px with the name at size 3 and a chip (the drive that holds it, or N disks), the letter grid, the filter list (ADF / DSK / GEN / categories / own disks); the left cover column, the A-Z column, the mode bar and the L tiles are gone from the landscape list (a tap on a row opens the reel at that game until the program screen); a disk key only selects when more than one drive is reachable (one drive swaps with a real eject first); a progress bar while a disk loads; the library sort is a host-tested heapsort | A600-calm2 (4 Nov 2026): the calm frame - landscape list and reel get the top bar (List / Reel tabs, the count, the Settings key) and the drive strip (one wide card, two halves, or two cards and +N: caption, the disk it holds, a link dot; a tap opens Drive info) instead of the status bar, NOW PLAYING and the bottom key row; Drive info is one card per drive of any kind (Gotek, dongle, FluxDrive DF0 / DF1) with Eject, scrolling beyond two; the reel keeps its source and ROLL keys on the stage; portrait and the compact layout are unchanged | A600-calm1 (4 Nov 2026): the calm layout building blocks - POST /api/tap (a virtual finger, test builds only), calm_ui.h (grid), gti_targets.h (drives, strip and load-key layouts), the calm UI primitives; nothing visible changes yet | A600-lab2i-fd4s (4 Nov 2026): skins (gti-skins, PR #29) and FluxDrive DF1 (fluxdrive-panel) together, the base of the calm layout | A600-lab2i-fd4 (4 Nov 2026): FluxDrive DF1 (a multi-disk game is sent as "<game> - Disk <n>" and read back, so each drive shows and ejects its own disk) - the INSERT key is cut in two, DF0 | DF1, for a single FluxDrive with DF1 on (a dongle, an older FluxDrive, DF1 off or several peers keep the one INSERT): each half loads or ejects its own drive (SET_DRIVE 1 before the push, EJECT_DRIVE 1), the reel's INSERT key is cut the same way, NOW PLAYING adds "DF1: <disk>" and no longer ejects: a tap on it opens a DRIVE INFO screen (a block per drive with its disk, WP/STORING/unsaved chips and an EJECT key; a tap on a disk name selects its game in the list), and DF1 saves are fetched over the LAN (GET_SAVE_DRIVE 1) into Game.sav.<tag>.adf with their own record key "<id>:1" in fdsaves.txt (old files stay valid); the commit window and START FRESH stay DF0 only | A600-skin1-JC3248 (Dimmy, 16 Oct): skins - one .gts file (colours + PNG atlas + optional JPEG backgrounds) makes your own look; made and uploaded in the web page's Theme Editor, NEO is the starter | A600-lab2i-fd3 (26 Oct 2026): FluxDrive's commit window - STORING... until the disk is in flash, a revert to the previous disk puts its record back, START FRESH keeps a backup until then | A600-lab2i-fd2 (25 Oct 2026): FluxDrive saves (writing): fetched over the LAN, write protect, start fresh | A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -3536,7 +3536,7 @@ static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=
 enum { LANG_EN=0, LANG_FR, LANG_IT, LANG_ES, LANG_DE, LANG_NL, LANG_PL, LANG_CS, LANG_N };   // lab15o: + Polish, Czech
 static int g_lang=0;
 static const char* const LANG_NAMES[LANG_N]={"EN","FR","IT","ES","DE","NL","PL","CS"};
-enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_CFG_MODE, L_CFG_FONT, L_CFG_LANG, L_CFG_ROTATE, L_CFG_COMPACT, L_CFG_LIBRARY, L_CFG_CATEG, L_CFG_BUTTONS, L_CFG_SAVER, L_CFG_FAVSAVER, L_CFG_HIVEMIND, L_ON, L_OFF, L_PORTRAIT, L_LANDSCAPE, L_FONT_SMALL, L_FONT_NORMAL, L_FONT_LARGE, L_PILL, L_FLAT, L_SLIDES, L_BOUNCE, L_MATRIX, L_CRACKTRO, L_SWITCH_DONGLE, L_SCAN_DONGLES, L_PAGE, L_CLOSE, L_TOP, L_SECTIONS, L_REEL_BORDER, L_COVER_ART, L_LIST_TILE, L_LAST_USED, L_HOME_WIFI, L_WIFI_CHECK, L_SET_UP, L_START_FRESH, L_FRESH_GONE, L_FRESH_ORIG, L_FRESH_SWAP, L_FRESH_DONE, L_FRESH_KEPT, L_WP_LATER, L_FRESH_CABLE, L_FRESH_CHANGED, L_FD_STORING, L_FD_NOT_OFF, L_FD_WENT_BACK, L_FD_OFF_BEFORE, L_FRESH_UNDONE, L_FRESH_RESET, L_FD_EMPTY, L_FD_UNSAVED, L_ST_STORED, L_ST_STORING, L_ST_WP, L_ST_LOADED, L_ST_LINKED, L_ST_NOTHEARD, L_JUMP, L_SHOW, L_DRIVES, L_NO_DRIVE, L_OWN_DISKS, L_CATEGORIES, L_F_ADF, L_F_DSK, L_F_GEN, L_PR_LOAD, L_PR_LOADINTO, L_PR_DISK, L_PR_OF, L_PR_IN, L_PR_NOTLOADED, L_PR_NOW, L_PR_DISKS, L_PR_DESC, L_PR_READING, L_PR_SENDING, L_PR_BATT, L_PROGRAMS, L_STR_N };
+enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_CFG_MODE, L_CFG_FONT, L_CFG_LANG, L_CFG_ROTATE, L_CFG_COMPACT, L_CFG_LIBRARY, L_CFG_CATEG, L_CFG_BUTTONS, L_CFG_SAVER, L_CFG_FAVSAVER, L_CFG_HIVEMIND, L_ON, L_OFF, L_PORTRAIT, L_LANDSCAPE, L_FONT_SMALL, L_FONT_NORMAL, L_FONT_LARGE, L_PILL, L_FLAT, L_SLIDES, L_BOUNCE, L_MATRIX, L_CRACKTRO, L_SWITCH_DONGLE, L_SCAN_DONGLES, L_PAGE, L_CLOSE, L_TOP, L_SECTIONS, L_REEL_BORDER, L_COVER_ART, L_LIST_TILE, L_LAST_USED, L_HOME_WIFI, L_WIFI_CHECK, L_SET_UP, L_START_FRESH, L_FRESH_GONE, L_FRESH_ORIG, L_FRESH_SWAP, L_FRESH_DONE, L_FRESH_KEPT, L_WP_LATER, L_FRESH_CABLE, L_FRESH_CHANGED, L_FD_STORING, L_FD_NOT_OFF, L_FD_WENT_BACK, L_FD_OFF_BEFORE, L_FRESH_UNDONE, L_FRESH_RESET, L_FD_EMPTY, L_FD_UNSAVED, L_ST_STORED, L_ST_STORING, L_ST_WP, L_ST_LOADED, L_ST_LINKED, L_ST_NOTHEARD, L_JUMP, L_SHOW, L_DRIVES, L_NO_DRIVE, L_OWN_DISKS, L_CATEGORIES, L_F_ADF, L_F_DSK, L_F_GEN, L_PR_LOAD, L_PR_LOADINTO, L_PR_DISK, L_PR_OF, L_PR_IN, L_PR_NOTLOADED, L_PR_NOW, L_PR_DISKS, L_PR_DESC, L_PR_READING, L_PR_SENDING, L_PR_BATT, L_PROGRAMS, L_S_SCREEN, L_S_SYSTEM, L_S_STYLE, L_S_SAVEDWIFI, L_S_FLEET, L_S_DSETUP, L_S_LOCKS, L_S_TESTTOOLS, L_D_THEME, L_D_LANG, L_D_FONT, L_D_ROTATE, L_D_COMPACT, L_D_BTN, L_D_BATT, L_D_COVERS, L_D_TILE, L_D_REELB, L_D_LAST, L_D_SAVER, L_D_SSFX, L_D_SSFAV, L_D_INTRO, L_D_INTROSTYLE, L_D_MODE, L_D_HOMEWIFI, L_D_WEBUI, L_D_WIFICHK, L_D_SAVEDWIFI, L_D_HIVE, L_D_FLEET, L_D_DONGLE, L_D_DSETUP, L_D_LOCKS, L_D_LIBRARY, L_D_CATEG, L_D_RESCAN, L_C_RESTART, L_C_SDACC, L_C_FWUPD, L_C_TESTTOOLS, L_STR_N };
 static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_PREV          */ {"PREV","PREC","PREC","ANT","VORH","VORIG","POPRZ","PRED"},
   /*L_NEXT          */ {"NEXT","SUIV","SUCC","SIG","WEIT","VOLG","DALEJ","DALSI"},
@@ -3687,6 +3687,48 @@ static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_PR_SENDING   */ {"Sending to","Envoi vers","Invio a","Enviando a","Senden an","Verzenden naar","Wysylanie do","Odesilam na"},
   /*L_PR_BATT      */ {"BATTERY","BATTERIE","BATTERIA","BATERIA","AKKU","BATTERIJ","BATERIA","BATERIE"},
   /*L_PROGRAMS     */ {"programs","programmes","programmi","programas","Programme","programma's","programy","programy"},
+  // A600-calm6: Settings (tab names, labels, the grey lines, the confirmations). NL is mine; FR/IT/ES/DE drafts like the rest, PL/CS to be checked by a speaker.
+  /*L_S_SCREEN     */ {"Screen","Ecran","Schermo","Pantalla","Anzeige","Scherm","Ekran","Obrazovka"},
+  /*L_S_SYSTEM     */ {"System","Systeme","Sistema","Sistema","System","Systeem","System","System"},
+  /*L_S_STYLE      */ {"style","style","stile","estilo","Stil","stijl","styl","styl"},
+  /*L_S_SAVEDWIFI  */ {"Saved Wi-Fi","Wi-Fi memorises","Wi-Fi salvate","Wi-Fi guardadas","Gemerkte WLANs","Opgeslagen wifi","Zapisane Wi-Fi","Ulozene Wi-Fi"},
+  /*L_S_FLEET      */ {"Fleet","Flotte","Flotta","Flota","Flotte","Vloot","Flota","Flotila"},
+  /*L_S_DSETUP     */ {"Dongle setup","Config dongle","Config. dongle","Config. dongle","Dongle-Setup","Dongle instellen","Ustaw dongle","Nastaveni donglu"},
+  /*L_S_LOCKS      */ {"Release locks","Liberer verrous","Libera blocchi","Liberar bloqueos","Sperren loesen","Sloten vrijgeven","Zwolnij blokady","Uvolnit zamky"},
+  /*L_S_TESTTOOLS  */ {"Test tools","Outils de test","Strumenti test","Herram. prueba","Testwerkzeuge","Testgereedschap","Narzedzia testu","Testovaci nastroje"},
+  /*L_D_THEME      */ {"Colours and look of the screen","Couleurs et aspect de l'ecran","Colori e aspetto dello schermo","Colores y aspecto","Farben und Aussehen","Kleuren en uiterlijk","Kolory i wyglad","Barvy a vzhled"},
+  /*L_D_LANG       */ {"Language of the screens","Langue des ecrans","Lingua delle schermate","Idioma de las pantallas","Sprache der Anzeigen","Taal van de schermen","Jezyk ekranow","Jazyk obrazovek"},
+  /*L_D_FONT       */ {"Text size in the readers","Taille du texte (lecteurs)","Dimensione del testo (lettori)","Tamano del texto (lectores)","Textgroesse (Leser)","Tekstgrootte (lezers)","Rozmiar tekstu (czytniki)","Velikost textu (ctecky)"},
+  /*L_D_ROTATE     */ {"Turn the screen around","Tourner l'ecran","Ruota lo schermo","Girar la pantalla","Bildschirm drehen","Scherm draaien","Obroc ekran","Otocit obrazovku"},
+  /*L_D_COMPACT    */ {"The old compact list layout","L'ancienne liste compacte","Il vecchio elenco compatto","La lista compacta antigua","Die alte kompakte Liste","De oude compacte lijst","Stara lista kompaktowa","Stary kompaktni seznam"},
+  /*L_D_BTN        */ {"Key style of the old screens","Style des touches (ancien)","Stile dei tasti (vecchio)","Estilo de teclas (antiguo)","Tastenstil (alte Anzeigen)","Toetsstijl (oude schermen)","Styl klawiszy (stare ekrany)","Styl tlacitek (stare obrazovky)"},
+  /*L_D_BATT       */ {"Show a gauge if one is fitted","Jauge si une batterie est la","Indicatore se c'e una batteria","Indicador si hay bateria","Anzeige, wenn ein Akku da ist","Meter, als er een accu is","Wskaznik, jesli jest bateria","Ukazatel, je-li baterie"},
+  /*L_D_COVERS     */ {"Pictures in reel and programs","Images du reel et des fiches","Immagini in reel e schede","Imagenes en reel y fichas","Bilder in Reel und Programmen","Plaatjes in reel en programma's","Obrazki w rolce i programach","Obrazky v reelu a programech"},
+  /*L_D_TILE       */ {"Cover from the reel's picture","Jaquette du reel (rapide)","Copertina dal reel (veloce)","Caratula del reel (rapido)","Cover aus dem Reel (schnell)","Cover uit het reel (sneller)","Okladka z rolki (szybciej)","Obal z reelu (rychleji)"},
+  /*L_D_REELB      */ {"A frame around reel covers","Cadre autour des jaquettes","Cornice attorno alle copertine","Marco alrededor de caratulas","Rahmen um die Reel-Cover","Kader om de reel-covers","Ramka wokol okladek","Ramecek kolem obalu"},
+  /*L_D_LAST       */ {"Start on the last loaded game","Demarrer sur le dernier jeu","Parti dall'ultimo gioco","Iniciar en el ultimo juego","Beim letzten Spiel starten","Start met het laatste spel","Start od ostatniej gry","Start u posledni hry"},
+  /*L_D_SAVER      */ {"Pictures when left alone","Images quand on n'y touche pas","Immagini quando non si tocca","Imagenes si no se toca","Bilder, wenn nichts passiert","Plaatjes bij niets doen","Obrazy gdy nic sie nie dzieje","Obrazky pri necinnosti"},
+  /*L_D_SSFX       */ {"How the pictures move","Mouvement des images","Come si muovono le immagini","Como se mueven las imagenes","Wie sich die Bilder bewegen","Hoe de plaatjes bewegen","Jak ruszaja sie obrazy","Jak se obrazky pohybuji"},
+  /*L_D_SSFAV      */ {"Favourites in the slideshow","Favoris dans le diaporama","Preferiti nella presentazione","Favoritos en la presentacion","Favoriten in der Diashow","Favorieten in de diashow","Ulubione w pokazie","Oblibene v prezentaci"},
+  /*L_D_INTRO      */ {"The demo intro at start-up","L'intro demo au demarrage","L'intro demo all'avvio","La intro demo al arrancar","Das Demo-Intro beim Start","De demo-intro bij het starten","Intro dema przy starcie","Demo intro pri spusteni"},
+  /*L_D_INTROSTYLE */ {"Which intro is played","Quelle intro est jouee","Quale intro viene mostrata","Que intro se muestra","Welches Intro laeuft","Welke intro gespeeld wordt","Ktore intro gra","Ktere intro se hraje"},
+  /*L_D_MODE       */ {"How the screen reaches drives","Liaison avec les lecteurs","Collegamento con i drive","Enlace con las unidades","Verbindung zu den Laufwerken","Verbinding met de drives","Polaczenie z napedami","Spojeni s mechanikami"},
+  /*L_D_HOMEWIFI   */ {"Your router's network","Le reseau de votre box","La rete del tuo router","La red de tu router","Das Netz deines Routers","Het netwerk van je router","Siec twojego routera","Sit vaseho routeru"},
+  /*L_D_WEBUI      */ {"The web page of this screen","La page web de cet ecran","La pagina web dello schermo","La pagina web de la pantalla","Die Webseite dieses Geraets","De webpagina van dit scherm","Strona www tego ekranu","Webova stranka teto obrazovky"},
+  /*L_D_WIFICHK    */ {"Test the connection","Tester la connexion","Prova la connessione","Probar la conexion","Verbindung testen","Test de verbinding","Sprawdz polaczenie","Zkusit pripojeni"},
+  /*L_D_SAVEDWIFI  */ {"Networks this screen remembers","Reseaux memorises","Reti ricordate","Redes recordadas","Gemerkte Netze","Onthouden netwerken","Zapamietane sieci","Zapamatovane site"},
+  /*L_D_HIVE       */ {"Send to all dongles at once","Envoyer a tous les dongles","Invia a tutti i dongle","Enviar a todos los dongles","An alle Dongles senden","Naar alle dongles tegelijk","Wyslij do wszystkich dongli","Poslat vsem donglum"},
+  /*L_D_FLEET      */ {"Drives in reach","Lecteurs a portee","Drive raggiungibili","Unidades al alcance","Erreichbare Laufwerke","Drives binnen bereik","Napedy w zasiegu","Mechaniky v dosahu"},
+  /*L_D_DONGLE     */ {"Pair or switch the dongle","Associer ou changer de dongle","Abbina o cambia il dongle","Vincular o cambiar el dongle","Dongle koppeln oder wechseln","Dongle koppelen of wisselen","Sparuj lub zmien dongle","Sparovat nebo vymenit dongle"},
+  /*L_D_DSETUP     */ {"Name, Wi-Fi and owners","Nom, Wi-Fi et proprietaires","Nome, Wi-Fi e proprietari","Nombre, Wi-Fi y propietarios","Name, WLAN und Besitzer","Naam, wifi en eigenaren","Nazwa, Wi-Fi i wlasciciele","Nazev, Wi-Fi a majitele"},
+  /*L_D_LOCKS      */ {"Release dongles locked here","Liberer les dongles bloques","Libera i dongle bloccati","Liberar dongles bloqueados","Gesperrte Dongles freigeben","Vergrendelde dongles vrijgeven","Zwolnij zablokowane dongle","Uvolnit zamcene dongly"},
+  /*L_D_LIBRARY    */ {"ADF, DSK or GEN disks","Disques ADF, DSK ou GEN","Dischi ADF, DSK o GEN","Discos ADF, DSK o GEN","ADF-, DSK- oder GEN-Disks","ADF-, DSK- of GEN-disks","Dyski ADF, DSK lub GEN","Disky ADF, DSK nebo GEN"},
+  /*L_D_CATEG      */ {"Browse by category folders","Parcourir par categories","Sfoglia per categorie","Explorar por categorias","Nach Kategorien stoebern","Bladeren per categorie","Przegladaj wg kategorii","Prochazet podle kategorii"},
+  /*L_D_RESCAN     */ {"Read the card again","Relire la carte","Rileggi la scheda","Leer la tarjeta de nuevo","Karte neu einlesen","Kaart opnieuw lezen","Wczytaj karte ponownie","Znovu cist kartu"},
+  /*L_C_RESTART    */ {"Restart the screen now?","Redemarrer l'ecran maintenant ?","Riavviare lo schermo ora?","Reiniciar la pantalla ahora?","Bildschirm jetzt neu starten?","Het scherm nu herstarten?","Uruchomic ekran ponownie?","Restartovat obrazovku ted?"},
+  /*L_C_SDACC      */ {"Restart as a USB card reader? Restart again to leave it.","Redemarrer en lecteur de carte USB ? Redemarrez pour en sortir.","Riavviare come lettore USB? Riavvia di nuovo per uscire.","Reiniciar como lector USB? Reinicia otra vez para salir.","Als USB-Kartenleser starten? Zum Verlassen neu starten.","Herstarten als USB-kaartlezer? Herstart weer om terug te gaan.","Uruchomic jako czytnik USB? Uruchom ponownie, by wyjsc.","Restart jako USB ctecka? Dalsim restartem odejdete."},
+  /*L_C_FWUPD      */ {"Install a firmware update from the card?","Installer une mise a jour depuis la carte ?","Installare un aggiornamento dalla scheda?","Instalar una actualizacion desde la tarjeta?","Update von der Karte installieren?","Update van de kaart installeren?","Zainstalowac aktualizacje z karty?","Nainstalovat aktualizaci z karty?"},
+  /*L_C_TESTTOOLS  */ {"Tools for testing the GTi. Open them?","Outils de test du GTi. Les ouvrir ?","Strumenti di test del GTi. Aprirli?","Herramientas de prueba del GTi. Abrirlas?","Testwerkzeuge des GTi. Oeffnen?","Testgereedschap van de GTi. Openen?","Narzedzia testowe GTi. Otworzyc?","Testovaci nastroje GTi. Otevrit?"},
 };
 static inline const char* T(int id){ return LSTR[id][g_lang]; }
 
@@ -4747,6 +4789,8 @@ static void calmSwapTo(const String&file,int drive){
   doLoadSelected(file,String(),nullptr,drive);
 }
 static inline uint16_t calmCardBg(){ return (g_neo||skinSlotOk(skin::S_PANEL))?COL_BG:COL_PANEL; }   // the colour behind text on a card
+// "SCREEN SAVER" -> "Screen saver": the existing translated (upper case) words, in the style of the calm screens
+static String calmTitle(const char*s){ String t=s?s:""; for(unsigned i=0;i<t.length();i++){ const char c=t[i]; if(i==0){ if(c>='a'&&c<='z') t.setCharAt(i,c-32); } else if(c>='A'&&c<='Z') t.setCharAt(i,c+32); } return t; }
 // A text cut to w pixels at the size it is given (never a smaller one: the calm screens keep their three sizes).
 static void calmCut(String&s,int w,int size){ while(s.length()>1&&(int)s.length()*6*size>w) s.remove(s.length()-1); }
 static void calmTextCut(int x,int y,String s,int w,int size,uint16_t fg,uint16_t bg){
@@ -5086,6 +5130,7 @@ static InfoItem g_ii[40]; static int g_ii_n=0;   // main's rows plus SAVED WIFI 
 struct InfoRect { int x,y,w,h; uint8_t act; };
 static InfoRect g_ir[28]; static int g_ir_n=0;
 static int g_info_page=0, g_info_pages=1;
+static bool g_calmSettings=false;   // A600-calm6: true while doSettings owns the screen: the old pages' drawInfoFull stays quiet
 static bool g_info_test=false;   // lab14k: true = Settings is showing its TEST TOOLS sub-page
 static String g_pick_custom[8]; static int g_pick_nc=0;   // A600-theme1: the custom themes on the THEME page
 static uint8_t g_info_pick=0;    // pick page: 0 = none, 1 = LANGUAGE, 2 = THEME, 3 = CRACKTRO style (every choice as a button, tap one = back)
@@ -6344,6 +6389,8 @@ static void doReelFilter();
 static bool calmHeldDisk(int gi,const GtTarget&t,int*disk);
 static void calmStripTap(int px,int py);
 static void calmOpenSettings();
+static void doSettings(int tab=0);
+static void infoAction(uint8_t act);
 static void carHandleTap(uint16_t px,uint16_t py){
   if(calmFrame()){   // A600-calm2: the top bar, the drive strip, and the reel's own source / ROLL keys
     const int tb=gtTopBarTap(gtTopBarLayout(VW),px,py);
@@ -9476,7 +9523,7 @@ static void calmStripTap(int px,int py){
   if(c==GT_STRIP_NONE) return;
   doDriveInfoAll(c==GT_STRIP_MORE?2:0);
 }
-static void calmOpenSettings(){ g_info_showing=true; g_info_page=0; g_info_test=false; g_info_pick=0; drawInfoFull(); }
+static void calmOpenSettings(){ g_info_showing=false; doSettings(0); g_info_showing=false; if(g_car_active) drawCarousel(); else drawFullUI(); gfx_flush(); }   // A600-calm6: the calm Settings
 
 // ════════════════════════════════════════════════════════════════════════════
 // SETUP
@@ -10625,13 +10672,171 @@ static int calmChoice(const char*title,const String*labels,int n,int cur){
 static String calmReelFilterLabel(){ return String(g_car_src==1?T(L_FAV):g_car_src==2?T(L_MOST):T(L_ALL)); }
 // The reel's source: all, favourites, most played, and the dice (a random cover, spun to).
 static void doReelFilter(){
-  const String labels[4]={T(L_ALL),T(L_FAV),T(L_MOST),T(L_ROLL)};
+  const String labels[4]={calmTitle(T(L_ALL)),calmTitle(T(L_FAV)),calmTitle(T(L_MOST)),calmTitle(T(L_ROLL))};
   const int pick=calmChoice(T(L_SHOW),labels,4,g_car_src>2?0:g_car_src);
   if(pick<0) return;
   if(pick==3){ carRollDice(); return; }
   g_car_src=pick; carBuildList(); g_car_spin=false; g_car_dieShow=false;
   if(carN()>0){ int start=0; for(int i=0;i<carN();i++) if(g_car_list[i]==g_sel){ start=i; break; } g_car_pos=(float)start; } else g_car_pos=0;
   g_car_coast=false;
+}
+// ── A600-calm6: Settings (docs/ui/README.md, mockup 5) ─────────────────────────────────────────────────────────────────────────
+// Back and four tabs (Screen / Wi-Fi / Drives / System); under them rows of 56 px: a setting is a label (size 3), its value or a switch at
+// the right and a grey line (size 2) saying what it does; an action (System) is a key. Restart, SD card access, the firmware update and
+// the test tools ask first (calmConfirm). Every row calls the action the old Settings pages called (infoAction), so nothing changed
+// in what it does; only where it is. The old pages stay for the portrait and compact layouts (their CONFIG key) until phase 7.
+enum { SK_TOGGLE=0, SK_VALUE, SK_ACTION, SK_INFO };
+enum { SA_THEME=150, SA_LANG, SA_CRKSTYLE, SA_TESTPAGE };
+struct SetRow { String label,desc,value; uint8_t kind,act; bool on,danger,confirm; const char*ask; };
+static SetRow g_sr[40]; static int g_sr_n=0;
+static void srAdd(const String&label,const String&desc,const String&value,uint8_t kind,uint8_t act,bool on=false,bool danger=false,const char*ask=nullptr){
+  if(g_sr_n>=(int)(sizeof g_sr/sizeof g_sr[0])) return;
+  SetRow&r=g_sr[g_sr_n++]; r.label=label; r.desc=desc; r.value=value; r.kind=kind; r.act=act; r.on=on; r.danger=danger; r.confirm=ask!=nullptr; r.ask=ask;
+}
+static void srToggle(const char*label,const char*desc,bool on,uint8_t act){ srAdd(calmTitle(label),desc,"",SK_TOGGLE,act,on); }
+static void srBuild(int tab,bool test){
+  g_sr_n=0;
+  if(test){   // the test tools (DEVMODE): developer words, left in English
+    srAdd("SD soak test","Read-only card reliability test","",SK_VALUE,IA_SDSOAK);
+    srToggle("Reel profiling","Frame times into gti.log",g_reelprof,IA_REELPROF);
+    srToggle("No cache","Ignore the library caches (next boot)",g_nocache,IA_NOCACHE);
+    srToggle("Diagnostics overlay","Live numbers on screen",g_diagdisp,IA_DIAGDISP);
+    { const bool diagOn=(g_loaded&&g_loaded_name=="AMIGA TEST KIT");
+      if(g_mode==MODE_ADF||diagOn) srAdd(calmTitle(diagOn?T(L_EJECT_DIAG):T(L_LOAD_DIAG)),"The built-in Amiga test disk","",SK_VALUE,IA_DIAG); }
+    return; }
+  if(tab==0){   // Screen
+    srAdd(calmTitle(T(L_THEME)),T(L_D_THEME),themeName(),SK_VALUE,SA_THEME);
+    srAdd(calmTitle(T(L_CFG_LANG)),T(L_D_LANG),calmTitle(LANG_FULL[g_lang]),SK_VALUE,SA_LANG);
+    srAdd(calmTitle(T(L_CFG_FONT)),T(L_D_FONT),calmTitle(fontName(g_font)),SK_VALUE,IA_FONT);
+    srAdd(calmTitle(T(L_CFG_ROTATE)),T(L_D_ROTATE),calmTitle(g_portrait?T(L_PORTRAIT):T(L_LANDSCAPE)),SK_VALUE,IA_ROTATE);
+    srToggle(T(L_CFG_COMPACT),T(L_D_COMPACT),g_compact,IA_COMPACT);
+    srAdd(calmTitle(T(L_CFG_BUTTONS)),T(L_D_BTN),calmTitle(g_btn_pill?T(L_PILL):T(L_FLAT)),SK_VALUE,IA_BTNSTYLE);
+    srToggle(T(L_PR_BATT),T(L_D_BATT),g_batt_show,IA_BATT);
+    srToggle(T(L_COVER_ART),T(L_D_COVERS),g_covers_on,IA_COVERS);
+    srToggle(T(L_LIST_TILE),T(L_D_TILE),g_listtile,IA_LISTTILE);
+    srToggle(T(L_REEL_BORDER),T(L_D_REELB),g_reelborder,IA_REELBORDER);
+    srToggle(T(L_LAST_USED),T(L_D_LAST),g_lastused,IA_LASTUSED);
+    srToggle(T(L_CFG_SAVER),T(L_D_SAVER),g_ss_enabled,IA_SAVER);
+    if(g_ss_enabled) srAdd(calmTitle(T(L_CFG_SAVER))+" FX",T(L_D_SSFX),calmTitle(g_ss_cracktro?T(L_CRACKTRO):(g_ss_matrix?T(L_MATRIX):(g_ss_slides?T(L_SLIDES):T(L_BOUNCE)))),SK_VALUE,IA_SSMODE);
+    srToggle(T(L_CFG_FAVSAVER),T(L_D_SSFAV),g_ss_fav,IA_SSFAV);
+    srToggle(T(L_CRACKTRO),T(L_D_INTRO),g_cracktro>=0,IA_CRACKTRO);
+    if(g_cracktro>=0) srAdd(calmTitle(T(L_CRACKTRO))+" "+T(L_S_STYLE),T(L_D_INTROSTYLE),calmTitle(crkStyleName(g_cracktro).c_str()),SK_VALUE,SA_CRKSTYLE);
+  } else if(tab==1){   // Wi-Fi
+    srAdd(calmTitle(T(L_CFG_MODE)),T(L_D_MODE),!g_wireless_mode?calmTitle(T(L_STANDALONE)):(g_link_home?String("Wi-Fi"):String("ESP-NOW")),SK_VALUE,IA_MODE);
+    if(g_wireless_mode&&!g_link_home){   // ESP-NOW: the screen's own Wi-Fi, read-only
+      srAdd("Wi-Fi","",espnowApName(),SK_INFO,IA_NONE); srAdd(calmTitle("KEY"),"",espnowApPass(),SK_INFO,IA_NONE); srAdd("Web","","192.168.4.1",SK_INFO,IA_NONE);
+      uint8_t mm[64][6]; if(enumMuCaDongles(mm,g_dongle_cap)>0) srToggle(T(L_CFG_HIVEMIND),T(L_D_HIVE),g_hivemind,IA_HIVEMIND); }
+    if(webModePossible()){
+      srAdd(calmTitle(T(L_HOME_WIFI)),T(L_D_HOMEWIFI),g_home_ssid.length()?g_home_ssid:calmTitle(T(L_SET_UP)),SK_VALUE,IA_HOMEWIFI);
+      { const bool won=g_wireless_mode?g_web_on:g_web_cfg; srToggle("Web UI",T(L_D_WEBUI),won,IA_WEBUI); }
+      if(g_home_ssid.length()) srAdd(calmTitle(T(L_WIFI_CHECK)),T(L_D_WIFICHK),"",SK_VALUE,IA_WIFICHECK);
+      srAdd(T(L_S_SAVEDWIFI),T(L_D_SAVEDWIFI),String((int)g_known.size()),SK_VALUE,IA_SAVEDWIFI);
+      if(webWanted()) srAdd("Web","",pfMdnsName()+".local",SK_INFO,IA_NONE); }
+  } else if(tab==2){   // Drives
+    if(g_wireless_mode&&webModePossible()){ pfPrune(); const int vis=pfVisibleCount();
+      String fl=String(vis); if(vis<g_pfPeerN) fl+="/"+String(g_pfPeerN);
+      srAdd(T(L_S_FLEET),T(L_D_FLEET),fl,SK_VALUE,IA_FLEET); }
+    if(g_wireless_mode&&!g_link_home){
+      srAdd(calmTitle(espnowIsPaired()?T(L_SWITCH_DONGLE):T(L_SCAN_DONGLES)),T(L_D_DONGLE),"",SK_VALUE,IA_DONGLE);
+      if(espnowIsPaired()) srAdd(T(L_S_DSETUP),T(L_D_DSETUP),"",SK_VALUE,IA_DONGLESETUP); }
+#if defined(GTI_FLEET)
+    if(g_wireless_mode){ const int orp=pfOrphanCount(); if(orp) srAdd(T(L_S_LOCKS),T(L_D_LOCKS),String(orp),SK_VALUE,IA_ORPHAN); }
+#endif
+    srAdd(calmTitle(T(L_CFG_LIBRARY)),T(L_D_LIBRARY),g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN",SK_VALUE,IA_LIBMODE);
+    srToggle(T(L_CFG_CATEG),T(L_D_CATEG),g_categories,IA_CATEG);
+    srAdd(calmTitle(T(L_RESCAN_SD)),T(L_D_RESCAN),"",SK_VALUE,IA_RESCAN);
+  } else {   // System
+    srAdd("Firmware","",FW_VERSION,SK_INFO,IA_NONE);
+    srAdd("IP","",WiFi.status()==WL_CONNECTED?WiFi.localIP().toString():String("-"),SK_INFO,IA_NONE);
+    srAdd(calmTitle(T(L_SOFT_RESET)),"","",SK_ACTION,IA_RESET,false,true,T(L_C_RESTART));
+    srAdd(calmTitle(T(L_SD_ACCESS)),"","",SK_ACTION,IA_SDACCESS,false,true,T(L_C_SDACC));
+    srAdd(calmTitle(T(L_FW_UPDATE)),"","",SK_ACTION,IA_FWUPDATE,false,false,T(L_C_FWUPD));
+    if(g_devmode) srAdd(T(L_S_TESTTOOLS),"","",SK_ACTION,SA_TESTPAGE,false,false,T(L_C_TESTTOOLS));
+  }
+}
+// Cancel on the left, the action on the right, 16 px between, far from Back: true = go ahead.
+static bool calmConfirm(const String&title,const String&msg,const String&okLabel,bool danger){
+  const ClConfirm c=clConfirmLayout(VW,VH);
+  { NeoScope _ns; clearBack(); drawCalmHeader(title.c_str());
+    gfx_setTextSize(CU_TS_SMALL); drawWrapped(c.msg.x+CU_GAP,c.msg.y+CU_GAP,msg,c.msg.w-2*CU_GAP,22,c.msg.h/22,cuBottom(c.msg),COL_LIT,COL_BG);
+    calmKey(c.cancel,T(L_CANCEL),CALM_NORMAL,false,CU_TS_MID); calmKey(c.ok,okLabel.c_str(),danger?CALM_DANGER:CALM_PRIMARY,false,CU_TS_MID); gfx_flush(); }
+  { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }
+  int tx=0,ty=0,dx=0,dy=0; bool down=false; uint32_t lastTouch=millis();
+  while(millis()-lastTouch<60000){
+    webPanelService(); pfService(); pfWorker();
+    if(calmPick(&tx,&ty,&lastTouch,&down,&dx,&dy)){ const int r=clConfirmTap(c,tx,ty); if(r==CL_CF_OK) return true; if(r==CL_CF_CANCEL) return false; }
+    delay(15);
+  }
+  return false;
+}
+static void settingsChoose(int act){
+  if(act==SA_LANG){ String labels[LANG_N]; for(int i=0;i<LANG_N;i++) labels[i]=calmTitle(LANG_FULL[i]);
+    const int p=calmChoice(T(L_CFG_LANG),labels,LANG_N,g_lang); if(p>=0){ g_lang=p; saveConfigKey("LANG",LANG_NAMES[g_lang]); } }
+  else if(act==SA_CRKSTYLE){ String labels[CRK_PICK_N]; for(int i=0;i<CRK_PICK_N;i++) labels[i]=calmTitle(CRK_PICK_NAME[i]);
+    const int p=calmChoice(T(L_CRACKTRO),labels,CRK_PICK_N,g_cracktro<CRK_PICK_N?g_cracktro:-1); if(p>=0){ g_cracktro=p; saveConfigKey("CRACKTRO",crkConfigValue(g_cracktro)); } }
+  else if(act==SA_THEME){
+    g_pick_nc=listCustomThemes(g_pick_custom,8);
+    String labels[1+NUM_THEMES+8]; int n=0; labels[n++]="NEO";
+    for(int i=0;i<NUM_THEMES-1;i++) labels[n++]=calmTitle(THEMES[i].name);
+    for(int i=0;i<g_pick_nc;i++) labels[n++]=g_pick_custom[i];
+    int cur=0; if(!g_neo_on){ if(g_theme_idx==CUSTOM_IDX){ for(int i=0;i<g_pick_nc;i++) if(g_custom_name==g_pick_custom[i]) cur=NUM_THEMES+i; } else cur=1+g_theme_idx; }
+    const int p=calmChoice(T(L_THEME),labels,n,cur);
+    if(p==0){ if(!g_neo_on){ g_neo_on=true; applyTheme(g_theme_idx); saveConfigKey("NEO","ON"); } }   // NEO: the look, with the theme's colours under it
+    else if(p>=1&&p<NUM_THEMES) themeActivate(THEMES[p-1].name);                                    // a classic theme (NEO goes off)
+    else if(p>=NUM_THEMES) themeActivate(g_pick_custom[p-NUM_THEMES]);                              // a custom theme / skin
+  }
+}
+static void doSettings(int tab){
+  struct Guard{ Guard(){ g_calmSettings=true; } ~Guard(){ g_calmSettings=false; } } _g;   // the old pages' drawInfoFull stays quiet while this owns the screen
+  const ClSetTabs T6=clSettingsTabs(VW);
+  const int listTop=GT_CONTENT_TOP+CU_GAP+4, viewH=VH-CU_MARGIN-listTop;   // 60 .. 312
+  bool test=false,dirty=true,down=false,moved=false,leave=false; int scroll=0,downScroll=0,dx=0,dy=0,tx=0,ty=0; uint32_t lastTouch=millis();
+  { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }
+  while(!leave&&calmFrame()&&millis()-lastTouch<180000){
+    webPanelService(); pfService(); pfWorker();
+    if(dirty){ dirty=false; srBuild(tab,test);
+      const int mp=clSetMaxScroll(g_sr_n,viewH); if(scroll>mp) scroll=mp;
+      NeoScope _ns; clearBack(); const uint16_t bg=calmCardBg();
+      const int c0=g_clip_y0,c1=g_clip_y1; g_clip_y0=listTop; g_clip_y1=VH-CU_MARGIN+4;
+      for(int i=0;i<g_sr_n;i++){ const SetRow&r=g_sr[i]; const CuRect R=clSetRowRect(i,scroll,listTop,CU_MARGIN,VW-2*CU_MARGIN); if(cuBottom(R)<=listTop||R.y>=VH) continue;
+        if(r.kind==SK_ACTION){ calmKey(CuRect{R.x,R.y+4,R.w,CU_KEY},r.label.c_str(),r.danger?CALM_DANGER:CALM_NORMAL,false,CU_TS_MID); continue; }
+        calmCard(R);
+        int vw=0; String v=r.value; if(v.length()>20) v.remove(20);
+        if(r.kind==SK_TOGGLE) vw=64; else if(v.length()) vw=(int)v.length()*6*CU_TS_SMALL+8; else if(r.kind==SK_VALUE) vw=28;
+        calmTextCut(R.x+12,R.y+(r.desc.length()?6:16),r.label,R.w-24-vw,CU_TS_MID,COL_LIT,bg);
+        if(r.desc.length()) calmTextCut(R.x+12,R.y+34,r.desc,R.w-24-(r.kind==SK_TOGGLE?64:0),CU_TS_SMALL,COL_MID,bg);
+        if(r.kind==SK_TOGGLE) calmToggle(R,r.on);
+        else if(v.length()){ gfx_setTextSize(CU_TS_SMALL); gfx_setTextColor(r.kind==SK_INFO?COL_DIM:COL_AMBER,bg); gfx_setCursor(R.x+R.w-12-(int)v.length()*6*CU_TS_SMALL,R.y+(r.desc.length()?10:20)); gfx_print(v); }
+        else if(r.kind==SK_VALUE){ gfx_setTextSize(CU_TS_MID); gfx_setTextColor(COL_AMBER,bg); gfx_setCursor(R.x+R.w-12-18,R.y+16); gfx_print(">"); }
+      }
+      g_clip_y0=c0; g_clip_y1=c1;
+      fillBack(0,0,VW,listTop);
+      calmKey(T6.back,"<",CALM_NORMAL,false,CU_TS_MID);
+      if(test){ calmTextCut(T6.tab[0].x+CU_GAP,T6.back.y+(T6.back.h-24)/2,String(T(L_S_TESTTOOLS)),VW-T6.tab[0].x-CU_MARGIN,CU_TS_MID,COL_AMBER,COL_BG); }
+      else { const String tn[4]={T(L_S_SCREEN),"Wi-Fi",T(L_DRIVES),T(L_S_SYSTEM)}; const char*tl[4]={tn[0].c_str(),tn[1].c_str(),tn[2].c_str(),tn[3].c_str()};
+        calmTabs(CuRect{T6.tab[0].x,T6.tab[0].y,cuRight(T6.tab[3])-T6.tab[0].x,T6.tab[0].h},tl,4,tab); }
+      if(mp>0){ const int th=max(16,viewH*viewH/(viewH+mp)); gfx_fillRect(VW-4,listTop+(viewH-th)*scroll/mp,3,th,COL_DIM); }
+      gfx_flush(); }
+    bool tt=Touch_ReadFrame(); uint16_t x=0,y=0; if(tt)tt=getTouchXY(&x,&y);
+    if(tt){ lastTouch=millis(); tx=x; ty=y;
+      if(!down){ down=true; dx=x; dy=y; downScroll=scroll; moved=false; }
+      else if(abs(ty-dy)>8||abs(tx-dx)>8){ moved=true; const int ns=max(0,min(clSetMaxScroll(g_sr_n,viewH),downScroll-(ty-dy))); if(ns!=scroll){ scroll=ns; dirty=true; } } }
+    else if(down){ down=false;
+      if(!moved){
+        if(cuContains(T6.back,dx,dy)){ if(test){ test=false; scroll=0; dirty=true; } else leave=true; }
+        else if(!test&&clSetTabAt(T6,dx,dy)>=0){ tab=clSetTabAt(T6,dx,dy); scroll=0; dirty=true; }
+        else if(dy>=listTop){ const int i=clSetRowAt(scroll,listTop,dy,g_sr_n);
+          if(i>=0&&g_sr[i].kind!=SK_INFO){ const SetRow r=g_sr[i];   // a copy: the rows are rebuilt below
+            { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }
+            bool go=true; if(r.confirm) go=calmConfirm(r.label,r.ask,r.label,r.danger);
+            if(go){
+              if(r.act==SA_THEME||r.act==SA_LANG||r.act==SA_CRKSTYLE) settingsChoose(r.act);
+              else if(r.act==SA_TESTPAGE){ test=true; scroll=0; }
+              else if(r.act!=IA_NONE){ infoAction(r.act); g_info_showing=false; if(r.act==IA_ROTATE||r.act==IA_COMPACT) leave=true; } }
+            dirty=true; lastTouch=millis(); } } } }
+    delay(15);
+  }
+  { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }
 }
 static void drawInfoBottomBar(){
   const uint16_t bg=TFT_BLACK, ink=TFT_WHITE;
@@ -10668,6 +10873,7 @@ static void drawInfoBottomBar(){
   }
 }
 static void drawInfoFull(){
+  if(g_calmSettings) return;
   {NeoScope _ns;clearBack();drawStatusBar();drawInfoPanel();drawInfoBottomBar();}gfx_flush();   // A600-neo1-JC3248: NEO background
 }
 static void infoAction(uint8_t act){
