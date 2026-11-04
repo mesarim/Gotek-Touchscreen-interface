@@ -163,8 +163,8 @@ inline CuRect gtContentArea(int w, int h) { return CuRect{0, GT_CONTENT_TOP, w, 
 
 // Top bar: [List][Reel] tabs at the left, the count text to the right of them, the Settings key at the right edge.
 // The rects are touch areas (48 high); the drawing inside is 40.
-struct GtTopBar { CuRect listTab, reelTab, count, gear; };
-enum { GT_TB_NONE = 0, GT_TB_LIST, GT_TB_REEL, GT_TB_GEAR };
+struct GtTopBar { CuRect listTab, reelTab, count, gear, filter; };   // filter: the reel's source key (ALL / FAV / MOST / the dice), shown in the reel only
+enum { GT_TB_NONE = 0, GT_TB_LIST, GT_TB_REEL, GT_TB_GEAR, GT_TB_FILTER };
 inline GtTopBar gtTopBarLayout(int w) {
   GtTopBar b;
   b.listTab = CuRect{CU_MARGIN, 0, 80, CU_KEY};
@@ -172,12 +172,14 @@ inline GtTopBar gtTopBarLayout(int w) {
   b.gear    = CuRect{w - CU_MARGIN - CU_KEY, 0, CU_KEY, CU_KEY};
   const int cx = cuRight(b.reelTab);
   b.count   = CuRect{cx, 0, b.gear.x - CU_GAP - cx, CU_KEY};
+  b.filter  = CuRect{cx + CU_GAP, 0, 88, CU_KEY};
   return b;
 }
 inline int gtTopBarTap(const GtTopBar& b, int x, int y) {
   if (cuContains(b.listTab, x, y)) return GT_TB_LIST;
   if (cuContains(b.reelTab, x, y)) return GT_TB_REEL;
   if (cuContains(b.gear, x, y))    return GT_TB_GEAR;
+  if (cuContains(b.filter, x, y))  return GT_TB_FILTER;
   return GT_TB_NONE;
 }
 
@@ -256,16 +258,17 @@ inline GtProgLayout gtProgLayout(int w, int diskCount) {
   L.more  = CuRect{w - CU_MARGIN - CU_KEY, 4, CU_KEY, CU_KEY};
   L.title = CuRect{cuRight(L.back) + CU_GAP, 4, L.more.x - CU_GAP - (cuRight(L.back) + CU_GAP), CU_KEY};
   const int top = cuBottom(L.back) + CU_GAP;   // 60
-  L.cover = CuRect{CU_MARGIN, top, 150, 108};
-  const int rx = cuRight(L.cover) + CU_GAP;
+  L.cover = CuRect{CU_MARGIN, top, 176, 136};   // mockup 2
+  const int rx = cuRight(L.cover) + CU_GAP, rw = w - CU_MARGIN - rx;
   L.hasStepper = diskCount > 1;
   if (L.hasStepper) {
-    L.details = CuRect{rx, top, w - CU_MARGIN - rx, 54};
-    L.stepper = CuRect{rx, top + 60, w - CU_MARGIN - rx, CU_KEY};
+    L.details = CuRect{rx, top, rw, 54};
+    L.stepper = CuRect{rx, top + 60, rw, CU_KEY};
+    L.status  = CuRect{rx, top + 60 + CU_KEY + 6, rw, 16};
   } else {
-    L.details = CuRect{rx, top, w - CU_MARGIN - rx, 108};
+    L.details = CuRect{rx, top, rw, 108};
+    L.status  = CuRect{rx, top + 108 + 6, rw, 16};
   }
-  L.status   = CuRect{CU_MARGIN, cuBottom(L.cover) + CU_GAP, w - 2 * CU_MARGIN, 16};
   L.loadArea = CuRect{CU_MARGIN, GT_CONTENT_BOTTOM - CU_KEY, w - 2 * CU_MARGIN, CU_KEY};
   return L;
 }

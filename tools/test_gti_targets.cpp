@@ -196,6 +196,8 @@ static void test_top_bar() {
   CHECK(gtTopBarTap(b, 20, 20) == GT_TB_LIST);
   CHECK(gtTopBarTap(b, cuRight(b.listTab) + 5, 47) == GT_TB_REEL);
   CHECK(gtTopBarTap(b, 450, 10) == GT_TB_GEAR);
+  CHECK(b.filter.h == 48 && b.filter.w >= 72 && b.filter.x >= cuRight(b.reelTab) && cuRight(b.filter) <= b.gear.x - 8);   // the reel's source key
+  CHECK(gtTopBarTap(b, b.filter.x + 5, 20) == GT_TB_FILTER);
   CHECK(gtTopBarTap(b, 300, 20) == GT_TB_NONE);
   CHECK(gtTopBarTap(b, 20, 48) == GT_TB_NONE);   // below the touch row: the list's
   CHECK(gtTopBarTap(b, 450, 48) == GT_TB_NONE);
@@ -294,6 +296,9 @@ static void test_program_layout() {
     CHECK(L.status.h >= 16);
   }
   CHECK(gtProgLayout(480, 2).details.h < gtProgLayout(480, 1).details.h);   // the stepper takes the room of some text
+  CHECK(gtProgLayout(480, 2).cover.w >= 176 && gtProgLayout(480, 2).cover.h >= 136);   // the cover of mockup 2
+  CHECK(cuBottom(gtProgLayout(480, 2).cover) + 8 <= gtProgLayout(480, 2).loadArea.y);
+  CHECK(gtProgLayout(480, 2).status.x >= cuRight(gtProgLayout(480, 2).cover));         // the status line sits right of the cover
   GtProgLayout L = gtProgLayout(480, 3);
   CHECK(gtProgTap(L, L.back.x + 5, L.back.y + 5) == GT_PR_BACK);
   CHECK(gtProgTap(L, L.more.x + 5, L.more.y + 5) == GT_PR_MORE);

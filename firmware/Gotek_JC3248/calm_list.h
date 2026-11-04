@@ -103,3 +103,45 @@ inline ClChip clRowChip(int diskCount, bool splitPeer, bool df0, bool df1, bool 
   }
   return c;
 }
+
+// ---- Settings (A600-calm6, mockup 5): Back, four tabs, setting rows of 56 px at a pitch of 60, a confirmation screen -------------
+#define CL_SET_H     56
+#define CL_SET_PITCH 60
+struct ClSetTabs { CuRect back; CuRect tab[4]; };
+inline ClSetTabs clSettingsTabs(int w) {
+  ClSetTabs t;
+  t.back = CuRect{CU_MARGIN, 4, CU_KEY, CU_KEY};
+  const CuRect area{cuRight(t.back) + CU_GAP, 4, w - CU_MARGIN - (cuRight(t.back) + CU_GAP), CU_KEY};
+  cuCols(area, 4, 0, t.tab);
+  return t;
+}
+inline int clSetTabAt(const ClSetTabs& t, int x, int y) {
+  for (int i = 0; i < 4; i++) if (cuContains(t.tab[i], x, y)) return i;
+  return -1;
+}
+inline int clSetMaxScroll(int n, int viewH) { const int v = n * CL_SET_PITCH - viewH; return v > 0 ? v : 0; }
+inline int clSetRowAt(int scroll, int listTop, int y, int n) {
+  const int rel = y - listTop + scroll;
+  if (rel < 0) return -1;
+  const int i = rel / CL_SET_PITCH;
+  return i < n ? i : -1;
+}
+inline CuRect clSetRowRect(int i, int scroll, int listTop, int x, int w) { return CuRect{x, listTop + i * CL_SET_PITCH - scroll, w, CL_SET_H}; }
+
+// A confirmation: Back at the top, the message, and at the foot Cancel (left) and the action (right), 16 px apart, 48 high, far from Back.
+struct ClConfirm { CuRect back, msg, cancel, ok; };
+enum { CL_CF_NONE = 0, CL_CF_CANCEL, CL_CF_OK };
+inline ClConfirm clConfirmLayout(int w, int h) {
+  ClConfirm c;
+  c.back = CuRect{CU_MARGIN, 4, 104, CU_KEY};
+  const int ky = h - CU_MARGIN - CU_KEY, half = (w - 2 * CU_MARGIN - CU_GROUP) / 2;
+  c.cancel = CuRect{CU_MARGIN, ky, half, CU_KEY};
+  c.ok     = CuRect{w - CU_MARGIN - half, ky, half, CU_KEY};
+  c.msg    = CuRect{CU_MARGIN, cuBottom(c.back) + CU_GAP, w - 2 * CU_MARGIN, ky - CU_GAP - (cuBottom(c.back) + CU_GAP)};
+  return c;
+}
+inline int clConfirmTap(const ClConfirm& c, int x, int y) {
+  if (cuContains(c.ok, x, y)) return CL_CF_OK;
+  if (cuContains(c.cancel, x, y) || cuContains(c.back, x, y)) return CL_CF_CANCEL;
+  return CL_CF_NONE;
+}

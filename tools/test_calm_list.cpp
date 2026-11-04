@@ -154,8 +154,34 @@ static void test_sort_counts() {
   CHECK(sorted);
 }
 
+static void test_settings_layout() {
+  ClSetTabs t = clSettingsTabs(480);
+  CHECK(t.back.x == 8 && t.back.w == 48 && t.back.h == 48 && t.back.y == 4);
+  CHECK(t.tab[0].x >= cuRight(t.back) && cuRight(t.tab[3]) == 472);
+  for (int i = 0; i < 4; i++) { CHECK(t.tab[i].h == 48 && t.tab[i].w >= 96 && t.tab[i].y == 4); if (i) CHECK(t.tab[i].x == cuRight(t.tab[i - 1])); }
+  CHECK(clSetTabAt(t, t.tab[2].x + 3, 20) == 2 && clSetTabAt(t, t.tab[0].x, 4) == 0 && clSetTabAt(t, 3, 20) == -1);
+  CHECK(clSetTabAt(t, t.tab[1].x + 3, 60) == -1);   // below the tab row
+  CHECK(CL_SET_H >= CU_KEY && CL_SET_PITCH == CL_SET_H + 4);
+  // rows of 56 at a pitch of 60 in a view from y 60 to 312
+  const int top = 60, viewH = 252;
+  CHECK(clSetMaxScroll(4, viewH) == 0 && clSetMaxScroll(5, viewH) == 5 * 60 - viewH && clSetMaxScroll(0, viewH) == 0);
+  CHECK(clSetRowAt(0, top, 60, 10) == 0 && clSetRowAt(0, top, 60 + 59, 10) == 0 && clSetRowAt(0, top, 120, 10) == 1);
+  CHECK(clSetRowAt(0, top, 59, 10) == -1 && clSetRowAt(100, top, 60, 10) == 1 && clSetRowAt(0, top, 300, 3) == -1);
+  CuRect r = clSetRowRect(2, 30, top, 8, 464);
+  CHECK(r.h == 56 && r.y == top + 2 * 60 - 30 && r.w == 464);
+  // the confirmation screen: the message, Cancel on the left, the action on the right, 16 px or more between, 48 high, far from Back
+  ClConfirm c = clConfirmLayout(480, 320);
+  CHECK(c.back.h == 48 && c.cancel.h == 48 && c.ok.h == 48 && c.cancel.y == c.ok.y);
+  CHECK(c.ok.x - cuRight(c.cancel) >= 16 && cuRight(c.ok) <= 472 && c.cancel.x == 8 && cuBottom(c.ok) <= 312);
+  CHECK(c.cancel.y >= cuBottom(c.back) + 100 && c.msg.y >= cuBottom(c.back) && cuBottom(c.msg) <= c.cancel.y - 8);
+  CHECK(clConfirmTap(c, c.ok.x + 5, c.ok.y + 5) == CL_CF_OK && clConfirmTap(c, c.cancel.x + 5, c.cancel.y + 5) == CL_CF_CANCEL);
+  CHECK(clConfirmTap(c, c.back.x + 5, c.back.y + 5) == CL_CF_CANCEL && clConfirmTap(c, 240, c.msg.y + 5) == CL_CF_NONE);
+  CHECK(clConfirmTap(c, cuRight(c.cancel) + 4, c.cancel.y + 5) == CL_CF_NONE);   // the gap between the two keys
+}
+
 int main() {
   test_search_row();
+  test_settings_layout();
   test_rows();
   test_letter_grid();
   test_split_disk();
