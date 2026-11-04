@@ -97,7 +97,7 @@ static void hSysInfo() {
   j += "\"dav_enabled\":" + String(g_dav_on ? "true" : "false") + ",";
   j += "\"log_enabled\":false,";
 #if defined(GTI_THEMES)
-  j += "\"has_sd\":false,\"has_display\":true,\"has_ota\":true,\"has_themes\":true,";
+  j += "\"has_sd\":false,\"has_display\":true,\"has_ota\":true,\"has_themes\":true,\"has_skins\":true,";
 #else
   j += "\"has_sd\":false,\"has_display\":true,\"has_ota\":true,\"has_themes\":false,";
 #endif
@@ -132,9 +132,9 @@ static void hConfigGet() {
   j += "\"LANG\":\"" + String(LANG_NAMES[g_lang]) + "\",";
   j += "\"FONT\":\"" + String(g_font == 0 ? "SMALL" : g_font == 2 ? "LARGE" : "NORMAL") + "\",";
   j += "\"ROTATE\":\"" + String(g_rot * 90) + "\",";
-  j += "\"COMPACT\":\"" + String(g_compact ? "ON" : "OFF") + "\",";
-  j += "\"BTNSTYLE\":\"" + String(g_btn_pill ? "PILL" : "FLAT") + "\",";
-  j += "\"TAPLOAD\":\"" + String(g_tapload ? "ON" : "OFF") + "\",";
+  j += "\"COMPACT\":\"" + String("OFF") + "\",";
+  j += "\"BTNSTYLE\":\"" + String("PILL") + "\",";
+  j += "\"TAPLOAD\":\"" + String("OFF") + "\",";
   j += "\"HOTSWAP\":\"" + String(g_hotswap ? "ON" : "OFF") + "\",";
   j += "\"FORCESWAP\":\"" + String(g_forceswap ? "ON" : "OFF") + "\",";
   j += "\"CATEGORIES\":\"" + String(g_categories ? "ON" : "OFF") + "\",";
@@ -610,7 +610,7 @@ static void hSdDelete() {
   if (f) f.close();
   const bool ok = isDir ? wpSdRmR(want) : SD_MMC.remove(want.c_str());
   if (ok) webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}");
-  else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not delete\"}");
+  else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not delete (" + String(strerror(errno)) + ")\"}");
 }
 
 
@@ -626,7 +626,7 @@ static void hSdMkdir() {
     }
   }
   if (ok) webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}");
-  else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not create folder\"}");
+  else    webPanelHttp.send(500, "application/json", "{\"error\":\"could not create folder (" + String(strerror(errno)) + ")\"}");
 }
 
 static void hFiles() { webPanelHttp.sendHeader("Content-Encoding", "gzip"); webPanelHttp.send_P(200, "text/html", (PGM_P)panel_files_gz, panel_files_gz_len); }
@@ -663,10 +663,70 @@ static bool hThemesNamed() {
   }
   if (what == "activate" && post) {
     if (themeActivate(name)) { g_theme_redraw = true; webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}"); }
+    else if (g_skin_err.length()) webPanelHttp.send(400, "application/json", "{\"error\":\"" + wpJsonEscape(g_skin_err) + "\"}");   // gti-skins: the skin exists, its load was refused
     else webPanelHttp.send(404, "application/json", "{\"error\":\"no such theme\"}");
     return true;
   }
   if (what == "asset" && post) { webPanelHttp.send(200, "application/json", "{\"status\":\"ignored\"}"); return true; }   // no button pictures on this screen
+  return false;
+}
+
+// ── gti-skins: skin upload / download / delete (spec 2026-10-16-gti-skins-design.md, "Web panel") ──
+// The sketch provides skinWriteChunk / skinCommit / skinOpenFile / skinDelete. The server reads every non-multipart
+// body into args before a handler runs, so an upload comes as small form posts: off=<decimal>&data=<base64url>,
+// at most 4096 raw bytes each, appended in order to <NAME>.gts.part; commit checks it and makes it <NAME>.gts.
+//   POST /api/skins/<NAME>/chunk   POST /api/skins/<NAME>/commit   GET /api/skins/<NAME>   POST /api/skins/<NAME>/delete
+#include "skin_b64.h"
+#include "skin_names.h"
+#include "skin_gts.h"
+static const size_t WP_SKIN_CHUNK = 4096;
+static void wpSkinErr(int code, const String& e) { webPanelHttp.send(code, "application/json", "{\"error\":\"" + wpJsonEscape(e) + "\"}"); }
+// false = not a skin URL. The name is checked (skin::validName) before any path is built.
+static bool hSkinsNamed() {
+  const String u = webPanelHttp.uri();
+  if (!u.startsWith("/api/skins/")) return false;
+  const int sl = u.indexOf('/', 11);
+  String name = (sl < 0) ? u.substring(11) : u.substring(11, sl); name.toUpperCase();
+  const String what = (sl < 0) ? String("") : u.substring(sl + 1);
+  const bool post = (webPanelHttp.method() == HTTP_POST);
+  if (!skin::validName(name.c_str())) { wpSkinErr(400, "bad skin name: A-Z, 0-9 and _ only, max 16, not starting with a digit"); return true; }
+  if (what == "" && !post) {
+    File f;
+    if (!skinOpenFile(name, f)) { wpSkinErr(404, "no such skin"); return true; }
+    webPanelHttp.sendHeader("Content-Disposition", "attachment; filename=\"" + name + ".gts\"");
+    webPanelHttp.streamFile(f, "application/octet-stream");
+    f.close();
+    return true;
+  }
+  if (what == "chunk" && post) {
+    const String so = webPanelHttp.arg("off");
+    const String sd = webPanelHttp.arg("data");
+    bool num = so.length() > 0 && so.length() <= 10;
+    for (unsigned i = 0; num && i < so.length(); i++) num = (so[i] >= '0' && so[i] <= '9');
+    const unsigned long long off = num ? strtoull(so.c_str(), nullptr, 10) : 0;
+    if (!num || off > gts::MAX_FILE) { wpSkinErr(400, "bad off"); return true; }
+    if (sd.length() > (WP_SKIN_CHUNK + 2) / 3 * 4) { wpSkinErr(400, "chunk over 4096 bytes"); return true; }
+    uint8_t* buf = (uint8_t*)malloc(WP_SKIN_CHUNK);
+    if (!buf) { wpSkinErr(500, "not enough memory"); return true; }
+    const int n = skin::b64urlDecode(sd.c_str(), sd.length(), buf, WP_SKIN_CHUNK);
+    String err;
+    if (n < 0) wpSkinErr(400, "data is not base64url or over 4096 bytes");
+    else if (!skinWriteChunk(name, (uint32_t)off, buf, (size_t)n, err)) wpSkinErr(400, err);
+    else webPanelHttp.send(200, "application/json", "{\"status\":\"ok\",\"next\":" + String((uint32_t)off + (uint32_t)n) + "}");
+    free(buf);
+    return true;
+  }
+  if (what == "commit" && post) {
+    String err;
+    if (skinCommit(name, err)) webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}");
+    else wpSkinErr(400, err);
+    return true;
+  }
+  if (what == "delete" && post) {
+    if (skinDelete(name)) webPanelHttp.send(200, "application/json", "{\"status\":\"ok\"}");
+    else wpSkinErr(404, "no such skin");
+    return true;
+  }
   return false;
 }
 #endif
@@ -707,6 +767,16 @@ static void webPanelRegister() {
     webPanelHttp.send(200, "application/json", j);
   });
 #endif
+#if defined(GTI_WEB_TAP)
+  // POST /api/tap?x=..&y=..[&hold=ms]: a virtual finger in screen coordinates (as /api/screenshot shows them). Only
+  // queued here; the loop's frame reader presses it (vtapQueue). {"ok":false,...} when busy or out of range.
+  webPanelHttp.on("/api/tap", HTTP_POST, [](){
+    if(!webPanelHttp.hasArg("x")||!webPanelHttp.hasArg("y")){ webPanelHttp.send(400,"application/json","{\"ok\":false,\"error\":\"x and y required\"}"); return; }
+    const long hold=webPanelHttp.hasArg("hold")?webPanelHttp.arg("hold").toInt():0;
+    if(vtapQueue((int)webPanelHttp.arg("x").toInt(),(int)webPanelHttp.arg("y").toInt(),hold<0?0:(uint32_t)hold)) webPanelHttp.send(200,"application/json","{\"ok\":true}");
+    else webPanelHttp.send(409,"application/json","{\"ok\":false,\"error\":\"busy or out of range\"}");
+  });
+#endif
 #if defined(GTI_THEMES)
   webPanelHttp.on("/api/themes/list",     HTTP_GET, hThemesList);
   webPanelHttp.on("/api/themes/geometry", HTTP_GET, hThemesGeometry);
@@ -739,6 +809,7 @@ static void webPanelRegister() {
   webPanelHttp.onNotFound([]() {
 #if defined(GTI_THEMES)
     if (hThemesNamed()) return;   // A600-theme1: /api/themes/<NAME>/...
+    if (hSkinsNamed()) return;    // gti-skins: /api/skins/<NAME>/...
 #endif
     webPanelHttp.send(404, "application/json", "{\"error\":\"Not available on this device\"}"); });
 }
