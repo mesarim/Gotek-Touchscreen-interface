@@ -37,8 +37,9 @@ inline CuRect clRowRect(int i, int scroll, int listTop, int x, int w) { return C
 #define CL_LETTER_N 27
 #define CL_CELL_W 64
 #define CL_CELL_GAP 2
+inline int clLetterCols(int w) { return w >= 460 ? 7 : 4; }   // 7 columns on 480, 4 on 320
 inline CuRect clLetterCell(int i, int w, int top) {
-  const int col = i % 7, row = i / 7, x0 = (w - (7 * CL_CELL_W + 6 * CL_CELL_GAP)) / 2;
+  const int cols = clLetterCols(w), col = i % cols, row = i / cols, x0 = (w - (cols * CL_CELL_W + (cols - 1) * CL_CELL_GAP)) / 2;
   return CuRect{x0 + col * (CL_CELL_W + CL_CELL_GAP), top + row * (CU_KEY + CL_CELL_GAP), CL_CELL_W, CU_KEY};
 }
 inline int clLetterAt(int w, int top, int x, int y) {
@@ -107,12 +108,17 @@ inline ClChip clRowChip(int diskCount, bool splitPeer, bool df0, bool df1, bool 
 // ---- Settings (A600-calm6, mockup 5): Back, four tabs, setting rows of 56 px at a pitch of 60, a confirmation screen -------------
 #define CL_SET_H     56
 #define CL_SET_PITCH 60
-struct ClSetTabs { CuRect back; CuRect tab[4]; };
+struct ClSetTabs { CuRect back; CuRect tab[4]; int listTop; };   // listTop: where the rows start
 inline ClSetTabs clSettingsTabs(int w) {
   ClSetTabs t;
   t.back = CuRect{CU_MARGIN, 4, CU_KEY, CU_KEY};
-  const CuRect area{cuRight(t.back) + CU_GAP, 4, w - CU_MARGIN - (cuRight(t.back) + CU_GAP), CU_KEY};
-  cuCols(area, 4, 0, t.tab);
+  if (w >= 400) {   // landscape: the tabs beside Back
+    const CuRect area{cuRight(t.back) + CU_GAP, 4, w - CU_MARGIN - (cuRight(t.back) + CU_GAP), CU_KEY};
+    cuCols(area, 4, 0, t.tab); t.listTop = 60;
+  } else {          // portrait: the tabs in a row of their own under Back
+    const CuRect area{CU_MARGIN, cuBottom(t.back) + 4, w - 2 * CU_MARGIN, CU_KEY};
+    cuCols(area, 4, 0, t.tab); t.listTop = cuBottom(area) + CU_GAP;
+  }
   return t;
 }
 inline int clSetTabAt(const ClSetTabs& t, int x, int y) {

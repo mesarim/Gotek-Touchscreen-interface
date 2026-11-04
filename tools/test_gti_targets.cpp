@@ -282,7 +282,7 @@ static bool apart(const CuRect& a, const CuRect& b) { return cuRight(a) <= b.x |
 
 static void test_program_layout() {
   for (int disks = 1; disks <= 3; disks += 2) {
-    GtProgLayout L = gtProgLayout(480, disks);
+    GtProgLayout L = gtProgLayout(480, 320, disks);
     CHECK(L.hasStepper == (disks > 1));
     // everything sits between the header and the drive strip, nothing overlaps, nothing reaches the strip
     const CuRect all[] = {L.back, L.more, L.cover, L.details, L.status, L.loadArea};
@@ -295,11 +295,11 @@ static void test_program_layout() {
     CHECK(L.title.x >= cuRight(L.back) && cuRight(L.title) <= L.more.x);
     CHECK(L.status.h >= 16);
   }
-  CHECK(gtProgLayout(480, 2).details.h < gtProgLayout(480, 1).details.h);   // the stepper takes the room of some text
-  CHECK(gtProgLayout(480, 2).cover.w >= 176 && gtProgLayout(480, 2).cover.h >= 136);   // the cover of mockup 2
-  CHECK(cuBottom(gtProgLayout(480, 2).cover) + 8 <= gtProgLayout(480, 2).loadArea.y);
-  CHECK(gtProgLayout(480, 2).status.x >= cuRight(gtProgLayout(480, 2).cover));         // the status line sits right of the cover
-  GtProgLayout L = gtProgLayout(480, 3);
+  CHECK(gtProgLayout(480, 320, 2).details.h < gtProgLayout(480, 320, 1).details.h);   // the stepper takes the room of some text
+  CHECK(gtProgLayout(480, 320, 2).cover.w >= 176 && gtProgLayout(480, 320, 2).cover.h >= 136);   // the cover of mockup 2
+  CHECK(cuBottom(gtProgLayout(480, 320, 2).cover) + 8 <= gtProgLayout(480, 320, 2).loadArea.y);
+  CHECK(gtProgLayout(480, 320, 2).status.x >= cuRight(gtProgLayout(480, 320, 2).cover));         // the status line sits right of the cover
+  GtProgLayout L = gtProgLayout(480, 320, 3);
   CHECK(gtProgTap(L, L.back.x + 5, L.back.y + 5) == GT_PR_BACK);
   CHECK(gtProgTap(L, L.more.x + 5, L.more.y + 5) == GT_PR_MORE);
   CHECK(gtProgTap(L, L.stepper.x + 5, L.stepper.y + 5) == GT_PR_PREV);
@@ -308,7 +308,7 @@ static void test_program_layout() {
   CHECK(gtProgTap(L, L.cover.x + 5, L.cover.y + 5) == GT_PR_COVER);       // the cover opens full screen
   CHECK(gtProgTap(L, L.details.x + 5, L.details.y + 5) == GT_PR_DETAILS);  // the details text opens the description
   CHECK(L.cover.w >= 48 && L.cover.h >= 48 && L.details.w >= 48 && L.details.h >= 48);   // every touch area is at least 48 px
-  GtProgLayout L1 = gtProgLayout(480, 1);
+  GtProgLayout L1 = gtProgLayout(480, 320, 1);
   CHECK(gtProgTap(L1, 200, 130) == GT_PR_DETAILS && L1.details.h >= 48);   // no stepper: the details take the room
   CHECK(gtProgTap(L1, 200, L1.status.y + 2) == GT_PR_NONE);                 // the status line is not a key
 }
@@ -337,6 +337,43 @@ static void test_chip_words() {
   CHECK(std::strcmp(c.text, "charge") == 0);
 }
 
+static void test_portrait() {
+  // 320 x 480: the same bands, stacked: top bar, content, the strip 8 px above the bottom edge
+  CuRect strip = gtStripArea(320, 480);
+  CHECK(strip.x == 8 && strip.w == 304 && strip.h == 48 && strip.y == 480 - 8 - 48 && gtStripY(480) == strip.y);
+  CHECK(gtContentBottom(480) == strip.y - 8 && gtContentBottom(320) == GT_CONTENT_BOTTOM && gtStripY(320) == GT_STRIP_Y);
+  GtTopBar b = gtTopBarLayout(320);
+  CHECK(b.listTab.w >= 48 && b.reelTab.w >= 48 && b.listTab.x == 8 && cuRight(b.reelTab) <= b.filter.x);
+  CHECK(cuRight(b.filter) <= b.gear.x - 8 && cuRight(b.gear) == 312 && b.gear.w == 48);
+  CHECK(b.filter.w >= 72 && b.filter.h == 48 && gtTopBarTap(b, b.reelTab.x + 3, 10) == GT_TB_REEL);
+  GtTopBar bl = gtTopBarLayout(480);
+  CHECK(bl.listTab.w == 80);   // landscape unchanged
+  // the program screen stacked: cover above the details, then the stepper, the status, the keys full width
+  for (int disks = 1; disks <= 3; disks += 2) {
+    GtProgLayout L = gtProgLayout(320, 480, disks);
+    const int bottom = gtContentBottom(480);
+    const CuRect all[] = {L.back, L.more, L.cover, L.details, L.status, L.loadArea};
+    for (const CuRect& r : all) CHECK(inside(r, 320, bottom));
+    CHECK(L.cover.w >= 150 && L.cover.h >= 100 && L.details.y >= cuBottom(L.cover) && L.details.w >= 288);   // the details below the cover, full width
+    CHECK(apart(L.cover, L.details) && apart(L.details, L.status) && apart(L.status, L.loadArea) && apart(L.cover, L.loadArea));
+    if (L.hasStepper) { CHECK(inside(L.stepper, 320, bottom) && L.stepper.h == 48 && L.stepper.w >= 288 && apart(L.stepper, L.details) && apart(L.stepper, L.status) && apart(L.stepper, L.loadArea)); }
+    CHECK(cuBottom(L.loadArea) == bottom && L.loadArea.w == 304 && L.loadArea.h >= 104);   // room for two keys one above the other
+    CHECK(gtProgTap(L, L.cover.x + 5, L.cover.y + 5) == GT_PR_COVER && gtProgTap(L, L.details.x + 5, L.details.y + 5) == GT_PR_DETAILS);
+    CHECK(L.cover.h >= 48 && L.details.h >= 48);
+  }
+  // load keys stacked: two keys one above the other, 8 px apart, full width; one key / the picker: the bottom row
+  GtProgLayout L = gtProgLayout(320, 480, 2);
+  GtLoadKeys k = gtLoadLayout(L.loadArea, 2, true);
+  CHECK(k.n == 2 && !k.picker && k.key[0].r.w == 304 && k.key[1].r.w == 304 && k.key[0].r.h == 48 && k.key[1].r.h == 48);
+  CHECK(k.key[1].r.y - cuBottom(k.key[0].r) == 8 && cuBottom(k.key[1].r) == cuBottom(L.loadArea) && k.key[0].target == 0 && k.key[1].target == 1);
+  k = gtLoadLayout(L.loadArea, 1, true);
+  CHECK(k.n == 1 && k.key[0].r.h == 48 && cuBottom(k.key[0].r) == cuBottom(L.loadArea) && k.key[0].r.w == 304 && k.key[0].target == 0);
+  k = gtLoadLayout(L.loadArea, 4, true);
+  CHECK(k.n == 1 && k.picker && k.key[0].target == -1 && k.key[0].r.h == 48);
+  k = gtLoadLayout(CuRect{8, 208, 464, 48}, 2, false);
+  CHECK(k.n == 2 && k.key[1].r.x > k.key[0].r.x);   // side by side as before in the landscape
+}
+
 int main() {
   test_screen_in_a_gotek();
   test_espnow_paired_dongle();
@@ -353,6 +390,7 @@ int main() {
   test_strip_tap();
   test_info_layout();
   test_disk_tap();
+  test_portrait();
   test_program_layout();
   test_pick_layout();
   test_chip_words();

@@ -138,14 +138,15 @@ inline GtStrip gtStripLayout(const CuRect& area, int n) {
 struct GtLoadKey { CuRect r; int target; };
 struct GtLoadKeys { GtLoadKey key[2]; int n; bool picker; };
 
-inline GtLoadKeys gtLoadLayout(const CuRect& area, int n) {
+inline GtLoadKeys gtLoadLayout(const CuRect& area, int n, bool stack = false) {
   GtLoadKeys k = {}; k.n = 0; k.picker = false;
   if (n < 1) return k;
   if (n == 2) {
-    CuRect c[2]; cuCols(area, 2, CU_GAP, c);
+    CuRect c[2]; if (stack) cuRows(area, 2, CU_GAP, c); else cuCols(area, 2, CU_GAP, c);   // portrait: one above the other
     k.key[0] = GtLoadKey{c[0], 0}; k.key[1] = GtLoadKey{c[1], 1}; k.n = 2; return k;
   }
-  k.key[0] = GtLoadKey{area, n == 1 ? 0 : -1}; k.n = 1; k.picker = (n >= 3);
+  const CuRect one = stack ? CuRect{area.x, cuBottom(area) - CU_KEY, area.w, CU_KEY} : area;   // one key / the picker: the bottom row
+  k.key[0] = GtLoadKey{one, n == 1 ? 0 : -1}; k.n = 1; k.picker = (n >= 3);
   return k;
 }
 
@@ -158,6 +159,8 @@ inline GtLoadKeys gtLoadLayout(const CuRect& area, int n) {
 #define GT_STRIP_Y         (320 - CU_MARGIN - GT_STRIP_H)      // 264
 #define GT_CONTENT_BOTTOM  (GT_STRIP_Y - CU_GAP)               // 256
 
+inline int gtStripY(int h) { return h - CU_MARGIN - GT_STRIP_H; }
+inline int gtContentBottom(int h) { return gtStripY(h) - CU_GAP; }
 inline CuRect gtStripArea(int w, int h) { return CuRect{CU_MARGIN, h - CU_MARGIN - GT_STRIP_H, w - 2 * CU_MARGIN, GT_STRIP_H}; }
 inline CuRect gtContentArea(int w, int h) { return CuRect{0, GT_CONTENT_TOP, w, h - CU_MARGIN - GT_STRIP_H - CU_GAP - GT_CONTENT_TOP}; }
 
@@ -167,8 +170,9 @@ struct GtTopBar { CuRect listTab, reelTab, count, gear, filter; };   // filter: 
 enum { GT_TB_NONE = 0, GT_TB_LIST, GT_TB_REEL, GT_TB_GEAR, GT_TB_FILTER };
 inline GtTopBar gtTopBarLayout(int w) {
   GtTopBar b;
-  b.listTab = CuRect{CU_MARGIN, 0, 80, CU_KEY};
-  b.reelTab = CuRect{CU_MARGIN + 80, 0, 80, CU_KEY};
+  const int tw = w >= 400 ? 80 : 64;   // portrait (320): narrower tabs, the reel's source key still fits beside them
+  b.listTab = CuRect{CU_MARGIN, 0, tw, CU_KEY};
+  b.reelTab = CuRect{CU_MARGIN + tw, 0, tw, CU_KEY};
   b.gear    = CuRect{w - CU_MARGIN - CU_KEY, 0, CU_KEY, CU_KEY};
   const int cx = cuRight(b.reelTab);
   b.count   = CuRect{cx, 0, b.gear.x - CU_GAP - cx, CU_KEY};
@@ -252,24 +256,40 @@ inline int gtDiskTap(int targetCount, bool gameLoaded, bool hotswap) {
 // loadArea) in the last 48 px of the content; the drive strip below as on every screen. Rects are touch areas.
 struct GtProgLayout { CuRect back, title, more, cover, details, stepper, status, loadArea; bool hasStepper; };
 enum { GT_PR_NONE = 0, GT_PR_BACK, GT_PR_MORE, GT_PR_PREV, GT_PR_NEXT, GT_PR_COVER, GT_PR_DETAILS };
-inline GtProgLayout gtProgLayout(int w, int diskCount) {
+inline GtProgLayout gtProgLayout(int w, int h, int diskCount) {
   GtProgLayout L; memset(&L, 0, sizeof L);
+  const int bottom = gtContentBottom(h);
   L.back  = CuRect{CU_MARGIN, 4, 104, CU_KEY};
   L.more  = CuRect{w - CU_MARGIN - CU_KEY, 4, CU_KEY, CU_KEY};
   L.title = CuRect{cuRight(L.back) + CU_GAP, 4, L.more.x - CU_GAP - (cuRight(L.back) + CU_GAP), CU_KEY};
   const int top = cuBottom(L.back) + CU_GAP;   // 60
-  L.cover = CuRect{CU_MARGIN, top, 176, 136};   // mockup 2
-  const int rx = cuRight(L.cover) + CU_GAP, rw = w - CU_MARGIN - rx;
   L.hasStepper = diskCount > 1;
-  if (L.hasStepper) {
-    L.details = CuRect{rx, top, rw, 54};
-    L.stepper = CuRect{rx, top + 60, rw, CU_KEY};
-    L.status  = CuRect{rx, top + 60 + CU_KEY + 6, rw, 16};
-  } else {
-    L.details = CuRect{rx, top, rw, 108};
-    L.status  = CuRect{rx, top + 108 + 6, rw, 16};
+  if (w >= 400) {   // landscape: the cover at the left, the details, stepper and status at its right, the keys side by side below
+    L.cover = CuRect{CU_MARGIN, top, 176, 136};   // mockup 2
+    const int rx = cuRight(L.cover) + CU_GAP, rw = w - CU_MARGIN - rx;
+    if (L.hasStepper) {
+      L.details = CuRect{rx, top, rw, 54};
+      L.stepper = CuRect{rx, top + 60, rw, CU_KEY};
+      L.status  = CuRect{rx, top + 60 + CU_KEY + 6, rw, 16};
+    } else {
+      L.details = CuRect{rx, top, rw, 108};
+      L.status  = CuRect{rx, top + 108 + 6, rw, 16};
+    }
+    L.loadArea = CuRect{CU_MARGIN, bottom - CU_KEY, w - 2 * CU_MARGIN, CU_KEY};
+  } else {          // portrait: everything stacked - the cover, the details, the stepper, the status, the keys one above the other
+    const int fw = w - 2 * CU_MARGIN;
+    L.cover = CuRect{CU_MARGIN, top, fw, 112};
+    const int dy = cuBottom(L.cover) + 6;
+    if (L.hasStepper) {
+      L.details = CuRect{CU_MARGIN, dy, fw, 54};
+      L.stepper = CuRect{CU_MARGIN, dy + 54 + 6, fw, CU_KEY};
+      L.status  = CuRect{CU_MARGIN, dy + 54 + 6 + CU_KEY + 4, fw, 16};
+    } else {
+      L.details = CuRect{CU_MARGIN, dy, fw, 108};
+      L.status  = CuRect{CU_MARGIN, dy + 108 + 4, fw, 16};
+    }
+    L.loadArea = CuRect{CU_MARGIN, bottom - (2 * CU_KEY + CU_GAP), fw, 2 * CU_KEY + CU_GAP};
   }
-  L.loadArea = CuRect{CU_MARGIN, GT_CONTENT_BOTTOM - CU_KEY, w - 2 * CU_MARGIN, CU_KEY};
   return L;
 }
 inline int gtProgTap(const GtProgLayout& L, int x, int y) {

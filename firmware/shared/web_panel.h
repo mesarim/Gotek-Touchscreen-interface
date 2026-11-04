@@ -132,9 +132,9 @@ static void hConfigGet() {
   j += "\"LANG\":\"" + String(LANG_NAMES[g_lang]) + "\",";
   j += "\"FONT\":\"" + String(g_font == 0 ? "SMALL" : g_font == 2 ? "LARGE" : "NORMAL") + "\",";
   j += "\"ROTATE\":\"" + String(g_rot * 90) + "\",";
-  j += "\"COMPACT\":\"" + String(g_compact ? "ON" : "OFF") + "\",";
-  j += "\"BTNSTYLE\":\"" + String(g_btn_pill ? "PILL" : "FLAT") + "\",";
-  j += "\"TAPLOAD\":\"" + String(g_tapload ? "ON" : "OFF") + "\",";
+  j += "\"COMPACT\":\"" + String("OFF") + "\",";
+  j += "\"BTNSTYLE\":\"" + String("PILL") + "\",";
+  j += "\"TAPLOAD\":\"" + String("OFF") + "\",";
   j += "\"HOTSWAP\":\"" + String(g_hotswap ? "ON" : "OFF") + "\",";
   j += "\"FORCESWAP\":\"" + String(g_forceswap ? "ON" : "OFF") + "\",";
   j += "\"CATEGORIES\":\"" + String(g_categories ? "ON" : "OFF") + "\",";

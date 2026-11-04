@@ -60,7 +60,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-calm6b-JC3248"   // A600-calm6b (4 Nov 2026): one casing style on the calm screens (Back, Cancel, List / Reel, Eject, the Settings labels; SD / UI / ADF stay capitals) | A600-calm6 (4 Nov 2026): Settings in the calm look - Back and four tabs (Screen / Wi-Fi / Drives / System), rows with a label, a value or a switch and a grey line that says what it does, actions as keys; Restart, SD card access, the firmware update and the test tools ask first; every row does what its old Settings key did | A600-calm5 (4 Nov 2026): the reel shows only covers - a bigger centre cover, the name (size 3) and N disks, a source key in the top bar (all / favourites / most played / the dice), a tap opens the program screen; the description and manual readers get the calm frame (Back, title, text at size 2, page keys); the count says programs | A600-calm4c (4 Nov 2026): a disk's name in Drive info opens that game's program screen on that disk; on the program screen the cover opens full screen and the details text opens the description | A600-calm4b (4 Nov 2026): ONE load screen with one bar (Reading card... / Sending to DF0... NN%); a send to a single fleet drive streams the image from the card instead of staging it in RAM first; the reel has no disk keys and no INSERT/EJECT (a Load key opens the program screen); the battery glyph shows only with BATTERY=ON in Settings | A600-calm4 (4 Nov 2026): the program screen - a tap on a row (or on the reel's centre cover) opens cover, details, the disk stepper and the load keys (one Load, one per drive, or Load into... with a list of every drive and what is in it); the ... key holds the manual, the .nfo text and START FRESH; the new strings are translated; the top bar no longer carries the storing warning (the drive's card does) | A600-calm3 (4 Nov 2026): the calm list - a search row (Search, A-Z, the filter), rows of 48 px with the name at size 3 and a chip (the drive that holds it, or N disks), the letter grid, the filter list (ADF / DSK / GEN / categories / own disks); the left cover column, the A-Z column, the mode bar and the L tiles are gone from the landscape list (a tap on a row opens the reel at that game until the program screen); a disk key only selects when more than one drive is reachable (one drive swaps with a real eject first); a progress bar while a disk loads; the library sort is a host-tested heapsort | A600-calm2 (4 Nov 2026): the calm frame - landscape list and reel get the top bar (List / Reel tabs, the count, the Settings key) and the drive strip (one wide card, two halves, or two cards and +N: caption, the disk it holds, a link dot; a tap opens Drive info) instead of the status bar, NOW PLAYING and the bottom key row; Drive info is one card per drive of any kind (Gotek, dongle, FluxDrive DF0 / DF1) with Eject, scrolling beyond two; the reel keeps its source and ROLL keys on the stage; portrait and the compact layout are unchanged | A600-calm1 (4 Nov 2026): the calm layout building blocks - POST /api/tap (a virtual finger, test builds only), calm_ui.h (grid), gti_targets.h (drives, strip and load-key layouts), the calm UI primitives; nothing visible changes yet | A600-lab2i-fd4s (4 Nov 2026): skins (gti-skins, PR #29) and FluxDrive DF1 (fluxdrive-panel) together, the base of the calm layout | A600-lab2i-fd4 (4 Nov 2026): FluxDrive DF1 (a multi-disk game is sent as "<game> - Disk <n>" and read back, so each drive shows and ejects its own disk) - the INSERT key is cut in two, DF0 | DF1, for a single FluxDrive with DF1 on (a dongle, an older FluxDrive, DF1 off or several peers keep the one INSERT): each half loads or ejects its own drive (SET_DRIVE 1 before the push, EJECT_DRIVE 1), the reel's INSERT key is cut the same way, NOW PLAYING adds "DF1: <disk>" and no longer ejects: a tap on it opens a DRIVE INFO screen (a block per drive with its disk, WP/STORING/unsaved chips and an EJECT key; a tap on a disk name selects its game in the list), and DF1 saves are fetched over the LAN (GET_SAVE_DRIVE 1) into Game.sav.<tag>.adf with their own record key "<id>:1" in fdsaves.txt (old files stay valid); the commit window and START FRESH stay DF0 only | A600-skin1-JC3248 (Dimmy, 16 Oct): skins - one .gts file (colours + PNG atlas + optional JPEG backgrounds) makes your own look; made and uploaded in the web page's Theme Editor, NEO is the starter | A600-lab2i-fd3 (26 Oct 2026): FluxDrive's commit window - STORING... until the disk is in flash, a revert to the previous disk puts its record back, START FRESH keeps a backup until then | A600-lab2i-fd2 (25 Oct 2026): FluxDrive saves (writing): fetched over the LAN, write protect, start fresh | A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-calm7-JC3248"   // A600-calm7 (4 Nov 2026): portrait on the same grid as landscape (top bar, search row, list, program screen stacked, drive strip, Drive info, Settings, readers); the compact layout is retired (COMPACT= in CONFIG.TXT is read and ignored); the old list, cover column, NOW PLAYING, A-Z column, mode bar, bottom bar, old Settings pages and old reel keys are gone | A600-calm6b (4 Nov 2026): one casing style on the calm screens (Back, Cancel, List / Reel, Eject, the Settings labels; SD / UI / ADF stay capitals) | A600-calm6 (4 Nov 2026): Settings in the calm look - Back and four tabs (Screen / Wi-Fi / Drives / System), rows with a label, a value or a switch and a grey line that says what it does, actions as keys; Restart, SD card access, the firmware update and the test tools ask first; every row does what its old Settings key did | A600-calm5 (4 Nov 2026): the reel shows only covers - a bigger centre cover, the name (size 3) and N disks, a source key in the top bar (all / favourites / most played / the dice), a tap opens the program screen; the description and manual readers get the calm frame (Back, title, text at size 2, page keys); the count says programs | A600-calm4c (4 Nov 2026): a disk's name in Drive info opens that game's program screen on that disk; on the program screen the cover opens full screen and the details text opens the description | A600-calm4b (4 Nov 2026): ONE load screen with one bar (Reading card... / Sending to DF0... NN%); a send to a single fleet drive streams the image from the card instead of staging it in RAM first; the reel has no disk keys and no INSERT/EJECT (a Load key opens the program screen); the battery glyph shows only with BATTERY=ON in Settings | A600-calm4 (4 Nov 2026): the program screen - a tap on a row (or on the reel's centre cover) opens cover, details, the disk stepper and the load keys (one Load, one per drive, or Load into... with a list of every drive and what is in it); the ... key holds the manual, the .nfo text and START FRESH; the new strings are translated; the top bar no longer carries the storing warning (the drive's card does) | A600-calm3 (4 Nov 2026): the calm list - a search row (Search, A-Z, the filter), rows of 48 px with the name at size 3 and a chip (the drive that holds it, or N disks), the letter grid, the filter list (ADF / DSK / GEN / categories / own disks); the left cover column, the A-Z column, the mode bar and the L tiles are gone from the landscape list (a tap on a row opens the reel at that game until the program screen); a disk key only selects when more than one drive is reachable (one drive swaps with a real eject first); a progress bar while a disk loads; the library sort is a host-tested heapsort | A600-calm2 (4 Nov 2026): the calm frame - landscape list and reel get the top bar (List / Reel tabs, the count, the Settings key) and the drive strip (one wide card, two halves, or two cards and +N: caption, the disk it holds, a link dot; a tap opens Drive info) instead of the status bar, NOW PLAYING and the bottom key row; Drive info is one card per drive of any kind (Gotek, dongle, FluxDrive DF0 / DF1) with Eject, scrolling beyond two; the reel keeps its source and ROLL keys on the stage; portrait and the compact layout are unchanged | A600-calm1 (4 Nov 2026): the calm layout building blocks - POST /api/tap (a virtual finger, test builds only), calm_ui.h (grid), gti_targets.h (drives, strip and load-key layouts), the calm UI primitives; nothing visible changes yet | A600-lab2i-fd4s (4 Nov 2026): skins (gti-skins, PR #29) and FluxDrive DF1 (fluxdrive-panel) together, the base of the calm layout | A600-lab2i-fd4 (4 Nov 2026): FluxDrive DF1 (a multi-disk game is sent as "<game> - Disk <n>" and read back, so each drive shows and ejects its own disk) - the INSERT key is cut in two, DF0 | DF1, for a single FluxDrive with DF1 on (a dongle, an older FluxDrive, DF1 off or several peers keep the one INSERT): each half loads or ejects its own drive (SET_DRIVE 1 before the push, EJECT_DRIVE 1), the reel's INSERT key is cut the same way, NOW PLAYING adds "DF1: <disk>" and no longer ejects: a tap on it opens a DRIVE INFO screen (a block per drive with its disk, WP/STORING/unsaved chips and an EJECT key; a tap on a disk name selects its game in the list), and DF1 saves are fetched over the LAN (GET_SAVE_DRIVE 1) into Game.sav.<tag>.adf with their own record key "<id>:1" in fdsaves.txt (old files stay valid); the commit window and START FRESH stay DF0 only | A600-skin1-JC3248 (Dimmy, 16 Oct): skins - one .gts file (colours + PNG atlas + optional JPEG backgrounds) makes your own look; made and uploaded in the web page's Theme Editor, NEO is the starter | A600-lab2i-fd3 (26 Oct 2026): FluxDrive's commit window - STORING... until the disk is in flash, a revert to the previous disk puts its record back, START FRESH keeps a backup until then | A600-lab2i-fd2 (25 Oct 2026): FluxDrive saves (writing): fetched over the LAN, write protect, start fresh | A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -95,12 +95,7 @@ extern "C" { bool tud_mounted(void); void tud_disconnect(void); void tud_connect
 // 3=portrait-flipped. Each ROTATE tap advances 90 degrees. gW/gH swap for portrait.
 static int gW=480, gH=320;
 static int g_rot=0;
-static bool g_compact=false;
 #define g_portrait (g_rot==1||g_rot==3)
-// Disk-selector grid geometry — declared up here so the Arduino auto-prototype
-// for diskGrid() (which returns this type) sees it before use.
-struct DiskGrid{int pages,pageStart,pageEnd,COLS,dbw,dbh,dgap,gridW,gx,gridY,gridH,pageBtnH,pageGap,labelY;bool multiPage;};
-static inline bool calmFrame(){ return !g_portrait&&!g_compact; }   // A600-calm2: the calm layout (landscape); portrait and the compact layout keep their old screens until phase 7
 static bool g_forceClassicBar=false;   // the old modal screens (categories, user disks) draw the old status bar under their own header
 struct ClassicBar{ bool was; ClassicBar(){ was=g_forceClassicBar; g_forceClassicBar=true; } ~ClassicBar(){ g_forceClassicBar=was; } };
 #define LCD_PIN_CS 45
@@ -2225,7 +2220,7 @@ static bool manualFor(const String&p,String&out){
 // ════════════════════════════════════════════════════════════════════════════
 // STATE
 // ════════════════════════════════════════════════════════════════════════════
-static bool g_wireless_mode=false,g_loop_cracktro=false,g_info_showing=false;
+static bool g_wireless_mode=false,g_loop_cracktro=false;
 // ── Screensaver (undocumented, folder-gated /screensaver/*.jpg) ──
 static std::vector<String> g_ss_paths;
 static bool g_ss_have=false, g_ss_enabled=true;
@@ -2244,7 +2239,6 @@ static uint32_t g_ss_idle_ms=SS_IDLE_MS, g_ss_load_ms=SS_LOAD_MS;   // hidden SS
 static bool g_ss_slides=true;         // SSMODE: true=slideshow, false=classic bounce
 static bool g_ss_cracktro=false;      // SSMODE=CRACKTRO: run the cracktro as the saver
 static bool g_ss_matrix=false;        // SSMODE=MATRIX: falling-code screensaver (5.8.3)
-static bool g_btn_pill=true;          // BTNSTYLE: coloured rounded pill reel buttons (5.8.3)
 static int  g_ss_fx=0;                // SSFX: 0=SHUFFLE 1=FADE 2=DISSOLVE 3=SLIDE 4=CUT
 static bool g_ss_fav=true;            // SSFAV: fold favourited game covers into the slide pool
 static uint32_t g_ss_time_ms=6000UL;  // SSTIME: seconds each slide holds (2..120)
@@ -2283,13 +2277,8 @@ static void davLogSerial(const String&m){Serial.println(m);}
 static void davApplyConfig(){DavConfig c;c.host=g_dav_host;c.port=(uint16_t)g_dav_port;c.https=g_dav_https;c.user=g_dav_user;c.pass=g_dav_pass;c.basePath=g_dav_path;c.enabled=g_dav_on;davClient.configure(c,davLogSerial);}
 // ── Item 4: load/eject behaviour toggles (all default OFF = safest) ──
 static bool g_batt_show=false;   // A600-calm4: the battery glyph in the bars - off unless BATTERY=ON (Settings), most screens have no battery
-static bool g_tapload=false;    // ON = tapping the already-selected row loads it (old double-tap behaviour)
 static bool g_hotswap=false;    // ON = tapping another disk while loaded swaps to it instantly
 static bool g_forceswap=false;  // ON = swap disk bytes in place without the USB eject/re-attach cycle
-static int g_info_x=0,g_info_w=150,g_info_bottom=0;
-static String g_manual_path=""; static int g_manual_bx=0,g_manual_by=0,g_manual_bw=0,g_manual_bh=0;  // v4.9.2 .rtfm book button rect
-static int g_nfo_bx=0,g_nfo_by=0,g_nfo_bw=0,g_nfo_bh=0;   // lab15j: list-panel text area (title + description) - a tap opens the whole .nfo
-static int g_fresh_bx=0,g_fresh_by=0,g_fresh_bw=0,g_fresh_bh=0;   // fd2: the cover panel's START FRESH key (0 wide = not shown)
 static String g_freshDrawn;   // fd2 fix round 1: the save that key was drawn for - a tap deletes that save or nothing
 // lab15b: 36 bytes, no heap blocks of its own - text + multi-disk lists live in g_gtext (gti_gamestore.h)
 struct GameEntry{AStr name;AStr jpg_path;AStr blurb;DiskList disk_indices;int first_file_idx=0;int disk_count=0;uint16_t plays=0;bool fav=false;bool cover_ok=false;bool nfo_done=false;bool has_manual=false;bool is_hd=false;};   // 5.9.31-lab1: sidecar results cached in PSRAM (see .nfocache) so selecting a game costs ZERO directory walks
@@ -2337,12 +2326,9 @@ static bool uiShowsLoaded(int gi,int d=-1,int drive=0){ int ld; return uiLoadedA
 // fd4 round 4: in either drive of a split FluxDrive (the loaded markers: the list row, the disk buttons), and the split halves' own rule: a
 // half ejects only when the selected disk is the one its drive holds (a disk of the game not known here counts), else it loads it.
 static bool uiShowsLoadedAny(int gi,int d=-1){ return uiShowsLoaded(gi,d,0)||(fdSplitPeer()>=0&&uiShowsLoaded(gi,d,1)); }
-static bool insHalfEjects(int gi,int d){ int ld=-1; const bool L=uiLoadedAs(gi,&ld,d); return fdInsertTapEjects(L,ld,g_disk_sel); }
 // ── Smooth list scroll + A-Z index state ──
 static float g_scrollPx=0;                 // pixel scroll offset (source of truth)
-static int   g_az_page=0;                  // 0 = #/A-M, 1 = N-Z
 static char  g_active_letter='A';          // letter the index highlights / pages to
-static int g_marquee_off=0,g_marquee_sel=-1,g_marquee_dir=1;static uint32_t g_marquee_pause=0;   // bounce scroll of the selected over-long name
 // touch/drag/inertia
 static bool  g_touch_active=false,g_touch_moved=false,g_touch_inlist=false,g_inertia_on=false;
 static uint32_t g_touch_down_ms=0; static bool g_shot_fired=false;   // screenshot hold on the status bar
@@ -3508,7 +3494,7 @@ static bool savExistsFor(const String&adfPath);
 static bool savBadgeFor(const String&adfPath);   // lab14i: the badge (from the save list)
 static String selDiskFile();                     // fd2: the selected game's selected disk (what INSERT loads)
 static String freshSave(const String&file,int*peer);   // fd2: the save START FRESH would delete ("" = none)
-static void drawListAndCover();
+static void drawListAndStrip();
 // freshId (fd2, START FRESH): the original goes to that FluxDrive only, with no fetch first; *sent: it was acked.
 // drive (fd4): 1 = DF1 of the single FluxDrive (the split INSERT's right half); 0 = DF0 / everything else, as before.
 static bool doLoadSelected(const String&p,const String&freshId=String(),bool*sent=nullptr,int drive=0);
@@ -3536,7 +3522,7 @@ static void ensureEspNow(){if(!g_espnow_started){espnowBegin();g_espnow_started=
 enum { LANG_EN=0, LANG_FR, LANG_IT, LANG_ES, LANG_DE, LANG_NL, LANG_PL, LANG_CS, LANG_N };   // lab15o: + Polish, Czech
 static int g_lang=0;
 static const char* const LANG_NAMES[LANG_N]={"EN","FR","IT","ES","DE","NL","PL","CS"};
-enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_CFG_MODE, L_CFG_FONT, L_CFG_LANG, L_CFG_ROTATE, L_CFG_COMPACT, L_CFG_LIBRARY, L_CFG_CATEG, L_CFG_BUTTONS, L_CFG_SAVER, L_CFG_FAVSAVER, L_CFG_HIVEMIND, L_ON, L_OFF, L_PORTRAIT, L_LANDSCAPE, L_FONT_SMALL, L_FONT_NORMAL, L_FONT_LARGE, L_PILL, L_FLAT, L_SLIDES, L_BOUNCE, L_MATRIX, L_CRACKTRO, L_SWITCH_DONGLE, L_SCAN_DONGLES, L_PAGE, L_CLOSE, L_TOP, L_SECTIONS, L_REEL_BORDER, L_COVER_ART, L_LIST_TILE, L_LAST_USED, L_HOME_WIFI, L_WIFI_CHECK, L_SET_UP, L_START_FRESH, L_FRESH_GONE, L_FRESH_ORIG, L_FRESH_SWAP, L_FRESH_DONE, L_FRESH_KEPT, L_WP_LATER, L_FRESH_CABLE, L_FRESH_CHANGED, L_FD_STORING, L_FD_NOT_OFF, L_FD_WENT_BACK, L_FD_OFF_BEFORE, L_FRESH_UNDONE, L_FRESH_RESET, L_FD_EMPTY, L_FD_UNSAVED, L_ST_STORED, L_ST_STORING, L_ST_WP, L_ST_LOADED, L_ST_LINKED, L_ST_NOTHEARD, L_JUMP, L_SHOW, L_DRIVES, L_NO_DRIVE, L_OWN_DISKS, L_CATEGORIES, L_F_ADF, L_F_DSK, L_F_GEN, L_PR_LOAD, L_PR_LOADINTO, L_PR_DISK, L_PR_OF, L_PR_IN, L_PR_NOTLOADED, L_PR_NOW, L_PR_DISKS, L_PR_DESC, L_PR_READING, L_PR_SENDING, L_PR_BATT, L_PROGRAMS, L_S_SCREEN, L_S_SYSTEM, L_S_STYLE, L_S_SAVEDWIFI, L_S_FLEET, L_S_DSETUP, L_S_LOCKS, L_S_TESTTOOLS, L_D_THEME, L_D_LANG, L_D_FONT, L_D_ROTATE, L_D_COMPACT, L_D_BTN, L_D_BATT, L_D_COVERS, L_D_TILE, L_D_REELB, L_D_LAST, L_D_SAVER, L_D_SSFX, L_D_SSFAV, L_D_INTRO, L_D_INTROSTYLE, L_D_MODE, L_D_HOMEWIFI, L_D_WEBUI, L_D_WIFICHK, L_D_SAVEDWIFI, L_D_HIVE, L_D_FLEET, L_D_DONGLE, L_D_DSETUP, L_D_LOCKS, L_D_LIBRARY, L_D_CATEG, L_D_RESCAN, L_C_RESTART, L_C_SDACC, L_C_FWUPD, L_C_TESTTOOLS, L_STR_N };
+enum { L_PREV, L_NEXT, L_THEME, L_REEL, L_INFO, L_LIST, L_ROLL, L_INSERT, L_EJECT, L_SEARCH, L_SETTINGS, L_NOW_PLAYING, L_NO_GAMES, L_NO_FAVS, L_ALL, L_FAV, L_MOST, L_BUILDING, L_ONEOFF, L_LOADING, L_LOADING_DIAG, L_RESCAN_SD, L_SD_ACCESS, L_FW_UPDATE, L_SOFT_RESET, L_RESETTING, L_STANDALONE, L_WIRELESS, L_USER_DISKS, L_RENAME, L_BACK, L_CANCEL, L_ACTIVE, L_MANUAL, L_PAIRED, L_NOT_PAIRED, L_NAME_DONGLE, L_DONGLE_LINKED, L_CREATE_DISK, L_NONE_YET, L_PREFMT, L_CHECK_DONGLE, L_NO_DONGLES, L_NO_WIRELESS_DEV, L_USE_CABLE, L_IN_RANGE, L_AVAIL_HD, L_HD_NO_WIRELESS, L_MAX_DD, L_TOO_BIG, L_SIZE_ERR, L_FAILED, L_SD_MOUNT_FAIL, L_LOAD_DIAG, L_EJECT_DIAG, L_GAMES_TAP, L_CFG_MODE, L_CFG_FONT, L_CFG_LANG, L_CFG_ROTATE, L_CFG_LIBRARY, L_CFG_CATEG, L_CFG_BUTTONS, L_CFG_SAVER, L_CFG_FAVSAVER, L_CFG_HIVEMIND, L_ON, L_OFF, L_PORTRAIT, L_LANDSCAPE, L_FONT_SMALL, L_FONT_NORMAL, L_FONT_LARGE, L_PILL, L_FLAT, L_SLIDES, L_BOUNCE, L_MATRIX, L_CRACKTRO, L_SWITCH_DONGLE, L_SCAN_DONGLES, L_PAGE, L_CLOSE, L_TOP, L_SECTIONS, L_REEL_BORDER, L_COVER_ART, L_LIST_TILE, L_LAST_USED, L_HOME_WIFI, L_WIFI_CHECK, L_SET_UP, L_START_FRESH, L_FRESH_GONE, L_FRESH_ORIG, L_FRESH_SWAP, L_FRESH_DONE, L_FRESH_KEPT, L_WP_LATER, L_FRESH_CABLE, L_FRESH_CHANGED, L_FD_STORING, L_FD_NOT_OFF, L_FD_WENT_BACK, L_FD_OFF_BEFORE, L_FRESH_UNDONE, L_FRESH_RESET, L_FD_EMPTY, L_FD_UNSAVED, L_ST_STORED, L_ST_STORING, L_ST_WP, L_ST_LOADED, L_ST_LINKED, L_ST_NOTHEARD, L_JUMP, L_SHOW, L_DRIVES, L_NO_DRIVE, L_OWN_DISKS, L_CATEGORIES, L_F_ADF, L_F_DSK, L_F_GEN, L_PR_LOAD, L_PR_LOADINTO, L_PR_DISK, L_PR_OF, L_PR_IN, L_PR_NOTLOADED, L_PR_NOW, L_PR_DISKS, L_PR_DESC, L_PR_READING, L_PR_SENDING, L_PR_BATT, L_PROGRAMS, L_S_SCREEN, L_S_SYSTEM, L_S_STYLE, L_S_SAVEDWIFI, L_S_FLEET, L_S_DSETUP, L_S_LOCKS, L_S_TESTTOOLS, L_D_THEME, L_D_LANG, L_D_FONT, L_D_ROTATE, L_D_BTN, L_D_BATT, L_D_COVERS, L_D_TILE, L_D_REELB, L_D_LAST, L_D_SAVER, L_D_SSFX, L_D_SSFAV, L_D_INTRO, L_D_INTROSTYLE, L_D_MODE, L_D_HOMEWIFI, L_D_WEBUI, L_D_WIFICHK, L_D_SAVEDWIFI, L_D_HIVE, L_D_FLEET, L_D_DONGLE, L_D_DSETUP, L_D_LOCKS, L_D_LIBRARY, L_D_CATEG, L_D_RESCAN, L_C_RESTART, L_C_SDACC, L_C_FWUPD, L_C_TESTTOOLS, L_STR_N };
 static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_PREV          */ {"PREV","PREC","PREC","ANT","VORH","VORIG","POPRZ","PRED"},
   /*L_NEXT          */ {"NEXT","SUIV","SUCC","SIG","WEIT","VOLG","DALEJ","DALSI"},
@@ -3598,7 +3584,6 @@ static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_CFG_FONT     */ {"FONT","POLICE","FONT","FUENTE","SCHRIFT","LETTER","CZCIONKA","PISMO"},
   /*L_CFG_LANG     */ {"LANG","LANGUE","LANG","IDIOMA","SPRACHE","TAAL","JEZYK","JAZYK"},
   /*L_CFG_ROTATE   */ {"ROTATE","ROTATION","ROTATE","ROTAR","DREHEN","DRAAIEN","OBROT","OTOCIT"},
-  /*L_CFG_COMPACT  */ {"COMPACT","COMPACT","COMPACT","COMPACTO","KOMPAKT","COMPACT","KOMPAKT","KOMPAKT"},
   /*L_CFG_LIBRARY  */ {"LIBRARY","BIBLIO.","LIBRARY","BIBLIOTECA","BIBLIOTHEK","BIBLIOTHEEK","BIBLIOTEKA","KNIHOVNA"},
   /*L_CFG_CATEG    */ {"CATEGORIES","CATEGORIES","CATEGORIES","CATEGORIAS","KATEGORIEN","CATEGORIEEN","KATEGORIE","KATEGORIE"},
   /*L_CFG_BUTTONS  */ {"BUTTONS","BOUTONS","BUTTONS","BOTONES","TASTEN","KNOPPEN","PRZYCISKI","TLACITKA"},
@@ -3700,7 +3685,6 @@ static const char* const LSTR[L_STR_N][LANG_N]={
   /*L_D_LANG       */ {"Language of the screens","Langue des ecrans","Lingua delle schermate","Idioma de las pantallas","Sprache der Anzeigen","Taal van de schermen","Jezyk ekranow","Jazyk obrazovek"},
   /*L_D_FONT       */ {"Text size in the readers","Taille du texte (lecteurs)","Dimensione del testo (lettori)","Tamano del texto (lectores)","Textgroesse (Leser)","Tekstgrootte (lezers)","Rozmiar tekstu (czytniki)","Velikost textu (ctecky)"},
   /*L_D_ROTATE     */ {"Turn the screen around","Tourner l'ecran","Ruota lo schermo","Girar la pantalla","Bildschirm drehen","Scherm draaien","Obroc ekran","Otocit obrazovku"},
-  /*L_D_COMPACT    */ {"The old compact list layout","L'ancienne liste compacte","Il vecchio elenco compatto","La lista compacta antigua","Die alte kompakte Liste","De oude compacte lijst","Stara lista kompaktowa","Stary kompaktni seznam"},
   /*L_D_BTN        */ {"Key style of the old screens","Style des touches (ancien)","Stile dei tasti (vecchio)","Estilo de teclas (antiguo)","Tastenstil (alte Anzeigen)","Toetsstijl (oude schermen)","Styl klawiszy (stare ekrany)","Styl tlacitek (stare obrazovky)"},
   /*L_D_BATT       */ {"Show a gauge if one is fitted","Jauge si une batterie est la","Indicatore se c'e una batteria","Indicador si hay bateria","Anzeige, wenn ein Akku da ist","Meter, als er een accu is","Wskaznik, jesli jest bateria","Ukazatel, je-li baterie"},
   /*L_D_COVERS     */ {"Pictures in reel and programs","Images du reel et des fiches","Immagini in reel e schede","Imagenes en reel y fichas","Bilder in Reel und Programmen","Plaatjes in reel en programma's","Obrazki w rolce i programach","Obrazky v reelu a programech"},
@@ -4144,18 +4128,18 @@ static void loadConfig(){
     int eq=l.indexOf('=');if(eq<0)continue;String k=l.substring(0,eq),v=l.substring(eq+1);k.trim();v.trim();
     if(k=="NEO"){String nv=v;nv.toUpperCase();g_neo_on=!(nv=="OFF"||nv=="0"||nv=="NO");sawNeo=true;applyTheme(g_theme_idx);}   // A600-neo1-JC3248
     else if(k=="THEME"){sawTheme=true;int ti=classicIdx(v);if(ti>=0)applyTheme(ti);else if(v.length()&&isDigit(v[0]))applyTheme(v.toInt());else if(v.equalsIgnoreCase("NEO")||!v.length())applyTheme(0);else applyTheme(loadCustomTheme(v)?CUSTOM_IDX:0);}else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");else if(k=="CAROUSEL"){String cv=v;cv.toUpperCase();g_car_bootmode=(cv=="LAST")?2:((cv=="1"||cv=="ON"||cv=="TRUE")?1:0);}
-    else if(k=="BATTERY")g_batt_show=(v=="ON"||v=="1");else if(k=="TAPLOAD")g_tapload=(v=="ON"||v=="1");else if(k=="HOTSWAP")g_hotswap=(v=="ON"||v=="1");else if(k=="FORCESWAP")g_forceswap=(v=="ON"||v=="1");
+    else if(k=="BATTERY")g_batt_show=(v=="ON"||v=="1");else if(k=="TAPLOAD"){}else if(k=="HOTSWAP")g_hotswap=(v=="ON"||v=="1");else if(k=="FORCESWAP")g_forceswap=(v=="ON"||v=="1");
     else if(k=="FONT"){int f=1;if(v=="SMALL")f=0;else if(v=="LARGE")f=2;applyFont(f);}
     else if(k=="LANG"){String lu=v;lu.toUpperCase();if(lu=="CZ")lu="CS";for(int i=0;i<LANG_N;i++)if(lu==LANG_NAMES[i]){g_lang=i;break;}}
     else if(k=="ROTATE"){g_rot=((v.toInt()/90)%4+4)%4;}
     else if(k=="COVERMIN"){g_covermin=v.toInt();if(g_covermin<0)g_covermin=0;}
     else if(k=="REELFILTER"){String ru=v;ru.trim();ru.toUpperCase();g_reelfilter=(ru=="ON"||ru=="1"||ru=="YES");}
-    else if(k=="COMPACT"){g_compact=(v=="ON"||v=="1");}
+    else if(k=="COMPACT"){}   // retired (A600-calm7): an old CONFIG.TXT may still have it, it is read and ignored
     else if(k=="SCREENSAVER"){g_ss_enabled=(v!="OFF"&&v!="0");}
     else if(k=="SS_IDLE"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_idle_ms=s*1000UL;}
     else if(k=="SS_LOAD"){uint32_t s=(uint32_t)v.toInt(); if(s>0)g_ss_load_ms=s*1000UL;}
     else if(k=="SSMODE"){String u=v;u.toUpperCase();g_ss_cracktro=(u=="CRACKTRO");g_ss_matrix=(u=="MATRIX"||u=="RAIN");g_ss_slides=!(u=="BOUNCE"||u=="0"||u=="SPRITES"||g_ss_matrix||g_ss_cracktro);}   // v5.7.2 slideshow; 5.8.3 matrix; cracktro saver
-    else if(k=="BTNSTYLE"){String u=v;u.toUpperCase();g_btn_pill=!(u=="FLAT"||u=="0"||u=="BAR");}   // 5.8.3 reel button style
+    else if(k=="BTNSTYLE"){}   // retired (A600-calm7): the old reel buttons are gone
     else if(k=="SSFX"){String u=v;u.toUpperCase();
       if(u=="FADE")g_ss_fx=1; else if(u=="DISSOLVE"||u=="DISS")g_ss_fx=2;
       else if(u=="SLIDE"||u=="PUSH")g_ss_fx=3; else if(u=="CUT"||u=="NONE")g_ss_fx=4; else g_ss_fx=0; }  // default SHUFFLE
@@ -4212,73 +4196,36 @@ static void loadConfig(){
 #define VH gH
 #define STATUS_H   20
 #define MODE_BAR_H 18
-#define NOW_PLAY_H 32   // as tall as the A-M toggle key (AZ_TOG_H); NOW_Y, LIST_BOTTOM and the bar's tap rectangle all follow it
 #define BOTTOM_H   40
-#define AZ_W       (calmFrame()?0:30)   // the A-Z column goes in the calm layout: A-Z is one key that opens a letter grid
-// Layout is computed by relayout() for the current rotation + compact mode.
-static int AZ_X=450, COVER_W=150, COVER_X=0, COVER_Y=20, COVER_H=260;
-static int COVER_ART_X=4, COVER_ART_Y=24, COVER_ART_W=142, COVER_ART_H=116;
-static int LIST_X=150, LIST_W=300, LIST_TOP=38, LIST_BOTTOM=258, AZ_TOP=38, AZ_H=242;
-static int INS_X=4, INS_Y=244, INS_W=142, INS_H=28;
-static int STRIP_Y=0, STRIP_H=0, NOW_Y=258;
+// Layout is computed by relayout() for the current rotation (one grid for landscape and portrait).
+static int LIST_X=0, LIST_W=480, LIST_TOP=104, LIST_BOTTOM=256;
 static int MB_Y=STATUS_H, MB_H=MODE_BAR_H;
-#define MSG_Y (calmFrame()?GT_CONTENT_TOP:STATUS_H)                                          // A600-calm2: the cover panel's status messages (loading, failed) follow the frame
-#define MSG_H (calmFrame()?GT_CONTENT_BOTTOM-GT_CONTENT_TOP:VH-STATUS_H-BOTTOM_H)
-#define MSG_W (calmFrame()?150:COVER_W)   // A600-calm2: where the mode bar sits (the calm frame moves it below the top bar)
-static bool COVER_ON=true, STRIP_ON=false, NOW_ON=true;
-#define INS_GAP (STRIP_ON?2:4)   // fd4: the gap between the DF0 and DF1 halves of a split INSERT (the compact strip's key is only 66-80 px wide)
+#define CBOT gtContentBottom(VH)   // the content ends here, the drive strip starts 8 px below
+#define MSG_Y GT_CONTENT_TOP                                          // A600-calm2: the cover panel's status messages (loading, failed) follow the frame
+#define MSG_H (CBOT-GT_CONTENT_TOP)
+#define MSG_W 150   // A600-calm2: where the mode bar sits (the calm frame moves it below the top bar)
 // Font profile: 0=SMALL 1=NORMAL 2=LARGE. Runtime row height / rows-per-screen / name size.
-static int g_font=1, g_item_h=55, g_items_vis=4, g_name_sz=2;
+static int g_font=1, g_item_h=55, g_items_vis=4;
 #define LIST_ITEM_H g_item_h
 #define ITEMS_VIS   g_items_vis
-static void applyFont(int f){if(f<0||f>2)f=1;g_font=f;g_name_sz=(f==0?1:f==2?3:2);
-  if(calmFrame()){ g_item_h=CL_ROW_PITCH; g_items_vis=(LIST_BOTTOM-LIST_TOP)/CL_ROW_PITCH+1; return; }   // A600-calm3: rows of 48 px, whatever FONT says
-  int target=(f==0?34:f==2?70:50),listH=LIST_BOTTOM-LIST_TOP,rows=listH/target;
-  if(listH%target>=target/2)rows++; if(rows<1)rows=1;
-  g_item_h=listH/rows; g_items_vis=rows;}
+static void applyFont(int f){if(f<0||f>2)f=1;g_font=f;
+  g_item_h=CL_ROW_PITCH; g_items_vis=(LIST_BOTTOM-LIST_TOP)/CL_ROW_PITCH+1;}   // rows of 48 px at a pitch of 52, whatever FONT says (FONT sizes the readers)
 static const char* fontName(int f){return f==0?T(L_FONT_SMALL):f==2?T(L_FONT_LARGE):T(L_FONT_NORMAL);}
 static const char* fontKey(int f){return f==0?"SMALL":f==2?"LARGE":"NORMAL";}   // canonical CONFIG.TXT token — NEVER localized (load parser matches these)
 static void relayout(){
   if(g_portrait){gW=320;gH=480;}else{gW=480;gH=320;}
-  // Reset the clip window to the new canvas. The clip statics init to the
-  // landscape 320 height; with an EMPTY game list drawFileList() early-returns
-  // before its usual set/reset, so in portrait everything below y=320 —
-  // including the whole bottom bar — was silently clipped (buttons invisible
-  // but still tappable). Rotation must always re-sync the clip.
+  // Rotation always re-syncs the clip window to the new canvas.
   g_clip_x0=0;g_clip_x1=gW;g_clip_y0=0;g_clip_y1=gH;
-  AZ_X=VW-AZ_W; int mb=STATUS_H+MODE_BAR_H; MB_Y=STATUS_H; MB_H=MODE_BAR_H;
-  if(!g_compact){
-    if(!g_portrait){
-      // A600-calm2/3: the calm frame - top bar 0..48, the search row, the list, drive strip below (gti_targets.h, calm_list.h).
-      // No left cover column, no A-Z column, no NOW PLAYING, no bottom bar: a tap on a row opens the program (phase 4; for now the reel).
-      const int top=GT_CONTENT_TOP, bot=GT_CONTENT_BOTTOM; MB_Y=top; MB_H=CU_KEY; mb=top+MB_H+CU_GAP;
-      COVER_ON=false;COVER_X=0;COVER_Y=top;COVER_W=0;COVER_H=bot-top;
-      COVER_ART_X=4;COVER_ART_Y=top+4;COVER_ART_W=142;COVER_ART_H=76;
-      LIST_X=0;LIST_TOP=mb;LIST_W=AZ_X;
-      NOW_ON=false;NOW_Y=bot;LIST_BOTTOM=bot;
-      AZ_TOP=LIST_TOP;AZ_H=0;
-      INS_X=-200;INS_W=0;INS_H=0;INS_Y=bot;STRIP_ON=false;
-    }else{
-      COVER_ON=true;COVER_X=0;COVER_Y=mb+2;COVER_W=VW;COVER_H=190;
-      COVER_ART_X=8;COVER_ART_Y=COVER_Y+8;COVER_ART_W=108;COVER_ART_H=108;
-      LIST_X=0;LIST_TOP=COVER_Y+COVER_H+4;LIST_W=AZ_X;
-      NOW_ON=true;NOW_Y=VH-BOTTOM_H-NOW_PLAY_H;LIST_BOTTOM=NOW_Y;
-      AZ_TOP=LIST_TOP;AZ_H=(VH-BOTTOM_H)-LIST_TOP;
-      INS_X=8;INS_W=VW-16;INS_H=28;INS_Y=COVER_Y+COVER_H-32;STRIP_ON=false;   // full-width INSERT at panel bottom
-    }
-  }else{
-    COVER_ON=false;STRIP_ON=true;STRIP_H=(g_portrait?46:44);STRIP_Y=VH-BOTTOM_H-STRIP_H;
-    LIST_X=0;LIST_TOP=mb+(g_portrait?2:0);LIST_W=AZ_X;LIST_BOTTOM=STRIP_Y;
-    AZ_TOP=LIST_TOP;AZ_H=STRIP_Y-LIST_TOP;NOW_ON=false;
-    INS_W=(g_portrait?66:80);INS_H=26;INS_X=VW-INS_W-6;INS_Y=STRIP_Y+((STRIP_H-INS_H)/2);
-  }
+  // One grid, landscape (480 x 320) and portrait (320 x 480): the top bar 0..48, the search row, the list, the drive strip at the foot.
+  MB_Y=GT_CONTENT_TOP; MB_H=CU_KEY;
+  LIST_X=0; LIST_TOP=MB_Y+MB_H+CU_GAP; LIST_W=VW; LIST_BOTTOM=CBOT;
   applyFont(g_font);
   skinSync();   // gti-skins: after loadConfig and on a rotation (the background follows gW x gH)
 }
 
 // ── Smooth-scroll / A-Z index helpers ──
 static int  maxScrollPx(){int t=(int)g_games.size()*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP);return t<0?0:t;}
-static void setActiveLetter(char l){g_active_letter=l;g_az_page=(l<='M')?0:1;g_marquee_off=0;}   // auto-flip page; restart marquee
+static void setActiveLetter(char l){g_active_letter=l;}
 static void syncIndexToScroll(){if(g_games.empty())return;int ti=(int)(g_scrollPx/LIST_ITEM_H);if(ti<0)ti=0;if(ti>=(int)g_games.size())ti=(int)g_games.size()-1;setActiveLetter(bucketOf(g_games[ti].name));}
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -4764,6 +4711,7 @@ static void drawCalmTopBar(){
     gfx_setTextSize(CU_TS_SMALL); gfx_setTextColor(COL_LIT,(g_neo||skinKeys())?COL_BG:COL_PANEL); gfx_setCursor(fk.x+8,fk.y+(fk.h-16)/2); gfx_print(calmReelFilterLabel());
     const int ax=fk.x+fk.w-14,ay=fk.y+fk.h/2-2; for(int k=0;k<5;k++) gfx_hline(ax-4+k,ay+k,9-2*k,COL_AMBER); }
   const int room=rx-(calmReelOn()?cuRight(b.filter):cuRight(b.reelTab))-CU_GAP;
+  if((int)ct.length()*6*CU_TS_SMALL>room){ const int sp=ct.indexOf(' '); if(sp>0) ct.remove(sp); }   // too narrow (portrait): just the number
   while(ct.length()>1&&(int)ct.length()*6*CU_TS_SMALL>room) ct.remove(ct.length()-1);
   gfx_setTextSize(CU_TS_SMALL); gfx_setTextColor(COL_MID,COL_BG);
   gfx_setCursor(rx-gfx_textWidth(ct),(GT_TOPBAR_H-8*CU_TS_SMALL)/2); gfx_print(ct);
@@ -4840,7 +4788,7 @@ static String calmCaption(const GtTarget&t,int fluxPeers){
 static void drawDriveStrip(){
   NeoScope _ns;
   const int n=calmBuildTargets(g_gtBuf,GT_MAX_TARGETS);
-  fillBack(0,GT_CONTENT_BOTTOM,VW,VH-GT_CONTENT_BOTTOM);
+  fillBack(0,CBOT,VW,VH-CBOT);
   const CuRect area=gtStripArea(VW,VH);
   const uint16_t bg=calmCardBg();
   if(n<1){ calmCard(area); calmText(area.x+CU_GAP,area.y+(area.h-16)/2,T(L_NO_DRIVE),area.w-2*CU_GAP,CU_TS_SMALL,COL_DIM,bg); return; }
@@ -4866,7 +4814,7 @@ static void drawDriveStrip(){
   if(s.more){ calmKey(s.moreKey,(String("+")+String(s.moreCount)).c_str(),CALM_NORMAL,false,CU_TS_MID); }
 }
 static void drawStatusBar(){
-  if(calmFrame()&&!g_info_showing&&!g_forceClassicBar){ drawCalmTopBar(); return; }   // A600-calm2: the top bar; Settings keeps the old bar
+  if(!g_forceClassicBar){ drawCalmTopBar(); return; }   // the top bar; only the old modal screens (categories, user disks, ...) still sit under the old status bar
   gfx_fillRect(0,0,VW,STATUS_H,COL_BAR);gfx_setTextSize(1);
   gfx_setTextColor(COL_ORANGE,COL_BAR);gfx_setCursor(6,6);gfx_print("OMEGAWARE");
   // fd3, the commit window: while the FluxDrive target holds a disk that is not in flash yet (its beacon's "stored"), the
@@ -4908,28 +4856,7 @@ static void drawStatusBar(){
   }
 }
 
-// disk grid geometry (landscape cover) — shared by draw + touch (struct declared up top)
-static DiskGrid diskGrid(int nd){DiskGrid L;L.pages=(nd+DISKS_PER_PAGE-1)/DISKS_PER_PAGE;if(g_disk_page>=L.pages)g_disk_page=0;
-  L.pageStart=g_disk_page*DISKS_PER_PAGE;L.pageEnd=min(L.pageStart+DISKS_PER_PAGE,nd);L.COLS=3;L.dbw=44;L.dbh=20;L.dgap=4;
-  L.gridW=L.COLS*L.dbw+(L.COLS-1)*L.dgap;L.gx=max(4,(COVER_W-L.gridW)/2);L.multiPage=(L.pages>1);
-  L.pageBtnH=L.multiPage?16:0;L.pageGap=L.multiPage?4:0;L.gridH=2*L.dbh+L.dgap;L.labelY=INS_Y-L.gridH-L.pageBtnH-L.pageGap-12;L.gridY=L.labelY+10;return L;}
-static void drawDiskGrid(int nd){DiskGrid L=diskGrid(nd);
-  gfx_setTextSize(1);gfx_setTextColor(COL_DIM,g_neo?COL_BG:COL_PANEL);gfx_setCursor(4,L.labelY);
-  gfx_print(L.multiPage?("DISK ("+String(g_disk_page+1)+"/"+String(L.pages)+"):"):"DISK:");
-  for(int d=L.pageStart;d<L.pageEnd;d++){int slot=d-L.pageStart,col=slot%L.COLS,row=slot/L.COLS;int bx=L.gx+col*(L.dbw+L.dgap),by=L.gridY+row*(L.dbh+L.dgap);
-    bool isSel=d==g_disk_sel,isLd=uiShowsLoadedAny(g_sel,d);uint16_t bc=isLd?COL_GREEN:(isSel?COL_AMBER:COL_BAR);
-    gfx_fillRoundRect(bx,by,L.dbw,L.dbh,4,bc);gfx_drawRoundRect(bx,by,L.dbw,L.dbh,4,isSel?COL_AMBER:COL_DIM);
-    gfx_setTextColor(isLd||isSel?TFT_BLACK:COL_LIT,bc);String dl="D"+String(d+1);gfx_setCursor(bx+(L.dbw-gfx_textWidth(dl))/2,by+(L.dbh-8)/2);gfx_print(dl);}
-  if(L.multiPage){int pby=L.gridY+L.gridH+L.pageGap;gfx_fillRoundRect(L.gx,pby,L.gridW,L.pageBtnH,4,COL_ACCENT);gfx_setTextColor(TFT_WHITE,COL_ACCENT);
-    String pl=(g_disk_page+1<L.pages)?("MORE D"+String(L.pageEnd+1)+"+  >"):("<  BACK TO D1");gfx_setCursor(L.gx+(L.gridW-gfx_textWidth(pl))/2,pby+(L.pageBtnH-8)/2);gfx_print(pl);}}
 // disk stepper (portrait cover / compact) — < Dn/total >
-static int g_step_x=0,g_step_y=0,g_step_w=0,g_step_h=0;static bool g_step_on=false;
-static void drawDiskStepper(int x,int y,int w,int h,int nd){g_step_on=true;g_step_x=x;g_step_y=y;g_step_w=w;g_step_h=h;
-  int bw=w/4;                                       // wide < / > buttons (quarter width each) — easy to hit
-  gfx_fillRoundRect(x,y,w,h,6,COL_BAR);
-  gfx_fillRoundRect(x,y,bw,h,6,COL_ACCENT);gfx_setTextSize(3);gfx_setTextColor(TFT_WHITE,COL_ACCENT);gfx_setCursor(x+(bw-18)/2,y+(h-24)/2);gfx_print("<");
-  gfx_fillRoundRect(x+w-bw,y,bw,h,6,COL_ACCENT);gfx_setCursor(x+w-bw+(bw-18)/2,y+(h-24)/2);gfx_print(">");
-  gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BAR);String lbl="Disk "+String(g_disk_sel+1)+" of "+String(nd);int tw=gfx_textWidth(lbl);gfx_setCursor(x+(w-tw)/2,y+(h-16)/2);gfx_print(lbl);}
 
 // v4.8.0: tiny 3.5" floppy icon = "this game has a save attached". 14x14 px,
 // black 1px backing so it reads on ANY cover art (light or dark), green body,
@@ -4948,24 +4875,10 @@ static void drawSaveFloppy(int x,int y){
 // ~1.2MB; extended-DD disks (~900-960KB) stay DD and get no badge (A500 reads them).
 static bool isHDImage(const String&path){String vfs="/sdcard"+path;struct stat st;if(stat(vfs.c_str(),&st)!=0)return false;return (uint32_t)st.st_size>HD_FLAG_BYTES;}
 static void drawHDChip(int x,int y){gfx_fillRoundRect(x,y,20,12,3,COL_AMBER);gfx_setTextSize(1);gfx_setTextColor(TFT_BLACK,COL_AMBER);gfx_setCursor(x+4,y+2);gfx_print("HD");}
-static void drawBookIcon(int cx,int cy,uint16_t col){   // open-book glyph (6x8 font can't draw it); enlarged v4.9.3
-  gfx_drawRect(cx-8,cy-6,16,13,col);     // outer covers
-  gfx_vline(cx,cy-6,13,col);             // spine down the middle
-  gfx_hline(cx-6,cy-2,4,col);gfx_hline(cx+3,cy-2,4,col);   // page-text lines, both leaves
-  gfx_hline(cx-6,cy+1,4,col);gfx_hline(cx+3,cy+1,4,col);
-  gfx_hline(cx-6,cy+4,4,col);gfx_hline(cx+3,cy+4,4,col);
-}
-static void drawNoA500(int cx,int cy,int r,uint16_t ring){
-  gfx_fillCircle(cx,cy,r-1,COL_BG);                         // dark backing so it reads on any cover art
-  gfx_drawCircle(cx,cy,r,ring);gfx_drawCircle(cx,cy,r-1,ring);
-  int d=(r*7)/10;for(int t=-d;t<=d;t++)gfx_fillRect(cx+t-1,cy+t-1,2,2,ring);   // TL->BR slash (no line primitive -> stepped)
-  if(r>=20){gfx_setTextSize(1);gfx_setTextColor(COL_LIT,COL_BG);int tw=gfx_textWidth("A500");gfx_setCursor(cx-tw/2,cy-3);gfx_print("A500");}
-}
 
 // v4.8.2: type-to-search. A little magnifier sits atop the A-Z rail (above # / A);
 // tapping it opens a keyboard that live-filters the library by substring and jumps
 // the list to whatever result you tap. The rail letters shrink slightly to make room.
-#define AZ_SRCH_H 18
 static void drawMagnifier(int cx,int cy,uint16_t col){
   gfx_drawCircle(cx-1,cy-1,4,col);
   gfx_drawCircle(cx-1,cy-1,5,col);        // 2px lens ring
@@ -4980,329 +4893,23 @@ static int fdSplitPeer(){
   const int sp=fdSingleFluxPeer(); if(sp<0)return -1;
   return fdInsertSplit(true,sp==pfFluxTarget(),g_pfPeers[sp].df1)?sp:-1;
 }
-// One INSERT/EJECT key at x,y,w,h in the cover's (strip=false) or the compact strip's (strip=true) look. Two lines (the drive
-// under EJECT) when bottom is set; fit: a split half, whose label drops to size 1 when it would not fit the width.
-static void drawInsKey(int x,int y,int w,int h,bool isL,bool strip,const char*top,const char*bottom,bool fit){
-  uint16_t fg,bg;
-  if(strip){
-    const uint16_t c=isL?(uint16_t)0x4000:COL_GREEN;
-    gfx_fillRoundRect(x,y,w,h,6,c);gfx_drawRoundRect(x,y,w,h,6,isL?(uint16_t)0xE8C4:COL_GREEN);
-    fg=isL?TFT_WHITE:TFT_BLACK; bg=c;
-  } else if(skinKeyEdge(x,y,w,h,10,isL?(uint16_t)NEO_RED:COL_AMBER)){ fg=COL_LIT; bg=COL_BG;   // skins: the skin's key face
-  } else if(g_neo){   // A600-neo2: INSERT = the amber main action, EJECT = a muted red key
-    if(isL){ neoKey(x,y,w,h,10,NEO_RED); fg=NEO_RED_INK; bg=COL_BG; }
-    else   { gfx_fillRoundRect(x,y,w,h,10,COL_AMBER); fg=COL_BG; bg=COL_AMBER; }
-  } else {
-    bg=isL?(uint16_t)0x4000:(uint16_t)0x0340;
-    gfx_fillRoundRect(x,y,w,h,8,bg);
-    gfx_drawRoundRect(x,y,w,h,8,isL?(uint16_t)0xE8C4:COL_GREEN);
-    fg=TFT_WHITE;
-  }
-  gfx_setTextColor(fg,bg);
-  if(bottom){ gfx_setTextSize(1); const int y0=y+(h-18)/2;
-    gfx_setCursor(x+(w-gfx_textWidth(top))/2,y0);gfx_print(top);
-    gfx_setCursor(x+(w-gfx_textWidth(bottom))/2,y0+10);gfx_print(bottom); return; }
-  gfx_setTextSize(2); int sz=2;
-  if(fit&&gfx_textWidth(top)>w-2){ gfx_setTextSize(1); sz=1; }
-  const int tw=gfx_textWidth(top); gfx_setCursor(x+(w-tw)/2,y+(h-8*sz)/2); gfx_print(top);
-}
-// The INSERT/EJECT key of the cover panel (strip=false) or of the compact action strip (strip=true). One key as before, or (fdSplitPeer)
-// two halves: each is INSERT/EJECT for its own drive (fdHalfText): DF0 / DF1 while the selected game is not in it, EJECT over the
-// drive's name while it is.
-static void drawInsertKeys(bool strip){
-  if(fdSplitPeer()<0){
-    const bool isL=uiShowsLoaded(g_sel);
-    drawInsKey(INS_X,INS_Y,INS_W,INS_H,isL,strip,isL?T(L_EJECT):T(L_INSERT),nullptr,false); return; }
-  FdRect h[2]; fdInsertHalves(FdRect{INS_X,INS_Y,INS_W,INS_H},INS_GAP,h);
-  for(int d=0;d<2;d++){ const bool isL=insHalfEjects(g_sel,d); const char*t1,*t2; fdHalfText(d,isL,&t1,&t2);
-    drawInsKey(h[d].x,h[d].y,h[d].w,h[d].h,isL,strip,isL?T(L_EJECT):t1,t2,true); }
-}
-static void drawCoverPanel(){
-  g_manual_bw=0;   // v4.9.2: cleared each draw; set below only if this game has a .rtfm
-  g_nfo_bw=0;      // lab15j: same for the .nfo text tap area (set only when a description is drawn)
-  g_fresh_bw=0; g_freshDrawn="";   // fd2: same for START FRESH (set only when the selected disk has a save to throw away)
-  if(!COVER_ON)return;
-  NeoScope _ns; const uint16_t PB=(g_neo||skinSlotOk(skin::S_PANEL))?COL_BG:COL_PANEL;   // A600-neo2: see-through panel, labels without a box
-  if(g_skin_on)skinPanel(COVER_X,COVER_Y,COVER_W,COVER_H); else if(g_neo)neoPanel(COVER_X,COVER_Y,COVER_W,COVER_H,0); else gfx_fillRect(COVER_X,COVER_Y,COVER_W,COVER_H,COL_PANEL);if(g_games.empty())return;
-  auto&game=g_games[g_sel];
-  if(!game.jpg_path.length()){String jpg;if(findJPGFor(g_files[game.first_file_idx],jpg))game.jpg_path=jpg;else game.jpg_path="?";}
-  static int lastNfoSel=-1;static String cachedNfoBlurb="";static bool cachedHasSav=false;static bool cachedHD=false;static String cachedManual="";
-  if(lastNfoSel!=g_sel){lastNfoSel=g_sel;cachedNfoBlurb="";cachedManual="";
-    const String _fp=g_files[game.first_file_idx];
-    if(game.nfo_done){                       // 5.9.31-lab1: harvested or loaded from .nfocache — ZERO directory walks
-      cachedNfoBlurb=game.blurb;
-      cachedHD=(g_mode==MODE_ADF)&&game.is_hd;
-      if(game.has_manual){String mp;if(manualFor(_fp,mp))cachedManual=mp;}   // only resolve a path when one actually exists (and it hits early)
-    }else{                                   // fallback: no harvest, no cache (pre-lab1 card) — old behaviour, minus the byte-at-a-time read
-      String nfoP,nT,nB;
-      if(findNFOFor(_fp,nfoP)){File nf=SD_MMC.open(nfoP,FILE_READ);if(nf){
-        char _nb[513];int _nr=nf.read((uint8_t*)_nb,512);if(_nr<0)_nr=0;_nb[_nr]=0;nf.close();String txt(_nb);parseNFO(txt,nT,nB);
-        if(nT.length()&&game.name==basenameNoExt(filenameOnly(_fp)))game.name=nT;cachedNfoBlurb=nB;}}
-      cachedHD=(g_mode==MODE_ADF)&&isHDImage(_fp);
-      {String mp;if(manualFor(_fp,mp))cachedManual=mp;}
-      game.blurb=cachedNfoBlurb;game.has_manual=cachedManual.length()>0;game.is_hd=cachedHD;game.nfo_done=true;   // remember for the session even without a cache file
-    }
-  }
-  { static int savSel=-1; static uint32_t savSeen=0;   // fd2: asked again when a save came or went (g_savGen: START FRESH), not only for a new selection
-    if(savSel!=g_sel||savSeen!=g_savGen){ savSel=g_sel; savSeen=g_savGen;
-      cachedHasSav=savBadgeFor(g_files[game.first_file_idx]); } }   // lab14i: from the save list (kept current when the GTi writes a save) - no card lookup
-  // fd2: START FRESH is offered - the save it would delete (freshSave), cached like the badge (fix round 1): asked again only
-  // when the selection, its disk, the save list (g_savGen), the FluxDrive target and its tag, the radio mode or SAVES changed.
-  { static int frSel=-2,frDisk=-2,frSaves=-2; static uint32_t frGen=0; static bool frW=false,frH=false; static String frKey="?",frSav;
-    const int t=pfFluxTarget(); const String key=t>=0?(String("T")+g_pfPeers[t].id+"/"+g_pfPeers[t].tag):String("N");
-    if(frSel!=g_sel||frDisk!=g_disk_sel||frGen!=g_savGen||frKey!=key||frSaves!=g_saves_mode||frW!=g_wireless_mode||frH!=g_link_home){
-      frSel=g_sel; frDisk=g_disk_sel; frGen=g_savGen; frKey=key; frSaves=g_saves_mode; frW=g_wireless_mode; frH=g_link_home;
-      int p=-1; frSav=freshSave(selDiskFile(),&p); }
-    g_freshDrawn=frSav; }
-  const bool fresh=g_freshDrawn.length()>0;
-  // Cover art
-  int ax=COVER_ART_X,ay=COVER_ART_Y,aw=COVER_ART_W,ah=COVER_ART_H;   // lab15l: the frame; shrinks to hug a tile picture
-  gfx_fillRoundRect(COVER_ART_X,COVER_ART_Y,COVER_ART_W,COVER_ART_H,5,COL_BAR);
-  gfx_drawRoundRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,6,COL_ACCENT);
-  {bool _drew=false; uint32_t _cv0=micros();
-   if(game.jpg_path.length()>0&&game.jpg_path!="?"){
-     if(g_listtile){            // 5.9.34-lab4: 45 KB pre-decoded tile instead of a fresh ~500 KB JPEG decode, every single selection change
-       bool _ok=false; uint16_t*_t=carTileEx(g_sel,true,&_ok);
-       if(_t&&_ok){
-         // lab15l: cut the tile's letterbox off and fit the picture itself as big as the frame allows (was: the whole
-         // square tile, so a 4:3 cover showed at ~92x69 inside a 142x96 frame). Then the frame is redrawn around it.
-         int px,py,pw,ph; tilePicRect(_t,CAR_TILE,px,py,pw,ph);
-         int bw=COVER_ART_W-4,bh=COVER_ART_H-4,dw=bw,dh=(ph*bw)/pw; if(dh>bh){dh=bh;dw=(pw*bh)/ph;} if(dw<1)dw=1; if(dh<1)dh=1;
-         aw=dw+4;ah=dh+4;ax=COVER_ART_X+(COVER_ART_W-aw)/2;ay=COVER_ART_Y+(COVER_ART_H-ah)/2;
-         if(g_skin_on)skinPanelClip(COVER_X,COVER_Y,COVER_W,COVER_H,COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2); else if(g_neo)neoPanel(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,0); else gfx_fillRect(COVER_ART_X-1,COVER_ART_Y-1,COVER_ART_W+2,COVER_ART_H+2,COL_PANEL);
-         gfx_fillRoundRect(ax,ay,aw,ah,5,COL_BAR); gfx_drawRoundRect(ax-1,ay-1,aw+2,ah+2,6,COL_ACCENT);
-         g_cb_sx0=px;g_cb_sy0=py;g_cb_sw=pw;g_cb_sh=ph;
-         carBlit(_t,CAR_TILE,ax+aw/2,ay+ah/2,dw,dh,0);
-         g_cb_sw=0;g_cb_sh=0;_drew=true;}
-     }
-     if(!_drew)_drew=gfx_drawJpgFile(game.jpg_path,COVER_ART_X+2,COVER_ART_Y+2,COVER_ART_W-4,COVER_ART_H-4);
-   }
-   if(g_reelprof)gLog("[cover] %s art %luus for %s\n",g_listtile?"tile":"jpeg",(unsigned long)(micros()-_cv0),game.name.c_str());
-   if(!_drew){char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setCursor(COVER_ART_X+COVER_ART_W/2-6,COVER_ART_Y+COVER_ART_H/2-8);gfx_print(ib);}}
-  // v4.8.0: floppy icon — this game has a save-copy (INSERT will boot the save)
-  if(cachedHasSav)drawSaveFloppy(ax+3,ay+3);                     // lab15l: markers follow the (possibly smaller) frame
-  if(cachedHD){drawHDChip(ax+aw-23,ay+3);drawNoA500(ax+15,ay+ah-15,13,TFT_RED);}   // v4.9 HD markers
-  if(cachedManual.length()){   // v4.9.2: book button, bottom-right of the cover art — only when a .rtfm exists
-    g_manual_bw=26;g_manual_bh=22;g_manual_bx=ax+3;g_manual_by=ay+(ah-g_manual_bh)/2;g_manual_path=cachedManual;   // v4.9.3: bigger + left edge, clear of the fav/HD corners
-    gfx_fillRoundRect(g_manual_bx,g_manual_by,g_manual_bw,g_manual_bh,3,COL_ACCENT);gfx_drawRoundRect(g_manual_bx,g_manual_by,g_manual_bw,g_manual_bh,3,COL_AMBER);
-    drawBookIcon(g_manual_bx+g_manual_bw/2,g_manual_by+g_manual_bh/2,COL_LIT);
-  }
-  bool isL=uiShowsLoaded(g_sel);
-  if(!g_portrait){
-    int cb;
-    if(game.disk_count>1){DiskGrid L=diskGrid(game.disk_count);cb=L.labelY-2;}
-    else cb=INS_Y-2;
-    if(fresh){ g_fresh_bx=4; g_fresh_bw=COVER_W-8; g_fresh_bh=16; g_fresh_by=cb-18; cb=g_fresh_by-2; }   // fd2: START FRESH, a slim key above the disks / INSERT
-    int ty=COVER_ART_Y+COVER_ART_H+4;gfx_setTextSize(1);
-    ty=drawWrapped(4,ty,game.name,COVER_W-8,10,2,cb,COL_LIT,PB);
-    if(cachedNfoBlurb.length()>0){int te=drawWrapped(4,ty,nfoFlow(cachedNfoBlurb,false),COVER_W-8,9,12,cb,COL_DIM,PB);
-      g_nfo_bx=COVER_X;g_nfo_by=COVER_ART_Y+COVER_ART_H+2;g_nfo_bw=COVER_W;g_nfo_bh=max(min(te+2,cb),g_nfo_by+20)-g_nfo_by;}   // lab15j: title + description = tap target
-    if(game.disk_count>1)drawDiskGrid(game.disk_count);
-  }else{
-    int rx=COVER_ART_X+COVER_ART_W+8,rw=VW-rx-6;int ty=COVER_ART_Y;gfx_setTextSize(1);
-    if(fresh){ g_fresh_bx=rx; g_fresh_bw=rw; g_fresh_bh=16; g_fresh_by=COVER_ART_Y+COVER_ART_H-16; }   // fd2: START FRESH, at the foot of the text beside the cover
-    const int tb=fresh?g_fresh_by-2:COVER_ART_Y+COVER_ART_H;   // where that text ends
-    ty=drawWrapped(rx,ty,game.name,rw,10,3,tb,COL_LIT,PB);
-    if(cachedNfoBlurb.length()>0){drawWrapped(rx,ty+3,nfoFlow(cachedNfoBlurb,false),rw,9,6,fresh?tb:tb+2,COL_DIM,PB);
-      g_nfo_bx=rx-4;g_nfo_by=COVER_ART_Y;g_nfo_bw=VW-g_nfo_bx;g_nfo_bh=(fresh?tb:tb+2)-g_nfo_by;}   // lab15j: text beside the cover = tap target
-    if(game.disk_count>1)drawDiskStepper(8,COVER_Y+COVER_H-70,VW-16,26,game.disk_count);   // full-width disk row above INSERT
-    else{gfx_setTextSize(1);gfx_setTextColor(cachedHD?COL_ORANGE:COL_DIM,PB);gfx_setCursor(12,COVER_Y+COVER_H-58);gfx_print(cachedHD?"HD 1.76MB - needs A3000/A4000":g_mode==MODE_ADF?"Single disk  -  ADF 880KB":g_mode==MODE_DSK?"Single disk  -  DSK":"Single disk");}
-  }
-  if(g_fresh_bw){   // fd2: START FRESH - the selected disk's save goes (doStartFresh asks first); a muted red key like EJECT's
-    const char*fl=T(L_START_FRESH); gfx_setTextSize(1);
-    if(g_neo){ neoKey(g_fresh_bx,g_fresh_by,g_fresh_bw,g_fresh_bh,6,NEO_RED); gfx_setTextColor(NEO_RED_INK,COL_BG); }
-    else { gfx_fillRoundRect(g_fresh_bx,g_fresh_by,g_fresh_bw,g_fresh_bh,4,(uint16_t)0x4000); gfx_drawRoundRect(g_fresh_bx,g_fresh_by,g_fresh_bw,g_fresh_bh,4,(uint16_t)0xE8C4);
-           gfx_setTextColor(TFT_WHITE,(uint16_t)0x4000); }
-    gfx_setCursor(g_fresh_bx+(g_fresh_bw-gfx_textWidth(fl))/2,g_fresh_by+(g_fresh_bh-8)/2); gfx_print(fl);
-  }
-  // INSERT/EJECT (fd4: cut in two, DF0 | DF1, for a single FluxDrive with DF1 on)
-  (void)isL; drawInsertKeys(false);
-}
 
-// Compact action strip (both orientations): thumbnail + selected name + INSERT
-static void drawActionStrip(){
-  if(!STRIP_ON||g_games.empty())return;auto&game=g_games[g_sel];
-  gfx_fillRect(0,STRIP_Y,VW,STRIP_H,COL_PANEL);gfx_hline(0,STRIP_Y,VW,COL_SEP);
-  int th=STRIP_H-12;gfx_fillRoundRect(6,STRIP_Y+6,th,th,4,COL_BG);gfx_drawRoundRect(6,STRIP_Y+6,th,th,4,COL_ACCENT);
-  char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setTextSize(3);gfx_setTextColor(COL_ACCENT,COL_BG);gfx_setCursor(6+(th-18)/2,STRIP_Y+6+(th-24)/2);gfx_print(ib);
-  gfx_setTextSize(2);gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL);String nm=game.name;int maxw=INS_X-(th+16)-6;while(gfx_textWidth(nm)>maxw&&nm.length()>3)nm=nm.substring(0,nm.length()-1);gfx_setCursor(th+16,STRIP_Y+8);gfx_print(nm);
-  gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_PANEL);gfx_setCursor(th+16,STRIP_Y+26);gfx_print(game.disk_count>1?("disk "+String(g_disk_sel+1)+"/"+String(game.disk_count)+"  < tap >"):"1 disk  ADF 880KB");
-  drawInsertKeys(true);
-}
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_THEME, IA_LANG, IA_ROTATE, IA_COMPACT, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_BTNSTYLE, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_TESTPAGE, IA_TESTBACK, IA_NEOUI, IA_CRKSTYLE, IA_SAVEDWIFI, IA_FLEET, IA_ORPHAN, IA_DONGLESETUP, IA_BATT };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_ROTATE, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_NEOUI, IA_SAVEDWIFI, IA_FLEET, IA_ORPHAN, IA_DONGLESETUP, IA_BATT };
 #if defined(GTI_FLEET)
 static int  pfOrphanCount();     // #lock: locked dongles this screen does not own (defined with the fleet console below)
 static void doReleaseOrphans();  // #lock: offer our token to each of them - only a real owner token releases one
 #endif
 static void doFleetPick();       // #console: the multi-select fleet manager (called from doLoadSelected, far above its definition)
 static void savedWifiManage();   // #clubday: remembered-networks manager
-struct InfoItem { char lbl[32]; uint16_t bg,fg; uint8_t act; };
-static InfoItem g_ii[40]; static int g_ii_n=0;   // main's rows plus SAVED WIFI / FLEET / RELEASE LOCKS, with room to spare
-struct InfoRect { int x,y,w,h; uint8_t act; };
-static InfoRect g_ir[28]; static int g_ir_n=0;
-static int g_info_page=0, g_info_pages=1;
-static bool g_calmSettings=false;   // A600-calm6: true while doSettings owns the screen: the old pages' drawInfoFull stays quiet
-static bool g_info_test=false;   // lab14k: true = Settings is showing its TEST TOOLS sub-page
-static String g_pick_custom[8]; static int g_pick_nc=0;   // A600-theme1: the custom themes on the THEME page
-static uint8_t g_info_pick=0;    // pick page: 0 = none, 1 = LANGUAGE, 2 = THEME, 3 = CRACKTRO style (every choice as a button, tap one = back)
-static int g_info_pick_ret=0;    // the Settings page to return to after a pick
-#define IA_PICK0 200             // pick-page buttons: IA_PICK0 + choice index
-#define IA_PICKBACK 199          // pick page: back to Settings without changing anything
+static String g_pick_custom[8]; static int g_pick_nc=0;   // the custom themes (Settings > Screen > Theme)
 static const char* const CRK_PICK_NAME[]={"RANDOM","COPPER CLASSIC","STARFIELD","RAINBOW RASTER","PLASMA","BOING BALL","SYNTHWAVE","OMEGAWARE"};   // CRACKTRO= 0..7, index = style
 #define CRK_PICK_N 8
 static String crkStyleName(int st){ if(st>=0&&st<CRK_PICK_N)return CRK_PICK_NAME[st]; if(st==8)return "DENISE"; if(st==9)return "WRANGLER"; if(st==10)return "RETRONAUT"; if(st==11)return g_crk_want.length()?g_crk_want:String("CUSTOM"); return String(st); }
 static String crkConfigValue(int st){ return (st>=8&&st<=11)?crkStyleName(st):String(st); }   // 11 = CUSTOM (.gti; the file stem when one was named)   // what CONFIG.TXT CRACKTRO= reads back as this style (the hidden ones are name-only)
 static const char* const LANG_FULL[]={"ENGLISH","FRANCAIS","ITALIANO","ESPANOL","DEUTSCH","NEDERLANDS","POLSKI","CESTINA"};   // each language in its own name (same order as LANG_NAMES)
-static void drawInfoFull();   // paginated settings + INFO bottom bar + flush
-// v5.6.7: readable ink for a key's colour on the dim fill — dark key colours
-// (COL_BAR OFF-states, the dark-red RESET) get promoted to light grey so they
-// don't vanish; bright colours keep their hue.
-static inline uint16_t keyInk(uint16_t c){
-  int r=(c>>11)&31, g=(c>>5)&63, b=c&31;
-  return ((r*2+g*3+b) < 60) ? COL_LIT : c;
-}
-static void drawInfoPanel(){
-  NeoScope _ns;   // A600-neo1-JC3248
-  // v5.5.4: full-screen, single-column, paginated. Build the item list (dynamic
-  // labels + conditional rows), then draw only the current page's buttons and
-  // record their rects in g_ir[] so the tap handler hits exactly what's drawn.
-  g_ii_n=0;
-  auto add=[&](const String&l,uint16_t bg,uint16_t fg,uint8_t act){
-    if(g_ii_n>=(int)(sizeof(g_ii)/sizeof(g_ii[0]))){ static bool told=false; if(!told){ told=true; gLog("[check] settings has more rows than g_ii holds - the rest are not shown\n"); } return; } strncpy(g_ii[g_ii_n].lbl,l.c_str(),31); g_ii[g_ii_n].lbl[31]=0;
-    g_ii[g_ii_n].bg=bg; g_ii[g_ii_n].fg=fg; g_ii[g_ii_n].act=act; g_ii_n++; };
-  // lab14k: TEST TOOLS sub-page - the tools for testing the GTi itself, kept off the main Settings list.
-  if(g_info_test){
-    add("< BACK TO SETTINGS", COL_ACCENT, TFT_WHITE, IA_TESTBACK);
-    add("SD SOAK TEST", COL_BLUE, TFT_WHITE, IA_SDSOAK);   // lab14g: read-only SD reliability test -> GTI/gti.log
-    add(String("REEL PROF")+": "+(g_reelprof?T(L_ON):T(L_OFF)), g_reelprof?(uint16_t)0x8000:COL_BAR, g_reelprof?TFT_WHITE:COL_LIT, IA_REELPROF);   // 5.9.33-lab3 frame profiler -> gti.log
-    add(String("NO-CACHE")+": "+(g_nocache?T(L_ON):T(L_OFF)), g_nocache?(uint16_t)0x8000:COL_BAR, g_nocache?TFT_WHITE:COL_LIT, IA_NOCACHE);   // 5.9.32-lab2 benchmark control -> CONFIG.TXT NOCACHE=
-    add(String("DIAG-DISP")+": "+(g_diagdisp?T(L_ON):T(L_OFF)), g_diagdisp?COL_GREEN:COL_BAR, g_diagdisp?TFT_BLACK:COL_LIT, IA_DIAGDISP);   // live diagnostic overlay -> CONFIG.TXT DIAGDISP=
-  } else if(g_info_pick){   // pick page: every choice as a button, the current one marked
-    add(String("< ")+T(L_SETTINGS), COL_ACCENT, TFT_WHITE, IA_PICKBACK);
-    if(g_info_pick==1) for(int i=0;i<LANG_N;i++){ bool cur=(i==g_lang);
-      add(String(cur?"> ":"")+LANG_FULL[i]+" ("+LANG_NAMES[i]+")"+(cur?" <":""), cur?COL_GREEN:(uint16_t)0x79D6, cur?TFT_BLACK:TFT_WHITE, (uint8_t)(IA_PICK0+i)); }
-    if(g_info_pick==2){   // A600-theme1: the THEME page - NEO on/off, then the classic themes, then the custom ones
-      add(String("NEO: ")+(g_neo_on?T(L_ON):T(L_OFF)), g_neo_on?COL_GREEN:COL_BAR, g_neo_on?TFT_BLACK:COL_LIT, IA_NEOUI);
-      add(String(T(L_PR_BATT))+": "+(g_batt_show?T(L_ON):T(L_OFF)), g_batt_show?COL_GREEN:COL_BAR, g_batt_show?TFT_BLACK:COL_LIT, IA_BATT);
-      for(int i=0;i<NUM_THEMES-1;i++){ bool cur=(!g_neo_on&&i==g_theme_idx);
-        add(String(cur?"> ":"")+THEMES[i].name+(cur?" <":""), THEMES[i].accent, TFT_WHITE, (uint8_t)(IA_PICK0+i)); }   // each theme in its own colour
-      g_pick_nc=listCustomThemes(g_pick_custom,8);
-      for(int i=0;i<g_pick_nc;i++){ bool cur=(!g_neo_on&&g_theme_idx==CUSTOM_IDX&&g_custom_name==g_pick_custom[i]);
-        Theme t=g_custom; String j; uint16_t col=COL_ACCENT; if(SD_MMC.exists(skinPath(g_pick_custom[i]).c_str())?skinPeek(g_pick_custom[i],t):(readThemeFile(g_pick_custom[i],j)&&themeFromStyle(j,t)))col=t.accent;   // gti-skins: a skin's colours from its manifest, no atlas
-        add(String(cur?"> ":"")+g_pick_custom[i]+(cur?" <":""), col, TFT_WHITE, (uint8_t)(IA_PICK0+NUM_THEMES-1+i)); } }
-    if(g_info_pick==3){ for(int i=0;i<CRK_PICK_N;i++){ bool cur=(i==g_cracktro);
-        add(String(cur?"> ":"")+CRK_PICK_NAME[i]+(cur?" <":""), cur?COL_GREEN:COL_BLUE, cur?TFT_BLACK:TFT_WHITE, (uint8_t)(IA_PICK0+i)); }
-      if(g_cracktro>=CRK_PICK_N) add(String("> ")+crkStyleName(g_cracktro)+" <", COL_GREEN, TFT_BLACK, (uint8_t)(IA_PICK0+CRK_PICK_N)); }   // a hidden style set in CONFIG.TXT: shown so it is not lost, tap keeps it
-  } else {
-  // 5.9.12: single 3-way MODE — STANDALONE (radio off) / ESP-NOW (blind dongles, no router) / WiFi (home router).
-  {const char* mlbl = !g_wireless_mode ? "STANDALONE" : (g_link_home ? "WiFi" : "ESP-NOW");
-   uint16_t     mcol = !g_wireless_mode ? COL_GREEN   : (g_link_home ? COL_BLUE : COL_ACCENT);
-   add(String(T(L_CFG_MODE))+": "+mlbl, mcol, TFT_BLACK, IA_MODE);}
-  if(g_wireless_mode && !g_link_home){   // ESP-NOW: blind Webby dongles (their own AP, no router)
-    add(espnowIsPaired()?String(T(L_SWITCH_DONGLE)):String(T(L_SCAN_DONGLES)), espnowIsPaired()?COL_GREEN:COL_AMBER, TFT_BLACK, IA_DONGLE);
-    if(espnowIsPaired()) add(String("DONGLE SETUP"), COL_ACCENT, TFT_WHITE, IA_DONGLESETUP);   // lock-b
-    // lab15p: the GTi's own Wi-Fi - name / password and where the web page is (read-only rows)
-    add(String("WIFI ")+espnowApName()+" / "+espnowApPass(), COL_BAR, COL_LIT, IA_NONE);
-    add("WEB PAGE: 192.168.4.1", COL_BAR, COL_LIT, IA_NONE);
-    uint8_t mm[64][6]; int mcN=enumMuCaDongles(mm,g_dongle_cap);
-    if(mcN>0) add(String(T(L_CFG_HIVEMIND))+": "+(g_hivemind?T(L_ON):T(L_OFF)), g_hivemind?COL_ACCENT:COL_BAR, g_hivemind?TFT_WHITE:COL_LIT, IA_HIVEMIND);
-  }
-  if(webModePossible()){    // #standalone: home router, web UI and SD access - in STANDALONE as well as WiFi mode
-    add(String(T(L_HOME_WIFI))+": "+(g_home_ssid.length()?g_home_ssid:String(T(L_SET_UP))), COL_ACCENT, TFT_WHITE, IA_HOMEWIFI);
-    { const bool won = g_wireless_mode ? g_web_on : g_web_cfg;   // WiFi mode forces it on (5.9.17); standalone shows what was asked for
-      add(String("WEB UI: ")+(won?(g_home_ssid.length()?String(T(L_ON)):String(T(L_ON))+" *"+T(L_SET_UP)+"*"):String(T(L_OFF))), won?COL_GREEN:COL_BAR, won?TFT_BLACK:COL_LIT, IA_WEBUI); }
-    if(g_home_ssid.length()) add(String(T(L_WIFI_CHECK)), COL_BLUE, TFT_WHITE, IA_WIFICHECK);
-    if(g_wireless_mode){ pfPrune(); const int vis=pfVisibleCount();   // #standalone: no dongles here, so no fleet row
-      String fl=String("FLEET: ")+String(vis); if(vis<g_pfPeerN) fl+=" of "+String(g_pfPeerN);   // the rest is claimed by another screen
-      if(g_pfTargetName.length())fl+=" > "+g_pfTargetName;
-      else { const int ft=pfFluxTarget(); if(ft>=0) fl+=" > "+pfPeerLabel(g_pfPeers[ft]); }   // nothing sent from here yet: the FluxDrive the screen shows
-      add(fl, vis?COL_GREEN:COL_AMBER, TFT_BLACK, IA_FLEET); }   // #console: dongles we may drive / dongles heard
-    add(String("SAVED WIFI: ")+String((int)g_known.size()), COL_BLUE, TFT_WHITE, IA_SAVEDWIFI);   // #clubday: remembered networks
-#if defined(GTI_FLEET)
-    if(g_wireless_mode){ int orp=pfOrphanCount(); if(orp) add(String("RELEASE LOCKS: ")+String(orp), COL_AMBER, TFT_BLACK, IA_ORPHAN); }   // #lock: only when there is something to release
-#endif
-  }
-  add(String(T(L_CFG_FONT))+": "+fontName(g_font), COL_AMBER, TFT_BLACK, IA_FONT);
-  add(String(T(L_THEME))+": "+themeName(), COL_ACCENT, TFT_WHITE, IA_THEME);   // A600-theme1: one THEME row; NEO on/off + every theme live on its page (Mez)
-  add(String(T(L_CFG_LANG))+": "+LANG_NAMES[g_lang], (uint16_t)0x79D6, TFT_WHITE, IA_LANG);
-  add(String(T(L_CFG_ROTATE))+": "+(g_portrait?T(L_PORTRAIT):T(L_LANDSCAPE)), COL_BLUE, TFT_WHITE, IA_ROTATE);
-  add(String(T(L_CFG_COMPACT))+": "+(g_compact?T(L_ON):T(L_OFF)), g_compact?COL_GREEN:COL_BAR, g_compact?TFT_BLACK:COL_LIT, IA_COMPACT);
-  add(String(T(L_CFG_LIBRARY))+": "+(g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN"), COL_ACCENT, TFT_BLACK, IA_LIBMODE);   // v5.6.0: disk-format mode moved here from the mode bar
-  add(String(T(L_CFG_CATEG))+": "+(g_categories?T(L_ON):T(L_OFF)), g_categories?COL_GREEN:COL_BAR, g_categories?TFT_BLACK:COL_LIT, IA_CATEG);   // library/category browse toggle (mirrors CONFIG.TXT CATEGORIES=)
-  add(String(T(L_CFG_BUTTONS))+": "+(g_btn_pill?T(L_PILL):T(L_FLAT)), g_btn_pill?COL_ACCENT:COL_BAR, g_btn_pill?TFT_WHITE:COL_LIT, IA_BTNSTYLE);   // 5.8.3 reel button style
-  add(String(T(L_CFG_SAVER))+": "+(g_ss_enabled?T(L_ON):T(L_OFF)), g_ss_enabled?COL_GREEN:COL_BAR, g_ss_enabled?TFT_BLACK:COL_LIT, IA_SAVER);   // screensaver on/off -> CONFIG.TXT SCREENSAVER=
-  if(g_ss_enabled) add(String(T(L_CFG_SAVER))+" FX: "+(g_ss_cracktro?T(L_CRACKTRO):(g_ss_matrix?T(L_MATRIX):(g_ss_slides?T(L_SLIDES):T(L_BOUNCE)))), COL_BLUE, TFT_WHITE, IA_SSMODE);   // 5.8.3 screensaver mode (only shown when ON); + cracktro
-  add(String(T(L_CFG_FAVSAVER))+": "+(g_ss_fav?T(L_ON):T(L_OFF)), g_ss_fav?COL_GREEN:COL_BAR, g_ss_fav?TFT_BLACK:COL_LIT, IA_SSFAV);   // 5.8.3 favourites into slideshow
-  add(String("CRACKTRO")+": "+(g_cracktro>=0?T(L_ON):T(L_OFF)), g_cracktro>=0?COL_GREEN:COL_BAR, g_cracktro>=0?TFT_BLACK:COL_LIT, IA_CRACKTRO);   // boot intro on/off -> CONFIG.TXT CRACKTRO=
-  if(g_cracktro>=0) add(String("CRACKTRO STYLE")+": "+crkStyleName(g_cracktro), COL_BLUE, TFT_WHITE, IA_CRKSTYLE);   // opens the style pick page (only shown when ON, like SAVER FX)
-  add(String(T(L_REEL_BORDER))+": "+(g_reelborder?T(L_ON):T(L_OFF)), g_reelborder?COL_GREEN:COL_BAR, g_reelborder?TFT_BLACK:COL_LIT, IA_REELBORDER);   // MasterTelly CR: frame around reel covers -> CONFIG.TXT REELBORDER=
-  add(String(T(L_COVER_ART))+": "+(g_covers_on?T(L_ON):T(L_OFF)), g_covers_on?COL_GREEN:COL_BAR, g_covers_on?TFT_BLACK:COL_LIT, IA_COVERS);   // 5.9.32-lab2 -> CONFIG.TXT COVERS=
-  add(String(T(L_LIST_TILE))+": "+(g_listtile?T(L_ON):T(L_OFF)), g_listtile?COL_GREEN:COL_BAR, g_listtile?TFT_BLACK:COL_LIT, IA_LISTTILE);   // 5.9.34-lab4 -> CONFIG.TXT LISTTILE=
-  add(String(T(L_LAST_USED))+": "+(g_lastused?T(L_ON):T(L_OFF)), g_lastused?COL_GREEN:COL_BAR, g_lastused?TFT_BLACK:COL_LIT, IA_LASTUSED);   // restore last-loaded game on boot -> CONFIG.TXT LASTUSED=
-  if(g_devmode) add("TEST TOOLS >", (uint16_t)0x4208, TFT_WHITE, IA_TESTPAGE);   // lab14p: DEVMODE=OFF hides it   // lab14k: SD SOAK TEST, REEL PROF, NO-CACHE, DIAG-DISP live here now
-  add(T(L_RESCAN_SD), COL_BLUE, TFT_WHITE, IA_RESCAN);
-  add(T(L_SOFT_RESET), (uint16_t)0x8000, TFT_WHITE, IA_RESET);
-  {bool diagOn=(g_loaded&&g_loaded_name=="AMIGA TEST KIT");   // v5.6.1: ATK is Amiga-only — hide LOAD DIAG in DSK/GEN (keep EJECT DIAG if somehow still loaded)
-   if(g_mode==MODE_ADF||diagOn) add(diagOn?T(L_EJECT_DIAG):T(L_LOAD_DIAG), diagOn?(uint16_t)0xE8C4:COL_ACCENT, diagOn?TFT_BLACK:TFT_WHITE, IA_DIAG);}
-  add(T(L_SD_ACCESS), (uint16_t)0x05FF, TFT_BLACK, IA_SDACCESS);
-  add(T(L_FW_UPDATE), COL_AMBER, TFT_BLACK, IA_FWUPDATE);
-  }   // lab14k: end of the main Settings list
-  int ix=0,iy=STATUS_H,iw=VW,ih=VH-STATUS_H-BOTTOM_H;
-  fillBack(ix,iy,iw,ih);
-  gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,iy+5);gfx_print(g_info_test?String("SETTINGS > TEST TOOLS"):g_info_pick?String(T(L_SETTINGS))+" > "+(g_info_pick==1?T(L_CFG_LANG):g_info_pick==2?T(L_THEME):"CRACKTRO"):String(T(L_SETTINGS)));   // lab14k + pick page
-  int headerH=webWanted()?30:18, footerH=14, pad=8, gap=6, colGap=8, bh=34, cols=(g_portrait?1:2);   // v5.5.5: 2 cols landscape (half-width), 1 col portrait (full-width, paginates)
-  int areaTop=iy+headerH, areaH=ih-headerH-footerH;
-  int colW=(iw-pad*2-colGap*(cols-1))/cols;
-  int rowsPP=(areaH+gap)/(bh+gap); if(rowsPP<1)rowsPP=1;
-  int perPage=rowsPP*cols;
-  g_info_pages=(g_ii_n+perPage-1)/perPage; if(g_info_pages<1)g_info_pages=1;
-  if(g_info_page>=g_info_pages)g_info_page=g_info_pages-1; if(g_info_page<0)g_info_page=0;
-  if(webWanted()){ gfx_setTextColor(TFT_CYAN,COL_BG); gfx_setCursor(8,iy+18);
-    gfx_print("WEB: "+pfMdnsName()+".local  ("+String(g_mdns_named?"named":(g_pfIsLeader?"+ " PF_MDNS_ALIAS ".local":"default"))+")"); gfx_setTextColor(COL_DIM,COL_BG); }
-  {String pn=String(T(L_PAGE))+" "+String(g_info_page+1)+"/"+String(g_info_pages);gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(iw-8-gfx_textWidth(pn),iy+5);gfx_print(pn);}
-  int startI=g_info_page*perPage, endI=min(g_ii_n,startI+perPage);
-  g_ir_n=0;
-  for(int i2=startI;i2<endI;i2++){
-    int idx=i2-startI, col=idx%cols, row=idx/cols;
-    int bx=ix+pad+col*(colW+colGap), by=areaTop+row*(bh+gap);
-    // 5.9.28: the settings grid now follows BTNSTYLE too. It used to be hardcoded to the
-    // dim-fill+border look, so PILL only ever restyled the two bottom bars and this tab
-    // stayed flat. PILL = solid coloured capsule + auto-contrast ink (same language as the
-    // nav/reel bars); FLAT = the original v5.6.7 dim-fill + bright double border.
-    uint16_t kc=g_ii[i2].bg, kfill, kink;
-    bool dot=false; uint16_t dotc=0; bool dotOn=false;
-    if(g_neo||skinKeys()){                       // A600-neo2: every setting is the same NEO key; the edge + a dot say on/off
-      bool on=(kc==COL_GREEN), off=(kc==COL_BAR), bad=(kc==(uint16_t)0x8000||kc==(uint16_t)0xE8C4);
-      uint16_t edge=on?COL_GREEN:bad?(uint16_t)NEO_RED:off?mix565(COL_SEP,COL_PANEL,140):COL_SEP;
-      if(!skinKeyEdge(bx,by,colW,bh,10,edge))neoKey(bx,by,colW,bh,10,edge);
-      kfill=COL_BG; kink=on?COL_LIT:bad?(uint16_t)NEO_RED_INK:off?COL_DIM:COL_LIT;
-      if((on||off)&&g_ii[i2].act!=IA_NONE&&g_ii[i2].act!=IA_MODE&&g_ii[i2].act!=IA_DONGLE&&g_ii[i2].act<IA_PICKBACK){ dot=true; dotOn=on; dotc=on?COL_GREEN:COL_DIM; }   // neo2g: no dot on MODE / dongle / pick rows
-    } else if(g_btn_pill){
-      kfill=kc; kink=inkFor(kc);                 // inkFor (not the row's fg) so every theme stays readable
-      gfx_fillRoundRect(bx,by,colW,bh,bh/2,kfill);
-    }else{
-      kfill=(uint16_t)((kc>>2)&0x39E7); kink=keyInk(kc);   // v5.6.7: dim-fill + bright border key
-      gfx_fillRoundRect(bx,by,colW,bh,8,kfill);
-      gfx_drawRoundRect(bx,by,colW,bh,8,kink);
-      gfx_drawRoundRect(bx+1,by+1,colW-2,bh-2,7,kink);
-    }
-    int sz=2; gfx_setTextSize(sz); int tw=gfx_textWidth(g_ii[i2].lbl);
-    int kinset=g_btn_pill?(bh/2):8;              // pill: keep the label clear of the rounded caps
-    if(dot)kinset=32;                            // A600-neo2b: the dot sits left; the label centres in the rest
-    if(tw>colW-kinset){ sz=1; gfx_setTextSize(sz); tw=gfx_textWidth(g_ii[i2].lbl); }   // shrink an over-long label to fit the half-width cell
-    gfx_setTextColor(kink,kfill);
-    { int lx=dot?bx+24+(colW-32-tw)/2:bx+(colW-tw)/2; gfx_setCursor(lx,by+(bh-8*sz)/2);gfx_print(g_ii[i2].lbl); }
-    if(dot){ int dx=bx+14,dy=by+bh/2; if(dotOn)gfx_fillCircle(dx,dy,4,dotc); else gfx_drawCircle(dx,dy,4,dotc); }
-    if(g_ir_n<28){g_ir[g_ir_n].x=bx;g_ir[g_ir_n].y=by;g_ir[g_ir_n].w=colW;g_ir[g_ir_n].h=bh;g_ir[g_ir_n].act=g_ii[i2].act;g_ir_n++;}
-  }
-  gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
-  gfx_setCursor(8,iy+ih-11);
-  if(webWanted()) gfx_print("IP:"+WiFi.localIP().toString()+"  Heap:"+String(ESP.getFreeHeap()/1024)+"K  Games:"+String(g_games.size()));
-  else gfx_print("Heap:"+String(ESP.getFreeHeap()/1024)+"K PSRAM:"+String(ESP.getFreePsram()/1024)+"K  Games:"+String(g_games.size()));
-}
 
 // A600-neo2d: L_GAMES_TAP is "<count> games - tap INSERT"; its two halves are used apart so the count shows once
 static String gamesWord(){ String s=T(L_GAMES_TAP); int d=s.indexOf(" - "); s=d>0?s.substring(0,d):s; s.trim(); return s; }
@@ -5357,199 +4964,11 @@ static void drawCalmList(){
   g_clip_y0=0; g_clip_y1=gH;
   if(mp>0){ const int vh=LIST_BOTTOM-LIST_TOP, th=max(16,vh*vh/(vh+mp)), ty=LIST_TOP+(vh-th)*scroll/mp; gfx_fillRect(VW-4,ty,3,th,COL_DIM); }
 }
-static void drawModeBar(){
-  if(calmFrame()){ drawCalmSearchRow(); return; }
-  NeoScope _ns;   // A600-neo2
-  int mbR=LIST_X+LIST_W+AZ_W;
-  gfx_fillRect(LIST_X,MB_Y,LIST_W+AZ_W,MODE_BAR_H,COL_BAR);gfx_setTextSize(1);
-  if(g_categories){   // v5.6.0: mode moved to INFO; this slot becomes the Categories button
-    gfx_fillRoundRect(LIST_X+4,MB_Y+2,104,14,7,COL_AMBER);gfx_setTextColor(TFT_BLACK,COL_AMBER);gfx_setCursor(LIST_X+10,MB_Y+6);gfx_print(g_libpath.length()?"< CATEGORY":"CATEGORIES");
-  } else {
-  // lab15g: ONE library button (Mez: "just put 1 button and change modes between it"). Tapping it cycles
-  // ADF -> DSK -> GEN; Settings -> LIBRARY stays the main place to pick one. Same 104 px the three
-  // 32 px pills used to share, so the whole slot is one target.
-  { String nm=String(T(L_CFG_LIBRARY))+": "+(g_mode==MODE_ADF?"ADF":g_mode==MODE_DSK?"DSK":"GEN");   // A600-neo2d: translated
-    { uint16_t tb=keyFill(LIST_X+4,MB_Y+2,104,14,7,COL_ACCENT,COL_AMBER); gfx_setTextColor(COL_AMBER,tb); }   // A600-neo2
-    gfx_setCursor(LIST_X+4+(104-gfx_textWidth(nm))/2,MB_Y+6);gfx_print(nm); }
-  }
-  { uint16_t tb=keyFill(LIST_X+112,MB_Y+2,62,14,7,COL_BLUE,COL_SEP); gfx_setTextColor((g_neo||skinKeys())?COL_LIT:TFT_WHITE,tb); } gfx_setCursor(LIST_X+118,MB_Y+6);gfx_print("USR-DSK");   // v4.9.7 user-disk manager
-  gfx_setTextColor(COL_MID,COL_BAR);String gt=String(g_games.size())+" "+gamesWord();gfx_setCursor(mbR-gfx_textWidth(gt)-6,MB_Y+6);gfx_print(gt);
-}
 
-static void drawFileList(){
-  if(calmFrame()){ drawCalmList(); return; }
-  NeoScope _ns;
-  const bool neoRows=neoBgOk()&&!g_games.empty();   // A600-neo2f: rows paint their own background (no double copy)
-  if(neoRows){ fillBack(LIST_X,LIST_TOP,2,LIST_BOTTOM-LIST_TOP); fillBack(LIST_X+LIST_W-2,LIST_TOP,2,LIST_BOTTOM-LIST_TOP); }
-  else fillBack(LIST_X,LIST_TOP,LIST_W,LIST_BOTTOM-LIST_TOP);   // A600-neo1-JC3248
-  if(g_games.empty()){gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_BG);gfx_setCursor(LIST_X+8,LIST_TOP+16);gfx_print(g_mode==MODE_ADF?"No .ADF files":g_mode==MODE_DSK?"No .DSK files":"No /GENERIC files");return;}
-  if(g_scrollPx<0)g_scrollPx=0;int mp=maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;
-  int first=(int)(g_scrollPx/LIST_ITEM_H),off=(int)(g_scrollPx-(float)first*LIST_ITEM_H);
-  g_scroll=first;                                  // keep integer scroll in sync (thumb, etc.)
-  g_clip_y0=LIST_TOP;g_clip_y1=LIST_BOTTOM;         // clip partial rows to the list window
-  int yEnd=LIST_TOP-off;                            // A600-neo2f: bottom of the last row drawn
-  for(int vi=0;vi<=ITEMS_VIS+1;vi++){int gi=first+vi;if(gi>=(int)g_games.size())break;
-    auto&game=g_games[gi];bool sel=gi==g_sel,ld=uiShowsLoadedAny(gi);
-    int y=LIST_TOP-off+vi*LIST_ITEM_H;if(y>=LIST_BOTTOM)break;
-    yEnd=y+LIST_ITEM_H;
-    if(neoRows){ fillBack(LIST_X+2,y,LIST_W-4,2); fillBack(LIST_X+2,y+LIST_ITEM_H-2,LIST_W-4,2); }   // the gaps between rows
-    if(g_neo){ neoPanel(LIST_X+2,y+2,LIST_W-4,LIST_ITEM_H-4,6,neoRows);   // A600-neo2: see-through rows with a gap, selected = amber edge
-      if(sel){ neoRing(LIST_X+2,y+2,LIST_W-4,LIST_ITEM_H-4,6,COL_AMBER); neoRing(LIST_X+3,y+3,LIST_W-6,LIST_ITEM_H-6,5,COL_AMBER); } }
-    else if(sel&&g_skin_on)skinRow(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2);
-    else if(sel){gfx_fillRoundRect(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,4,COL_SEL);gfx_drawRoundRect(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,4,COL_AMBER);}
-    else gfx_fillRoundRect(LIST_X+2,y+1,LIST_W-4,LIST_ITEM_H-2,3,COL_PANEL);
-    uint16_t acCol=ld?COL_GREEN:(sel?COL_AMBER:COL_ACCENT);if(!g_neo||ld)gfx_fillRect(LIST_X+(g_neo?5:3),y+(g_neo?8:3),3,LIST_ITEM_H-(g_neo?16:4),acCol);   // NEO: only the loaded game keeps its green bar
-    int r=8+g_name_sz*3,cx=LIST_X+6+r,cy=y+LIST_ITEM_H/2;
-    if(game.fav){gfx_fillStar(cx,cy,(float)r,COL_STAR);}
-    else{
-    gfx_fillCircle(cx,cy,r,sel?COL_AMBER:(ld?COL_GREEN:COL_CIRC));
-    gfx_setTextSize(g_name_sz);gfx_setTextColor(sel||ld?TFT_BLACK:COL_CIRC_TEXT,sel?COL_AMBER:COL_CIRC);
-    char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setCursor(cx-(5*g_name_sz)/2,cy-(7*g_name_sz)/2);gfx_print(ib);   // A600-neo2c: centre the visible 5x7 glyph, not its 6x8 cell
-    }
-    int nx=cx+r+6;gfx_setTextSize(g_name_sz);gfx_setTextColor(sel?TFT_WHITE:COL_LIT,(g_neo||(sel&&skinSlotOk(skin::S_ROW_SEL)))?COL_BG:(sel?COL_SEL:COL_PANEL));
-    int maxNW=LIST_W-(nx-LIST_X)-8-(game.disk_count>1?36:0);
-    if(sel&&gfx_textWidth(game.name)>maxNW){
-      // marquee: bounce the full selected name within its lane (offset 0..max), clipped horizontally
-      g_clip_x0=nx;g_clip_x1=nx+maxNW;
-      gfx_setCursor(nx-g_marquee_off,cy-4*g_name_sz);gfx_print(game.name);
-      g_clip_x0=0;g_clip_x1=gW;
-    } else {
-      String nm=game.name;while(gfx_textWidth(nm)>maxNW&&nm.length()>3)nm=nm.substring(0,nm.length()-1);
-      gfx_setCursor(nx,cy-4*g_name_sz);gfx_print(nm);
-    }
-    if(game.disk_count>1){gfx_setTextSize(1);gfx_fillRoundRect(LIST_X+LIST_W-38,cy-6,34,12,4,COL_ACCENT);gfx_setTextColor(g_neo?COL_LIT:TFT_WHITE,COL_ACCENT);gfx_setCursor(LIST_X+LIST_W-34,cy-4);gfx_print(String(game.disk_count)+"DSK");}
-  }
-  g_clip_y0=0;g_clip_y1=gH;
-  if(neoRows&&yEnd<LIST_BOTTOM)fillBack(LIST_X+2,yEnd,LIST_W-4,LIST_BOTTOM-yEnd);   // A600-neo2f: below the last row
-}
 
-static void drawNowPlayingBar(){
-  if(!NOW_ON||calmFrame())return;   // A600-calm2: the drive strip replaces it
-  int y=NOW_Y;
-  // Fleet mode with a FluxDrive target: what that FluxDrive holds, by its beacon (or the disk just sent to it), staged
-  // here or not. Anywhere else the disk staged in this panel, as before.
-  const int ft=pfFluxTarget(); const PfPeer*fp=ft>=0?&g_pfPeers[ft]:nullptr;
-  if(fp?fdBarShows(true,fp->loaded,fp->df1,fp->loaded1):(g_loaded&&g_loaded_name.length())){NeoScope _ns; const uint16_t nb=(g_neo||skinKeys())?COL_BG:COL_NOW;   // fd4: also while only its DF1 holds a disk   // A600-neo2: a NEO key with a green edge
-    if(skinKeys()){fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);skinKeyEdge(LIST_X+2,y,LIST_W-4,NOW_PLAY_H,6,COL_GREEN);}
-    else if(g_neo){fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);neoKey(LIST_X+2,y,LIST_W-4,NOW_PLAY_H,6,COL_GREEN);}
-    else{gfx_fillRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_NOW);gfx_drawRect(LIST_X,y,LIST_W,NOW_PLAY_H,COL_GREEN);}
-    gfx_fillCircle(LIST_X+8,y+NOW_PLAY_H/2,3,COL_GREEN);gfx_setTextSize(1);gfx_setTextColor(COL_GREEN,nb);gfx_setCursor(LIST_X+16,y+7);gfx_print(T(L_NOW_PLAYING));
-    const int wpW=(fp&&fp->wp)?gfx_textWidth("WP")+6:0;   // fd2: the FluxDrive target's write protect is on (its beacon's "wp"): a WP chip at the right
-    // fd3: the disk it holds is not in flash yet (its beacon's "stored"): a STORING... chip, left of the WP chip
-    const int stW=(fp&&fdShowStoring(true,fp->loaded,fp->stored))?gfx_textWidth(T(L_FD_STORING))+6:0;
-    const int chipW=wpW+stW+((wpW&&stW)?4:0);
-    if(fp){ String lb=" > "+pfPeerLabel(*fp);
-      if(chipW){ const int room=LIST_W-24-chipW-gfx_textWidth(T(L_NOW_PLAYING)); while(lb.length()&&gfx_textWidth(lb)>room)lb.remove(lb.length()-1); }
-      gfx_print(lb); }
-    else if(g_wireless_mode&&g_link_home&&g_pfTargetName.length()) gfx_print(" > "+g_pfTargetName);   // #console: which dongle this went to
-    if(wpW){ const int cx=LIST_X+LIST_W-8-wpW; gfx_fillRoundRect(cx,y+6,wpW,10,2,COL_AMBER); gfx_setTextColor(TFT_BLACK,COL_AMBER); gfx_setCursor(cx+3,y+7); gfx_print("WP"); }
-    if(stW){ const int cx=LIST_X+LIST_W-8-chipW; gfx_fillRoundRect(cx,y+6,stW,10,2,COL_AMBER); gfx_setTextColor(TFT_BLACK,COL_AMBER); gfx_setCursor(cx+3,y+7); gfx_print(T(L_FD_STORING)); }
-    gfx_setTextColor((g_neo||skinKeys())?COL_LIT:TFT_WHITE,nb);gfx_setCursor(LIST_X+16,y+17);
-    String n;
-    if(fp){   // fd4: DF0's disk as today, DF1's after it ("DF1: <name>") when DF1 holds one too; a line too long cuts the longer name first
-      String a=fp->disk,b=fp->disk1; const bool both=fp->loaded&&fp->df1&&fp->loaded1;
-      for(;;){ char bf[260]; fdBarCompose(a.c_str(),fp->loaded,b.c_str(),fp->loaded1,fp->df1,bf,sizeof bf); n=bf;
-        if(!both||gfx_textWidth(n)<=LIST_W-24)break;
-        String&l=a.length()>=b.length()?a:b; if(l.length()<=3)break; l.remove(l.length()-1); } }
-    else n=g_loaded_display.length()?g_loaded_display:g_loaded_name;
-    while(gfx_textWidth(n)>LIST_W-24&&n.length()>3)n=n.substring(0,n.length()-1);gfx_print(n);}
-  else{NeoScope _ns;fillBack(LIST_X,y,LIST_W,NOW_PLAY_H);gfx_setTextSize(1);gfx_setTextColor(COL_MID,COL_BG);gfx_setCursor(LIST_X+8,y+NOW_PLAY_H/2-4);gfx_print(tapHint());}   // A600-neo2d: hint only, the count is in the mode bar
-}
 
-// Split active letters into the two halves: page 0 = #/A-M, page 1 = N-Z
-static int azHalf(int page,char*out){int n=0;for(int i=0;i<active_letter_count;i++){bool lo=active_letters[i]<='M';if((page==0&&lo)||(page==1&&!lo))out[n++]=active_letters[i];}return n;}
-#define AZ_TOG_H 32   // A-M/N-Z toggle button height (taller = easier to hit, away from the INFO button)
-static void drawAZBar(){
-  if(calmFrame()||!active_letter_count)return;
-  int azBottom=AZ_TOP+AZ_H;
-  int togY=azBottom-AZ_TOG_H;                       // toggle top; letters occupy the strip above it
-  int letTop=AZ_TOP+AZ_SRCH_H;                      // v4.8.2: reserve a cell for the search magnifier
-  int barH=togY-letTop;
-  NeoScope _ns;   // A600-neo2
-  if(g_skin_on)skinPanel(AZ_X,AZ_TOP,AZ_W,AZ_H); else if(g_neo)neoPanel(AZ_X,AZ_TOP,AZ_W,AZ_H,0); else gfx_fillRect(AZ_X,AZ_TOP,AZ_W,AZ_H,COL_PANEL);
-  drawMagnifier(AZ_X+AZ_W/2,AZ_TOP+AZ_SRCH_H/2,COL_AMBER);
-  gfx_hline(AZ_X,AZ_TOP+AZ_SRCH_H-1,AZ_W,COL_SEP);
-  char p0[27],p1[27];int n0=azHalf(0,p0),n1=azHalf(1,p1);
-  char*half=g_az_page==0?p0:p1;int hn=g_az_page==0?n0:n1;
-  int slots=max(13,max(n0,n1));                    // enough rows for the bigger half ('#' can push it to 14)
-  int letterH=barH/slots;if(letterH<7)letterH=7;
-  int lsz=(letterH>=15)?2:1;
-  gfx_setTextSize(lsz);
-  for(int i=0;i<hn;i++){char letter=half[i];int ly=letTop+i*letterH;if(ly+letterH>togY)break;
-    if(letter==g_active_letter){gfx_fillRect(AZ_X,ly,AZ_W,letterH,COL_AMBER);gfx_setTextColor(TFT_BLACK,COL_AMBER);}
-    else gfx_setTextColor(COL_DIM,(g_neo||skinSlotOk(skin::S_PANEL))?COL_BG:COL_PANEL);
-    gfx_setCursor(AZ_X+(AZ_W-6*lsz)/2,ly+(letterH-8*lsz)/2);char lb[2]={letter,0};gfx_print(lb);}
-  // Toggle button — taller, fills the strip bottom
-  { uint16_t tb=keyFill(AZ_X+1,togY+1,AZ_W-2,azBottom-togY-2,5,COL_ACCENT,COL_SEP);
-  gfx_setTextSize(1);gfx_setTextColor((g_neo||skinKeys())?COL_LIT:TFT_WHITE,tb); }
-  const char*blbl=g_az_page==0?"N-Z":"A-M";
-  gfx_setCursor(AZ_X+(AZ_W-gfx_textWidth(blbl))/2,togY+(AZ_TOG_H-8)/2);gfx_print(blbl);
-  int maxOff=(int)g_games.size()-ITEMS_VIS;if(maxOff>0){int thumbH=max(4,barH*ITEMS_VIS/(int)g_games.size());int thumbY=AZ_TOP+(barH-thumbH)*g_scroll/maxOff;gfx_fillRect(AZ_X-2,thumbY,2,thumbH,COL_BLUE);}
-}
 
-static bool handleAlphabetTouch(uint16_t px,uint16_t py){
-  if(px<AZ_X||py<AZ_TOP||py>=(uint16_t)(AZ_TOP+AZ_H)||!active_letter_count)return false;
-  int togY=AZ_TOP+AZ_H-AZ_TOG_H;
-  // Toggle button (taller hit region at the strip bottom) — manual page peek
-  if(py>=(uint16_t)togY){g_az_page=g_az_page?0:1;return true;}
-  int letTop=AZ_TOP+AZ_SRCH_H;int barH=togY-letTop;    // letters live below the magnifier cell
-  char p0[27],p1[27];int n0=azHalf(0,p0),n1=azHalf(1,p1);
-  char*half=g_az_page==0?p0:p1;int hn=g_az_page==0?n0:n1;
-  if(hn==0){g_az_page=g_az_page?0:1;return true;}
-  int slots=max(13,max(n0,n1));int letterH=barH/slots;if(letterH<7)letterH=7;
-  int r=constrain((int)(py-letTop)/letterH,0,hn-1);
-  char letter=half[r];
-  int target=0;for(int i=0;i<(int)g_games.size();i++){if(bucketOf(g_games[i].name)>=letter){target=i;break;}}
-  setActiveLetter(letter);
-  g_sel=target;g_scrollPx=min((float)(target*LIST_ITEM_H),(float)maxScrollPx());g_inertia_on=false;
-  return true;
-}
 
-// v4.8.5: little pictograph glyphs (the 6x8 font can't draw these) for the
-// list<->carousel flip. Drawn inside the ~8px button circle at (cx,cy).
-static void drawListIcon(int cx,int cy,uint16_t col){
-  for(int r=-1;r<=1;r++) gfx_fillRect(cx-5,cy+r*4-1,10,2,col);   // three stacked rows
-}
-static void drawCarouselIcon(int cx,int cy,uint16_t col){
-  gfx_drawRect(cx-7,cy-4,4,9,col);      // left cover, peeking
-  gfx_drawRect(cx+3,cy-4,4,9,col);      // right cover, peeking
-  gfx_fillRect(cx-2,cy-6,5,13,col);     // center cover, front & tall
-}
-// Vince test: single bar split by divider lines, white-on-black on every theme.
-static void drawBottomBar(){
-  if(calmFrame()) return;   // A600-calm2: the top bar and the drive strip replace it
-  const uint16_t bg=TFT_BLACK, ink=TFT_WHITE;
-  NeoScope _ns;   // A600-neo2
-  int y=VH-BOTTOM_H;if(g_neo||skinKeys())fillBack(0,y,VW,BOTTOM_H);else gfx_fillRect(0,y,VW,BOTTOM_H,bg);gfx_hline(0,y,VW,COL_SEP);
-  const int nb=4;int bw=VW/nb;
-  String blbl[4]={String("< ")+T(L_PREV),String(T(L_NEXT))+" >",String(T(L_REEL)),String(T(L_INFO))};
-  if(g_btn_pill||g_neo||skinKeys()){                                            // 5.9.x: coloured pill buttons (matches the reel bar); A600-neo2: NEO keys
-    static const uint16_t cols[4]={COL_BLUE,COL_BLUE,COL_AMBER,COL_GREEN};
-    int pad=5, bh=BOTTOM_H-2*pad, r=bh/2, by=y+pad;
-    int ts=2; for(int i=0;i<nb;i++){gfx_setTextSize(2); if(gfx_textWidth(blbl[i])>bw-2*pad-18){ts=1;break;}}
-    gfx_setTextSize(ts);
-    for(int i=0;i<nb;i++){
-      uint16_t bc=cols[i], ic=skinKeyInk(bc,COL_LIT); int bx=i*bw+pad, w=bw-2*pad, tw=gfx_textWidth(blbl[i]), th=8*ts;
-      bc=keyFill(bx,by,w,bh,g_neo?10:r,bc,COL_SEP);
-      if(i==2){ int total=16+tw,sx=bx+(w-total)/2; drawCarouselIcon(sx+7,by+bh/2,ic);
-        gfx_setTextColor(ic,bc); gfx_setCursor(sx+16,by+(bh-th)/2); gfx_print(blbl[i]); }
-      else { gfx_setTextColor(ic,bc); gfx_setCursor(bx+(w-tw)/2,by+(bh-th)/2); gfx_print(blbl[i]); }
-    }
-    return;
-  }
-  for(int i=1;i<nb;i++)gfx_vline(i*bw,y+8,BOTTOM_H-16,ink);          // slot dividers (FLAT)
-  int ts=2; for(int i=0;i<nb;i++){gfx_setTextSize(2); if(gfx_textWidth(blbl[i])>bw-12){ts=1;break;}}
-  gfx_setTextSize(ts);gfx_setTextColor(ink,bg);
-  for(int i=0;i<nb;i++){
-    int bx=i*bw,tw=gfx_textWidth(blbl[i]),th=8*ts;
-    if(i==2){ int total=16+tw,sx=bx+(bw-total)/2;
-      drawCarouselIcon(sx+7,y+BOTTOM_H/2,ink);
-      gfx_setCursor(sx+16,y+(BOTTOM_H-th)/2);gfx_print(blbl[i]);
-    } else {
-      gfx_setCursor(bx+(bw-tw)/2,y+(BOTTOM_H-th)/2);gfx_print(blbl[i]);
-    }
-  }
-}
 
 // ════════════════════════════════════════════════════════════════════════════
 // CAROUSEL — "fake coverflow" reel (v4.8.5: first-class mode; CAROUSEL= sets default boot view)
@@ -5575,8 +4994,6 @@ static float g_car_spinTarget=0;
 static uint8_t g_car_die=1, g_car_dieTick=0;
 static uint32_t g_car_die_rest_ms=0;   // v5.4.2: millis() when the die settled (for auto-hide)
 #define DIE_HIDE_MS 2500               // v5.4.2: hide the rested die this many ms after the roll settles
-static int g_car_ins_x=0,g_car_ins_y=0,g_car_ins_w=0,g_car_ins_h=0;   // INSERT button rect (set by drawCarousel)
-static int g_car_disk_n=0,g_car_disk_x=0,g_car_disk_y=0,g_car_disk_bw=0,g_car_disk_h=0;   // v5.7.x: reel multi-disk button row rect
 static void runScreensaver();   // defined below; the reel's idle tick can summon it
 // CAR_TILE is defined up with COVER_TILE_PX — the list cover panel shares the reel's tile.
 #define CAR_SLOTS 48                             // 5.9.0: LRU tile cache entries (PSRAM ~2.1 MB) — was 16; more cache = less re-reading when you scroll back. Dial down if PSRAM gets tight.
@@ -5593,13 +5010,10 @@ static uint32_t g_bench_sharp=0,g_bench_micro=0,g_bench_square=0;
 static int carN(){return (int)g_car_list.size();}
 static int carWrap(int i){int n=carN();if(n<=0)return 0;i%=n;if(i<0)i+=n;return i;}
 // A600-calm2: the reel's stage in the calm frame is 48..256 (the stage was 20..280): covers at 0.66, the keys on the bottom row.
-#define CAR_RS 1.0f   // the calm reel keeps the full 150 px cover (mockup 3)
-static int carCcy(){ return calmFrame()?GT_CONTENT_TOP+4+(int)(CAR_TILE*CAR_RS)/2:STATUS_H+12+CAR_TILE/2; }
-static int carHalf(){ return (int)(CAR_TILE*CAR_RS)/2; }
-static CuRect g_car_srcR={0,0,0,0}, g_car_rollR={0,0,0,0};   // the source and ROLL keys of the calm reel (set by drawCarousel)
+static int carCcy(){ return GT_CONTENT_TOP+4+CAR_TILE/2; }   // the centre cover: y 52..202
+static int carHalf(){ return CAR_TILE/2; }
 static bool calmReelOn(){ return g_car_active; }
 static String calmCountText(){ if(g_car_active&&carN()>0) return String(carWrap((int)lroundf(g_car_pos))+1)+" / "+String(carN()); return String(g_games.size())+" "+T(L_PROGRAMS); }
-static const char* carSrcName(){return g_car_src==1?T(L_FAV):g_car_src==2?T(L_MOST):T(L_ALL);}
 
 static void carBuildList(){
   g_car_list.clear();
@@ -6131,10 +5545,9 @@ static void drawCarousel(){
   if(!g_rp_t0)g_rp_t0=millis();
   neoBgEnsure();   // A600-neo2g: a first build overwrites the whole framebuffer - do it before the status bar
   drawStatusBar();
-  {uint32_t _c0=micros(); neoBgEnsure(); if(calmFrame())fillBack(0,GT_CONTENT_TOP,VW,GT_CONTENT_BOTTOM-GT_CONTENT_TOP); else fillBack(0,STATUS_H,VW,VH-STATUS_H-BOTTOM_H); g_rp_clear+=micros()-_c0;}
+  {uint32_t _c0=micros(); neoBgEnsure(); fillBack(0,GT_CONTENT_TOP,VW,CBOT-GT_CONTENT_TOP); g_rp_clear+=micros()-_c0;}
   int n=carN();
   int ccx=VW/2, ccy=carCcy();              // center cover: y 32..182 (calm frame: 52..151)
-  g_car_disk_n=0;                                        // reset reel disk-button rect each frame; set below if multi-disk
   if(n==0){
     gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BG);
     String m=(g_car_src==1)?T(L_NO_FAVS):T(L_NO_GAMES);
@@ -6173,8 +5586,8 @@ static void drawCarousel(){
       int gi=g_car_list[carWrap(ci+off)];
       float rel=(float)off-frac;
       float ar=fabsf(rel);if(ar>2.6f)continue;
-      int x=ccx+(int)(rel*110.0f*CAR_RS*(1.0f-min(ar,1.0f)*0.22f));
-      float scale=(1.0f-ar*0.28f)*CAR_RS;if(scale<0.42f*CAR_RS)scale=0.42f*CAR_RS;
+      int x=ccx+(int)(rel*110.0f*(1.0f-min(ar,1.0f)*0.22f));
+      float scale=1.0f-ar*0.28f;if(scale<0.42f)scale=0.42f;
       float squash=1.0f-ar*0.20f;if(squash<0.55f)squash=0.55f;
       int h=(int)(CAR_TILE*scale),w=(int)(CAR_TILE*scale*squash);
       int dim=(ar<0.5f)?0:((ar<1.6f)?1:2);
@@ -6220,123 +5633,13 @@ static void drawCarousel(){
     // v5.7.x: reset the reel disk selection when the centered game changes
     static int carDiskGi=-1;
     if(carDiskGi!=gi){carDiskGi=gi; int ld=-1; g_disk_sel=(uiLoadedAs(gi,&ld)&&ld>=0)?ld:0;}
-    gfx_setTextSize(calmFrame()?CU_TS_MID:2);gfx_setTextColor(COL_LIT,COL_BG);
+    gfx_setTextSize(CU_TS_MID);gfx_setTextColor(COL_LIT,COL_BG);
     String t=game.name;while(gfx_textWidth(t)>VW-24&&t.length()>3)t=t.substring(0,t.length()-1);
-    gfx_setCursor((VW-gfx_textWidth(t))/2,calmFrame()?carCcy()+carHalf()+6:190);gfx_print(t);
-    if(calmFrame()&&game.disk_count>1){ gfx_setTextSize(CU_TS_SMALL); gfx_setTextColor(COL_MID,COL_BG); const String dl=String(game.disk_count)+" "+T(L_PR_DISKS);   // the name and "N disks": the rest is on the program screen
+    gfx_setCursor((VW-gfx_textWidth(t))/2,carCcy()+carHalf()+6);gfx_print(t);
+    if(game.disk_count>1){ gfx_setTextSize(CU_TS_SMALL); gfx_setTextColor(COL_MID,COL_BG); const String dl=String(game.disk_count)+" "+T(L_PR_DISKS);   // the name and "N disks": the rest is on the program screen
       gfx_setCursor((VW-gfx_textWidth(dl))/2,carCcy()+carHalf()+36); gfx_print(dl); }
-    // lazy NFO blurb (same pattern as the cover panel, keyed to the center game)
-    static int carNfoSel=-1;static String carBlurb="";
-    if(carNfoSel!=gi&&moving&&!game.nfo_done){carNfoSel=-1;carBlurb="";}   // lab14i: never search the card for a description while the reel moves - wait until it stops
-    else if(carNfoSel!=gi){carNfoSel=gi;carBlurb="";
-      if(game.nfo_done)carBlurb=game.blurb;   // 5.9.31-lab1: straight out of PSRAM
-      else{String nfoP,nT,nB;
-        if(findNFOFor(g_files[game.first_file_idx],nfoP)){File nf=SD_MMC.open(nfoP,FILE_READ);
-          if(nf){char _nb[513];int _nr=nf.read((uint8_t*)_nb,512);if(_nr<0)_nr=0;_nb[_nr]=0;nf.close();String txt(_nb);parseNFO(txt,nT,nB);
-            if(nT.length()&&game.name==basenameNoExt(filenameOnly(g_files[game.first_file_idx])))game.name=nT;carBlurb=nB;}}
-        game.blurb=carBlurb;game.nfo_done=true;}}
-    if(game.disk_count>1&&!calmFrame()){
-      // v5.7.x: reel disk buttons — pick a disk (unloaded) or clean-swap to it (loaded), without leaving the reel.
-      int nd=game.disk_count, dh=20, dy=calmFrame()?GT_CONTENT_BOTTOM-48-4-dh:VH-BOTTOM_H-42-26;
-      int dbw=min(40,(VW-16)/nd), totalW=dbw*nd, dx0=(VW-totalW)/2;
-      g_car_disk_n=nd; g_car_disk_x=dx0; g_car_disk_y=dy; g_car_disk_bw=dbw; g_car_disk_h=dh;
-      for(int d=0;d<nd;d++){
-        int bx=dx0+d*dbw;
-        bool isLd=uiShowsLoadedAny(gi,d);
-        bool isSel=(d==g_disk_sel);
-        uint16_t bc=isLd?COL_GREEN:(isSel?COL_AMBER:COL_BAR);
-        uint16_t tc=(isLd||isSel)?TFT_BLACK:COL_LIT;
-        gfx_fillRoundRect(bx+1,dy,dbw-2,dh,4,bc);
-        String dl=String(d+1); gfx_setTextSize(1); gfx_setTextColor(tc,bc);
-        gfx_setCursor(bx+(dbw-gfx_textWidth(dl))/2,dy+(dh-8)/2);gfx_print(dl);
-      }
-    } else if(carBlurb.length()&&!calmFrame()){gfx_setTextSize(1);
-      { const int by=calmFrame()?carCcy()+carHalf()+24:210; drawWrapped(70,by,nfoFlow(carBlurb,true),VW-140,10,2,calmFrame()?by+22:232,COL_MID,COL_BG); } }
-    // reel position "i/n" top-right of the stage
-    gfx_setTextSize(1);gfx_setTextColor(COL_DIM,COL_BG);
-    String pn=String(carWrap(ci)+1)+"/"+String(n);
-    if(!calmFrame()){ gfx_setCursor(VW-8-gfx_textWidth(pn),STATUS_H+4);gfx_print(pn); }   // calm frame: the top bar shows it
-#if CAR_BENCH
-    {gfx_setTextSize(1);gfx_setTextColor(g_bench_square?0xF800:0x07E0,COL_BG);
-     char _bb[40];snprintf(_bb,sizeof _bb,"sq%lu mi%lu sh%lu",(unsigned long)g_bench_square,(unsigned long)g_bench_micro,(unsigned long)g_bench_sharp);
-     gfx_setCursor(8,STATUS_H+4);gfx_print(_bb);}
-#endif
-    // INSERT/EJECT — an explicit button under the nfo (v4.7.3: tap-the-cover-to-
-    // load removed; in portrait the cover fills the width, so swipes grazed
-    // into accidental loads. Mounting is always a deliberate button on the GTi.)
-    {bool isLd=uiShowsLoaded(gi);
-     g_car_ins_w=170;g_car_ins_h=34;
-     g_car_ins_x=(VW-g_car_ins_w)/2;g_car_ins_y=VH-BOTTOM_H-42;
-     if(calmFrame()){ g_car_ins_w=g_car_ins_h=0; g_car_srcR=g_car_rollR=CuRect{0,0,0,0}; }   // the reel has no keys: the cover opens the program screen, the source is in the top bar
-     else if(fdSplitPeer()>=0){   // fd4 round 2: cut in two, DF0 | DF1, as the list's key (drawInsertKeys): each half is INSERT/EJECT for its own drive
-       FdRect h[2]; fdInsertHalves(FdRect{g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h},4,h);
-       for(int d=0;d<2;d++){ const bool ld=insHalfEjects(gi,d); const char*t1,*t2; fdHalfText(d,ld,&t1,&t2);
-         drawInsKey(h[d].x,h[d].y,h[d].w,h[d].h,ld,false,ld?T(L_EJECT):t1,t2,true); }
-     } else {
-     uint16_t bf=isLd?(uint16_t)0x4000:(uint16_t)0x0340, bb=isLd?(uint16_t)0xE8C4:COL_GREEN, bi=TFT_WHITE;
-     if(skinKeyEdge(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,10,isLd?(uint16_t)NEO_RED:COL_AMBER)){ bf=COL_BG; bi=COL_LIT; }
-     else if(g_neo){ if(isLd){ neoKey(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,10,NEO_RED); bf=COL_BG; bi=NEO_RED_INK; }   // A600-neo2: EJECT = muted red key
-                else { gfx_fillRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,10,COL_AMBER); bf=COL_AMBER; bi=COL_BG; } }   // INSERT = the amber main action
-     else {
-     gfx_fillRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,8,bf);
-     gfx_drawRoundRect(g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h,8,bb); }
-     gfx_setTextSize(2);gfx_setTextColor(bi,bf);
-     const char*lbl=isLd?T(L_EJECT):T(L_INSERT);int tw=gfx_textWidth(lbl);
-     gfx_setCursor(g_car_ins_x+(g_car_ins_w-tw)/2,g_car_ins_y+(g_car_ins_h-16)/2);gfx_print(lbl);}
-    }
   }
-  if(calmFrame()){   // A600-calm2: the drive strip instead of the bottom bar; it does not change while the reel moves, so it is drawn when settled
-    if(!((g_car_touch&&g_car_moved)||g_car_coast||g_car_spin)) drawDriveStrip();
-  } else
-  if(g_btn_pill||g_neo||skinKeys()){                                      // 5.8.3: coloured rounded pill buttons; A600-neo2: NEO keys
-    int y=VH-BOTTOM_H; fillBack(0,y,VW,BOTTOM_H); gfx_hline(0,y,VW,COL_SEP);
-    int bw=VW/3, pad=5, bh=BOTTOM_H-2*pad, r=bh/2, by=y+pad;
-    gfx_setTextSize(2);
-    if(g_neo)r=10;
-    { uint16_t bc=COL_BLUE, ic=skinKeyInk(bc,COL_LIT); int bx=0*bw+pad, w=bw-2*pad;
-      bc=keyFill(bx,by,w,bh,r,bc,COL_SEP);
-      int tw=gfx_textWidth(T(L_LIST)),total=16+tw,sx=bx+(w-total)/2;
-      drawListIcon(sx+7,by+bh/2,ic); gfx_setTextColor(ic,bc);
-      gfx_setCursor(sx+16,by+(bh-16)/2); gfx_print(T(L_LIST)); }
-    { uint16_t bc=COL_AMBER, ic=skinKeyInk(bc,COL_AMBER); int bx=1*bw+pad, w=bw-2*pad;
-      bc=keyFill(bx,by,w,bh,r,bc,COL_AMBER); String sl=carSrcName(); int ts=2; if(gfx_textWidth(sl)>w-bh){ts=1;gfx_setTextSize(1);}   // lab15q: long words fit the pill
-      int tw=gfx_textWidth(sl);
-      gfx_setTextColor(ic,bc); gfx_setCursor(bx+(w-tw)/2,by+(bh-8*ts)/2); gfx_print(sl); gfx_setTextSize(2); }
-    { uint16_t bc=COL_GREEN, ic=skinKeyInk(bc,COL_LIT); int bx=2*bw+pad, w=bw-2*pad;
-      bc=keyFill(bx,by,w,bh,r,bc,COL_SEP);
-      int tw=gfx_textWidth(T(L_ROLL)),ds=16,total=ds+4+tw,sx=bx+(w-total)/2;
-      int dx=sx+ds/2,dy2=by+bh/2;
-      gfx_fillRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,0xFFFF); gfx_drawRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,TFT_BLACK);
-      int o=4; gfx_fillCircle(dx,dy2,1,TFT_BLACK);
-      gfx_fillCircle(dx-o,dy2-o,1,TFT_BLACK); gfx_fillCircle(dx+o,dy2+o,1,TFT_BLACK);
-      gfx_fillCircle(dx+o,dy2-o,1,TFT_BLACK); gfx_fillCircle(dx-o,dy2+o,1,TFT_BLACK);
-      gfx_setTextColor(ic,bc); gfx_setCursor(sx+ds+4,by+(bh-16)/2); gfx_print(T(L_ROLL)); }
-  } else {
-  // carousel bottom bar: Vince test — single bar split by dividers [LIST] [source] [ROLL], white-on-black
-  const uint16_t bg=TFT_BLACK, ink=TFT_WHITE;
-  const uint16_t dieBody=0xFFFF, diePip=TFT_BLACK;
-  int y=VH-BOTTOM_H;gfx_fillRect(0,y,VW,BOTTOM_H,bg);gfx_hline(0,y,VW,COL_SEP);
-  int bw=VW/3;
-  for(int i=1;i<3;i++)gfx_vline(i*bw,y+8,BOTTOM_H-16,ink);          // slot dividers
-  gfx_setTextSize(2);gfx_setTextColor(ink,bg);
-  // LIST — coverflow-list glyph + word
-  { int bx=0*bw,tw=gfx_textWidth(T(L_LIST)),total=16+tw,sx=bx+(bw-total)/2;
-    drawListIcon(sx+7,y+BOTTOM_H/2,ink);
-    gfx_setCursor(sx+16,y+(BOTTOM_H-16)/2);gfx_print(T(L_LIST)); }
-  // SOURCE — cycles ALL/FAV/MOST (word is the current source)
-  { int bx=1*bw;String sl=carSrcName();int ts=2;if(gfx_textWidth(sl)>bw-12){ts=1;gfx_setTextSize(1);}   // lab15q: long words fit the slot
-    int tw=gfx_textWidth(sl);
-    gfx_setCursor(bx+(bw-tw)/2,y+(BOTTOM_H-8*ts)/2);gfx_print(sl);gfx_setTextSize(2); }
-  // ROLL — die glyph + word
-  { int bx=2*bw,tw=gfx_textWidth(T(L_ROLL)),ds=16,total=ds+4+tw,sx=bx+(bw-total)/2;
-    int dx=sx+ds/2,dy2=y+BOTTOM_H/2;
-    gfx_fillRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,dieBody);gfx_drawRoundRect(dx-ds/2,dy2-ds/2,ds,ds,3,ink);
-    int o=4;
-    gfx_fillCircle(dx,dy2,1,diePip);
-    gfx_fillCircle(dx-o,dy2-o,1,diePip);gfx_fillCircle(dx+o,dy2+o,1,diePip);
-    gfx_fillCircle(dx+o,dy2-o,1,diePip);gfx_fillCircle(dx-o,dy2+o,1,diePip);
-    gfx_setCursor(sx+ds+4,y+(BOTTOM_H-16)/2);gfx_print(T(L_ROLL)); }
-  }
+  if(!((g_car_touch&&g_car_moved)||g_car_coast||g_car_spin)) drawDriveStrip();   // the strip does not change while the reel moves: drawn when it settles
   if(g_car_dieShow&&carN()>0)carDrawDie();   // dice overlay rides on top of everything
   g_rp_draw+=micros()-_rp_f0; g_rp_frames++;
 }
@@ -6374,13 +5677,6 @@ static void carEnter(){
   drawCarousel();gfx_flush();
 }
 static void carExit(){g_car_active=false;if(g_car_bootmode==2)writeLastView(0);drawFullUI();gfx_flush();}
-static void carCycleSrc(){
-  g_car_src=(g_car_src+1)%3;carBuildList();          // ALL -> FAV -> MOST (RND is its own button now)
-  g_car_spin=false;g_car_dieShow=false;
-  if(carN()>0){int start=0;for(int i=0;i<carN();i++)if(g_car_list[i]==g_sel){start=i;break;}g_car_pos=(float)start;}
-  else g_car_pos=0;
-  g_car_coast=false;drawCarousel();gfx_flush();
-}
 // ROLL — the dice button. Spins to a random cover WITHIN the current source
 // (roll a random favourite, a random most-played, or a random anything).
 // Every tap re-rolls. That's the fun; it deserved its own button.
@@ -6406,58 +5702,18 @@ static void calmOpenSettings();
 static void doSettings(int tab=0);
 static void infoAction(uint8_t act);
 static void carHandleTap(uint16_t px,uint16_t py){
-  if(calmFrame()){   // A600-calm2: the top bar, the drive strip, and the reel's own source / ROLL keys
-    const int tb=gtTopBarTap(gtTopBarLayout(VW),px,py);
-    if(tb==GT_TB_LIST){ carExit(); return; }
-    if(tb==GT_TB_GEAR){ g_car_active=false; if(g_car_bootmode==2)writeLastView(0); calmOpenSettings(); return; }
-    if(tb==GT_TB_FILTER){ doReelFilter(); drawCarousel(); gfx_flush(); return; }
-    if(tb==GT_TB_REEL||py<GT_CONTENT_TOP) return;
-    if(py>=GT_CONTENT_BOTTOM){ calmStripTap(px,py); return; }
-    if(cuContains(g_car_srcR,px,py)){ carCycleSrc(); return; }
-    if(cuContains(g_car_rollR,px,py)){ carRollDice(); return; }
-  }
-  if(!calmFrame()&&py>=(uint16_t)(VH-BOTTOM_H)){
-    if(px<(uint16_t)(VW/3))carExit();
-    else if(px<(uint16_t)(2*VW/3))carCycleSrc();
-    else carRollDice();                                // every tap re-rolls
-    return;}
+  const int tb=gtTopBarTap(gtTopBarLayout(VW),px,py);
+  if(tb==GT_TB_LIST){ carExit(); return; }
+  if(tb==GT_TB_GEAR){ g_car_active=false; if(g_car_bootmode==2)writeLastView(0); calmOpenSettings(); return; }
+  if(tb==GT_TB_FILTER){ doReelFilter(); drawCarousel(); gfx_flush(); return; }
+  if(tb==GT_TB_REEL||py<GT_CONTENT_TOP) return;
+  if(py>=CBOT){ calmStripTap(px,py); return; }
   int n=carN();if(!n)return;
   int ci=carWrap((int)lroundf(g_car_pos));
   int ccx=VW/2,ccy=carCcy();
-  // v5.7.x: reel disk buttons (multi-disk centered game) — checked before INSERT
-  if(g_car_disk_n>0 && py>=(uint16_t)g_car_disk_y && py<(uint16_t)(g_car_disk_y+g_car_disk_h) &&
-     px>=(uint16_t)g_car_disk_x && px<(uint16_t)(g_car_disk_x+g_car_disk_bw*g_car_disk_n)){
-    int d=(px-g_car_disk_x)/g_car_disk_bw; if(d<0)d=0; if(d>=g_car_disk_n)d=g_car_disk_n-1;
-    int gi=g_car_list[ci]; auto&gm=g_games[gi];
-    if(d<(int)gm.disk_indices.size()){
-      int ld=-1; if(uiLoadedAs(gi,&ld)){
-        if(!calmDiskSwap(true,true)) g_disk_sel=d;   // more than one drive: only select the disk, INSERT picks the drive
-        else if(d!=ld){                              // one drive: clean swap - flush saves + eject, then insert the chosen disk
-          g_sel=gi;g_disk_sel=d;g_disk_page=0;
-          calmSwapTo(g_files[gm.disk_indices[d]],0);
-        }
-      } else { g_disk_sel=d; }                        // not loaded yet — just select; INSERT will mount it
-      if(g_car_active){drawCarousel();gfx_flush();}
-    }
-    return;
-  }
-  // INSERT/EJECT button (checked FIRST — its corners overlap the side zones)
-  const int carDrv=calmFrame()?-1:fdInsertHit(FdRect{g_car_ins_x,g_car_ins_y,g_car_ins_w,g_car_ins_h},4,fdSplitPeer()>=0,(int)px,(int)py);   // fd4 round 2: the half tapped is the drive
-  if(carDrv>=0){
-    int gi=g_car_list[ci];
-    g_sel=gi;g_disk_page=0;setActiveLetter(bucketOf(g_games[gi].name));
-    if(fdSplitPeer()>=0?insHalfEjects(gi,carDrv):uiShowsLoaded(gi,-1,carDrv))doEject(carDrv);
-    else{auto&gm=g_games[gi];int d=(g_disk_sel>=0&&g_disk_sel<(int)gm.disk_indices.size())?g_disk_sel:0;doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[d]],String(),nullptr,carDrv);}
-    if(g_car_active){drawCarousel();gfx_flush();}        // repaint over the list redraw the loader did
-    return;
-  }
-  // A600-calm4: a tap on the centre cover opens the program screen (cover, details, disk stepper, load keys)
-  if(calmFrame()&&px>=(uint16_t)(ccx-carHalf())&&px<(uint16_t)(ccx+carHalf())&&py>=(uint16_t)(ccy-carHalf())&&py<(uint16_t)GT_CONTENT_BOTTOM){   // the cover and its name
+  // the centre cover and its name open the program screen (cover, details, disk stepper, load keys)
+  if(px>=(uint16_t)(ccx-carHalf())&&px<(uint16_t)(ccx+carHalf())&&py>=(uint16_t)(ccy-carHalf())&&py<(uint16_t)CBOT){
     const int gi=g_car_list[ci]; doProgramScreen(gi); if(g_car_active){ drawCarousel(); gfx_flush(); } return; }
-  // center cover = DEAD ZONE (v4.7.3: no tap-to-load — portrait thumbs kept
-  // grazing it into accidental mounts; the button above is the only trigger)
-  if(px>=(uint16_t)(ccx-carHalf())&&px<(uint16_t)(ccx+carHalf())&&
-     py>=(uint16_t)(ccy-carHalf())&&py<(uint16_t)(ccy+carHalf()))return;
   // side tap = step one cover toward that side
   if(px<(uint16_t)(ccx-carHalf()))g_car_pos-=1.0f;
   else if(px>=(uint16_t)(ccx+carHalf()))g_car_pos+=1.0f;
@@ -6479,7 +5735,7 @@ static void carTick(bool touch,uint16_t px,uint16_t py,uint32_t now){
       g_car_pos0=g_car_pos;g_car_vel=0;g_car_coast=false;g_car_lastMs=now;
     }else{
       if(abs((int)px-g_car_x0)>DRAG_THRESH)g_car_moved=true;
-      if(g_car_moved&&n>0&&py<(uint16_t)(calmFrame()?GT_STRIP_Y:VH-BOTTOM_H)){
+      if(g_car_moved&&n>0&&py<(uint16_t)gtStripY(VH)){
         g_car_pos=g_car_pos0-((float)((int)px-g_car_x0))/CAR_PX_PER_STEP;
         uint32_t dt=now-g_car_lastMs;
         if(dt>0){g_car_vel=((float)((int)px-g_car_lastX))/(float)dt;g_car_lastX=px;g_car_lastMs=now;}
@@ -6555,8 +5811,11 @@ static void carTick(bool touch,uint16_t px,uint16_t py,uint32_t now){
   }
 }
 
-static void drawFullUI(){g_ui_gen++;NeoScope _ns;clearBack();drawStatusBar();drawCoverPanel();drawActionStrip();drawModeBar();drawFileList();drawNowPlayingBar();drawAZBar();drawBottomBar();if(calmFrame()&&!g_info_showing)drawDriveStrip();}
-static void drawListAndCover(){g_ui_gen++;drawCoverPanel();drawActionStrip();drawFileList();drawNowPlayingBar();drawAZBar();if(calmFrame()&&!g_info_showing)drawDriveStrip();}
+static void drawFullUI(){g_ui_gen++;NeoScope _ns;clearBack();drawStatusBar();drawCalmSearchRow();drawCalmList();drawDriveStrip();}
+// The list and the strip again (a drive changed, a disk was ejected); the top bar and the search row are as they were.
+static void drawListAndStrip(){g_ui_gen++;drawCalmList();drawDriveStrip();}
+// While scrolling only the rows move.
+static void redrawListArea(){drawCalmList();gfx_flush();}
 
 // ════════════════════════════════════════════════════════════════════════════
 // LOAD / UNLOAD
@@ -6873,7 +6132,7 @@ static bool fdFetchUi(int peer,uint32_t replyMs,uint32_t sectorsMs,bool toastFai
   {const char*m="SAVING GAME...";int tw=gfx_textWidth(m);gfx_setCursor((VW-tw)/2,VH/2-8);gfx_print(m);}gfx_flush();
   if(replyMs>5000)fleetWaitHintAt(bd.c_str(),VH/2+32);
   const bool ok=fdFetchCore(peer,replyMs,sectorsMs,drive);
-  if(g_car_active)drawCarousel();else if(g_info_showing)drawInfoFull();else drawFullUI();
+  if(g_car_active)drawCarousel();else drawFullUI();
   gfx_flush();
   if(ok&&g_fdFetchSectors)svToast("SAVED: "+nm);else if(!ok&&toastFail)svToast("SAVE FETCH FAILED");
   return ok;
@@ -7228,9 +6487,9 @@ static String g_loadForce;   // calm4: the peer id a load goes to (the program s
 // image in RAM first, then send: the bar reads the card first and the rest follows.
 static String g_lsTitle,g_lsLabel,g_lsHint;
 static int g_lsBase=0,g_lsSpan=100;
-static const CuRect LS_BOX={40,96,400,128};
+static CuRect lsBox(){ const int w=VW-16<400?VW-16:400; return CuRect{(VW-w)/2,(VH-128)/2,w,128}; }   // centred, whatever the orientation
 static void loadScreenDraw(int pct){
-  NeoScope _ns;
+  NeoScope _ns; const CuRect LS_BOX=lsBox();
   if(pct<0)pct=0; if(pct>100)pct=100;
   calmCard(LS_BOX); const uint16_t bg=calmCardBg();
   calmTextCut(LS_BOX.x+16,LS_BOX.y+12,g_lsTitle,LS_BOX.w-32,CU_TS_MID,COL_AMBER,bg);
@@ -7491,7 +6750,7 @@ static bool doLoadSelected(const String&adfPath,const String&freshId,bool*sent,i
     }
     drawFullUI();gfx_flush();return true;   // a modal owned the screen; repaint all of it
   }
-  drawStatusBar();drawListAndCover();gfx_flush();return true;
+  drawStatusBar();drawListAndStrip();gfx_flush();return true;
 }
 
 // fd2: START FRESH asks first, laid out as claimAskUI: the game, whose save goes (who: the FluxDrive's name, or "cable save"
@@ -7700,21 +6959,21 @@ static String neoBenchJson(){
   if(!g_neo_on) return String("{\"error\":\"turn NEO on first\"}");   // neo2g: the bench must not allocate NEO's 600 KB late
   if(g_car_active) return String("{\"error\":\"leave the reel first\"}");
   if(g_games.empty()) return String("{\"error\":\"no games in the list\"}");
-  const bool was=g_neo_on; const float sp=g_scrollPx; const bool info=g_info_showing; const int pg=g_info_page;
+  const bool was=g_neo_on; const float sp=g_scrollPx;
   uint32_t full[2],scr[2],sett[2],flush=0,build=0;
   for(int k=0;k<2;k++){ const bool neo=(k==0);
-    g_neo_on=neo; applyTheme(g_theme_idx); g_info_showing=false;
+    g_neo_on=neo; applyTheme(g_theme_idx); 
     drawFullUI();                                                        // warm-up: background + tint built here
     uint32_t t=micros(); for(int i=0;i<10;i++)drawFullUI(); full[k]=(micros()-t)/10;
     int mp=maxScrollPx(); t=micros();
-    for(int i=0;i<20;i++){ g_scrollPx=(float)((i*37)%(mp>0?mp:1)); drawFileList(); drawNowPlayingBar(); drawAZBar(); }   // one drag frame
+    for(int i=0;i<20;i++){ g_scrollPx=(float)((i*37)%(mp>0?mp:1)); drawCalmList(); }   // one drag frame
     scr[k]=(micros()-t)/20; g_scrollPx=sp;
-    t=micros(); for(int i=0;i<5;i++){ NeoScope _ns; clearBack(); drawStatusBar(); drawInfoPanel(); drawInfoBottomBar(); } sett[k]=(micros()-t)/5;
+    sett[k]=0;   // the old Settings pages are gone (the key stays so the JSON keeps its shape)
     if(neo){ t=micros(); gfx_flush(); flush=micros()-t;
       g_neo_bg_rot=-1; g_neo_tint_rot=-1; t=micros(); neoBgEnsure(); neoTintEnsure(); build=micros()-t; }   // first build after boot / rotation
   }
-  g_neo_on=was; applyTheme(g_theme_idx); g_scrollPx=sp; g_info_showing=info; g_info_page=pg;
-  if(info) drawInfoFull(); else { drawFullUI(); gfx_flush(); }
+  g_neo_on=was; applyTheme(g_theme_idx); g_scrollPx=sp;
+  drawFullUI(); gfx_flush();
   char j[320]; snprintf(j,sizeof j,
     "{\"unit\":\"us\",\"neo\":{\"full\":%lu,\"scroll_frame\":%lu,\"settings\":%lu},\"flat\":{\"full\":%lu,\"scroll_frame\":%lu,\"settings\":%lu},\"flush\":%lu,\"neo_first_build\":%lu,\"games\":%u}",
     (unsigned long)full[0],(unsigned long)scr[0],(unsigned long)sett[0],(unsigned long)full[1],(unsigned long)scr[1],(unsigned long)sett[1],
@@ -7760,7 +7019,7 @@ static void doUnload(){
   if(svPending())svFlushStandalone();
   if(g_wireless_mode&&g_espnow_started&&g_espnow_dirty)svFetchWireless();
   hardDetach();g_loaded=false;g_loaded_name="";g_loaded_display="";g_img_bytes=0;g_pfTargetName="";g_loaded_path="";g_loaded_orig="";g_loaded_game_idx=-1;g_loaded_disk_idx=-1;svDirtyReset();g_alias=false;   // 5.9.37: drop any alias mapping
-  if(g_wireless_mode&&g_espnow_started&&espnowIsPaired())espnowSendEject();drawStatusBar();drawListAndCover();gfx_flush();}
+  if(g_wireless_mode&&g_espnow_started&&espnowIsPaired())espnowSendEject();drawStatusBar();drawListAndStrip();gfx_flush();}
 // EJECT on the touchscreen (cover, action strip, reel, tap-to-load). Fleet mode with a FluxDrive target: that FluxDrive
 // is told first (fleetEjectTarget), whether or not this panel staged its disk; then this panel's staging goes, as before.
 // doUnload() itself stays this panel only: the web page calls it inside a request handler (which must not block), a
@@ -7783,7 +7042,7 @@ static void diagInflate(const uint8_t*src,uint32_t slen,uint8_t*dst){
 }
 // Mount the built-in Amiga Test Kit as the emulated disk — works with no SD card inserted.
 static void doLoadDiag(){
-  g_info_showing=false;
+  
   gfx_fillRect(0,MSG_Y,MSG_W,MSG_H,COL_PANEL);
   gfx_setTextSize(1);gfx_setTextColor(TFT_CYAN,COL_PANEL);gfx_setCursor(6,MSG_Y+16);gfx_print("AMIGA TEST KIT");
   gfx_setTextColor(COL_LIT,COL_PANEL);gfx_setCursor(6,MSG_Y+28);gfx_print(T(L_LOADING_DIAG));gfx_flush();
@@ -8280,7 +7539,7 @@ static void runScreensaver(){                                // blocking bounce 
 // ════════════════════════════════════════════════════════════════════════════
 static void doRescan(){
   uint32_t _t0=millis();   // lab15a2: how long before the SCANNING screen
-  g_info_showing=false;
+  
   g_cover_flags_ready=false;   // v5.9.2: covers may have changed -> recompute reel-filter flags
   // Delete all cache files
   SD_MMC.remove("/ADF/.index");SD_MMC.remove("/DSK/.index");SD_MMC.remove("/GENERIC/.index");   // S1: GENERIC too (was never rebuilt)
@@ -8302,7 +7561,7 @@ static void doRescan(){
   heap_caps_malloc_extmem_enable(4096);applyStats();buildActiveLetters();scanScreensaver();
   bcSet(BC_READY,(uint32_t)g_games.size());   // lab14e
   sdGuardReport(true);                          // lab14g
-  g_sel=0;g_scroll=0;g_disk_sel=0;g_disk_page=0;g_scrollPx=0;g_az_page=0;g_inertia_on=false;
+  g_sel=0;g_scroll=0;g_disk_sel=0;g_disk_page=0;g_scrollPx=0;g_inertia_on=false;
   if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
   drawFullUI();gfx_flush();
 }
@@ -8818,12 +8077,11 @@ static void doManual(const String& path,const char* title=nullptr){   // lab15j:
       } f.close(); }
   }
   if(!raw.length())raw=title?"(no text)":"(no manual text)";
-  const bool calm=calmFrame();   // A600-calm5: Back (48), the title, the text at size 2, two 48 px page keys (and Sections) at the bottom
-  const int margin=8, topH=calm?56:22, botH=calm?64:30;
+  const int margin=8, topH=56, botH=64;   // Back (48), the title, the text, two 48 px page keys (and Sections) at the bottom
   const int areaTop=topH+3, areaBot=VH-botH-2, maxW=VW-2*margin;
-  int sz=calm?CU_TS_SMALL:g_name_sz, lineH=8*sz+(sz>=2?5:3);
+  int sz=g_font==2?CU_TS_MID:CU_TS_SMALL, lineH=8*sz+(sz>=2?5:3);   // Settings > Screen > Letter: size 2, or 3 for Large
   std::vector<String> lines; std::vector<uint8_t> head; std::vector<int> secLine; std::vector<String> secName;   // v2: head[i]=heading; sec* = jump index
-  auto rewrap=[&](){ lines.clear(); head.clear(); secLine.clear(); secName.clear(); sz=calm?CU_TS_SMALL:g_name_sz; lineH=8*sz+(sz>=2?5:3); gfx_setTextSize(sz);
+  auto rewrap=[&](){ lines.clear(); head.clear(); secLine.clear(); secName.clear(); sz=g_font==2?CU_TS_MID:CU_TS_SMALL; lineH=8*sz+(sz>=2?5:3); gfx_setTextSize(sz);
     String para="";
     for(int i=0;i<=(int)raw.length();i++){ char c=i<(int)raw.length()?raw[i]:'\n';
       if(c=='\n'){ String lab;
@@ -8843,8 +8101,6 @@ static void doManual(const String& path,const char* title=nullptr){   // lab15j:
   {uint32_t t0=millis();while(Touch_ReadFrame()&&millis()-t0<600)delay(10);}   // drain the entering tap
   while(true){
     webPanelPoll();   // the web UI must not die while this screen owns the loop
-    int nbtn = secName.size()? 4 : 3;   // v2 buttons: SIZE, TOP, [SECTIONS], CLOSE
-    int bw = VW/nbtn;
     { uint32_t g0=g_ui_gen; webPanelService(); if(g_ui_gen!=g0)dirty=true; if(g_theme_redraw){g_theme_redraw=false;dirty=true;} }   // A600-neo2: keep the web page (and /api/screenshot) answering; neo2g: redraw if a web load/eject drew the list over the reader
     if(dirty||vel!=0){ dirty=false;
       NeoScope _ns;   // A600-neo2: NEO background, keys at the bottom
@@ -8856,7 +8112,7 @@ static void doManual(const String& path,const char* title=nullptr){   // lab15j:
       float ms=maxScroll();
       if(ms>0){ int trkH=areaBot-areaTop; int thH=max(18,(int)((float)trkH*trkH/((float)lines.size()*lineH))); int thY=areaTop+(int)((float)(trkH-thH)*(scroll/ms));
         gfx_fillRect(VW-4,areaTop,2,trkH,COL_PANEL); gfx_fillRect(VW-4,thY,2,thH,COL_AMBER); }
-      if(calm){
+      {
         fillBack(0,0,VW,topH); fillBack(0,areaBot,VW,VH-areaBot);
         calmKey(CuRect{CU_MARGIN,4,104,CU_KEY},(String("< ")+calmTitle(T(L_BACK))).c_str(),CALM_NORMAL,false,CU_TS_MID);
         const int pct=ms>0?(int)(scroll*100/ms):100; const String ps=String(pct)+"%";
@@ -8866,25 +8122,6 @@ static void doManual(const String& path,const char* title=nullptr){   // lab15j:
         calmKey(kr[0],"<",CALM_NORMAL,false,CU_TS_MID); calmKey(kr[nk-1],">",CALM_NORMAL,false,CU_TS_MID);   // page up / page down
         if(secName.size()) calmKey(kr[1],T(L_SECTIONS),CALM_NORMAL,false,CU_TS_SMALL);
         gfx_flush();
-      } else {
-      bool liteBar=(inkFor(COL_BAR)==TFT_BLACK);
-      gfx_fillRect(0,0,VW,topH,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(liteBar?TFT_BLACK:COL_AMBER,COL_BAR);
-      gfx_setCursor(6,7); gfx_print(title?title:T(L_MANUAL));
-      { int pct=ms>0?(int)(scroll*100/ms):100; String s=String(pct)+"%"; gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR); gfx_setCursor(VW/2-gfx_textWidth(s)/2,7); gfx_print(s); }   // v2: % moved to top bar
-      { String nm=g_games.empty()?String(""):g_games[g_sel].name; while(gfx_textWidth(nm)>VW/2-24&&nm.length()>1)nm=nm.substring(0,nm.length()-1);
-        gfx_setTextColor(liteBar?COL_MID:COL_DIM,COL_BAR); gfx_setCursor(VW-gfx_textWidth(nm)-6,7); gfx_print(nm); }
-      int by=VH-botH; if(g_neo||skinKeys())fillBack(0,by,VW,botH); else gfx_fillRect(0,by,VW,botH,COL_BAR); gfx_hline(0,by,VW,COL_SEP);
-      auto btn=[&](int idx,const String& lab,uint16_t bg,uint16_t brd,uint16_t ink){ int x=idx*bw;
-        if(skinKeyEdge(x+3,by+4,bw-6,botH-8,8,bg==(uint16_t)0x8000?(uint16_t)NEO_RED:brd==COL_AMBER?COL_AMBER:COL_SEP)){ bg=COL_BG; ink=COL_LIT; }
-        else if(g_neo){ bool red=(bg==(uint16_t)0x8000); neoKey(x+3,by+4,bw-6,botH-8,8,red?(uint16_t)NEO_RED:brd==COL_AMBER?COL_AMBER:COL_SEP); bg=COL_BG; if(red)ink=NEO_RED_INK; else ink=COL_LIT; }
-        else { gfx_fillRoundRect(x+3,by+4,bw-6,botH-8,6,bg); gfx_drawRoundRect(x+3,by+4,bw-6,botH-8,6,brd); }
-        gfx_setTextSize(1); gfx_setTextColor(ink,bg); gfx_setCursor(x+(bw-gfx_textWidth(lab))/2,by+(botH-8)/2); gfx_print(lab); };
-      { String sl=String(T(L_CFG_FONT))+": "+fontName(g_font); gfx_setTextSize(1); if(gfx_textWidth(sl)>bw-12)sl=fontName(g_font);   // A600-neo2g: portrait keys are narrow
-      btn(0,sl,COL_BAR,COL_ACCENT,COL_LIT); }
-      btn(1,T(L_TOP),COL_BAR,COL_ACCENT,COL_LIT);
-      if(secName.size()) btn(2,T(L_SECTIONS),COL_BAR,COL_AMBER,COL_LIT);
-      btn(nbtn-1,T(L_CLOSE),0x8000,COL_AMBER,TFT_WHITE);
-      gfx_flush();
       }
     }
     uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
@@ -8895,7 +8132,7 @@ static void doManual(const String& path,const char* title=nullptr){   // lab15j:
       lastX=tx; lastY=ty;
     } else {
       if(pressed&&++rel>=3){ pressed=false;
-        if(!moved&&calm){
+        if(!moved){
           if(cuContains(CuRect{CU_MARGIN,4,104,CU_KEY},lastX,lastY)){ g_rtfmLastPath=path; g_rtfmLastScroll=scroll; return; }   // Back
           const int ky=VH-CU_MARGIN-CU_KEY; CuRect kr[3]; const int nk=secName.size()?3:2; cuCols(CuRect{CU_MARGIN,ky,VW-2*CU_MARGIN,CU_KEY},nk,CU_GAP,kr);
           const float pageH=(float)(areaBot-areaTop-lineH), ms=maxScroll();
@@ -8904,17 +8141,6 @@ static void doManual(const String& path,const char* title=nullptr){   // lab15j:
           else if(secName.size()&&cuContains(kr[1],lastX,lastY)){ int pick=rtfmSectionMenu(secName);
             if(pick>=0&&pick<(int)secLine.size()){ scroll=(float)secLine[pick]*lineH; if(scroll<0)scroll=0; if(scroll>ms)scroll=ms; vel=0; }
             { int q=0; uint32_t t0=millis(); while(q<8 && millis()-t0<1200){ if(Touch_ReadFrame())q=0; else q++; delay(8); } } pressed=false; moved=false; rel=0; dirty=true; }
-        }
-        else if(!moved){ int by=VH-botH;
-          if(lastY>=by){ int idx=lastX/bw; if(idx>=nbtn)idx=nbtn-1;
-            if(idx==0){ applyFont((g_font+1)%3); saveConfigKey("FONT",fontKey(g_font)); rewrap(); float ms=maxScroll(); if(scroll>ms)scroll=ms; dirty=true; }
-            else if(idx==1){ scroll=0; vel=0; dirty=true; }                                            // TOP
-            else if(secName.size()&&idx==2){ int pick=rtfmSectionMenu(secName);                        // SECTIONS jump
-              if(pick>=0&&pick<(int)secLine.size()){ scroll=(float)secLine[pick]*lineH; float ms=maxScroll(); if(scroll<0)scroll=0; if(scroll>ms)scroll=ms; vel=0; }
-              { int q=0; uint32_t t0=millis(); while(q<8 && millis()-t0<1200){ if(Touch_ReadFrame())q=0; else q++; delay(8); } } pressed=false; moved=false; rel=0; dirty=true; }   // fix: drain the section-pick tap so it is not read as a body-tap (which closes the reader)
-            else { g_rtfmLastPath=path; g_rtfmLastScroll=scroll; return; }                             // CLOSE
-          }
-          else { g_rtfmLastPath=path; g_rtfmLastScroll=scroll; return; }                               // tap body closes (forgiving)
         }
       }
     }
@@ -9037,7 +8263,7 @@ static void doDongleSetup(){
         gfx_fillRoundRect(x,y,colW,rowH-6,8,bg);gfx_setTextColor(inkFor(bg),bg);gfx_setCursor(x+10,y+8);gfx_print(L[k]);
         String v=(k==0)?(espnowDongleSsid().length()?espnowDongleSsid():String("default name")):(k==1)?String(espnowDongleHasKey()?"own password":"default password"):String("");
         if(v.length()){gfx_setCursor(x+10,y+22);gfx_print(v);}}
-      int bw=120;gfx_fillRoundRect((VW-bw)/2,VH-40,bw,34,6,COL_BAR);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setCursor((VW-gfx_textWidth(T(L_BACK)))/2,VH-28);gfx_print(T(L_BACK));gfx_flush();}
+      int bw=120;gfx_fillRoundRect((VW-bw)/2,VH-40,bw,34,6,COL_BAR);gfx_setTextColor(COL_LIT,COL_BAR);{const String bk=calmTitle(T(L_BACK)); gfx_setCursor((VW-gfx_textWidth(bk))/2,VH-28);gfx_print(bk);}gfx_flush();}
     uint16_t tx=0,ty=0; bool t=Touch_ReadFrame(); if(t)t=getTouchXY(&tx,&ty);
     if(t){if(!down){down=true;downX=tx;downY=ty;}}
     else if(down){down=false;
@@ -9088,10 +8314,10 @@ static void doScanDongles(){
     gfx_setTextColor(COL_DIM,COL_BG);gfx_setCursor(8,30);gfx_print(T(L_CHECK_DONGLE));
     gfx_setCursor(8,42);gfx_print(T(L_IN_RANGE));
     gfx_fillRoundRect(VW/2-50,VH-44,100,32,8,COL_BAR);gfx_drawRoundRect(VW/2-50,VH-44,100,32,8,COL_DIM);
-    gfx_setTextColor(COL_LIT,COL_BAR);{const char*s="BACK";gfx_setCursor(VW/2-gfx_textWidth(s)/2,VH-34);}gfx_print(T(L_BACK));
+    gfx_setTextColor(COL_LIT,COL_BAR);{const String bk=calmTitle(T(L_BACK)); gfx_setCursor(VW/2-gfx_textWidth(bk)/2,VH-34); gfx_print(bk);}
     gfx_flush();
     uint32_t w=millis();while(millis()-w<8000){if(Touch_ReadFrame()){uint32_t r=millis();while(Touch_ReadFrame()&&millis()-r<400)delay(10);break;}delay(20);}
-    g_info_showing=true;return;   // v5.6.9: back to the INFO tab, not the games list (caller redraws drawInfoFull)
+    return;   // back to Settings
   }
   // Results: tap a row to highlight, then USE (pair) / RENAME (keyboard) / BACK. Long lists scroll (drag).
   int rowH=40, listTop=26, btnBarY=VH-40;
@@ -9165,7 +8391,7 @@ static void doScanDongles(){
     }
     delay(15);
   }
-  g_info_showing=true;   // v5.6.9: stay on the INFO tab after pairing (caller redraws drawInfoFull)
+     // back to Settings after pairing
 }
 
 // Legacy single-pair (kept for compatibility, now routes to scan)
@@ -9375,68 +8601,6 @@ static void doFleetPick(){
 // uiLoadedAs), if there is one. BACK closes it, as 2 minutes without a touch do. The layout and what a tap means: fdInfoLayout /
 // fdInfoTap (fluxdrive_peer.h, host-tested), the same in both orientations and the compact layout.
 static FdInfoLayout g_diL;   // the layout as drawn (a member of the sketch, not a parameter: the .ino's auto-prototypes come before fluxdrive_peer.h)
-static void drawDriveInfo(int t){
-  FdInfoLayout&L=g_diL; NeoScope _ns; clearBack();
-  const PfPeer&p=g_pfPeers[t];
-  fdInfoLayout(VW,VH,p.df1,p.loaded,p.loaded1,&L);
-  const uint16_t pbg=g_neo?COL_BG:COL_PANEL;   // the text background on a block (a NEO panel is drawn over the picture: COL_BG is its transparent key)
-  { String ti=pfPeerLabel(p); gfx_setTextSize(2); while(ti.length()>1&&gfx_textWidth(ti)>VW-16) ti.remove(ti.length()-1);
-    gfx_setTextColor(COL_AMBER,COL_BG); gfx_setCursor(8,9); gfx_print(ti); }
-  for(int i=0;i<L.blocks;i++){
-    const FdRect b=L.block[i]; const bool ld=i?p.loaded1:p.loaded; const bool wp=ld&&(i?p.wp1:p.wp); const uint16_t dirty=i?p.dirty1:p.dirty;
-    if(g_neo) neoPanel(b.x,b.y,b.w,b.h,8); else { gfx_fillRoundRect(b.x,b.y,b.w,b.h,8,COL_PANEL); gfx_drawRoundRect(b.x,b.y,b.w,b.h,8,COL_ACCENT); }
-    gfx_setTextSize(1); gfx_setTextColor(COL_ORANGE,pbg); gfx_setCursor(b.x+8,b.y+6); gfx_print(i?"DF1":"DF0");
-    int cx=b.x+8+gfx_textWidth("DF0")+10;
-    auto chip=[&](const String&txt){ const int w=gfx_textWidth(txt)+6; if(cx+w>b.x+b.w-8) return;
-      gfx_fillRoundRect(cx,b.y+4,w,10,2,COL_AMBER); gfx_setTextColor(TFT_BLACK,COL_AMBER); gfx_setCursor(cx+3,b.y+5); gfx_print(txt); cx+=w+4; };
-    gfx_setTextSize(1);
-    if(wp) chip("WP");
-    if(i==0&&fdShowStoring(true,p.loaded,p.stored)) chip(T(L_FD_STORING));
-    if(ld&&dirty>0) chip(String(dirty)+" "+T(L_FD_UNSAVED));
-    const FdRect n=L.name[i]; gfx_setTextSize(2);
-    String dn; if(ld){ dn=i?p.disk1:p.disk; if(!dn.length()) dn="disk"; } else dn=T(L_FD_EMPTY);
-    while(dn.length()>1&&gfx_textWidth(dn)>n.w) dn.remove(dn.length()-1);
-    gfx_setTextColor(ld?COL_GREEN:COL_DIM,pbg); gfx_setCursor(n.x,n.y+(n.h-16)/2); gfx_print(dn);
-    if(L.hasEject[i]){ const FdRect e=L.eject[i];
-      const uint16_t bc=keyFill(e.x,e.y,e.w,e.h,8,(uint16_t)0x4000,NEO_RED); if(!g_neo) gfx_drawRoundRect(e.x,e.y,e.w,e.h,8,(uint16_t)0xE8C4);
-      gfx_setTextColor(g_neo?NEO_RED_INK:(uint16_t)TFT_WHITE,bc); gfx_setTextSize(2); int sz=2; const char*lb=T(L_EJECT); if(gfx_textWidth(lb)>e.w-4){ gfx_setTextSize(1); sz=1; }
-      gfx_setCursor(e.x+(e.w-gfx_textWidth(lb))/2,e.y+(e.h-8*sz)/2); gfx_print(lb); }
-  }
-  { const FdRect k=L.back; const uint16_t bc=keyFill(k.x,k.y,k.w,k.h,8,COL_BAR,COL_SEP);
-    gfx_setTextSize(2); gfx_setTextColor(btnInk(bc,COL_LIT),bc); const char*lb=T(L_BACK);
-    gfx_setCursor(k.x+(k.w-gfx_textWidth(lb))/2,k.y+(k.h-16)/2); gfx_print(lb); }
-  gfx_flush();
-}
-static void doDriveInfo(){
-  const int t0i=pfFluxTarget(); if(t0i<0) return;
-  const String pid=g_pfPeers[t0i].id;
-  String drawn; bool dirty=true, down=false, moved=false; int downX=0,downY=0; uint32_t lastTouch=millis();
-  auto drain=[&](){ uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); down=false; moved=true; lastTouch=millis(); };
-  int selGame=-1, selDisk=-1;
-  while(true){
-    webPanelService(); pfService(); pfWorker();
-    const int t=pfPeerIdx(pid); if(t<0||!fdIsFluxDrive(g_pfPeers[t].board.c_str())) break;   // it went away
-    { const PfPeer&p=g_pfPeers[t]; String sig=String(p.loaded)+p.disk+"|"+String(p.wp)+String(p.stored)+String(p.dirty)+"|"+String(p.df1)+String(p.loaded1)+p.disk1+"|"+String(p.wp1)+String(p.dirty1)+"|"+p.name+p.ip;
-      if(sig!=drawn){ drawn=sig; dirty=true; } }
-    if(dirty){ dirty=false; drawDriveInfo(t); }
-    bool tt=Touch_ReadFrame(); uint16_t tx=0,ty=0; if(tt)tt=getTouchXY(&tx,&ty);
-    if(tt){ lastTouch=millis(); if(!down){down=true;downX=tx;downY=ty;moved=false;} else if(abs((int)ty-downY)>8||abs((int)tx-downX)>8)moved=true; }
-    else if(down){ down=false;
-      if(!moved){ const int code=fdInfoTap(g_diL,downX,downY);
-        if(code==FD_INFO_BACK) break;
-        else if(code==FD_INFO_EJECT0||code==FD_INFO_EJECT1){ doEject(code==FD_INFO_EJECT1?1:0); drain(); dirty=true; }   // the drive's own eject path; this screen stays
-        else if(code==FD_INFO_NAME0||code==FD_INFO_NAME1){ const int dr=code==FD_INFO_NAME1?1:0;
-          for(int gi=0;gi<(int)g_games.size();gi++){ int ld=-1; if(uiLoadedAs(gi,&ld,dr)){ selGame=gi; selDisk=ld; break; } }
-          if(selGame>=0) break; }   // no game of that name: nothing happens
-      }
-    }
-    if(millis()-lastTouch>120000) break;   // no touch for 2 minutes: back to the list (this screen blocks the screensaver's own timer)
-    delay(15);
-  }
-  if(selGame>=0){ g_sel=selGame; g_disk_sel=selDisk>=0?selDisk:0; g_disk_page=0; g_scrollPx=min((float)(selGame*LIST_ITEM_H),(float)maxScrollPx()); g_inertia_on=false; setActiveLetter(bucketOf(g_games[selGame].name)); }
-  { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }   // a finger held through it must not tap what is under it
-  drawFullUI(); gfx_flush();
-}
 
 
 // ── A600-calm2: DRIVE INFO for every drive the screen can reach (docs/ui/README.md, mockup 4) ──────────────────────────────
@@ -9537,7 +8701,7 @@ static void calmStripTap(int px,int py){
   if(c==GT_STRIP_NONE) return;
   doDriveInfoAll(c==GT_STRIP_MORE?2:0);
 }
-static void calmOpenSettings(){ g_info_showing=false; doSettings(0); g_info_showing=false; if(g_car_active) drawCarousel(); else drawFullUI(); gfx_flush(); }   // A600-calm6: the calm Settings
+static void calmOpenSettings(){  doSettings(0);  if(g_car_active) drawCarousel(); else drawFullUI(); gfx_flush(); }   // A600-calm6: the calm Settings
 
 // ════════════════════════════════════════════════════════════════════════════
 // SETUP
@@ -10185,15 +9349,6 @@ void setup(){
 // ════════════════════════════════════════════════════════════════════════════
 // MAIN LOOP
 // ════════════════════════════════════════════════════════════════════════════
-// Redraw only the list strip + A-Z index (cover doesn't change while scrolling)
-static void redrawListArea(){drawFileList();drawNowPlayingBar();drawAZBar();gfx_flush();}
-// True if the selected game's name is too long for its lane (needs a marquee)
-static bool selNameOverflows(){
-  if(calmFrame())return false;   // the calm rows cut the name, no marquee
-  if(g_sel<0||g_sel>=(int)g_games.size())return false;
-  auto&g=g_games[g_sel];int r=8+g_name_sz*3,nx=LIST_X+6+r+r+6;int maxNW=LIST_W-(nx-LIST_X)-8-(g.disk_count>1?36:0);
-  gfx_setTextSize(g_name_sz);return gfx_textWidth(g.name)>maxNW;
-}
 
 // Dispatch a completed tap (finger down + up with no drag) to the right UI region
 // ════════════════════════════════════════════════════════════════════════════
@@ -10295,7 +9450,7 @@ static void reloadLevel(){
   heap_caps_malloc_extmem_enable(4096);    // back to the runtime setting
   bcSet(BC_READY,(uint32_t)g_games.size());   // lab14n: out of the library stages (a later crash must not read as a library crash)
   applyStats();                            // applyStats restores fav/plays
-  buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;g_disk_sel=0;g_disk_page=0;
+  buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_disk_sel=0;g_disk_page=0;
   if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));
 }
 
@@ -10360,7 +9515,7 @@ static void switchLib(int m){   // int, not DiskMode: Arduino auto-generates thi
     if(g_sidecars_harvested){ if(assignSidecarsFromHarvest())writeGameCache(); writeNfoCacheIfChanged(); }   // lab14p: descriptions for the new library,
     else loadNfoCache();                                                                                  //   exactly as setup() does
     g_nfoharvest.clear();g_nfoharvest.shrink_to_fit();g_manualset.clear();g_manualset.shrink_to_fit();g_hdset.clear();g_hdset.shrink_to_fit();   // lab14n
-    fwLocFree();heap_caps_malloc_extmem_enable(4096);bcSet(BC_READY,(uint32_t)g_games.size());buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;g_az_page=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));}
+    fwLocFree();heap_caps_malloc_extmem_enable(4096);bcSet(BC_READY,(uint32_t)g_games.size());buildActiveLetters();g_sel=g_scroll=0;g_scrollPx=0;if(!g_games.empty())setActiveLetter(bucketOf(g_games[0].name));}
   drawFullUI();gfx_flush();
 }
 // ── A600-calm3: the letter grid (mockup 6) and the filter list ──────────────────────────────────────────────────────────────
@@ -10518,7 +9673,7 @@ static bool doProgramNfo(int gi){
 static void drawProgram(int gi,const GtTarget*t,int n){
   NeoScope _ns; clearBack();
   GameEntry&game=g_games[gi];
-  const GtProgLayout L=gtProgLayout(VW,game.disk_count);
+  const GtProgLayout L=gtProgLayout(VW,VH,game.disk_count);
   calmKey(L.back,(String("< ")+calmTitle(T(L_LIST))).c_str(),CALM_NORMAL,false,CU_TS_MID);
   calmTextCut(L.title.x,L.title.y+(L.title.h-24)/2,String(game.name.c_str()),L.title.w,CU_TS_MID,COL_AMBER,COL_BG);
   calmKey(L.more,"",CALM_NORMAL,false,CU_TS_MID);   // the "..." key
@@ -10534,7 +9689,7 @@ static void drawProgram(int gi,const GtTarget*t,int n){
   { String st=game.disk_count>1?String(T(L_PR_DISK))+" "+String(g_disk_sel+1)+": ":String("");
     st+=where.length()?String(T(L_PR_IN))+" "+where:String(T(L_PR_NOTLOADED));
     calmTextCut(L.status.x,L.status.y,st,L.status.w,CU_TS_SMALL,where.length()?COL_GREEN:COL_MID,COL_BG); }
-  const GtLoadKeys lk=gtLoadLayout(L.loadArea,n);
+  const GtLoadKeys lk=gtLoadLayout(L.loadArea,n,VW<400);
   for(int k=0;k<lk.n;k++){
     const GtLoadKey&key=lk.key[k];
     if(lk.picker){ calmKey(key.r,T(L_PR_LOADINTO),CALM_PRIMARY,false,CU_TS_MID); continue; }
@@ -10633,15 +9788,15 @@ static void doProgramScreen(int gi,int disk){
       if(sig!=shown){ shown=sig; dirty=true; } }
     if(dirty){ dirty=false; drawProgram(gi,t,n); }
     if(calmPick(&tx,&ty,&lastTouch,&down,&dx,&dy)){
-      if(ty>=GT_CONTENT_BOTTOM){ calmStripTap(tx,ty); dirty=true; shown=""; continue; }
-      GameEntry&game=g_games[gi]; const GtProgLayout L=gtProgLayout(VW,game.disk_count);
+      if(ty>=CBOT){ calmStripTap(tx,ty); dirty=true; shown=""; continue; }
+      GameEntry&game=g_games[gi]; const GtProgLayout L=gtProgLayout(VW,VH,game.disk_count);
       const int code=gtProgTap(L,tx,ty);
       if(code==GT_PR_BACK) break;
       else if(code==GT_PR_MORE){ doProgramMore(gi); dirty=true; shown=""; }
       else if(code==GT_PR_COVER){ doCoverFull(gi); dirty=true; shown=""; }
       else if(code==GT_PR_DETAILS){ if(doProgramNfo(gi)){ dirty=true; shown=""; } }
       else if(code==GT_PR_PREV||code==GT_PR_NEXT){ g_disk_sel=(g_disk_sel+(code==GT_PR_NEXT?1:game.disk_count-1))%game.disk_count; g_disk_page=0; dirty=true; }
-      else { const GtLoadKeys lk=gtLoadLayout(L.loadArea,n);
+      else { const GtLoadKeys lk=gtLoadLayout(L.loadArea,n,VW<400);
         for(int k=0;k<lk.n;k++) if(cuContains(lk.key[k].r,tx,ty)){
           if(lk.picker){ doProgramPick(t,n,gi); dirty=true; shown=""; break; }
           int ld; if(calmHeldDisk(gi,t[lk.key[k].target],&ld)&&(game.disk_count<=1||ld<0||ld==g_disk_sel)) break;   // already in that drive: nothing to do
@@ -10723,8 +9878,6 @@ static void srBuild(int tab,bool test){
     srAdd(calmTitle(T(L_CFG_LANG)),T(L_D_LANG),calmTitle(LANG_FULL[g_lang]),SK_VALUE,SA_LANG);
     srAdd(calmTitle(T(L_CFG_FONT)),T(L_D_FONT),calmTitle(fontName(g_font)),SK_VALUE,IA_FONT);
     srAdd(calmTitle(T(L_CFG_ROTATE)),T(L_D_ROTATE),calmTitle(g_portrait?T(L_PORTRAIT):T(L_LANDSCAPE)),SK_VALUE,IA_ROTATE);
-    srToggle(T(L_CFG_COMPACT),T(L_D_COMPACT),g_compact,IA_COMPACT);
-    srAdd(calmTitle(T(L_CFG_BUTTONS)),T(L_D_BTN),calmTitle(g_btn_pill?T(L_PILL):T(L_FLAT)),SK_VALUE,IA_BTNSTYLE);
     srToggle(T(L_PR_BATT),T(L_D_BATT),g_batt_show,IA_BATT);
     srToggle(T(L_COVER_ART),T(L_D_COVERS),g_covers_on,IA_COVERS);
     srToggle(T(L_LIST_TILE),T(L_D_TILE),g_listtile,IA_LISTTILE);
@@ -10801,13 +9954,12 @@ static void settingsChoose(int act){
   }
 }
 static void doSettings(int tab){
-  struct Guard{ Guard(){ g_calmSettings=true; } ~Guard(){ g_calmSettings=false; } } _g;   // the old pages' drawInfoFull stays quiet while this owns the screen
-  const ClSetTabs T6=clSettingsTabs(VW);
-  const int listTop=GT_CONTENT_TOP+CU_GAP+4, viewH=VH-CU_MARGIN-listTop;   // 60 .. 312
   bool test=false,dirty=true,down=false,moved=false,leave=false; int scroll=0,downScroll=0,dx=0,dy=0,tx=0,ty=0; uint32_t lastTouch=millis();
   { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }
-  while(!leave&&calmFrame()&&millis()-lastTouch<180000){
+  while(!leave&&millis()-lastTouch<180000){
     webPanelService(); pfService(); pfWorker();
+    const ClSetTabs T6=clSettingsTabs(VW);   // per pass: a rotation changes the screen
+    const int listTop=T6.listTop, viewH=VH-CU_MARGIN-listTop;
     if(dirty){ dirty=false; srBuild(tab,test);
       const int mp=clSetMaxScroll(g_sr_n,viewH); if(scroll>mp) scroll=mp;
       NeoScope _ns; clearBack(); const uint16_t bg=calmCardBg();
@@ -10846,142 +9998,70 @@ static void doSettings(int tab){
             if(go){
               if(r.act==SA_THEME||r.act==SA_LANG||r.act==SA_CRKSTYLE) settingsChoose(r.act);
               else if(r.act==SA_TESTPAGE){ test=true; scroll=0; }
-              else if(r.act!=IA_NONE){ infoAction(r.act); g_info_showing=false; if(r.act==IA_ROTATE||r.act==IA_COMPACT) leave=true; } }
+              else if(r.act!=IA_NONE){ infoAction(r.act);  if(r.act==IA_ROTATE){ scroll=0; } } }
             dirty=true; lastTouch=millis(); } } } }
     delay(15);
   }
   { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }
 }
-static void drawInfoBottomBar(){
-  const uint16_t bg=TFT_BLACK, ink=TFT_WHITE;
-  int y=VH-BOTTOM_H,bw=VW/5;
-  gfx_fillRect(0,y,VW,BOTTOM_H,bg);gfx_hline(0,y,VW,COL_SEP);   // Vince test: single bar split by dividers, white-on-black
-  struct{const char*l;bool on;}bb[5]={
-    {"<",g_info_page>0},{">",g_info_page<g_info_pages-1},   // A600-neo2d: arrows (PAGE n/m is in the header)
-    {"",false},{"",false},{T(L_CLOSE),true}};
-  if(g_neo||skinKeys()){ NeoScope _ns; fillBack(0,y,VW,BOTTOM_H); gfx_hline(0,y,VW,COL_SEP); }   // A600-neo2: NEO keys on the background
-  if(g_btn_pill||g_neo||skinKeys()){   // 5.9.30: this bar was hardcoded flat, so PILL left the settings screen half-styled
-    NeoScope _ns;
-    static const uint16_t pc[5]={COL_BLUE,COL_BLUE,COL_BG,COL_BG,COL_ACCENT};
-    int pad=5, bh2=BOTTOM_H-2*pad, r=bh2/2, by=y+pad;
-    for(int i=0;i<5;i++){
-      if(!bb[i].l[0])continue;
-      uint16_t bc=bb[i].on?pc[i]:COL_BAR, ic=skinKeys()?(bb[i].on?COL_LIT:COL_DIM):btnInk(bc,bb[i].on?COL_LIT:COL_DIM);      // inactive PAGE key = dim capsule, not just dim text
-      int bx=i*bw+pad, w=bw-2*pad;
-      bc=keyFill(bx,by,w,bh2,g_neo?10:r,bc,bb[i].on?COL_SEP:mix565(COL_SEP,COL_PANEL,140));
-      int sz=2; gfx_setTextSize(sz); int tw=gfx_textWidth(bb[i].l);
-      if(tw>w-6){ sz=1; gfx_setTextSize(sz); tw=gfx_textWidth(bb[i].l); }
-      gfx_setTextColor(ic,bc);
-      gfx_setCursor(bx+(w-tw)/2,by+(bh2-8*sz)/2);gfx_print(bb[i].l);
-    }
-    return;
-  }
-  for(int i=1;i<5;i++){ if(bb[i-1].l[0]&&bb[i].l[0]) gfx_vline(i*bw,y+8,BOTTOM_H-16,ink); }   // dividers between adjacent populated slots
-  for(int i=0;i<5;i++){
-    if(!bb[i].l[0])continue;
-    uint16_t fg=bb[i].on?ink:COL_DIM;   // inactive PAGE keys greyed
-    int sz=2; gfx_setTextSize(sz); int tw=gfx_textWidth(bb[i].l);
-    if(tw>bw-8){ sz=1; gfx_setTextSize(sz); tw=gfx_textWidth(bb[i].l); }
-    gfx_setTextColor(fg,bg);
-    gfx_setCursor(i*bw+(bw-tw)/2,y+(BOTTOM_H-8*sz)/2);gfx_print(bb[i].l);
-  }
-}
-static void drawInfoFull(){
-  if(g_calmSettings) return;
-  {NeoScope _ns;clearBack();drawStatusBar();drawInfoPanel();drawInfoBottomBar();}gfx_flush();   // A600-neo1-JC3248: NEO background
-}
 static void infoAction(uint8_t act){
-  if(act==IA_PICKBACK||act>=IA_PICK0){   // pick page: set the choice (or not), then back to the Settings page we came from
-    int i=act-IA_PICK0;
-    if(act>=IA_PICK0&&g_info_pick==1&&i<LANG_N){ g_lang=i; saveConfigKey("LANG",LANG_NAMES[g_lang]); }
-    if(act>=IA_PICK0&&g_info_pick==2&&i<NUM_THEMES-1) themeActivate(THEMES[i].name);   // A600-theme1: picking a theme = NEO off
-    if(act>=IA_PICK0&&g_info_pick==2&&i>=NUM_THEMES-1&&i-(NUM_THEMES-1)<g_pick_nc) themeActivate(g_pick_custom[i-(NUM_THEMES-1)]);
-    if(act>=IA_PICK0&&g_info_pick==3&&i<CRK_PICK_N){ g_cracktro=i; saveConfigKey("CRACKTRO",crkConfigValue(g_cracktro)); }   // i==CRK_PICK_N is the hidden style: unchanged
-    g_info_pick=0; g_info_page=g_info_pick_ret; drawInfoFull(); return;
-  }
   switch(act){
-    case IA_MODE: { int m=!g_wireless_mode?0:(g_link_home?2:1); m=(m+1)%3; g_wireless_mode=(m!=0); g_link_home=(m==2); saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE"); saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW"); applyRadioMode(); drawInfoFull(); } break;   // 5.9.19: live switch, no reboot, no splash
-    case IA_FONT: applyFont((g_font+1)%3);saveConfigKey("FONT",fontKey(g_font));drawInfoFull();break;
-    case IA_BATT: g_batt_show=!g_batt_show; saveConfigKey("BATTERY",g_batt_show?"ON":"OFF"); drawInfoFull(); break;
-    case IA_NEOUI: g_neo_on=!g_neo_on;applyTheme(g_theme_idx);saveConfigKey("NEO",g_neo_on?"ON":"OFF");drawInfoFull();break;   // A600-neo1-JC3248: live switch, no reboot
-    case IA_THEME: g_info_pick=2;g_info_pick_ret=g_info_page;g_info_page=0;drawInfoFull();break;   // pick page (was: cycle to the next theme)   // Vince test: theme cycling lives in CONFIG now
-    case IA_CRKSTYLE: g_info_pick=3;g_info_pick_ret=g_info_page;g_info_page=0;drawInfoFull();break;   // CRACKTRO style pick page
-    case IA_LANG: g_info_pick=1;g_info_pick_ret=g_info_page;g_info_page=0;drawInfoFull();break;   // pick page (was: cycle to the next language)
-    case IA_ROTATE: g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
-    case IA_COMPACT: g_compact=!g_compact;relayout();saveConfigKey("COMPACT",g_compact?"ON":"OFF");{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}drawInfoFull();break;
-    case IA_DONGLE: doPairNow();drawInfoFull();break;
-    case IA_DONGLESETUP: doDongleSetup();g_info_showing=true;drawInfoFull();break;   // lock-b
-    case IA_HIVEMIND: g_hivemind=!g_hivemind;saveConfigKey("HIVEMIND",g_hivemind?"ON":"OFF");drawInfoFull();break;
-    case IA_HOMEWIFI: doHomeWifiSetup(); drawInfoFull(); break;   // on-screen SSID/password entry
+    case IA_MODE: { int m=!g_wireless_mode?0:(g_link_home?2:1); m=(m+1)%3; g_wireless_mode=(m!=0); g_link_home=(m==2); saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE"); saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW"); applyRadioMode();  } break;   // 5.9.19: live switch, no reboot, no splash
+    case IA_FONT: applyFont((g_font+1)%3);saveConfigKey("FONT",fontKey(g_font));break;
+    case IA_BATT: g_batt_show=!g_batt_show; saveConfigKey("BATTERY",g_batt_show?"ON":"OFF");  break;
+    case IA_NEOUI: g_neo_on=!g_neo_on;applyTheme(g_theme_idx);saveConfigKey("NEO",g_neo_on?"ON":"OFF");break;   // A600-neo1-JC3248: live switch, no reboot
+    case IA_ROTATE: g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}break;
+    case IA_DONGLE: doPairNow();break;
+    case IA_DONGLESETUP: doDongleSetup();break;   // lock-b
+    case IA_HIVEMIND: g_hivemind=!g_hivemind;saveConfigKey("HIVEMIND",g_hivemind?"ON":"OFF");break;
+    case IA_HOMEWIFI: doHomeWifiSetup();  break;   // on-screen SSID/password entry
     case IA_RESCAN: doRescan();break;
     case IA_RESET: {gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0xE8C4,COL_BG);const char*m=T(L_RESETTING);gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();delay(700);ESP.restart();}break;
-    case IA_DIAG: if(g_loaded&&g_loaded_name=="AMIGA TEST KIT"){g_info_showing=false;doUnload();drawFullUI();gfx_flush();}else doLoadDiag();break;
+    case IA_DIAG: if(g_loaded&&g_loaded_name=="AMIGA TEST KIT"){doUnload();drawFullUI();gfx_flush();}else doLoadDiag();break;
     case IA_SDACCESS: {gLog("[sdguard] entering SD ACCESS after %lu min up - totals since this boot:\n",(unsigned long)(millis()/60000)); sdGuardReport(true);   // lab14j: the session's reads, before the restart wipes them
       gfx_fillScreen(COL_BG);gfx_setTextSize(2);gfx_setTextColor((uint16_t)0x05FF,COL_BG);const char*m="ENTERING SD ACCESS...";gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8);gfx_print(m);gfx_flush();g_sdaccess_magic=SDACCESS_MAGIC;delay(350);ESP.restart();}break;
-    case IA_FWUPDATE: doFirmwareUpdate();g_info_showing=false;drawFullUI();gfx_flush();break;
-    case IA_LIBMODE: switchLib((g_mode+1)%3); if(g_info_showing)drawInfoFull(); break;   // v5.6.0: cycle ADF->DSK->GEN, stay in INFO
-    case IA_CATEG: g_categories=!g_categories; saveConfigKey("CATEGORIES", g_categories?"ON":"OFF"); g_libpath=""; drawInfoFull(); break;   // flip+save like COMPACT/HIVEMIND; NO rescan (g_cats builds when the CATEGORIES button is tapped)
-    case IA_BTNSTYLE: g_btn_pill=!g_btn_pill; saveConfigKey("BTNSTYLE", g_btn_pill?"PILL":"FLAT"); drawInfoFull(); break;   // 5.8.3
-    case IA_SAVER: g_ss_enabled=!g_ss_enabled; saveConfigKey("SCREENSAVER", g_ss_enabled?"ON":"OFF"); drawInfoFull(); break;   // real on-screen screensaver ON/OFF
+    case IA_FWUPDATE: doFirmwareUpdate();drawFullUI();gfx_flush();break;
+    case IA_LIBMODE: switchLib((g_mode+1)%3);break;   // v5.6.0: cycle ADF->DSK->GEN, stay in INFO
+    case IA_CATEG: g_categories=!g_categories; saveConfigKey("CATEGORIES", g_categories?"ON":"OFF"); g_libpath="";  break;   // flip+save like COMPACT/HIVEMIND; NO rescan (g_cats builds when the CATEGORIES button is tapped)
+    case IA_SAVER: g_ss_enabled=!g_ss_enabled; saveConfigKey("SCREENSAVER", g_ss_enabled?"ON":"OFF");  break;   // real on-screen screensaver ON/OFF
     case IA_CRACKTRO:   // boot intro ON/OFF -> CONFIG.TXT CRACKTRO=; OFF is -1, ON restores the remembered style
       if(g_cracktro>=0){ g_cracktro_prev=g_cracktro; g_cracktro=-1; saveConfigKey("CRACKTRO","OFF"); }
       else { g_cracktro=g_cracktro_prev;
              saveConfigKey("CRACKTRO", crkConfigValue(g_cracktro)); }
-      drawInfoFull(); break;
-    case IA_TESTPAGE: g_info_test=true;  g_info_page=0; drawInfoFull(); break;   // lab14k: open the TEST TOOLS sub-page
-    case IA_TESTBACK: g_info_test=false; g_info_page=0; drawInfoFull(); break;   // lab14k: back to the main Settings list
-    case IA_DIAGDISP: g_diagdisp=!g_diagdisp; saveConfigKey("DIAGDISP", g_diagdisp?"ON":"OFF"); drawInfoFull(); break;   // live diagnostic overlay ON/OFF
-    case IA_REELBORDER: g_reelborder=!g_reelborder; saveConfigKey("REELBORDER", g_reelborder?"ON":"OFF"); drawInfoFull(); break;   // MasterTelly CR: reel cover frame ON/OFF (applies next reel draw)
-    case IA_LASTUSED: g_lastused=!g_lastused; saveConfigKey("LASTUSED", g_lastused?"ON":"OFF"); drawInfoFull(); break;
-    case IA_NOCACHE: g_nocache=!g_nocache; saveConfigKey("NOCACHE", g_nocache?"ON":"OFF"); drawInfoFull(); break;   // takes effect on the next boot/rescan
-    case IA_COVERS:  g_covers_on=!g_covers_on; saveConfigKey("COVERS", g_covers_on?"ON":"OFF"); drawInfoFull(); break;
+       break;
+    case IA_DIAGDISP: g_diagdisp=!g_diagdisp; saveConfigKey("DIAGDISP", g_diagdisp?"ON":"OFF");  break;   // live diagnostic overlay ON/OFF
+    case IA_REELBORDER: g_reelborder=!g_reelborder; saveConfigKey("REELBORDER", g_reelborder?"ON":"OFF");  break;   // MasterTelly CR: reel cover frame ON/OFF (applies next reel draw)
+    case IA_LASTUSED: g_lastused=!g_lastused; saveConfigKey("LASTUSED", g_lastused?"ON":"OFF");  break;
+    case IA_NOCACHE: g_nocache=!g_nocache; saveConfigKey("NOCACHE", g_nocache?"ON":"OFF");  break;   // takes effect on the next boot/rescan
+    case IA_COVERS:  g_covers_on=!g_covers_on; saveConfigKey("COVERS", g_covers_on?"ON":"OFF");  break;
     case IA_REELPROF: g_reelprof=!g_reelprof; saveConfigKey("REELPROF", g_reelprof?"ON":"OFF");
                       g_rp_frames=g_rp_draw=g_rp_clear=g_rp_blit=g_rp_sav=g_rp_flush=0; g_rp_t0=millis();
-                      drawInfoFull(); break;   // 5.9.33-lab3: live frame breakdown into /gti.log
-    case IA_SDSOAK: sdSoakTest(); drawInfoFull(); break;   // lab14g
-    case IA_LISTTILE: g_listtile=!g_listtile; saveConfigKey("LISTTILE", g_listtile?"ON":"OFF"); drawInfoFull(); break;   // 5.9.34-lab4: list cover from the reel tile vs a fresh JPEG decode
+                       break;   // 5.9.33-lab3: live frame breakdown into /gti.log
+    case IA_SDSOAK: sdSoakTest();  break;   // lab14g
+    case IA_LISTTILE: g_listtile=!g_listtile; saveConfigKey("LISTTILE", g_listtile?"ON":"OFF");  break;   // 5.9.34-lab4: list cover from the reel tile vs a fresh JPEG decode
     case IA_SSMODE:
       if(g_ss_slides){ g_ss_slides=false; g_ss_matrix=false; g_ss_cracktro=false; saveConfigKey("SSMODE","BOUNCE"); }
       else if(!g_ss_matrix&&!g_ss_cracktro){ g_ss_matrix=true; g_ss_slides=false; saveConfigKey("SSMODE","MATRIX"); }
       else if(g_ss_matrix){ g_ss_matrix=false; g_ss_cracktro=true; saveConfigKey("SSMODE","CRACKTRO"); }
       else { g_ss_cracktro=false; g_ss_slides=true; g_ss_matrix=false; saveConfigKey("SSMODE","SLIDES"); }
-      drawInfoFull(); break;   // cycle SLIDES->BOUNCE->MATRIX->CRACKTRO
-    case IA_SSFAV: g_ss_fav=!g_ss_fav; saveConfigKey("SSFAV", g_ss_fav?"ON":"OFF"); drawInfoFull(); break;   // 5.8.3
-    case IA_WEBUI: doWebUiSetup(); drawInfoFull(); break;   // 5.9.9
-    case IA_WIFICHECK: doWifiCheck(); drawInfoFull(); break;   // 5.9.10
-    case IA_FLEET: doFleetPick(); g_info_showing=true; drawInfoFull(); break;        // #console: multi-select fleet manager
+       break;   // cycle SLIDES->BOUNCE->MATRIX->CRACKTRO
+    case IA_SSFAV: g_ss_fav=!g_ss_fav; saveConfigKey("SSFAV", g_ss_fav?"ON":"OFF");  break;   // 5.8.3
+    case IA_WEBUI: doWebUiSetup();  break;   // 5.9.9
+    case IA_WIFICHECK: doWifiCheck();  break;   // 5.9.10
+    case IA_FLEET: doFleetPick();   break;        // #console: multi-select fleet manager
 #if defined(GTI_FLEET)
-    case IA_ORPHAN: doReleaseOrphans(); g_info_showing=true; drawInfoFull(); break;  // #lock: release a claim this screen has forgotten
+    case IA_ORPHAN: doReleaseOrphans();   break;  // #lock: release a claim this screen has forgotten
 #endif
-    case IA_SAVEDWIFI: savedWifiManage(); drawInfoFull(); break;                     // #clubday: remembered networks
+    case IA_SAVEDWIFI: savedWifiManage();  break;                     // #clubday: remembered networks
     default: break;
   }
 }
 static void handleTap(uint16_t px,uint16_t py){
-  // ── v5.5.4: full-screen paginated INFO — swallow ALL taps while settings are open ──
-  if(g_info_showing){
-    if(py>=(uint16_t)(VH-BOTTOM_H)){
-      int bw=VW/5,bsel=px/bw; if(bsel>4)bsel=4;
-      if(bsel==0){ if(g_info_page>0){g_info_page--;drawInfoFull();} }
-      else if(bsel==1){ if(g_info_page<g_info_pages-1){g_info_page++;drawInfoFull();} }
-      else if(bsel==4){ g_info_showing=false;drawFullUI();gfx_flush(); }
-      return;
-    }
-    for(int i=0;i<g_ir_n;i++){
-      if(px>=(uint16_t)g_ir[i].x&&px<(uint16_t)(g_ir[i].x+g_ir[i].w)&&py>=(uint16_t)g_ir[i].y&&py<(uint16_t)(g_ir[i].y+g_ir[i].h)){
-        uint32_t t0=millis(); uint8_t a=g_ir[i].act; infoAction(a);   // lab15a2: slow Settings taps go in the log
-        uint32_t dt=millis()-t0; if(dt>300) gLog("[slow] settings action %u took %lums | int=%u psram=%u largest-int=%u\n",(unsigned)a,(unsigned long)dt,(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)ESP.getFreePsram(),(unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-        return; }
-    }
-    return;
-  }
-  // ── A600-calm2: the top bar (List / Reel tabs, Settings) and the drive strip ──
-  if(calmFrame()){
-    const int tb=gtTopBarTap(gtTopBarLayout(VW),px,py);
-    if(tb==GT_TB_REEL){ g_info_showing=false; carEnter(); return; }
-    if(tb==GT_TB_GEAR){ calmOpenSettings(); return; }
-    if(tb==GT_TB_LIST||py<GT_CONTENT_TOP) return;   // already in the list
-    if(py>=GT_CONTENT_BOTTOM){ calmStripTap(px,py); return; }   // the strip and the gap above it
+  const int tb=gtTopBarTap(gtTopBarLayout(VW),px,py);
+  if(tb==GT_TB_REEL){ carEnter(); return; }
+  if(tb==GT_TB_GEAR){ calmOpenSettings(); return; }
+  if(tb==GT_TB_LIST||py<GT_CONTENT_TOP) return;   // already in the list
+  if(py>=CBOT){ calmStripTap(px,py); return; }   // the strip and the gap above it
     if(py>=MB_Y&&py<MB_Y+MB_H){   // the search row: Search | A-Z | the filter
       const ClSearchRow sr=clSearchRow(CuRect{CU_MARGIN,MB_Y,VW-2*CU_MARGIN,MB_H}); const CuRect rs[3]={sr.search,sr.az,sr.filter};
       const int h=cuHit(rs,3,px,py);
@@ -10992,93 +10072,8 @@ static void handleTap(uint16_t px,uint16_t py){
     if(py>=LIST_TOP&&py<LIST_BOTTOM){   // a row: the star toggles the favourite; the rest opens the program (the reel at that game for now: cover, disks, INSERT / EJECT)
       const int gi=clRowAt((int)g_scrollPx,LIST_TOP,py,(int)g_games.size());
       if(gi<0) return;
-      if(px<(uint16_t)(CU_MARGIN+40)){ g_games[gi].fav=!g_games[gi].fav; saveStats(); drawFileList(); gfx_flush(); return; }
-      setActiveLetter(bucketOf(g_games[gi].name)); g_info_showing=false; doProgramScreen(gi); drawFullUI(); gfx_flush(); return; }
-    return;   // nothing else is left on the calm list screen
-  }
-  // ── NOW PLAYING, fleet mode: the FluxDrive target's bar shows a disk -> a tap opens its DRIVE INFO screen (it never ejects: the
-  //    EJECT keys are on that screen). A drag that starts there (a flick of the list's bottom row begun a few px low) does not.
-  //    Otherwise the bar does what it did: nothing. The rule: fdBarOpensInfo.
-  { const int ft=pfFluxTarget(); const FdRect bar={LIST_X,NOW_Y,LIST_W,NOW_PLAY_H};
-    if(fdBarOpensInfo(NOW_ON,px,py,bar,ft>=0,ft>=0&&fdBarShows(true,g_pfPeers[ft].loaded,g_pfPeers[ft].df1,g_pfPeers[ft].loaded1),g_touch_moved)){ doDriveInfo(); return; } }
-  // ── v4.9.2: book button on the cover — opens the .rtfm manual full-screen ──
-  if(!g_info_showing&&g_manual_bw&&g_manual_path.length()&&px>=(uint16_t)g_manual_bx&&px<(uint16_t)(g_manual_bx+g_manual_bw)&&py>=(uint16_t)g_manual_by&&py<(uint16_t)(g_manual_by+g_manual_bh)){
-    doManual(g_manual_path); drawFullUI(); gfx_flush(); return; }
-  // ── fd2: START FRESH on the cover panel (shown only when the selected disk has a save to throw away) - asks first ──
-  if(!g_info_showing&&g_fresh_bw&&!g_games.empty()&&px>=(uint16_t)g_fresh_bx&&px<(uint16_t)(g_fresh_bx+g_fresh_bw)&&py>=(uint16_t)g_fresh_by&&py<(uint16_t)(g_fresh_by+g_fresh_bh)){
-    doStartFresh(); return; }
-  // ── lab15j: tap the game's text (title + description) — opens the whole .nfo full-screen in the manual reader ──
-  // The list only keeps the first 400 characters (NFO_BLURB_MAX). The file is found ONCE, on the tap (one by-name
-  // lookup, R7: never while scrolling) and read by doManual (up to 16 KB, same text clean-up as the .rtfm).
-  if(!g_info_showing&&g_nfo_bw&&!g_games.empty()&&px>=(uint16_t)g_nfo_bx&&px<(uint16_t)(g_nfo_bx+g_nfo_bw)&&py>=(uint16_t)g_nfo_by&&py<(uint16_t)(g_nfo_by+g_nfo_bh)){
-    String np; if(findNFOFor(g_files[g_games[g_sel].first_file_idx],np)){ gLog("[nfo] open %s\n",np.c_str()); doManual(np,"NFO"); drawFullUI(); gfx_flush(); }
-    else gLog("[nfo] no .nfo file found for %s\n",g_games[g_sel].name.c_str());
-    return; }
-
-  // ── A-Z bar (letters + toggle button) — suppressed where the INFO panel covers it ──
-  if(px>=AZ_X&&py>=AZ_TOP&&py<(uint16_t)(AZ_TOP+AZ_H)&&!(g_info_showing&&px<(uint16_t)(g_info_x+g_info_w)&&py<(uint16_t)g_info_bottom)){
-    if(py<(uint16_t)(AZ_TOP+AZ_SRCH_H)&&active_letter_count){doSearch();drawFullUI();gfx_flush();return;}   // v4.8.2: magnifier
-    if(handleAlphabetTouch(px,py)){drawListAndCover();gfx_flush();}return;}
-
-  // ── INSERT/EJECT (cover button or compact action strip) ──
-  // fd4: with the key cut in two (fdSplitPeer) the half tapped is the drive (fdInsertHit); otherwise the one key is DF0, as before.
-  {const int insDrv=g_games.empty()?-1:fdInsertHit(FdRect{INS_X,INS_Y,INS_W,INS_H},INS_GAP,fdSplitPeer()>=0,(int)px,(int)py);
-   if(insDrv>=0){
-    auto&gm=g_games[g_sel];int idx=gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[min(g_disk_sel,(int)gm.disk_indices.size()-1)];
-    int ld=-1; const bool isL=uiLoadedAs(g_sel,&ld,insDrv);
-    if(fdInsertTapEjects(isL,ld,g_disk_sel))doEject(insDrv);   // pressing on exactly what's mounted (or a disk of it not known here) = eject
-    else doLoadSelected(g_files[idx],String(),nullptr,insDrv);   // a different disk is selected = clean-swap to it; not loaded: load the selected game/disk
-    return;}}
-
-  // ── Disk selection (landscape grid / portrait stepper / compact thumbnail) ──
-  if(!g_games.empty()){auto&game=g_games[g_sel];if(game.disk_count>1){
-    if(COVER_ON&&!g_portrait){
-      DiskGrid L=diskGrid(game.disk_count);
-      if(L.multiPage){int pby=L.gridY+L.gridH+L.pageGap;if(py>=(uint16_t)pby&&py<(uint16_t)(pby+L.pageBtnH)&&px>=(uint16_t)L.gx&&px<(uint16_t)(L.gx+L.gridW)){g_disk_page=(g_disk_page+1)%L.pages;drawCoverPanel();gfx_flush();return;}}
-      for(int d=L.pageStart;d<L.pageEnd;d++){int slot=d-L.pageStart,col=slot%L.COLS,row=slot/L.COLS;int bx=L.gx+col*(L.dbw+L.dgap),by=L.gridY+row*(L.dbh+L.dgap);
-        if(px>=(uint16_t)bx&&px<(uint16_t)(bx+L.dbw)&&py>=(uint16_t)by&&py<(uint16_t)(by+L.dbh)){g_disk_sel=d;if(calmDiskSwap(uiShowsLoaded(g_sel),g_hotswap))calmSwapTo(g_files[game.disk_indices[g_disk_sel]],0);else{drawCoverPanel();gfx_flush();}return;}}
-    } else if(COVER_ON&&g_portrait&&g_step_on){
-      if(px>=(uint16_t)g_step_x&&px<(uint16_t)(g_step_x+g_step_w)&&py>=(uint16_t)(g_step_y-6)&&py<(uint16_t)(g_step_y+g_step_h)){
-        if(px<(uint16_t)(g_step_x+g_step_w/2))g_disk_sel=(g_disk_sel-1+game.disk_count)%game.disk_count;   // left half = prev
-        else g_disk_sel=(g_disk_sel+1)%game.disk_count;                                                    // right half = next
-        if(calmDiskSwap(uiShowsLoaded(g_sel),g_hotswap))calmSwapTo(g_files[game.disk_indices[g_disk_sel]],0);else{drawCoverPanel();gfx_flush();}return;}
-    } else if(STRIP_ON){
-      if(px<(uint16_t)INS_X&&py>=(uint16_t)STRIP_Y&&py<(uint16_t)(STRIP_Y+STRIP_H)){if(px<(uint16_t)(INS_X/2))g_disk_sel=(g_disk_sel-1+game.disk_count)%game.disk_count;else g_disk_sel=(g_disk_sel+1)%game.disk_count;if(calmDiskSwap(uiShowsLoaded(g_sel),g_hotswap))calmSwapTo(g_files[game.disk_indices[g_disk_sel]],0);else{drawActionStrip();gfx_flush();}return;}
-    }
-  }}
-
-  // ── Mode bar ──
-  if(py>=MB_Y&&py<MB_Y+MODE_BAR_H&&px>=LIST_X){
-    if(g_categories){ if(px<LIST_X+110){ g_libpath=""; reloadLevel(); doCategoryBrowse(); drawFullUI(); gfx_flush(); return; } }   // v5.6.0: Categories button = jump to top + browse
-    else{
-    if(px<LIST_X+110){ switchLib((g_mode+1)%3); return; }   // lab15g: one button, cycles ADF->DSK->GEN (was three 36 px targets)
-    }
-    if(px<LIST_X+174){String p=doUserDisks(); if(p.length()){ if(doLoadSelected(p)){g_loaded_game_idx=-1;String nm=p;int s=nm.lastIndexOf('/');if(s>=0)nm=nm.substring(s+1);int d=nm.lastIndexOf('.');if(d>0)nm=nm.substring(0,d);g_loaded_name=nm;g_loaded_display=nm;} } drawFullUI();gfx_flush();return;}}   // v4.9.7 USR-DSK (display name too: the inserted disk, not whatever was highlighted)
-
-  // ── File list ──
-  if(px>=LIST_X&&px<AZ_X&&py>=LIST_TOP&&py<LIST_BOTTOM){
-    bool wasInfo=g_info_showing; g_info_showing=false;
-    int gi=(int)((g_scrollPx+(py-LIST_TOP))/LIST_ITEM_H);if(gi>=0&&gi<(int)g_games.size()){
-      {int r=8+g_name_sz*3;if(px<=(uint16_t)(LIST_X+6+2*r+3)){g_games[gi].fav=!g_games[gi].fav;saveStats();if(wasInfo)drawFullUI();else drawFileList();gfx_flush();return;}}
-      if(gi==g_sel){
-        // Default: tapping the already-selected row does nothing (load only via INSERT).
-        // TAPLOAD=ON restores the old tap-again-to-load/eject behaviour.
-        if(g_tapload){if(uiShowsLoaded(g_sel))doEject();else{auto&gm=g_games[g_sel];g_disk_sel=0;g_disk_page=0;doLoadSelected(g_files[gm.disk_indices.empty()?gm.first_file_idx:gm.disk_indices[0]]);}}
-        else if(wasInfo){drawFullUI();gfx_flush();}
-      }
-      else{g_sel=gi;setActiveLetter(bucketOf(g_games[gi].name));g_disk_sel=0;g_disk_page=0;if(wasInfo)drawFullUI();else drawListAndCover();gfx_flush();}}
-    else if(wasInfo){drawFullUI();gfx_flush();}
-    return;}
-
-  // ── Bottom bar ── (slot count follows drawBottomBar: 5 with carousel, else 4)
-  if(!calmFrame()&&py>=VH-BOTTOM_H){
-    const int nb=4;int bw=VW/nb,btn=px/bw;if(btn>=nb)btn=nb-1;   // Vince test: THEME removed from the bar (4 slots)
-    if(btn==0&&g_sel>0){g_sel--;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[g_sel].name));if((float)(g_sel*LIST_ITEM_H)<g_scrollPx)g_scrollPx=g_sel*LIST_ITEM_H;drawListAndCover();gfx_flush();}
-    else if(btn==1&&g_sel<(int)g_games.size()-1){g_sel++;g_disk_sel=0;g_disk_page=0;setActiveLetter(bucketOf(g_games[g_sel].name));if((float)((g_sel+1)*LIST_ITEM_H)>g_scrollPx+(LIST_BOTTOM-LIST_TOP))g_scrollPx=(g_sel+1)*LIST_ITEM_H-(LIST_BOTTOM-LIST_TOP);drawListAndCover();gfx_flush();}
-    else if(btn==2){ g_info_showing=false; carEnter(); }   // REEL — enter the carousel
-    else if(btn==3){ g_info_showing=!g_info_showing; if(g_info_showing){g_info_page=0;g_info_test=false;g_info_pick=0;drawInfoFull();} else {drawFullUI();gfx_flush();} }
-    return;
-  }
+      if(px<(uint16_t)(CU_MARGIN+40)){ g_games[gi].fav=!g_games[gi].fav; saveStats(); drawCalmList(); gfx_flush(); return; }
+      setActiveLetter(bucketOf(g_games[gi].name)); doProgramScreen(gi); drawFullUI(); gfx_flush(); return; }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -11086,7 +10081,7 @@ static void handleTap(uint16_t px,uint16_t py){
 // ════════════════════════════════════════════════════════════════════════════
 
 static void themeRedraw(){   // A600-theme1: after a theme change from the web page
-  if(g_car_active){drawCarousel();gfx_flush();} else if(g_info_showing){drawInfoFull();} else {drawFullUI();gfx_flush();}
+  if(g_car_active){drawCarousel();gfx_flush();} else {drawFullUI();gfx_flush();}
 }
 void loop(){
   { static uint32_t batNext = 0;          // every 5s: 16 ADC samples, nothing needs it faster
@@ -11114,14 +10109,14 @@ void loop(){
     if(ft<0) now[0]=0; else { const PfPeer&p=g_pfPeers[ft]; snprintf(now,sizeof now,"%s|%c|%c|%c|%s|%s|%s|%s|%c%c|%s",p.id.c_str(),p.loaded?'L':'l',p.wp?'W':'w',fdShowStoring(true,p.loaded,p.stored)?'S':'s',p.tag.c_str(),p.name.c_str(),p.ip.c_str(),p.disk.c_str(),
         fdSplitPeer()==ft?(p.loaded1?'2':'1'):'0',p.df1?'D':'d',p.disk1.c_str()); }   // fd4: + whether the INSERT key is split (DF1 on, single FluxDrive) and DF1's disk (NOW PLAYING, the DF1 half)   // fd2: + its write protect (NOW PLAYING's WP) and save tag (START FRESH); fd3: + STORING... (NOW PLAYING, the status bar)
     if(strcmp(now,fdShown)){ strcpy(fdShown,now);
-      if(!g_info_showing){ if(g_car_active) drawCarousel(); else { drawStatusBar(); drawListAndCover(); } gfx_flush(); } } }
+      { if(g_car_active) drawCarousel(); else { drawStatusBar(); drawListAndStrip(); } gfx_flush(); } } }
   { static uint32_t stripNext=0; static String stripShown;   // A600-calm2: the drive strip follows every drive the screen can reach (wired, dongles, FluxDrives)
-    if(calmFrame()&&!g_info_showing&&(int32_t)(millis()-stripNext)>=0){ stripNext=millis()+500;
+    if((int32_t)(millis()-stripNext)>=0){ stripNext=millis()+500;
       const int n=calmBuildTargets(g_gtBuf,GT_MAX_TARGETS); String sig; sig.reserve(160);
       for(int i=0;i<n;i++){ const GtTarget&t=g_gtBuf[i]; sig+=t.name; sig+='|'; sig+=t.holds; sig+=t.linked?'L':'l'; sig+=t.wp?'W':'w'; sig+=t.storing?'S':'s'; sig+=t.unsaved?'U':'u'; sig+=';'; }
       if(sig!=stripShown){ stripShown=sig; if(!g_touch_active&&!g_car_touch&&!g_car_coast&&!g_car_spin){ drawDriveStrip(); gfx_flush(); } else stripShown=""; } } }
   { static String mdnsShown; if(pfMdnsName()!=mdnsShown){ mdnsShown=pfMdnsName();
-      if(g_info_showing) drawInfoFull(); else { drawStatusBar(); gfx_flush(); } } }   // #clubday: the election renamed us - repaint wherever the address is shown
+      { drawStatusBar(); gfx_flush(); } } }   // #clubday: the election renamed us - repaint wherever the address is shown
   // #clubday: the link is gone for a while (moved to another location) -> rejoin the strongest
   // remembered network. setAutoReconnect covers brief same-AP drops; this is for when the AP is truly gone.
   { static uint32_t wdOut=0, wdWait=25000; static bool g_wifiToldLost=false;
@@ -11140,12 +10135,12 @@ void loop(){
   if(g_pfClaimedId.length()){ setDongleMine(g_pfClaimedId,true); g_pfClaimedId=""; }      // #lock: a CLAIM from the web page persists ownership too
   if(g_pfReleasedId.length()){ setDongleMine(g_pfReleasedId,false); g_pfReleasedId=""; }  // #lock: and an UNCLAIM forgets it (never write SD inside a request handler)
 #endif
-  if(g_wifiNotice && !g_info_showing){   // #clubday: one notice, once the UI is actually there
+  if(g_wifiNotice){   // #clubday: one notice, once the UI is actually there
     if(g_wifiNotice==1) hwMsg("No WiFi found","using ESP-NOW instead",COL_AMBER,2500);
     else                hwMsg("WiFi lost","tap MODE for ESP-NOW",COL_AMBER,2500);
     g_wifiNotice=0; drawFullUI(); gfx_flush();
   }
-  if(g_fdNote && !g_info_showing){   // fd3: a FluxDrive went back to the disk before (fdCommitWatch): say so on the main screen
+  if(g_fdNote){   // fd3: a FluxDrive went back to the disk before (fdCommitWatch): say so on the main screen
     g_fdNote=false; fdNoteUI();
     if(g_car_active) drawCarousel(); else drawFullUI();
     gfx_flush();
@@ -11189,7 +10184,7 @@ void loop(){
       // finger down
       g_touch_active=true;g_touch_x0=px;g_touch_y0=py;g_touch_px0=g_scrollPx;
       g_touch_lastY=py;g_touch_lastMs=now;g_touch_moved=false;g_touch_vel=0;g_inertia_on=false;
-      g_touch_inlist=(px>=LIST_X&&px<AZ_X&&py>=LIST_TOP&&py<LIST_BOTTOM&&!g_info_showing&&!g_games.empty());
+      g_touch_inlist=(px>=LIST_X&&px<(uint16_t)VW&&py>=LIST_TOP&&py<LIST_BOTTOM&&!g_games.empty());
       g_touch_down_ms=now; g_shot_fired=false; g_shot_drift=0;
     } else {
       // screenshot: hold the status bar for 2 s (no drag) -> /SCREENSHOTS/SHOT_nnn.BMP, a green frame confirms
@@ -11197,7 +10192,7 @@ void loop(){
       if(!g_shot_fired&&g_shot_drift<=SHOT_DRIFT&&g_touch_y0<SHOT_ZONE_H&&now-g_touch_down_ms>=2000){
         g_shot_fired=true; String sp=shotSaveSD(); gLog("[shot] %s\n", sp.length()?sp.c_str():"FAILED");
         uint16_t fc=sp.length()?COL_GREEN:(uint16_t)0xF800; for(int k=0;k<4;k++)gfx_drawRect(k,k,VW-2*k,VH-2*k,fc); gfx_flush(); delay(250);
-        if(g_info_showing)drawInfoFull(); else {drawFullUI();gfx_flush();}
+        drawFullUI();gfx_flush();
       }
       // finger held / moving
       if(abs((int)px-g_touch_x0)>DRAG_THRESH||abs((int)py-g_touch_y0)>DRAG_THRESH)g_touch_moved=true;
@@ -11222,7 +10217,7 @@ void loop(){
   }
 
   // screensaver (undocumented, folder-gated): fires on idle; any touch wakes it
-  if(g_ss_enabled&&g_ss_have&&!g_info_showing&&!g_inertia_on&&!g_car_active){
+  if(g_ss_enabled&&g_ss_have&&!g_inertia_on&&!g_car_active){
     uint32_t thr=g_loaded?g_ss_load_ms:g_ss_idle_ms;
     if(now-g_last_touch_ms>=thr)runScreensaver();
   }
@@ -11233,17 +10228,5 @@ void loop(){
     int mp=maxScrollPx();if(g_scrollPx>mp){g_scrollPx=mp;g_inertia_on=false;}
     if(fabsf(g_inertia_vel)<0.3f)g_inertia_on=false;
     syncIndexToScroll();redrawListArea();
-  }
-  // idle: bounce the selected over-long name (scroll to the end, pause ~1s, reverse)
-  else if(!g_info_showing&&selNameOverflows()){
-    if(g_marquee_sel!=g_sel){g_marquee_sel=g_sel;g_marquee_off=0;g_marquee_dir=1;g_marquee_pause=now;}   // pause at start on new selection
-    auto&g=g_games[g_sel];int r=8+g_name_sz*3,nx=LIST_X+6+r+r+6;int maxNW=LIST_W-(nx-LIST_X)-8-(g.disk_count>1?36:0);
-    gfx_setTextSize(g_name_sz);int mx=gfx_textWidth(g.name)-maxNW+8;if(mx<0)mx=0;
-    static uint32_t lastMq=0;
-    if(g_marquee_pause){ if(now-g_marquee_pause>=1000){g_marquee_pause=0;g_marquee_dir=(g_marquee_off<=0)?1:-1;lastMq=now;} }
-    else if(now-lastMq>=45){ lastMq=now;g_marquee_off+=g_marquee_dir*5;
-      if(g_marquee_off>=mx){g_marquee_off=mx;g_marquee_pause=now;}
-      else if(g_marquee_off<=0){g_marquee_off=0;g_marquee_pause=now;}
-      redrawListArea(); }
   }
 }

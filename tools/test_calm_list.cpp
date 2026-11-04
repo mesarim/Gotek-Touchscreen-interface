@@ -179,8 +179,29 @@ static void test_settings_layout() {
   CHECK(clConfirmTap(c, cuRight(c.cancel) + 4, c.cancel.y + 5) == CL_CF_NONE);   // the gap between the two keys
 }
 
+static void test_portrait_lists() {
+  // the letter grid on 320: four columns of 64, seven rows; every cell on screen, A..Z and '#'
+  CHECK(clLetterCols(480) == 7 && clLetterCols(320) == 4);
+  for (int i = 0; i < CL_LETTER_N; i++) { CuRect c = clLetterCell(i, 320, 60); CHECK(c.x >= 8 && cuRight(c) <= 312 && cuBottom(c) <= 480 - 8 && c.w == 64 && c.h == 48); }
+  CHECK(clLetterAt(320, 60, clLetterCell(26, 320, 60).x + 5, clLetterCell(26, 320, 60).y + 5) == 26);
+  CHECK(clLetterAt(320, 60, clLetterCell(5, 320, 60).x + 5, clLetterCell(5, 320, 60).y + 5) == 5);
+  CHECK(clLetterCell(4, 320, 60).y == 60 + 50 && clLetterCell(4, 320, 60).x == clLetterCell(0, 320, 60).x);   // the fifth letter starts the second row
+  // Settings tabs on 320: Back on top, the four tabs in a row of their own below it
+  ClSetTabs t = clSettingsTabs(320);
+  CHECK(t.back.w == 48 && t.back.h == 48);
+  for (int i = 0; i < 4; i++) { CHECK(t.tab[i].h == 48 && t.tab[i].w >= 64 && t.tab[i].y >= cuBottom(t.back) && cuRight(t.tab[i]) <= 312); if (i) CHECK(t.tab[i].x == cuRight(t.tab[i - 1])); }
+  CHECK(t.listTop >= cuBottom(t.tab[0]) + 4 && clSetTabAt(t, t.tab[3].x + 5, t.tab[3].y + 5) == 3);
+  ClSetTabs tl = clSettingsTabs(480);
+  CHECK(tl.listTop == 60 && tl.tab[0].y == 4);   // landscape unchanged
+  ClConfirm c = clConfirmLayout(320, 480);
+  CHECK(c.ok.x - cuRight(c.cancel) >= 16 && cuBottom(c.ok) <= 472 && cuRight(c.ok) <= 312 && c.cancel.w >= 100);
+  ClSearchRow r = clSearchRow(CuRect{8, 48, 304, 48});
+  CHECK(r.search.w >= 120 && cuRight(r.search) < r.az.x && cuRight(r.filter) == 312);
+}
+
 int main() {
   test_search_row();
+  test_portrait_lists();
   test_settings_layout();
   test_rows();
   test_letter_grid();
