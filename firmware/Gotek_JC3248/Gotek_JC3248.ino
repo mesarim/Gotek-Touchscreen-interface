@@ -61,7 +61,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-aa1-JC3248"   // A600-aa1 (5 Nov 2026): the calm text sizes (16 / 24 / 32 px) in an anti-aliased font (Inter SemiBold, OFL, ~58 KB, ASCII + Latin-1), edges mixed with what is under them; widths, cuts and the disk name's middle dot follow the real letter widths; Settings > Screen > Smooth letters (TEXTFONT=PIXEL) brings the 6x8 font back | A600-calm8 (4 Nov 2026): the web Theme Editor's starter skin is drawn in the calm NEO look (radius 8 keys and cards, 4 for the selected row); docs/skins/README.md says which slot each calm part uses; no slot added or dropped, so an old .gts still loads | A600-calm7b (4 Nov 2026): a star key in the list's search row switches between all programs and only the favourites (remembered: FAVONLY=), the top bar says "12 / 95" while it is on | A600-calm7 (4 Nov 2026): portrait on the same grid as landscape (top bar, search row, list, program screen stacked, drive strip, Drive info, Settings, readers); the compact layout is retired (COMPACT= in CONFIG.TXT is read and ignored); the old list, cover column, NOW PLAYING, A-Z column, mode bar, bottom bar, old Settings pages and old reel keys are gone | A600-calm6b (4 Nov 2026): one casing style on the calm screens (Back, Cancel, List / Reel, Eject, the Settings labels; SD / UI / ADF stay capitals) | A600-calm6 (4 Nov 2026): Settings in the calm look - Back and four tabs (Screen / Wi-Fi / Drives / System), rows with a label, a value or a switch and a grey line that says what it does, actions as keys; Restart, SD card access, the firmware update and the test tools ask first; every row does what its old Settings key did | A600-calm5 (4 Nov 2026): the reel shows only covers - a bigger centre cover, the name (size 3) and N disks, a source key in the top bar (all / favourites / most played / the dice), a tap opens the program screen; the description and manual readers get the calm frame (Back, title, text at size 2, page keys); the count says programs | A600-calm4c (4 Nov 2026): a disk's name in Drive info opens that game's program screen on that disk; on the program screen the cover opens full screen and the details text opens the description | A600-calm4b (4 Nov 2026): ONE load screen with one bar (Reading card... / Sending to DF0... NN%); a send to a single fleet drive streams the image from the card instead of staging it in RAM first; the reel has no disk keys and no INSERT/EJECT (a Load key opens the program screen); the battery glyph shows only with BATTERY=ON in Settings | A600-calm4 (4 Nov 2026): the program screen - a tap on a row (or on the reel's centre cover) opens cover, details, the disk stepper and the load keys (one Load, one per drive, or Load into... with a list of every drive and what is in it); the ... key holds the manual, the .nfo text and START FRESH; the new strings are translated; the top bar no longer carries the storing warning (the drive's card does) | A600-calm3 (4 Nov 2026): the calm list - a search row (Search, A-Z, the filter), rows of 48 px with the name at size 3 and a chip (the drive that holds it, or N disks), the letter grid, the filter list (ADF / DSK / GEN / categories / own disks); the left cover column, the A-Z column, the mode bar and the L tiles are gone from the landscape list (a tap on a row opens the reel at that game until the program screen); a disk key only selects when more than one drive is reachable (one drive swaps with a real eject first); a progress bar while a disk loads; the library sort is a host-tested heapsort | A600-calm2 (4 Nov 2026): the calm frame - landscape list and reel get the top bar (List / Reel tabs, the count, the Settings key) and the drive strip (one wide card, two halves, or two cards and +N: caption, the disk it holds, a link dot; a tap opens Drive info) instead of the status bar, NOW PLAYING and the bottom key row; Drive info is one card per drive of any kind (Gotek, dongle, FluxDrive DF0 / DF1) with Eject, scrolling beyond two; the reel keeps its source and ROLL keys on the stage; portrait and the compact layout are unchanged | A600-calm1 (4 Nov 2026): the calm layout building blocks - POST /api/tap (a virtual finger, test builds only), calm_ui.h (grid), gti_targets.h (drives, strip and load-key layouts), the calm UI primitives; nothing visible changes yet | A600-lab2i-fd4s (4 Nov 2026): skins (gti-skins, PR #29) and FluxDrive DF1 (fluxdrive-panel) together, the base of the calm layout | A600-lab2i-fd4 (4 Nov 2026): FluxDrive DF1 (a multi-disk game is sent as "<game> - Disk <n>" and read back, so each drive shows and ejects its own disk) - the INSERT key is cut in two, DF0 | DF1, for a single FluxDrive with DF1 on (a dongle, an older FluxDrive, DF1 off or several peers keep the one INSERT): each half loads or ejects its own drive (SET_DRIVE 1 before the push, EJECT_DRIVE 1), the reel's INSERT key is cut the same way, NOW PLAYING adds "DF1: <disk>" and no longer ejects: a tap on it opens a DRIVE INFO screen (a block per drive with its disk, WP/STORING/unsaved chips and an EJECT key; a tap on a disk name selects its game in the list), and DF1 saves are fetched over the LAN (GET_SAVE_DRIVE 1) into Game.sav.<tag>.adf with their own record key "<id>:1" in fdsaves.txt (old files stay valid); the commit window and START FRESH stay DF0 only | A600-skin1-JC3248 (Dimmy, 16 Oct): skins - one .gts file (colours + PNG atlas + optional JPEG backgrounds) makes your own look; made and uploaded in the web page's Theme Editor, NEO is the starter | A600-lab2i-fd3 (26 Oct 2026): FluxDrive's commit window - STORING... until the disk is in flash, a revert to the previous disk puts its record back, START FRESH keeps a backup until then | A600-lab2i-fd2 (25 Oct 2026): FluxDrive saves (writing): fetched over the LAN, write protect, start fresh | A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-aa2-JC3248"   // A600-aa2 (5 Nov 2026): Mode, Rotate (now with the flipped ones by name), Font size, Library and the saver FX open a list instead of stepping on each tap; Wi-Fi check, the network list and Saved Wi-Fi in the calm look; leaving the network list with Back brings the link and the web page back (the scan had dropped it); a tap that closes a screen no longer lands on Settings | A600-aa1 (5 Nov 2026): the calm text sizes (16 / 24 / 32 px) in an anti-aliased font (Inter SemiBold, OFL, ~58 KB, ASCII + Latin-1), edges mixed with what is under them; widths, cuts and the disk name's middle dot follow the real letter widths; Settings > Screen > Smooth letters (TEXTFONT=PIXEL) brings the 6x8 font back | A600-calm8 (4 Nov 2026): the web Theme Editor's starter skin is drawn in the calm NEO look (radius 8 keys and cards, 4 for the selected row); docs/skins/README.md says which slot each calm part uses; no slot added or dropped, so an old .gts still loads | A600-calm7b (4 Nov 2026): a star key in the list's search row switches between all programs and only the favourites (remembered: FAVONLY=), the top bar says "12 / 95" while it is on | A600-calm7 (4 Nov 2026): portrait on the same grid as landscape (top bar, search row, list, program screen stacked, drive strip, Drive info, Settings, readers); the compact layout is retired (COMPACT= in CONFIG.TXT is read and ignored); the old list, cover column, NOW PLAYING, A-Z column, mode bar, bottom bar, old Settings pages and old reel keys are gone | A600-calm6b (4 Nov 2026): one casing style on the calm screens (Back, Cancel, List / Reel, Eject, the Settings labels; SD / UI / ADF stay capitals) | A600-calm6 (4 Nov 2026): Settings in the calm look - Back and four tabs (Screen / Wi-Fi / Drives / System), rows with a label, a value or a switch and a grey line that says what it does, actions as keys; Restart, SD card access, the firmware update and the test tools ask first; every row does what its old Settings key did | A600-calm5 (4 Nov 2026): the reel shows only covers - a bigger centre cover, the name (size 3) and N disks, a source key in the top bar (all / favourites / most played / the dice), a tap opens the program screen; the description and manual readers get the calm frame (Back, title, text at size 2, page keys); the count says programs | A600-calm4c (4 Nov 2026): a disk's name in Drive info opens that game's program screen on that disk; on the program screen the cover opens full screen and the details text opens the description | A600-calm4b (4 Nov 2026): ONE load screen with one bar (Reading card... / Sending to DF0... NN%); a send to a single fleet drive streams the image from the card instead of staging it in RAM first; the reel has no disk keys and no INSERT/EJECT (a Load key opens the program screen); the battery glyph shows only with BATTERY=ON in Settings | A600-calm4 (4 Nov 2026): the program screen - a tap on a row (or on the reel's centre cover) opens cover, details, the disk stepper and the load keys (one Load, one per drive, or Load into... with a list of every drive and what is in it); the ... key holds the manual, the .nfo text and START FRESH; the new strings are translated; the top bar no longer carries the storing warning (the drive's card does) | A600-calm3 (4 Nov 2026): the calm list - a search row (Search, A-Z, the filter), rows of 48 px with the name at size 3 and a chip (the drive that holds it, or N disks), the letter grid, the filter list (ADF / DSK / GEN / categories / own disks); the left cover column, the A-Z column, the mode bar and the L tiles are gone from the landscape list (a tap on a row opens the reel at that game until the program screen); a disk key only selects when more than one drive is reachable (one drive swaps with a real eject first); a progress bar while a disk loads; the library sort is a host-tested heapsort | A600-calm2 (4 Nov 2026): the calm frame - landscape list and reel get the top bar (List / Reel tabs, the count, the Settings key) and the drive strip (one wide card, two halves, or two cards and +N: caption, the disk it holds, a link dot; a tap opens Drive info) instead of the status bar, NOW PLAYING and the bottom key row; Drive info is one card per drive of any kind (Gotek, dongle, FluxDrive DF0 / DF1) with Eject, scrolling beyond two; the reel keeps its source and ROLL keys on the stage; portrait and the compact layout are unchanged | A600-calm1 (4 Nov 2026): the calm layout building blocks - POST /api/tap (a virtual finger, test builds only), calm_ui.h (grid), gti_targets.h (drives, strip and load-key layouts), the calm UI primitives; nothing visible changes yet | A600-lab2i-fd4s (4 Nov 2026): skins (gti-skins, PR #29) and FluxDrive DF1 (fluxdrive-panel) together, the base of the calm layout | A600-lab2i-fd4 (4 Nov 2026): FluxDrive DF1 (a multi-disk game is sent as "<game> - Disk <n>" and read back, so each drive shows and ejects its own disk) - the INSERT key is cut in two, DF0 | DF1, for a single FluxDrive with DF1 on (a dongle, an older FluxDrive, DF1 off or several peers keep the one INSERT): each half loads or ejects its own drive (SET_DRIVE 1 before the push, EJECT_DRIVE 1), the reel's INSERT key is cut the same way, NOW PLAYING adds "DF1: <disk>" and no longer ejects: a tap on it opens a DRIVE INFO screen (a block per drive with its disk, WP/STORING/unsaved chips and an EJECT key; a tap on a disk name selects its game in the list), and DF1 saves are fetched over the LAN (GET_SAVE_DRIVE 1) into Game.sav.<tag>.adf with their own record key "<id>:1" in fdsaves.txt (old files stay valid); the commit window and START FRESH stay DF0 only | A600-skin1-JC3248 (Dimmy, 16 Oct): skins - one .gts file (colours + PNG atlas + optional JPEG backgrounds) makes your own look; made and uploaded in the web page's Theme Editor, NEO is the starter | A600-lab2i-fd3 (26 Oct 2026): FluxDrive's commit window - STORING... until the disk is in flash, a revert to the previous disk puts its record back, START FRESH keeps a backup until then | A600-lab2i-fd2 (25 Oct 2026): FluxDrive saves (writing): fetched over the LAN, write protect, start fresh | A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -4945,6 +4945,9 @@ static void doReleaseOrphans();  // #lock: offer our token to each of them - onl
 #endif
 static void doFleetPick();       // #console: the multi-select fleet manager (called from doLoadSelected, far above its definition)
 static void savedWifiManage();   // #clubday: remembered-networks manager
+static int calmChoiceEx(const char*title,const String*labels,const String*metas,int n,int cur,const char*hdrKey);   // A600-aa2
+static bool calmConfirm(const String&title,const String&msg,const String&okLabel,bool danger);
+static void drawCalmHeader(const char*title);
 static String g_pick_custom[8]; static int g_pick_nc=0;   // the custom themes (Settings > Screen > Theme)
 static const char* const CRK_PICK_NAME[]={"RANDOM","COPPER CLASSIC","STARFIELD","RAINBOW RASTER","PLASMA","BOING BALL","SYNTHWAVE","OMEGAWARE"};   // CRACKTRO= 0..7, index = style
 #define CRK_PICK_N 8
@@ -7782,48 +7785,33 @@ static bool wifiPickBestKnownInto(){
   return false;
 }
 
+// The networks in range as a calm choice list (strongest first, saved ones say so), Rescan in the header and a last row
+// for a network that does not broadcast its name. Returns 1 (picked: outSsid / outSecured), 2 (type a name) or 0 (Back).
+// The scan drops the current link (an associated radio scans nothing): the caller puts the radio back.
 static int wifiPickFromScan(String& outSsid, bool& outSecured){
-  const int hdr=24, rowH=32, gap=4, ctlH=34, bm=6;
   while(true){                                            // outer loop = Rescan
-    webPanelPoll();   // the web UI must not die while this screen owns the loop
-    gfx_fillScreen(COL_BG); gfx_setTextSize(2); gfx_setTextColor(COL_ACCENT,COL_BG);
-    { const char* s="Scanning WiFi..."; gfx_setCursor((VW-gfx_textWidth(s))/2,VH/2-8); gfx_print(s); } gfx_flush();
+    webPanelPoll();
+    { NeoScope _ns; clearBack(); drawCalmHeader("Wi-Fi networks");
+      const char* m="Looking for networks..."; gfx_setTextSize(CU_TS_SMALL); gfx_setTextColor(COL_MID,COL_BG);
+      gfx_setCursor((VW-gfx_textWidth(m))/2,VH/2-8); gfx_print(m); gfx_flush(); }
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(false,false);      // 5.9.20 (his): drop the active link or the scan returns 0 while associated+serving
     delay(120);
     int n=WiFi.scanNetworks(false,true); if(n<0)n=0;   // blocking, include hidden
-    String ss[24]; int rs[24]; bool en[24]; int m=0;
+    String ss[25]; int rs[24]; bool en[24]; int m=0;
     for(int i=0;i<n && m<24;i++){ String s=WiFi.SSID(i); if(s.length()==0)continue; int r=WiFi.RSSI(i); bool sec=(WiFi.encryptionType(i)!=WIFI_AUTH_OPEN);
       int f=-1; for(int j=0;j<m;j++) if(ss[j]==s){f=j;break;}
       if(f<0){ss[m]=s;rs[m]=r;en[m]=sec;m++;} else if(r>rs[f]){rs[f]=r;en[f]=sec;} }
     WiFi.scanDelete();
     for(int a=0;a<m;a++){ int best=a; for(int b=a+1;b<m;b++) if(rs[b]>rs[best])best=b; if(best!=a){int tr=rs[a];rs[a]=rs[best];rs[best]=tr;String ts=ss[a];ss[a]=ss[best];ss[best]=ts;bool tb=en[a];en[a]=en[best];en[best]=tb;} }
-    int avail=(VH-hdr-(ctlH+gap+bm))/(rowH+gap); if(avail<1)avail=1; int vis=m<avail?m:avail;
-    bool dirty=true,pressed=true; int rel=0; kbWaitRelease(600);   // #clubday: start "pressed" + drain -> no phantom tap from the opening touch landing on a network
-    while(true){
-      webPanelPoll();   // the web UI must not die while this screen owns the loop
-      if(dirty){ dirty=false; gfx_fillScreen(COL_BG);
-        gfx_fillRect(0,0,VW,hdr,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_BAR),COL_BAR); gfx_setCursor(6,8); gfx_print("Choose WiFi network");
-        if(m==0){ gfx_setTextColor(COL_AMBER,COL_BG); gfx_setCursor(14,hdr+gap+6); gfx_print("No networks found"); }
-        for(int i=0;i<vis;i++){ int y=hdr+gap+i*(rowH+gap);
-          gfx_fillRoundRect(6,y,VW-12,rowH,6,COL_PANEL); gfx_drawRoundRect(6,y,VW-12,rowH,6,COL_BAR);
-          gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL);
-          String label=ss[i]; if(netIsKnown(ss[i])) label=String("*")+label;   // * = remembered
-          gfx_setCursor(14,y+(rowH-8)/2); gfx_print(label);
-          String meta=String(en[i]?"[L] ":"    ")+String(rs[i])+"dBm"; gfx_setTextColor(COL_DIM,COL_PANEL); gfx_setCursor(VW-14-gfx_textWidth(meta),y+(rowH-8)/2); gfx_print(meta); }
-        int cy=hdr+gap+vis*(rowH+gap); const char* CTL[3]={"Rescan","Type...","Cancel"}; uint16_t cc[3]={COL_BLUE,COL_BAR,(uint16_t)0x8000};
-        int cw=(VW-4*gap)/3, cx=gap;
-        for(int i=0;i<3;i++){ gfx_fillRoundRect(cx,cy,cw,ctlH,6,cc[i]); gfx_setTextSize(1); gfx_setTextColor(inkFor(cc[i]),cc[i]); gfx_setCursor(cx+(cw-gfx_textWidth(CTL[i]))/2,cy+(ctlH-8)/2); gfx_print(CTL[i]); cx+=cw+gap; }
-        gfx_flush(); }
-      uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
-      if(have){ rel=0; if(!pressed){ pressed=true;
-        for(int i=0;i<vis;i++){ int y=hdr+gap+i*(rowH+gap); if(ty>=y&&ty<y+rowH){ outSsid=ss[i]; outSecured=en[i]; kbWaitRelease(); return 1; } }
-        int cy=hdr+gap+vis*(rowH+gap);
-        if(ty>=cy&&ty<cy+ctlH){ int cw=(VW-4*gap)/3; int i=((int)tx-gap)/(cw+gap); int cxi=gap+i*(cw+gap);
-          if(i>=0&&i<3&&(int)tx>=cxi&&(int)tx<cxi+cw){ if(i==0){ kbWaitRelease(300); break; } else if(i==1){ kbWaitRelease(); return 2; } else { kbWaitRelease(); return 0; } } }
-      } } else { if(pressed&&++rel>=3)pressed=false; }
-      delay(12);
-    }
+    String meta[25];
+    for(int i=0;i<m;i++) meta[i]=String(netIsKnown(ss[i])?"saved  ":"")+String(en[i]?"":"open  ")+String(rs[i])+" dBm";
+    ss[m]="Other network..."; meta[m]="";
+    const int p=calmChoiceEx("Wi-Fi networks",ss,meta,m+1,-1,"Rescan");
+    if(p==-2) continue;
+    if(p<0) return 0;
+    if(p==m) return 2;
+    outSsid=ss[p]; outSecured=en[p]; return 1;
   }
 }
 
@@ -7832,7 +7820,7 @@ static int wifiPickFromScan(String& outSsid, bool& outSecured){
 static void doHomeWifiSetup(){
   String ssid; bool secured=true;
   int r=wifiPickFromScan(ssid,secured);
-  if(r==0) return;                                        // cancel
+  if(r==0){ applyRadioMode(); return; }                   // Back: the scan dropped the link - A600-aa2: bring it (and the web page) back
   if(r==2){ ssid=g_home_ssid; if(!kbInput("WiFi: network name (SSID)",ssid,32)) return; ssid.trim(); if(!ssid.length()){ hwMsg("No SSID","nothing saved",COL_AMBER,1200); return; } secured=true; }
   else ssid.trim();
   String pass = secured ? netKnownPass(ssid) : String("");
@@ -7848,32 +7836,18 @@ static void doHomeWifiSetup(){
     hwMsg("Could not join", (oldSsid.length()?("back on "+oldSsid):String("no connection")).c_str(), COL_AMBER, 2200); }
 }
 
+// The remembered networks as a calm list (the one in use says so); a tap asks before it forgets one.
 static void savedWifiManage(){
-  const int hdr=24,rowH=34,gap=5,bm=6,ctlH=34,FGW=84;   // FGW = width of the FORGET button
-  bool dirty=true,pressed=true; int rel=0; kbWaitRelease(600);   // start "pressed": the opening tap must be released before anything here counts (no phantom tap)
   while(true){
-    webPanelPoll();   // the web UI must not die while this screen owns the loop
-    int m=g_known.size(); int avail=(VH-hdr-(ctlH+gap+bm))/(rowH+gap); if(avail<1)avail=1; int vis=m<avail?m:avail;
-    if(dirty){ dirty=false; gfx_fillScreen(COL_BG);
-      gfx_fillRect(0,0,VW,hdr,COL_BAR); gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_BAR),COL_BAR); gfx_setCursor(6,8); gfx_print("Saved WiFi  -  tap FORGET to remove");
-      if(m==0){ gfx_setTextColor(COL_DIM,COL_BG); gfx_setCursor(14,hdr+gap+8); gfx_print("(none remembered yet)"); }
-      String curSsid=(WiFi.status()==WL_CONNECTED && WiFi.SSID().length())?WiFi.SSID():g_home_ssid;   // #clubday: mark the net we are ACTUALLY on, not just list slot 0
-      for(int i=0;i<vis;i++){ int y=hdr+gap+i*(rowH+gap);
-        gfx_fillRoundRect(6,y,VW-12,rowH,6,COL_PANEL); gfx_drawRoundRect(6,y,VW-12,rowH,6,COL_BAR);
-        gfx_setTextSize(1); gfx_setTextColor(inkFor(COL_PANEL),COL_PANEL);
-        String nm=g_known[i].ssid; int maxw=VW-12-FGW-24; while(gfx_textWidth(nm)>maxw&&nm.length()>3)nm=nm.substring(0,nm.length()-1);
-        gfx_setCursor(14,y+(rowH-8)/2); gfx_print(nm);
-        if(g_known[i].ssid==curSsid){ gfx_setTextColor(COL_GREEN,COL_PANEL); gfx_print("  (current)"); }
-        int bx=VW-12-FGW; gfx_fillRoundRect(bx,y+4,FGW-4,rowH-8,6,(uint16_t)0x8000); gfx_setTextColor(TFT_WHITE,(uint16_t)0x8000); gfx_setCursor(bx+(FGW-4-gfx_textWidth("FORGET"))/2,y+(rowH-8)/2); gfx_print("FORGET"); }
-      int cy=hdr+gap+vis*(rowH+gap); gfx_fillRoundRect(gap,cy,VW-2*gap,ctlH,6,COL_SEL); gfx_setTextColor(inkFor(COL_SEL),COL_SEL); gfx_setCursor((VW-gfx_textWidth("Back"))/2,cy+(ctlH-8)/2); gfx_print("Back");
-      gfx_flush(); }
-    uint16_t tx=0,ty=0; bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
-    if(have){ rel=0; if(!pressed){ pressed=true;
-      bool acted=false;
-      for(int i=0;i<vis;i++){ int y=hdr+gap+i*(rowH+gap); int bx=VW-12-FGW; if(ty>=y&&ty<y+rowH&&(int)tx>=bx){ forgetNet(g_known[i].ssid); dirty=true; acted=true; break; } }
-      if(!acted){ int cy=hdr+gap+vis*(rowH+gap); if(ty>=cy&&ty<cy+ctlH){ kbWaitRelease(); return; } }
-    } } else { if(pressed&&++rel>=3)pressed=false; }
-    delay(12);
+    const String curSsid=(WiFi.status()==WL_CONNECTED && WiFi.SSID().length())?WiFi.SSID():g_home_ssid;   // #clubday: the net we are ACTUALLY on
+    const int m=g_known.size();
+    if(m==0){ const String none[1]={"No networks saved yet"}; calmChoiceEx(T(L_S_SAVEDWIFI),none,nullptr,1,-1,nullptr); return; }
+    std::vector<String> labels(m), metas(m);
+    for(int i=0;i<m;i++){ labels[i]=g_known[i].ssid; metas[i]=g_known[i].ssid==curSsid?"in use":""; }
+    const int p=calmChoiceEx(T(L_S_SAVEDWIFI),labels.data(),metas.data(),m,-1,nullptr);
+    if(p<0) return;
+    const String nm=g_known[p].ssid;
+    if(calmConfirm("Forget network",String("Forget ")+nm+"? The screen will ask for its password again next time.","Forget",true)) forgetNet(nm);
   }
 }
 
@@ -7935,26 +7909,29 @@ static void doWebUiSetup(){
 // join failed), it brings the server up live rather than needing another reboot.
 static void doWifiCheck(){
   auto draw=[&](const char* status, uint16_t scol){
-    gfx_fillScreen(COL_BG);
-    gfx_setTextSize(2); gfx_setTextColor(COL_ACCENT,COL_BG);
-    gfx_setCursor(10,12); gfx_print("WiFi Check");
-    gfx_setTextSize(1); int y=46;
-    auto line=[&](const String& t, uint16_t c){ gfx_setTextColor(c,COL_BG); gfx_setCursor(10,y); gfx_print(t); y+=16; };
-    line(String("SSID: ")+(g_home_ssid.length()?g_home_ssid:String("(none set)")), COL_LIT);
-    line(String("Status: ")+status, scol);
-    if(WiFi.status()==WL_CONNECTED){
-      line(String("IP: ")+WiFi.localIP().toString(), COL_GREEN);
-      line(String("Signal: ")+String((int)WiFi.RSSI())+" dBm", COL_LIT);
-      line(String("Web server: ")+(g_web_up?"UP":"not started"), g_web_up?COL_GREEN:COL_AMBER);
-      line("Open on your phone/PC:", COL_DIM);
-      line(String("  http://")+pfMdnsName()+".local/files", COL_LIT);
-      line(String("  http://")+WiFi.localIP().toString()+"/files", COL_LIT);
-    } else {
-      line("Not on the network.", COL_AMBER);
-      line("Check the password, and that it is a", COL_DIM);
-      line("2.4GHz network (ESP32 is 2.4G only).", COL_DIM);
+    NeoScope _ns; clearBack(); drawCalmHeader(calmTitle(T(L_WIFI_CHECK)).c_str());
+    const bool on=(WiFi.status()==WL_CONNECTED);
+    const CuRect card{CU_MARGIN,GT_CONTENT_TOP+CU_GAP,VW-2*CU_MARGIN,on?5*28+16:2*28+16};
+    calmCard(card); const uint16_t bg=calmCardBg(); int y=card.y+8;
+    auto row=[&](const char* k,const String& v,uint16_t c){
+      calmTextCut(card.x+12,y+6,k,card.w/3,CU_TS_SMALL,COL_MID,bg);
+      calmTextCut(card.x+12+card.w/3,y+6,v,card.w-card.w/3-24,CU_TS_SMALL,c,bg); y+=28; };
+    row("Network",g_home_ssid.length()?g_home_ssid:String("(none set)"),COL_LIT);
+    row("Status",status,scol);
+    if(on){
+      row("IP address",WiFi.localIP().toString(),COL_LIT);
+      row("Signal",String((int)WiFi.RSSI())+" dBm",COL_LIT);
+      row("Web page",g_web_up?"running":"not started",g_web_up?COL_GREEN:COL_AMBER);
     }
-    y+=8; line("Tap to close", COL_DIM);
+    y=cuBottom(card)+CU_GAP*2;
+    if(on){
+      calmTextCut(CU_MARGIN,y,"Open on your phone or PC:",VW-2*CU_MARGIN,CU_TS_SMALL,COL_MID,COL_BG); y+=24;
+      calmTextCut(CU_MARGIN,y,String("http://")+pfMdnsName()+".local",VW-2*CU_MARGIN,CU_TS_SMALL,COL_AMBER,COL_BG); y+=24;
+      calmTextCut(CU_MARGIN,y,String("http://")+WiFi.localIP().toString(),VW-2*CU_MARGIN,CU_TS_SMALL,COL_AMBER,COL_BG);
+    } else {
+      calmTextCut(CU_MARGIN,y,"Not on the network. Check the password,",VW-2*CU_MARGIN,CU_TS_SMALL,COL_MID,COL_BG); y+=24;
+      calmTextCut(CU_MARGIN,y,"and that it is a 2.4 GHz network.",VW-2*CU_MARGIN,CU_TS_SMALL,COL_MID,COL_BG);
+    }
     gfx_flush();
   };
   if(g_home_ssid.length()==0){ hwMsg("No home WiFi set","use WEB UI to set it up",COL_AMBER,1600); return; }
@@ -7964,19 +7941,20 @@ static void doWifiCheck(){
     WiFi.mode(WIFI_STA); WiFi.persistent(false); WiFi.setAutoReconnect(true);
     wifiBeginStrongest(g_home_ssid.c_str(), g_home_pass.c_str());
     uint32_t t0=millis();
-    while(WiFi.status()!=WL_CONNECTED && millis()-t0<12000) delay(200);
+    while(WiFi.status()!=WL_CONNECTED && millis()-t0<12000){ webPanelPoll(); delay(200); }
   }
   if(WiFi.status()==WL_CONNECTED && g_web_on && !g_web_up) webPanelBeginStrongest();   // bring the server up now
 
   const bool ok=(WiFi.status()==WL_CONNECTED);
-  draw(ok?"CONNECTED":"FAILED", ok?COL_GREEN:(uint16_t)0x8000);
+  draw(ok?"connected":"failed", ok?COL_GREEN:(uint16_t)NEO_RED);
 
-  bool pressed=false; int rel=0;                    // wait for a tap to dismiss
+  { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }   // the tap that opened this screen
+  bool down=false; int up=0;                       // closes on the release of a tap (Back or anywhere): nothing reaches Settings
   while(true){
     webPanelPoll();   // the web UI must not die while this screen owns the loop
-    uint16_t tx=0,ty=0; bool have = Touch_ReadFrame() && getTouchXY(&tx,&ty);
-    if(have){ if(!pressed){ pressed=true; kbWaitRelease(); break; } }
-    else { if(pressed && ++rel>=3) pressed=false; }
+    uint16_t tx=0,ty=0; const bool have=Touch_ReadFrame()&&getTouchXY(&tx,&ty);
+    if(have){ down=true; up=0; }
+    else if(down&&++up>=4) break;
     delay(12);
   }
 }
@@ -9855,9 +9833,13 @@ static void doProgramScreen(int gi,int disk){
 // ── A600-calm5: a choice list (the reel's source, and the choices of Settings) ───────────────────────────────────────────────
 // Back at the top left, a title, then one 48 px row per choice (the current one with the amber ring), scrolling by a drag when it does
 // not fit. Returns the index tapped, or -1 for Back (or 2 minutes without a touch). Rows: clRowRect / clRowAt (host-tested).
-static int calmChoice(const char*title,const String*labels,int n,int cur){
+// A choice list in the calm look: Back, the title, one 48 px row per choice (the current one marked). metas (may be null):
+// a grey text at the right of each row. hdrKey (may be null): a key at the right of the header; a tap on it returns -2.
+// Returns the row tapped, or -1 (Back, or two minutes without a touch).
+static int calmChoiceEx(const char*title,const String*labels,const String*metas,int n,int cur,const char*hdrKey){
   const int listTop=GT_CONTENT_TOP+CU_GAP;   // 56
   const int viewH=VH-CU_MARGIN-listTop;   // down to the foot of the screen less the margin: 256
+  const CuRect hk{VW-CU_MARGIN-112,4,112,CU_KEY};
   int scroll=0; bool dirty=true,down=false,moved=false; int dx=0,dy=0,tx=0,ty=0,downScroll=0; uint32_t lastTouch=millis();
   if(cur>=0) scroll=max(0,min(clMaxScroll(n,viewH),cur*CL_ROW_PITCH-viewH/2));
   { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }
@@ -9867,9 +9849,13 @@ static int calmChoice(const char*title,const String*labels,int n,int cur){
       const int c0=g_clip_y0,c1=g_clip_y1; g_clip_y0=listTop; g_clip_y1=VH-CU_MARGIN;
       for(int i=0;i<n;i++){ const CuRect r=clRowRect(i,scroll,listTop,CU_MARGIN,VW-2*CU_MARGIN); if(cuBottom(r)<=listTop||r.y>=VH) continue;
         calmRow(r,i==cur);
-        calmTextCut(r.x+16,r.y+(r.h-24)/2,labels[i],r.w-32,CU_TS_MID,COL_LIT,(g_neo||(i==cur?skinSlotOk(skin::S_ROW_SEL):skinSlotOk(skin::S_PANEL)))?COL_BG:(i==cur?COL_SEL:COL_PANEL)); }
+        const uint16_t bg=(g_neo||(i==cur?skinSlotOk(skin::S_ROW_SEL):skinSlotOk(skin::S_PANEL)))?COL_BG:(i==cur?COL_SEL:COL_PANEL);
+        int mw=0; if(metas&&metas[i].length()){ mw=gfx_textWidthAt(metas[i],CU_TS_SMALL);
+          gfx_setTextSize(CU_TS_SMALL); gfx_setTextColor(COL_MID,bg); gfx_setCursor(cuRight(r)-16-mw,r.y+(r.h-16)/2); gfx_print(metas[i]); mw+=CU_GAP; }
+        calmTextCut(r.x+16,r.y+(r.h-24)/2,labels[i],r.w-32-mw,CU_TS_MID,COL_LIT,bg); }
       g_clip_y0=c0; g_clip_y1=c1;
       fillBack(0,0,VW,listTop); drawCalmHeader(title);
+      if(hdrKey){ fillBack(hk.x-CU_GAP,0,VW-hk.x+CU_GAP,listTop); calmKey(hk,hdrKey,CALM_NORMAL,false,CU_TS_SMALL); }
       const int mp=clMaxScroll(n,viewH); if(mp>0){ const int th=max(16,viewH*viewH/(viewH+mp)); gfx_fillRect(VW-4,listTop+(viewH-th)*scroll/mp,3,th,COL_DIM); }
       gfx_flush(); }
     bool tt=Touch_ReadFrame(); uint16_t x=0,y=0; if(tt)tt=getTouchXY(&x,&y);
@@ -9879,11 +9865,13 @@ static int calmChoice(const char*title,const String*labels,int n,int cur){
     else if(down){ down=false;
       if(!moved){
         if(cuContains(CuRect{CU_MARGIN,4,104,CU_KEY},dx,dy)) return -1;
+        if(hdrKey&&cuContains(hk,dx,dy)) return -2;
         if(dy>=listTop){ const int i=clRowAt(scroll,listTop,dy,n); if(i>=0){ { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); } return i; } } } }
     delay(15);
   }
   return -1;
 }
+static int calmChoice(const char*title,const String*labels,int n,int cur){ return calmChoiceEx(title,labels,nullptr,n,cur,nullptr); }
 static String calmReelFilterLabel(){ return String(g_car_src==1?T(L_FAV):g_car_src==2?T(L_MOST):T(L_ALL)); }
 // The reel's source: all, favourites, most played, and the dice (a random cover, spun to).
 static void doReelFilter(){
@@ -9923,7 +9911,7 @@ static void srBuild(int tab,bool test){
     srAdd(calmTitle(T(L_THEME)),T(L_D_THEME),themeName(),SK_VALUE,SA_THEME);
     srAdd(calmTitle(T(L_CFG_LANG)),T(L_D_LANG),calmTitle(LANG_FULL[g_lang]),SK_VALUE,SA_LANG);
     srAdd(calmTitle(T(L_CFG_FONT)),T(L_D_FONT),calmTitle(fontName(g_font)),SK_VALUE,IA_FONT);
-    srAdd(calmTitle(T(L_CFG_ROTATE)),T(L_D_ROTATE),calmTitle(g_portrait?T(L_PORTRAIT):T(L_LANDSCAPE)),SK_VALUE,IA_ROTATE);
+    srAdd(calmTitle(T(L_CFG_ROTATE)),T(L_D_ROTATE),rotName(g_rot),SK_VALUE,IA_ROTATE);
     srToggle(T(L_PR_BATT),T(L_D_BATT),g_batt_show,IA_BATT);
     srToggle("Smooth letters","Anti-aliased text; off: the pixel font",g_aa_text,IA_AATEXT);   // A600-aa1 proof: English only for now
     srToggle(T(L_COVER_ART),T(L_D_COVERS),g_covers_on,IA_COVERS);
@@ -9983,7 +9971,25 @@ static bool calmConfirm(const String&title,const String&msg,const String&okLabel
   }
   return false;
 }
+static const char* rotName(int r){ static String n; n=calmTitle(r&1?T(L_PORTRAIT):T(L_LANDSCAPE)); if(r>=2) n+=" (flipped)"; return n.c_str(); }
+// The rows that used to step through their values on each tap open a list of all of them (A600-aa2).
+static bool settingsIsChoice(int act){ return act==SA_THEME||act==SA_LANG||act==SA_CRKSTYLE||act==IA_MODE||act==IA_FONT||act==IA_ROTATE||act==IA_LIBMODE||act==IA_SSMODE; }
 static void settingsChoose(int act){
+  if(act==IA_MODE){ const String l[3]={calmTitle(T(L_STANDALONE)),"ESP-NOW","Wi-Fi"};
+    const int cur=!g_wireless_mode?0:(g_link_home?2:1), p=calmChoice(calmTitle(T(L_CFG_MODE)).c_str(),l,3,cur);
+    if(p>=0&&p!=cur){ g_wireless_mode=(p!=0); g_link_home=(p==2); saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE"); saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW"); applyRadioMode(); }
+    return; }
+  if(act==IA_FONT){ const String l[3]={calmTitle(T(L_FONT_SMALL)),calmTitle(T(L_FONT_NORMAL)),calmTitle(T(L_FONT_LARGE))};
+    const int p=calmChoice(calmTitle(T(L_CFG_FONT)).c_str(),l,3,g_font); if(p>=0){ applyFont(p); saveConfigKey("FONT",fontKey(g_font)); } return; }
+  if(act==IA_ROTATE){ const String l[4]={rotName(0),rotName(1),rotName(2),rotName(3)};
+    const int p=calmChoice(calmTitle(T(L_CFG_ROTATE)).c_str(),l,4,g_rot);
+    if(p>=0&&p!=g_rot){ g_rot=p; relayout(); saveConfigKey("ROTATE",String(g_rot*90)); float mp=(float)maxScrollPx(); if(g_scrollPx>mp) g_scrollPx=mp; } return; }
+  if(act==IA_LIBMODE){ const String l[3]={"ADF","DSK","GEN"};
+    const int p=calmChoice(calmTitle(T(L_CFG_LIBRARY)).c_str(),l,3,g_mode); if(p>=0&&p!=g_mode) switchLib(p); return; }
+  if(act==IA_SSMODE){ const String l[4]={calmTitle(T(L_SLIDES)),calmTitle(T(L_BOUNCE)),calmTitle(T(L_MATRIX)),calmTitle(T(L_CRACKTRO))};
+    static const char* const KEY[4]={"SLIDES","BOUNCE","MATRIX","CRACKTRO"};
+    const int cur=g_ss_slides?0:g_ss_matrix?2:g_ss_cracktro?3:1, p=calmChoice((calmTitle(T(L_CFG_SAVER))+" FX").c_str(),l,4,cur);
+    if(p>=0){ g_ss_slides=(p==0); g_ss_matrix=(p==2); g_ss_cracktro=(p==3); saveConfigKey("SSMODE",KEY[p]); } return; }
   if(act==SA_LANG){ String labels[LANG_N]; for(int i=0;i<LANG_N;i++) labels[i]=calmTitle(LANG_FULL[i]);
     const int p=calmChoice(T(L_CFG_LANG),labels,LANG_N,g_lang); if(p>=0){ g_lang=p; saveConfigKey("LANG",LANG_NAMES[g_lang]); } }
   else if(act==SA_CRKSTYLE){ String labels[CRK_PICK_N]; for(int i=0;i<CRK_PICK_N;i++) labels[i]=calmTitle(CRK_PICK_NAME[i]);
@@ -10002,6 +10008,7 @@ static void settingsChoose(int act){
 }
 static void doSettings(int tab){
   bool test=false,dirty=true,down=false,moved=false,leave=false; int scroll=0,downScroll=0,dx=0,dy=0,tx=0,ty=0; uint32_t lastTouch=millis();
+  bool swallow=false;   // A600-aa2: after a row's action, a finger still down (from the screen it opened) is not a new tap
   { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }
   while(!leave&&millis()-lastTouch<180000){
     webPanelService(); pfService(); pfWorker();
@@ -10031,6 +10038,7 @@ static void doSettings(int tab){
       if(mp>0){ const int th=max(16,viewH*viewH/(viewH+mp)); gfx_fillRect(VW-4,listTop+(viewH-th)*scroll/mp,3,th,COL_DIM); }
       gfx_flush(); }
     bool tt=Touch_ReadFrame(); uint16_t x=0,y=0; if(tt)tt=getTouchXY(&x,&y);
+    if(swallow){ if(!tt) swallow=false; delay(15); continue; }
     if(tt){ lastTouch=millis(); tx=x; ty=y;
       if(!down){ down=true; dx=x; dy=y; downScroll=scroll; moved=false; }
       else if(abs(ty-dy)>8||abs(tx-dx)>8){ moved=true; const int ns=max(0,min(clSetMaxScroll(g_sr_n,viewH),downScroll-(ty-dy))); if(ns!=scroll){ scroll=ns; dirty=true; } } }
@@ -10043,10 +10051,11 @@ static void doSettings(int tab){
             { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }
             bool go=true; if(r.confirm) go=calmConfirm(r.label,r.ask,r.label,r.danger);
             if(go){
-              if(r.act==SA_THEME||r.act==SA_LANG||r.act==SA_CRKSTYLE) settingsChoose(r.act);
+              if(settingsIsChoice(r.act)) settingsChoose(r.act);
               else if(r.act==SA_TESTPAGE){ test=true; scroll=0; }
-              else if(r.act!=IA_NONE){ infoAction(r.act);  if(r.act==IA_ROTATE){ scroll=0; } } }
-            dirty=true; lastTouch=millis(); } } } }
+              else if(r.act!=IA_NONE) infoAction(r.act);
+              if(r.act==IA_ROTATE) scroll=0; }
+            dirty=true; lastTouch=millis(); swallow=true; } } } }
     delay(15);
   }
   { uint32_t t0=millis(); while(Touch_ReadFrame()&&millis()-t0<800) delay(10); }
