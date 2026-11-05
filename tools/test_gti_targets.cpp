@@ -374,6 +374,141 @@ static void test_portrait() {
   CHECK(k.n == 2 && k.key[1].r.x > k.key[0].r.x);   // side by side as before in the landscape
 }
 
+// ---- A600-aa3: Load into... select mode ----
+static void test_select_several() {
+  GtPeerIn p[3] = {flux("Bench", true, "Zool"), dongle("Den", false, nullptr), dongle("Attic", false, nullptr)};
+  p[0].df1 = true;
+  p[2].heard = false;   // gone quiet: not selectable
+  GtTarget t[GT_MAX_TARGETS];
+  const int n = gtBuildTargets(fleet(), p, 3, t, GT_MAX_TARGETS);
+  CHECK(n == 4);   // Bench DF0, Bench DF1, Den, Attic
+  CHECK(gtSelectable(t[0]) && gtSelectable(t[1]) && gtSelectable(t[2]) && !gtSelectable(t[3]));
+  CHECK(gtSelectableCount(t, n) == 3 && gtSelOffered(t, n));
+  bool sel[GT_MAX_TARGETS] = {};
+  CHECK(gtSelCount(sel, n) == 0);
+  CHECK(gtSelToggle(t, n, sel, 0) && sel[0] && gtSelCount(sel, n) == 1);
+  CHECK(gtSelToggle(t, n, sel, 2) && sel[2] && gtSelCount(sel, n) == 2);
+  CHECK(gtSelToggle(t, n, sel, 1) && sel[1] && !sel[0]);   // DF1 of the same FluxDrive: DF0 goes
+  CHECK(gtSelCount(sel, n) == 2);
+  CHECK(!gtSelToggle(t, n, sel, 3) && !sel[3]);           // not heard: nothing happens
+  CHECK(!gtSelToggle(t, n, sel, -1) && !gtSelToggle(t, n, sel, n));
+  CHECK(gtSelToggle(t, n, sel, 2) && !sel[2] && gtSelCount(sel, n) == 1);   // a second tap unchecks
+  // a drive that went quiet after it was checked leaves the selection
+  sel[2] = true; t[2].linked = false; gtSelPrune(t, n, sel);
+  CHECK(!sel[2] && sel[1]);
+  // two FluxDrives: DF0 of one and DF0 of the other stay checked together
+  GtPeerIn q[2] = {flux("A", false, nullptr), flux("B", false, nullptr)};
+  const int m = gtBuildTargets(fleet(), q, 2, t, GT_MAX_TARGETS);
+  bool s2[GT_MAX_TARGETS] = {};
+  CHECK(m == 2 && gtSelToggle(t, m, s2, 0) && gtSelToggle(t, m, s2, 1) && s2[0] && s2[1]);
+  // the wired Gotek and the ESP-NOW dongle are never selectable, so the key is not offered
+  CHECK(gtBuildTargets(wired(true, "x"), nullptr, 0, t, GT_MAX_TARGETS) == 1 && !gtSelectable(t[0]) && !gtSelOffered(t, 1));
+  GtInputs en = {}; en.wireless = true; en.espnow_paired = true; en.espnow_linked = true;
+  CHECK(gtBuildTargets(en, nullptr, 0, t, GT_MAX_TARGETS) == 1 && !gtSelectable(t[0]));
+  // one heard drive only: nothing to choose between
+  GtPeerIn r[2] = {dongle("One", false, nullptr), dongle("Two", false, nullptr)}; r[1].heard = false;
+  const int k = gtBuildTargets(fleet(), r, 2, t, GT_MAX_TARGETS);
+  CHECK(k == 2 && !gtSelOffered(t, k));
+}
+
+static void test_pick_layout_select() {
+  CuRect sk, lk;
+  GtPickLayout L = gtPickLayoutSel(480, 320, 5, 0, true, false, &sk, &lk);
+  CHECK(sk.w == GT_PICK_SEL_W_WIDE && sk.h == CU_KEY && cuRight(sk) == 480 - CU_MARGIN && lk.w == 0);
+  CHECK(sk.x > cuRight(L.back) + CU_GAP);
+  CHECK(L.view.y == 60 && cuBottom(L.view) == 312);
+  bool en[5] = {true, true, true, true, true};
+  CHECK(gtPickTapSel(L, sk, lk, sk.x + 4, sk.y + 4, en) == GT_PICK_SELECT);
+  CHECK(gtPickTapSel(L, sk, lk, 20, 20, en) == GT_PICK_BACK);
+  CHECK(gtPickTapSel(L, sk, lk, 100, L.card[1].y + 4, en) == GT_PICK_ROW + 1);
+  // select mode: no select key, Load along the bottom, the list stops above it
+  L = gtPickLayoutSel(480, 320, 5, 999, true, true, &sk, &lk);
+  CHECK(sk.w == 0 && lk.w == 464 && lk.h == CU_KEY && cuBottom(lk) == 312);
+  CHECK(cuBottom(L.view) == lk.y - CU_GAP);
+  CHECK(L.maxScroll == 5 * (GT_PICK_CARD_H + CU_GAP) - CU_GAP - L.view.h && L.scroll == L.maxScroll);
+  CHECK(gtPickTapSel(L, sk, lk, 200, lk.y + 10, en) == GT_PICK_LOAD);
+  CHECK(cuBottom(L.card[4]) == cuBottom(L.view));   // scrolled to the end: the last card ends on the view's edge
+  bool off[5] = {true, false, true, true, true};
+  const GtPickLayout L0 = gtPickLayoutSel(480, 320, 5, 0, true, true, &sk, &lk);
+  CHECK(gtPickTapSel(L0, sk, lk, 100, L0.card[1].y + 4, off) == GT_PICK_NONE);
+  // not offered: no key; portrait: the narrow one
+  gtPickLayoutSel(480, 320, 5, 0, false, false, &sk, &lk); CHECK(sk.w == 0 && lk.w == 0);
+  gtPickLayoutSel(320, 480, 5, 0, true, false, &sk, &lk); CHECK(sk.w == GT_PICK_SEL_W_NARROW && cuRight(sk) == 312);
+}
+
+// ---- A600-aa3: Fleet ----
+static void test_fleet_drives() {
+  GtFleetDrive d[GT_FL_MAX_DRIVES];
+  GtPeerIn f = flux("Bench", true, "Zool"); f.wp = true; f.stored = false;
+  int n = gtFleetDrives(f, d, GT_FL_MAX_DRIVES);
+  CHECK(n == 1 && d[0].drive == 0 && d[0].flux && d[0].has && std::strcmp(d[0].disk, "Zool") == 0 && d[0].wp && d[0].storing);
+  f.df1 = true; f.loaded1 = false; f.disk1 = "stale"; f.wp1 = false;
+  n = gtFleetDrives(f, d, GT_FL_MAX_DRIVES);
+  CHECK(n == 2 && d[1].drive == 1 && d[1].flux && !d[1].has && d[1].disk[0] == 0 && !d[1].storing);
+  f.loaded1 = true; f.disk1 = "Turrican"; f.stored1 = true; f.wp1 = true;
+  n = gtFleetDrives(f, d, GT_FL_MAX_DRIVES);
+  CHECK(n == 2 && d[1].has && std::strcmp(d[1].disk, "Turrican") == 0 && d[1].wp && !d[1].storing);
+  CHECK(gtFleetDrives(f, d, 1) == 1);   // room for one: DF0 only
+  GtPeerIn g = dongle("Den", true, "Lemmings"); g.wp = true; g.stored = false; g.df1 = true;
+  n = gtFleetDrives(g, d, GT_FL_MAX_DRIVES);
+  CHECK(n == 1 && !d[0].flux && d[0].has && !d[0].wp && !d[0].storing);   // a dongle: one drive, no WP, never STORING, df1 ignored
+  g.loaded = false;
+  n = gtFleetDrives(g, d, GT_FL_MAX_DRIVES);
+  CHECK(n == 1 && !d[0].has && d[0].disk[0] == 0);
+}
+
+static void test_fleet_layout() {
+  GtFleetCardIn in[3] = {};
+  in[0].rows = 2; in[0].wp[0] = true; in[0].wp[1] = false;   // FluxDrive, DF1 empty
+  in[1].rows = 1; in[1].claim = true;                        // a dongle with Claim
+  in[2].rows = 3; in[2].wp[2] = true;                        // a future DF2
+  CHECK(gtFleetCardH(1) == 112 && gtFleetCardH(2) == 160 && gtFleetCardH(3) == 208 && gtFleetCardH(9) == 208);
+  GtFleetLayout L = gtFleetLayout(480, 320, in, 3, 0);
+  CHECK(L.cards == 3 && L.view.y == 60 && cuBottom(L.view) == 312);
+  CHECK(L.c[0].card.y == 60 && L.c[0].card.h == 160 && L.c[1].card.y == 228 && L.c[2].card.y == 228 + 112 + CU_GAP);
+  CHECK(L.maxScroll == (160 + 8 + 112 + 8 + 208) - 252);
+  CHECK(L.c[0].row[0].y == 60 + GT_FL_HEAD_H && L.c[0].row[1].y == 60 + GT_FL_HEAD_H + CU_KEY && L.c[0].row[1].h == CU_KEY);
+  CHECK(cuBottom(L.c[0].row[1]) + CU_GAP == cuBottom(L.c[0].card));
+  CHECK(L.c[0].wp[0].w == GT_FL_WP_W && cuRight(L.c[0].wp[0]) == cuRight(L.c[0].card) - CU_GAP && L.c[0].wp[0].h == CU_KEY);
+  CHECK(L.c[1].claim.h == CU_KEY && cuRight(L.c[1].claim) == cuRight(L.c[1].card) - CU_GAP && L.c[1].claim.y == L.c[1].card.y + 4);
+  CHECK(gtFleetTap(L, 20, 20) == GT_FL_BACK);
+  CHECK(gtFleetTap(L, L.c[0].wp[0].x + 4, L.c[0].wp[0].y + 4) == GT_FL_WP + 0);
+  CHECK(gtFleetTap(L, L.c[0].wp[1].x + 4, L.c[0].wp[1].y + 4) == GT_FL_NONE);   // no disk in DF1: inert
+  CHECK(gtFleetTap(L, L.c[0].row[0].x + 4, L.c[0].row[0].y + 4) == GT_FL_NONE); // the disk name does nothing
+  CHECK(gtFleetTap(L, L.c[1].claim.x + 4, L.c[1].claim.y + 4) == GT_FL_CLAIM + 1);
+  CHECK(gtFleetTap(L, L.c[0].claim.x + 4, L.c[0].claim.y + 4) == GT_FL_NONE);   // no claim key on card 0
+  // scrolled to the end: DF2's switch of the last card is reachable, the first card under the header is not
+  L = gtFleetLayout(480, 320, in, 3, 9999, 24);
+  CHECK(L.maxScroll == (160 + 8 + 112 + 8 + 208 + 24) - 252 && L.scroll == L.maxScroll);
+  CHECK(L.contentBottom + 24 == cuBottom(L.view));
+  CHECK(gtFleetTap(L, L.c[2].wp[2].x + 4, L.c[2].wp[2].y + 4) == GT_FL_WP + 2 * GT_FL_MAX_DRIVES + 2);
+  CHECK(L.c[0].card.y < L.view.y && gtFleetTap(L, 100, L.view.y - 4) == GT_FL_NONE);
+  // portrait, nothing at all
+  L = gtFleetLayout(320, 480, in, 0, 0);
+  CHECK(L.cards == 0 && L.maxScroll == 0 && L.view.w == 304);
+  // every touch area is 48 px high
+  L = gtFleetLayout(480, 320, in, 3, 0);
+  for (int i = 0; i < 3; i++) for (int k = 0; k < L.c[i].rows; k++) CHECK(L.c[i].wp[k].h >= CU_KEY && L.c[i].wp[k].w >= CU_KEY);
+}
+
+static void test_wp_http() {
+  CHECK(gtWpOutcome(200) == GT_WP_DONE);
+  CHECK(gtWpOutcome(409) == GT_WP_REFUSED && gtWpOutcome(400) == GT_WP_REFUSED && gtWpOutcome(403) == GT_WP_REFUSED);
+  CHECK(gtWpOutcome(503) == GT_WP_BUSY);
+  CHECK(gtWpOutcome(-1) == GT_WP_FAILED && gtWpOutcome(-11) == GT_WP_FAILED && gtWpOutcome(500) == GT_WP_FAILED && gtWpOutcome(404) == GT_WP_FAILED);
+  char b[64];
+  CHECK(gtWpPath(b, sizeof b, 0, true) > 0 && std::strcmp(b, "/api/disk/wp?drive=0&on=1") == 0);
+  gtWpPath(b, sizeof b, 1, false); CHECK(std::strcmp(b, "/api/disk/wp?drive=1&on=0") == 0);
+  char s[8]; gtWpPath(s, sizeof s, 1, true); CHECK(std::strlen(s) == 7);   // cut, never overrun
+  char e[48];
+  CHECK(gtJsonErr("{\"ok\":false,\"err\":\"no disk\"}", e, sizeof e) && std::strcmp(e, "no disk") == 0);
+  CHECK(gtJsonErr("{\"ok\":false,\"err\": \"no motor wire\",\"code\":\"no_wire\"}", e, sizeof e) && std::strcmp(e, "no motor wire") == 0);
+  CHECK(gtJsonErr("{\"err\":\"say \\\"hi\\\"\"}", e, sizeof e) && std::strcmp(e, "say \"hi\"") == 0);
+  CHECK(!gtJsonErr("{\"ok\":true}", e, sizeof e) && e[0] == 0);
+  CHECK(!gtJsonErr(nullptr, e, sizeof e) && !gtJsonErr("{\"err\":3}", e, sizeof e));
+  char t4[4]; CHECK(gtJsonErr("{\"err\":\"busy - in use\"}", t4, sizeof t4) && std::strcmp(t4, "bus") == 0);
+}
+
 int main() {
   test_screen_in_a_gotek();
   test_espnow_paired_dongle();
@@ -394,6 +529,11 @@ int main() {
   test_program_layout();
   test_pick_layout();
   test_chip_words();
+  test_select_several();
+  test_pick_layout_select();
+  test_fleet_drives();
+  test_fleet_layout();
+  test_wp_http();
   std::printf("%d checks, %d failed\n", g_run, g_fail);
   return g_fail ? 1 : 0;
 }
