@@ -48,6 +48,7 @@
 #include <sys/time.h>   // lab15d: settimeofday (clock starts at the build time)
 #include <errno.h>      // lab15d: save-failure detail
 #include "calm_ui.h"       // A600-calm1: the calm layout grid and rectangle helpers (host-tested)
+#include "aa_font_data.h"  // A600-aa1: the anti-aliased screen font (Inter, 16 / 24 / 32 px; aa_text.h host-tested)
 #include "calm_list.h"     // A600-calm3: the calm list (search row, rows, letter grid, row chip, short disk names; host-tested)
 #include "game_sort.h"     // A600-calm3: the library sort order and heapsort (host-tested)
 #include "gti_targets.h"   // A600-calm1: the drives the screen can reach, strip and load-key layouts (host-tested)
@@ -60,7 +61,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-calm8-JC3248"   // A600-calm8 (4 Nov 2026): the web Theme Editor's starter skin is drawn in the calm NEO look (radius 8 keys and cards, 4 for the selected row); docs/skins/README.md says which slot each calm part uses; no slot added or dropped, so an old .gts still loads | A600-calm7b (4 Nov 2026): a star key in the list's search row switches between all programs and only the favourites (remembered: FAVONLY=), the top bar says "12 / 95" while it is on | A600-calm7 (4 Nov 2026): portrait on the same grid as landscape (top bar, search row, list, program screen stacked, drive strip, Drive info, Settings, readers); the compact layout is retired (COMPACT= in CONFIG.TXT is read and ignored); the old list, cover column, NOW PLAYING, A-Z column, mode bar, bottom bar, old Settings pages and old reel keys are gone | A600-calm6b (4 Nov 2026): one casing style on the calm screens (Back, Cancel, List / Reel, Eject, the Settings labels; SD / UI / ADF stay capitals) | A600-calm6 (4 Nov 2026): Settings in the calm look - Back and four tabs (Screen / Wi-Fi / Drives / System), rows with a label, a value or a switch and a grey line that says what it does, actions as keys; Restart, SD card access, the firmware update and the test tools ask first; every row does what its old Settings key did | A600-calm5 (4 Nov 2026): the reel shows only covers - a bigger centre cover, the name (size 3) and N disks, a source key in the top bar (all / favourites / most played / the dice), a tap opens the program screen; the description and manual readers get the calm frame (Back, title, text at size 2, page keys); the count says programs | A600-calm4c (4 Nov 2026): a disk's name in Drive info opens that game's program screen on that disk; on the program screen the cover opens full screen and the details text opens the description | A600-calm4b (4 Nov 2026): ONE load screen with one bar (Reading card... / Sending to DF0... NN%); a send to a single fleet drive streams the image from the card instead of staging it in RAM first; the reel has no disk keys and no INSERT/EJECT (a Load key opens the program screen); the battery glyph shows only with BATTERY=ON in Settings | A600-calm4 (4 Nov 2026): the program screen - a tap on a row (or on the reel's centre cover) opens cover, details, the disk stepper and the load keys (one Load, one per drive, or Load into... with a list of every drive and what is in it); the ... key holds the manual, the .nfo text and START FRESH; the new strings are translated; the top bar no longer carries the storing warning (the drive's card does) | A600-calm3 (4 Nov 2026): the calm list - a search row (Search, A-Z, the filter), rows of 48 px with the name at size 3 and a chip (the drive that holds it, or N disks), the letter grid, the filter list (ADF / DSK / GEN / categories / own disks); the left cover column, the A-Z column, the mode bar and the L tiles are gone from the landscape list (a tap on a row opens the reel at that game until the program screen); a disk key only selects when more than one drive is reachable (one drive swaps with a real eject first); a progress bar while a disk loads; the library sort is a host-tested heapsort | A600-calm2 (4 Nov 2026): the calm frame - landscape list and reel get the top bar (List / Reel tabs, the count, the Settings key) and the drive strip (one wide card, two halves, or two cards and +N: caption, the disk it holds, a link dot; a tap opens Drive info) instead of the status bar, NOW PLAYING and the bottom key row; Drive info is one card per drive of any kind (Gotek, dongle, FluxDrive DF0 / DF1) with Eject, scrolling beyond two; the reel keeps its source and ROLL keys on the stage; portrait and the compact layout are unchanged | A600-calm1 (4 Nov 2026): the calm layout building blocks - POST /api/tap (a virtual finger, test builds only), calm_ui.h (grid), gti_targets.h (drives, strip and load-key layouts), the calm UI primitives; nothing visible changes yet | A600-lab2i-fd4s (4 Nov 2026): skins (gti-skins, PR #29) and FluxDrive DF1 (fluxdrive-panel) together, the base of the calm layout | A600-lab2i-fd4 (4 Nov 2026): FluxDrive DF1 (a multi-disk game is sent as "<game> - Disk <n>" and read back, so each drive shows and ejects its own disk) - the INSERT key is cut in two, DF0 | DF1, for a single FluxDrive with DF1 on (a dongle, an older FluxDrive, DF1 off or several peers keep the one INSERT): each half loads or ejects its own drive (SET_DRIVE 1 before the push, EJECT_DRIVE 1), the reel's INSERT key is cut the same way, NOW PLAYING adds "DF1: <disk>" and no longer ejects: a tap on it opens a DRIVE INFO screen (a block per drive with its disk, WP/STORING/unsaved chips and an EJECT key; a tap on a disk name selects its game in the list), and DF1 saves are fetched over the LAN (GET_SAVE_DRIVE 1) into Game.sav.<tag>.adf with their own record key "<id>:1" in fdsaves.txt (old files stay valid); the commit window and START FRESH stay DF0 only | A600-skin1-JC3248 (Dimmy, 16 Oct): skins - one .gts file (colours + PNG atlas + optional JPEG backgrounds) makes your own look; made and uploaded in the web page's Theme Editor, NEO is the starter | A600-lab2i-fd3 (26 Oct 2026): FluxDrive's commit window - STORING... until the disk is in flash, a revert to the previous disk puts its record back, START FRESH keeps a backup until then | A600-lab2i-fd2 (25 Oct 2026): FluxDrive saves (writing): fetched over the LAN, write protect, start fresh | A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-aa1-JC3248"   // A600-aa1 (5 Nov 2026): the calm text sizes (16 / 24 / 32 px) in an anti-aliased font (Inter SemiBold, OFL, ~58 KB, ASCII + Latin-1), edges mixed with what is under them; widths, cuts and the disk name's middle dot follow the real letter widths; Settings > Screen > Smooth letters (TEXTFONT=PIXEL) brings the 6x8 font back | A600-calm8 (4 Nov 2026): the web Theme Editor's starter skin is drawn in the calm NEO look (radius 8 keys and cards, 4 for the selected row); docs/skins/README.md says which slot each calm part uses; no slot added or dropped, so an old .gts still loads | A600-calm7b (4 Nov 2026): a star key in the list's search row switches between all programs and only the favourites (remembered: FAVONLY=), the top bar says "12 / 95" while it is on | A600-calm7 (4 Nov 2026): portrait on the same grid as landscape (top bar, search row, list, program screen stacked, drive strip, Drive info, Settings, readers); the compact layout is retired (COMPACT= in CONFIG.TXT is read and ignored); the old list, cover column, NOW PLAYING, A-Z column, mode bar, bottom bar, old Settings pages and old reel keys are gone | A600-calm6b (4 Nov 2026): one casing style on the calm screens (Back, Cancel, List / Reel, Eject, the Settings labels; SD / UI / ADF stay capitals) | A600-calm6 (4 Nov 2026): Settings in the calm look - Back and four tabs (Screen / Wi-Fi / Drives / System), rows with a label, a value or a switch and a grey line that says what it does, actions as keys; Restart, SD card access, the firmware update and the test tools ask first; every row does what its old Settings key did | A600-calm5 (4 Nov 2026): the reel shows only covers - a bigger centre cover, the name (size 3) and N disks, a source key in the top bar (all / favourites / most played / the dice), a tap opens the program screen; the description and manual readers get the calm frame (Back, title, text at size 2, page keys); the count says programs | A600-calm4c (4 Nov 2026): a disk's name in Drive info opens that game's program screen on that disk; on the program screen the cover opens full screen and the details text opens the description | A600-calm4b (4 Nov 2026): ONE load screen with one bar (Reading card... / Sending to DF0... NN%); a send to a single fleet drive streams the image from the card instead of staging it in RAM first; the reel has no disk keys and no INSERT/EJECT (a Load key opens the program screen); the battery glyph shows only with BATTERY=ON in Settings | A600-calm4 (4 Nov 2026): the program screen - a tap on a row (or on the reel's centre cover) opens cover, details, the disk stepper and the load keys (one Load, one per drive, or Load into... with a list of every drive and what is in it); the ... key holds the manual, the .nfo text and START FRESH; the new strings are translated; the top bar no longer carries the storing warning (the drive's card does) | A600-calm3 (4 Nov 2026): the calm list - a search row (Search, A-Z, the filter), rows of 48 px with the name at size 3 and a chip (the drive that holds it, or N disks), the letter grid, the filter list (ADF / DSK / GEN / categories / own disks); the left cover column, the A-Z column, the mode bar and the L tiles are gone from the landscape list (a tap on a row opens the reel at that game until the program screen); a disk key only selects when more than one drive is reachable (one drive swaps with a real eject first); a progress bar while a disk loads; the library sort is a host-tested heapsort | A600-calm2 (4 Nov 2026): the calm frame - landscape list and reel get the top bar (List / Reel tabs, the count, the Settings key) and the drive strip (one wide card, two halves, or two cards and +N: caption, the disk it holds, a link dot; a tap opens Drive info) instead of the status bar, NOW PLAYING and the bottom key row; Drive info is one card per drive of any kind (Gotek, dongle, FluxDrive DF0 / DF1) with Eject, scrolling beyond two; the reel keeps its source and ROLL keys on the stage; portrait and the compact layout are unchanged | A600-calm1 (4 Nov 2026): the calm layout building blocks - POST /api/tap (a virtual finger, test builds only), calm_ui.h (grid), gti_targets.h (drives, strip and load-key layouts), the calm UI primitives; nothing visible changes yet | A600-lab2i-fd4s (4 Nov 2026): skins (gti-skins, PR #29) and FluxDrive DF1 (fluxdrive-panel) together, the base of the calm layout | A600-lab2i-fd4 (4 Nov 2026): FluxDrive DF1 (a multi-disk game is sent as "<game> - Disk <n>" and read back, so each drive shows and ejects its own disk) - the INSERT key is cut in two, DF0 | DF1, for a single FluxDrive with DF1 on (a dongle, an older FluxDrive, DF1 off or several peers keep the one INSERT): each half loads or ejects its own drive (SET_DRIVE 1 before the push, EJECT_DRIVE 1), the reel's INSERT key is cut the same way, NOW PLAYING adds "DF1: <disk>" and no longer ejects: a tap on it opens a DRIVE INFO screen (a block per drive with its disk, WP/STORING/unsaved chips and an EJECT key; a tap on a disk name selects its game in the list), and DF1 saves are fetched over the LAN (GET_SAVE_DRIVE 1) into Game.sav.<tag>.adf with their own record key "<id>:1" in fdsaves.txt (old files stay valid); the commit window and START FRESH stay DF0 only | A600-skin1-JC3248 (Dimmy, 16 Oct): skins - one .gts file (colours + PNG atlas + optional JPEG backgrounds) makes your own look; made and uploaded in the web page's Theme Editor, NEO is the starter | A600-lab2i-fd3 (26 Oct 2026): FluxDrive's commit window - STORING... until the disk is in flash, a revert to the previous disk puts its record back, START FRESH keeps a backup until then | A600-lab2i-fd2 (25 Oct 2026): FluxDrive saves (writing): fetched over the LAN, write protect, start fresh | A600-lab2i-fd1e (24 Oct 2026): send-buffer guard rails and A/B switch, strongest-AP join from the sketch only | A600-lab2i-fd1d (24 Oct 2026): joins the strongest access point of the home network, Wi-Fi link in /api/wifi/status | A600-lab2i-fd1c (24 Oct 2026): faster sends to FluxDrive (15-segment send buffer, 21,540 B) | A600-lab2i-fd1b (23 Oct 2026): review fixes - a drag no longer ejects, honest busy text | A600-lab2i-fd1 (23 Oct 2026): the panel shows FluxDrive's real disk (beacon), EJECT reaches FluxDrive | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -338,10 +339,28 @@ static void gfx_drawRoundRect(int x,int y,int w,int h,int r,uint16_t c){gfx_hlin
 static void gfx_setTextColor(uint16_t f,uint16_t b){text_fg=f;text_bg=b;}
 static void gfx_setTextSize(int s){text_size=s<1?1:s;}
 static void gfx_setCursor(int x,int y){text_x=x;text_y=y;}
-static int gfx_textWidth(const String&s){return s.length()*6*text_size;}
+static bool g_aa_text=true;   // A600-aa1: the calm sizes (2 / 3 / 4) in the anti-aliased font; TEXTFONT=PIXEL keeps the 6x8 font
+static inline const AaFont* aaFontNow(int size){ return g_aa_text?aaFontFor(size):nullptr; }
+// The width of s at a text size, in whichever font that size is drawn in.
+static int gfx_textWidthAt(const String&s,int size){ const AaFont*f=aaFontNow(size); return f?aaWidth(*f,s.c_str()):(int)s.length()*6*size; }
+static int gfx_textWidth(const String&s){return gfx_textWidthAt(s,text_size);}
+// s cut (at its end) to w pixels at a text size; never inside a UTF-8 sequence.
+static void gfx_cutTo(String&s,int w,int size){ const AaFont*f=aaFontNow(size);
+  if(f){ const int n=aaFitBytes(*f,s.c_str(),w); if(n<(int)s.length()) s.remove(n<1?1:n); return; }
+  while(s.length()>1&&(int)s.length()*6*size>w) s.remove(s.length()-1); }
 
 static void gfx_print(const String&text){
   const bool tr=(g_neo_depth>0&&text_bg==g_txt_key);   // A600-neo1-JC3248 (lab16a-P4): NEO - no box behind text on the background picture
+  if(const AaFont*f=aaFontNow(text_size)){   // A600-aa1: the edges mix with what is under them (the framebuffer is read back)
+    const char*s=text.c_str(); const int w=aaWidth(*f,s);
+    if(!tr) gfx_fillRect(text_x,text_y,w,f->box,text_bg);
+    for(int i=0;s[i];){ const AaGlyph&g=f->glyphs[aaIndex(aaNext(s,&i))];
+      for(int y=0;y<g.h;y++){ const int py=text_y+g.dy+y; if(py<g_clip_y0||py>=g_clip_y1) continue;
+        for(int x=0;x<g.w;x++){ const uint8_t a=aaCoverage(f->bits,g,x,y); if(!a) continue;
+          const int px=text_x+g.dx+x; if(px<g_clip_x0||px>=g_clip_x1) continue;
+          fb_setPixel(px,py,a>=15?text_fg:aaBlend565(fb_getPixel(px,py),text_fg,a)); } }
+      text_x+=g.adv; }
+    return; }
   for(unsigned i=0;i<text.length();i++){char c=text[i];if(c<32||c>126)continue;
     const uint8_t*data=font6x8[c-32];
     for(int col=0;col<6;col++){uint8_t bits=pgm_read_byte(&data[col]);
@@ -3295,8 +3314,8 @@ enum CalmStyle { CALM_NORMAL = 0, CALM_PRIMARY, CALM_DANGER, CALM_SELECTED };
 // The text size a label gets: want, or a step down (never below 2) so it fits w; at 2 a too long label is cut.
 static int calmFit(String&s,int w,int want){
   int sz=want<CU_TS_SMALL?CU_TS_SMALL:(want>CU_TS_BIG?CU_TS_BIG:want);
-  while(sz>CU_TS_SMALL&&(int)s.length()*6*sz>w)sz--;
-  while(s.length()>1&&(int)s.length()*6*sz>w)s.remove(s.length()-1);
+  while(sz>CU_TS_SMALL&&gfx_textWidthAt(s,sz)>w)sz--;
+  gfx_cutTo(s,w,sz);
   return sz;
 }
 // A label centred in (x,y,w,h) at the given size (see calmFit); bg is the colour behind it.
@@ -3348,7 +3367,7 @@ static void calmRow(const CuRect&r,bool selected){
 // place the next one (a gap of CU_GAP / 2 is enough).
 static int calmChip(int x,int y,const char*text,CalmStyle st=CALM_NORMAL){
   NeoScope _ns;
-  const String s=text; const int w=(int)s.length()*6*CU_TS_SMALL+12, h=24;
+  const String s=text; const int w=gfx_textWidthAt(s,CU_TS_SMALL)+12, h=24;
   const uint16_t edge=st==CALM_PRIMARY?COL_AMBER:st==CALM_DANGER?(uint16_t)NEO_RED:st==CALM_SELECTED?COL_GREEN:COL_SEP;
   const uint16_t fg=st==CALM_PRIMARY?COL_BG:st==CALM_DANGER?(uint16_t)NEO_RED_INK:st==CALM_SELECTED?COL_GREEN:COL_MID;
   const uint16_t face=st==CALM_PRIMARY?COL_AMBER:COL_BG;
@@ -4129,7 +4148,7 @@ static void loadConfig(){
     int eq=l.indexOf('=');if(eq<0)continue;String k=l.substring(0,eq),v=l.substring(eq+1);k.trim();v.trim();
     if(k=="NEO"){String nv=v;nv.toUpperCase();g_neo_on=!(nv=="OFF"||nv=="0"||nv=="NO");sawNeo=true;applyTheme(g_theme_idx);}   // A600-neo1-JC3248
     else if(k=="THEME"){sawTheme=true;int ti=classicIdx(v);if(ti>=0)applyTheme(ti);else if(v.length()&&isDigit(v[0]))applyTheme(v.toInt());else if(v.equalsIgnoreCase("NEO")||!v.length())applyTheme(0);else applyTheme(loadCustomTheme(v)?CUSTOM_IDX:0);}else if(k=="LOOP")g_loop_cracktro=(v=="1");else if(k=="MODE")g_wireless_mode=(v=="WIRELESS");else if(k=="CAROUSEL"){String cv=v;cv.toUpperCase();g_car_bootmode=(cv=="LAST")?2:((cv=="1"||cv=="ON"||cv=="TRUE")?1:0);}
-    else if(k=="BATTERY")g_batt_show=(v=="ON"||v=="1");else if(k=="TAPLOAD"){}else if(k=="HOTSWAP")g_hotswap=(v=="ON"||v=="1");else if(k=="FORCESWAP")g_forceswap=(v=="ON"||v=="1");
+    else if(k=="BATTERY")g_batt_show=(v=="ON"||v=="1");else if(k=="TEXTFONT")g_aa_text=(v!="PIXEL");else if(k=="TAPLOAD"){}else if(k=="HOTSWAP")g_hotswap=(v=="ON"||v=="1");else if(k=="FORCESWAP")g_forceswap=(v=="ON"||v=="1");
     else if(k=="FONT"){int f=1;if(v=="SMALL")f=0;else if(v=="LARGE")f=2;applyFont(f);}
     else if(k=="LANG"){String lu=v;lu.toUpperCase();if(lu=="CZ")lu="CS";for(int i=0;i<LANG_N;i++)if(lu==LANG_NAMES[i]){g_lang=i;break;}}
     else if(k=="ROTATE"){g_rot=((v.toInt()/90)%4+4)%4;}
@@ -4730,8 +4749,8 @@ static void drawCalmTopBar(){
     gfx_setTextSize(CU_TS_SMALL); gfx_setTextColor(COL_LIT,(g_neo||skinKeys())?COL_BG:COL_PANEL); gfx_setCursor(fk.x+8,fk.y+(fk.h-16)/2); gfx_print(calmReelFilterLabel());
     const int ax=fk.x+fk.w-14,ay=fk.y+fk.h/2-2; for(int k=0;k<5;k++) gfx_hline(ax-4+k,ay+k,9-2*k,COL_AMBER); }
   const int room=rx-(calmReelOn()?cuRight(b.filter):cuRight(b.reelTab))-CU_GAP;
-  if((int)ct.length()*6*CU_TS_SMALL>room){ const int sp=ct.indexOf(' '); if(sp>0) ct.remove(sp); }   // too narrow (portrait): just the number
-  if((int)ct.length()*6*CU_TS_SMALL>room) ct="";   // still no room (the reel in portrait): no count rather than a cut one
+  if(gfx_textWidthAt(ct,CU_TS_SMALL)>room){ const int sp=ct.indexOf(' '); if(sp>0) ct.remove(sp); }   // too narrow (portrait): just the number
+  if(gfx_textWidthAt(ct,CU_TS_SMALL)>room) ct="";   // still no room (the reel in portrait): no count rather than a cut one
   if(ct.length()){ gfx_setTextSize(CU_TS_SMALL); gfx_setTextColor(COL_MID,COL_BG);
     gfx_setCursor(rx-gfx_textWidth(ct),(GT_TOPBAR_H-8*CU_TS_SMALL)/2); gfx_print(ct); }
 }
@@ -4773,7 +4792,7 @@ static String calmTitle(const char*src){
   return out;
 }
 // A text cut to w pixels at the size it is given (never a smaller one: the calm screens keep their three sizes).
-static void calmCut(String&s,int w,int size){ while(s.length()>1&&(int)s.length()*6*size>w) s.remove(s.length()-1); }
+static void calmCut(String&s,int w,int size){ gfx_cutTo(s,w,size); }
 static void calmTextCut(int x,int y,String s,int w,int size,uint16_t fg,uint16_t bg){
   calmCut(s,w,size); gfx_setTextSize(size); gfx_setTextColor(fg,bg); gfx_setCursor(x,y); gfx_print(s);
 }
@@ -4784,6 +4803,9 @@ static void calmDiskText(int x,int y,const char*name,int w,int size,uint16_t fg,
   String g=game; const int cw=6*size;
   if(!has){ calmTextCut(x,y,g,w,size,fg,bg); return; }
   const String num=String(d);
+  if(aaFontNow(size)){   // A600-aa1: the font has a real middle dot; the game part is cut to what " \xb7 D<n>" leaves
+    const String tail=String(" \xc2\xb7 D")+num; gfx_cutTo(g,w-gfx_textWidthAt(tail,size),size);
+    gfx_setTextSize(size); gfx_setTextColor(fg,bg); gfx_setCursor(x,y); gfx_print(g+tail); return; }
   const int keep=clFitDisk((int)g.length(),cw,w,(int)num.length());
   if(keep<(int)g.length()) g.remove(keep);
   gfx_setTextSize(size); gfx_setTextColor(fg,bg); gfx_setCursor(x,y); gfx_print(g);
@@ -4822,7 +4844,7 @@ static void drawDriveStrip(){
     String marks; if(t.wp)marks="WP";
     if(t.storing){ String w=T(L_FD_STORING); w.replace("...",""); marks=(marks.length()?marks+" ":String(""))+w; }
     else if(t.unsaved){ String w=T(L_FD_UNSAVED); w.toUpperCase(); marks=(marks.length()?marks+" ":String(""))+w; }
-    const int capW=(int)cap.length()*6*CU_TS_SMALL, mw=(int)marks.length()*6*CU_TS_SMALL;
+    const int capW=gfx_textWidthAt(cap,CU_TS_SMALL), mw=gfx_textWidthAt(marks,CU_TS_SMALL);
     const bool showMarks=marks.length()&&(c.x+CU_GAP+capW+12+mw<=right);
     calmTextCut(c.x+CU_GAP,c.y+6,cap,right-(c.x+CU_GAP)-(showMarks?mw+12:0),CU_TS_SMALL,COL_ORANGE,bg);
     if(showMarks) calmTextCut(right-mw,c.y+6,marks,mw,CU_TS_SMALL,COL_AMBER,bg);
@@ -4916,7 +4938,7 @@ static int fdSplitPeer(){
 
 // INFO / SETTINGS panel — left column (landscape) or full width (portrait). Stores button Ys for touch.
 // ── v5.5.4: full-screen paginated INFO/settings model ──
-enum { IA_NONE=0, IA_MODE, IA_FONT, IA_ROTATE, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_NEOUI, IA_SAVEDWIFI, IA_FLEET, IA_ORPHAN, IA_DONGLESETUP, IA_BATT };
+enum { IA_NONE=0, IA_MODE, IA_FONT, IA_ROTATE, IA_DONGLE, IA_HIVEMIND, IA_RESCAN, IA_RESET, IA_DIAG, IA_SDACCESS, IA_FWUPDATE, IA_LIBMODE, IA_CATEG, IA_SSMODE, IA_SSFAV, IA_LINK, IA_HOMEWIFI, IA_WEBUI, IA_WIFICHECK, IA_SAVER, IA_CRACKTRO, IA_DIAGDISP, IA_REELBORDER, IA_LASTUSED, IA_NOCACHE, IA_COVERS, IA_REELPROF, IA_LISTTILE, IA_SDSOAK, IA_NEOUI, IA_SAVEDWIFI, IA_FLEET, IA_ORPHAN, IA_DONGLESETUP, IA_BATT, IA_AATEXT };
 #if defined(GTI_FLEET)
 static int  pfOrphanCount();     // #lock: locked dongles this screen does not own (defined with the fleet console below)
 static void doReleaseOrphans();  // #lock: offer our token to each of them - only a real owner token releases one
@@ -4981,7 +5003,7 @@ static void drawCalmList(){
     const bool d0=split&&uiShowsLoaded(gi,-1,0), d1=split&&uiShowsLoaded(gi,-1,1), any=uiShowsLoadedAny(gi);
     const ClChip chip=clRowChip(game.disk_count,split,d0,d1,any,single.c_str(),T(L_PR_DISKS),T(L_ST_LOADED));
     int right=r.x+r.w-CU_GAP;
-    if(chip.kind!=CL_CHIP_NONE){ const int cw=(int)strlen(chip.text)*6*CU_TS_SMALL+12; calmChip(right-cw,r.y+(r.h-24)/2,chip.text,chip.kind==CL_CHIP_LOADED?CALM_SELECTED:CALM_NORMAL); right-=cw+CU_GAP; }
+    if(chip.kind!=CL_CHIP_NONE){ const int cw=gfx_textWidthAt(chip.text,CU_TS_SMALL)+12; calmChip(right-cw,r.y+(r.h-24)/2,chip.text,chip.kind==CL_CHIP_LOADED?CALM_SELECTED:CALM_NORMAL); right-=cw+CU_GAP; }
     calmTextCut(r.x+44,cy-12,String(game.name.c_str()),right-(r.x+44),CU_TS_MID,COL_LIT,bg);
   }
   g_clip_y0=0; g_clip_y1=gH;
@@ -8658,7 +8680,7 @@ static void drawDriveInfoAll(const GtTarget*t,int n,const GtInfoLayout&L){
     calmCard(c);
     const String cap=calmCaption(t[i],fp);   // just DF0 / DF1 / the dongle's name / Gotek: the FluxDrive's name is the title
     calmTextCut(c.x+CU_GAP,c.y+6,cap,c.w/2,CU_TS_SMALL,COL_ORANGE,bg);
-    if(t[i].wp&&t[i].holds[0]) calmChip(c.x+CU_GAP+(int)cap.length()*6*CU_TS_SMALL+CU_GAP,c.y+2,"WP",CALM_PRIMARY);
+    if(t[i].wp&&t[i].holds[0]) calmChip(c.x+CU_GAP+gfx_textWidthAt(cap,CU_TS_SMALL)+CU_GAP,c.y+2,"WP",CALM_PRIMARY);
     const CuRect&nm=L.name[i];
     if(t[i].holds[0]) calmDiskText(nm.x,nm.y,t[i].holds,nm.w,CU_TS_MID,COL_GREEN,bg); else calmTextCut(nm.x,nm.y,T(L_FD_EMPTY),nm.w,CU_TS_MID,COL_DIM,bg);
     calmTextCut(c.x+CU_GAP,c.y+58,calmStatusLine(t[i]),c.w-2*CU_GAP,CU_TS_SMALL,t[i].storing?COL_AMBER:COL_MID,bg);
@@ -9903,6 +9925,7 @@ static void srBuild(int tab,bool test){
     srAdd(calmTitle(T(L_CFG_FONT)),T(L_D_FONT),calmTitle(fontName(g_font)),SK_VALUE,IA_FONT);
     srAdd(calmTitle(T(L_CFG_ROTATE)),T(L_D_ROTATE),calmTitle(g_portrait?T(L_PORTRAIT):T(L_LANDSCAPE)),SK_VALUE,IA_ROTATE);
     srToggle(T(L_PR_BATT),T(L_D_BATT),g_batt_show,IA_BATT);
+    srToggle("Smooth letters","Anti-aliased text; off: the pixel font",g_aa_text,IA_AATEXT);   // A600-aa1 proof: English only for now
     srToggle(T(L_COVER_ART),T(L_D_COVERS),g_covers_on,IA_COVERS);
     srToggle(T(L_LIST_TILE),T(L_D_TILE),g_listtile,IA_LISTTILE);
     srToggle(T(L_REEL_BORDER),T(L_D_REELB),g_reelborder,IA_REELBORDER);
@@ -9992,11 +10015,11 @@ static void doSettings(int tab){
         if(r.kind==SK_ACTION){ calmKey(CuRect{R.x,R.y+4,R.w,CU_KEY},r.label.c_str(),r.danger?CALM_DANGER:CALM_NORMAL,false,CU_TS_MID); continue; }
         calmCard(R);
         int vw=0; String v=r.value; if(v.length()>20) v.remove(20);
-        if(r.kind==SK_TOGGLE) vw=64; else if(v.length()) vw=(int)v.length()*6*CU_TS_SMALL+8; else if(r.kind==SK_VALUE) vw=28;
+        if(r.kind==SK_TOGGLE) vw=64; else if(v.length()) vw=gfx_textWidthAt(v,CU_TS_SMALL)+8; else if(r.kind==SK_VALUE) vw=28;
         calmTextCut(R.x+12,R.y+(r.desc.length()?6:16),r.label,R.w-24-vw,CU_TS_MID,COL_LIT,bg);
         if(r.desc.length()) calmTextCut(R.x+12,R.y+34,r.desc,R.w-24-(r.kind==SK_TOGGLE?64:0),CU_TS_SMALL,COL_MID,bg);
         if(r.kind==SK_TOGGLE) calmToggle(R,r.on);
-        else if(v.length()){ gfx_setTextSize(CU_TS_SMALL); gfx_setTextColor(r.kind==SK_INFO?COL_DIM:COL_AMBER,bg); gfx_setCursor(R.x+R.w-12-(int)v.length()*6*CU_TS_SMALL,R.y+(r.desc.length()?10:20)); gfx_print(v); }
+        else if(v.length()){ gfx_setTextSize(CU_TS_SMALL); gfx_setTextColor(r.kind==SK_INFO?COL_DIM:COL_AMBER,bg); gfx_setCursor(R.x+R.w-12-gfx_textWidthAt(v,CU_TS_SMALL),R.y+(r.desc.length()?10:20)); gfx_print(v); }
         else if(r.kind==SK_VALUE){ gfx_setTextSize(CU_TS_MID); gfx_setTextColor(COL_AMBER,bg); gfx_setCursor(R.x+R.w-12-18,R.y+16); gfx_print(">"); }
       }
       g_clip_y0=c0; g_clip_y1=c1;
@@ -10033,6 +10056,7 @@ static void infoAction(uint8_t act){
     case IA_MODE: { int m=!g_wireless_mode?0:(g_link_home?2:1); m=(m+1)%3; g_wireless_mode=(m!=0); g_link_home=(m==2); saveConfigKey("MODE",g_wireless_mode?"WIRELESS":"STANDALONE"); saveConfigKey("LINK",g_link_home?"HOMEWIFI":"ESPNOW"); applyRadioMode();  } break;   // 5.9.19: live switch, no reboot, no splash
     case IA_FONT: applyFont((g_font+1)%3);saveConfigKey("FONT",fontKey(g_font));break;
     case IA_BATT: g_batt_show=!g_batt_show; saveConfigKey("BATTERY",g_batt_show?"ON":"OFF");  break;
+    case IA_AATEXT: g_aa_text=!g_aa_text; saveConfigKey("TEXTFONT",g_aa_text?"SMOOTH":"PIXEL"); break;
     case IA_NEOUI: g_neo_on=!g_neo_on;applyTheme(g_theme_idx);saveConfigKey("NEO",g_neo_on?"ON":"OFF");break;   // A600-neo1-JC3248: live switch, no reboot
     case IA_ROTATE: g_rot=(g_rot+1)&3;relayout();saveConfigKey("ROTATE",String(g_rot*90));{float mp=(float)maxScrollPx();if(g_scrollPx>mp)g_scrollPx=mp;}break;
     case IA_DONGLE: doPairNow();break;
