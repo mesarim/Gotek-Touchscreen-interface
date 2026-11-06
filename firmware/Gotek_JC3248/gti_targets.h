@@ -327,3 +327,152 @@ inline int gtPickTap(const GtPickLayout& L, int x, int y, const bool* enabled) {
   for (int i = 0; i < L.cards; i++) if (cuContains(L.card[i], x, y)) return (enabled != nullptr && enabled[i]) ? GT_PICK_ROW + i : GT_PICK_NONE;
   return GT_PICK_NONE;
 }
+
+// ---- "Load into..." select mode (A600-aa3): one disk into several drives ---------------------------------------------------
+// A tap on "Select several" turns the list into check marks; "Load (N)" loads the disk into every checked drive, each its own
+// way (doLoadSelected with the drive named). Only drives of the fleet can be checked (peer >= 0), and only while heard: the
+// wired Gotek and the ESP-NOW dongle are only ever the one target in the list (gtBuildTargets never mixes them with the
+// fleet), so there is nothing to mix. One drive per FluxDrive: the same disk in DF0 and DF1 is two volumes of one name to
+// AmigaDOS, so checking one of its drives unchecks the other.
+inline bool gtSelectable(const GtTarget& t) { return t.peer >= 0 && t.linked; }
+inline int gtSelectableCount(const GtTarget* t, int n) { int c = 0; for (int i = 0; i < n; i++) if (gtSelectable(t[i])) c++; return c; }
+inline bool gtSelOffered(const GtTarget* t, int n) { return gtSelectableCount(t, n) >= 2; }   // "Select several" only when there is a choice
+inline int gtSelCount(const bool* sel, int n) { int c = 0; for (int i = 0; i < n; i++) if (sel[i]) c++; return c; }
+inline bool gtIsFluxKind(GtKind k) { return k == GT_FLUX_DF0 || k == GT_FLUX_DF1; }
+// Toggle target i; false = not selectable (nothing changes).
+inline bool gtSelToggle(const GtTarget* t, int n, bool* sel, int i) {
+  if (i < 0 || i >= n || !gtSelectable(t[i])) return false;
+  if (sel[i]) { sel[i] = false; return true; }
+  sel[i] = true;
+  if (gtIsFluxKind(t[i].kind))
+    for (int j = 0; j < n; j++) if (j != i && t[j].peer == t[i].peer && gtIsFluxKind(t[j].kind)) sel[j] = false;
+  return true;
+}
+// Drop the marks a rebuilt list no longer allows (a drive gone quiet).
+inline void gtSelPrune(const GtTarget* t, int n, bool* sel) { for (int i = 0; i < n; i++) if (sel[i] && !gtSelectable(t[i])) sel[i] = false; }
+
+// The picker with the select key: the key at the header's right; in select mode a "Load (N)" key along the bottom and the list
+// above it. Tap codes as gtPickTap, plus the two keys (a zero-sized key is not there).
+#define GT_PICK_SEL_W_WIDE   176   // "Select several" at size 2 (landscape)
+#define GT_PICK_SEL_W_NARROW 96    // "Select" (portrait)
+enum { GT_PICK_SELECT = 2, GT_PICK_LOAD = 3 };
+inline GtPickLayout gtPickLayoutSel(int w, int h, int n, int scroll, bool offer, bool selecting, CuRect* selKey, CuRect* loadKey) {
+  GtPickLayout L = gtPickLayout(w, h, n, 0);
+  const int sw = w >= 400 ? GT_PICK_SEL_W_WIDE : GT_PICK_SEL_W_NARROW;
+  *selKey  = (offer && !selecting) ? CuRect{w - CU_MARGIN - sw, 4, sw, CU_KEY} : CuRect{0, 0, 0, 0};
+  *loadKey = selecting ? CuRect{CU_MARGIN, h - CU_MARGIN - CU_KEY, w - 2 * CU_MARGIN, CU_KEY} : CuRect{0, 0, 0, 0};
+  if (selecting) L.view.h = loadKey->y - CU_GAP - L.view.y;
+  const int t = L.cards * (GT_PICK_CARD_H + CU_GAP) - CU_GAP - L.view.h;
+  L.maxScroll = t > 0 ? t : 0;
+  L.scroll = scroll < 0 ? 0 : (scroll > L.maxScroll ? L.maxScroll : scroll);
+  for (int i = 0; i < L.cards; i++) L.card[i] = CuRect{L.view.x, L.view.y + i * (GT_PICK_CARD_H + CU_GAP) - L.scroll, L.view.w, GT_PICK_CARD_H};
+  return L;
+}
+inline int gtPickTapSel(const GtPickLayout& L, const CuRect& selKey, const CuRect& loadKey, int x, int y, const bool* enabled) {
+  if (selKey.w > 0 && cuContains(selKey, x, y)) return GT_PICK_SELECT;
+  if (loadKey.w > 0 && cuContains(loadKey, x, y)) return GT_PICK_LOAD;
+  return gtPickTap(L, x, y, enabled);
+}
+
+// ---- Fleet (A600-aa3): one card per device, one row per drive ------------------------------------------------------------------
+// Settings > Drives > Fleet. A card: the device's name (size 3), a grey line (kind and state, size 2), then one 48 px row per
+// drive: a FluxDrive's DF0, and DF1 while its beacon says df1; a dongle's one drive. A row: the caption (DF0 / DF1; none for a
+// dongle), the disk or "empty", STORING... while a FluxDrive's disk is not in flash yet, and on a FluxDrive a WP switch (inert
+// without a disk). A dongle of a club build may carry a Claim / Unclaim key at the card's top right. A third drive is one more
+// row: GT_FL_MAX_DRIVES.
+#define GT_FL_MAX_CARDS  16   // PF_MAX_PEERS
+#define GT_FL_MAX_DRIVES 3    // DF0, DF1, and room for DF2
+#define GT_FL_HEAD_H     56   // the name (y + 8, 24 px) and the grey line (y + 34, 16 px)
+#define GT_FL_WP_W       112  // "WP" and the switch: the touch area of a drive's write protect
+#define GT_FL_CLAIM_W    128
+
+struct GtFleetDrive { int drive; bool flux, has; const char* disk; bool wp, storing; };
+// The drive rows of one device (a GtPeerIn as gtBuildTargets takes it); returns how many.
+inline int gtFleetDrives(const GtPeerIn& p, GtFleetDrive* out, int max) {
+  int n = 0; const bool fx = gtIsFlux(p);
+  if (n < max) out[n++] = GtFleetDrive{0, fx, p.loaded, (p.loaded && p.disk) ? p.disk : "", fx && p.wp, fx && p.loaded && !p.stored};
+  if (fx && p.df1 && n < max) out[n++] = GtFleetDrive{1, true, p.loaded1, (p.loaded1 && p.disk1) ? p.disk1 : "", p.wp1, p.loaded1 && !p.stored1};
+  return n;
+}
+
+struct GtFleetCardIn { int rows; bool claim; bool wp[GT_FL_MAX_DRIVES]; };   // wp[k]: row k has a live WP switch
+struct GtFleetCard { CuRect card, claim, row[GT_FL_MAX_DRIVES], wp[GT_FL_MAX_DRIVES]; int rows; bool hasClaim, wpOn[GT_FL_MAX_DRIVES]; };
+struct GtFleetLayout { CuRect back, view; int cards, scroll, maxScroll, contentBottom; GtFleetCard c[GT_FL_MAX_CARDS]; };
+enum { GT_FL_NONE = 0, GT_FL_BACK = 1, GT_FL_CLAIM = 100, GT_FL_WP = 1000 };   // CLAIM + card, WP + card * GT_FL_MAX_DRIVES + row
+inline int gtFleetRows(int r) { return r < 0 ? 0 : (r > GT_FL_MAX_DRIVES ? GT_FL_MAX_DRIVES : r); }
+inline int gtFleetCardH(int rows) { return GT_FL_HEAD_H + gtFleetRows(rows) * CU_KEY + CU_GAP; }
+// tail: room under the last card for a line of text (claimed elsewhere), part of what scrolls.
+inline GtFleetLayout gtFleetLayout(int w, int h, const GtFleetCardIn* in, int n, int scroll, int tail = 0) {
+  GtFleetLayout L; memset(&L, 0, sizeof L);
+  L.back = CuRect{CU_MARGIN, 4, 104, CU_KEY};
+  const int vy = cuBottom(L.back) + CU_GAP;
+  L.view = CuRect{CU_MARGIN, vy, w - 2 * CU_MARGIN, h - CU_MARGIN - vy};
+  L.cards = n < 0 ? 0 : (n > GT_FL_MAX_CARDS ? GT_FL_MAX_CARDS : n);
+  int total = tail;
+  for (int i = 0; i < L.cards; i++) total += gtFleetCardH(in[i].rows) + (i ? CU_GAP : 0);
+  L.maxScroll = total > L.view.h ? total - L.view.h : 0;
+  L.scroll = scroll < 0 ? 0 : (scroll > L.maxScroll ? L.maxScroll : scroll);
+  int y = L.view.y - L.scroll;
+  for (int i = 0; i < L.cards; i++) {
+    GtFleetCard& c = L.c[i];
+    c.rows = gtFleetRows(in[i].rows); c.hasClaim = in[i].claim;
+    c.card  = CuRect{L.view.x, y, L.view.w, gtFleetCardH(c.rows)};
+    c.claim = CuRect{cuRight(c.card) - CU_GAP - GT_FL_CLAIM_W, y + 4, GT_FL_CLAIM_W, CU_KEY};
+    for (int k = 0; k < c.rows; k++) {
+      c.row[k]  = CuRect{c.card.x + CU_GAP, y + GT_FL_HEAD_H + k * CU_KEY, c.card.w - 2 * CU_GAP, CU_KEY};
+      c.wp[k]   = CuRect{cuRight(c.row[k]) - GT_FL_WP_W, c.row[k].y, GT_FL_WP_W, CU_KEY};
+      c.wpOn[k] = in[i].wp[k];
+    }
+    y += c.card.h + CU_GAP;
+  }
+  L.contentBottom = y - CU_GAP;
+  return L;
+}
+inline int gtFleetTap(const GtFleetLayout& L, int x, int y) {
+  if (cuContains(L.back, x, y)) return GT_FL_BACK;
+  if (!cuContains(L.view, x, y)) return GT_FL_NONE;   // a card scrolled under the header cannot be tapped there
+  for (int i = 0; i < L.cards; i++) {
+    const GtFleetCard& c = L.c[i];
+    if (!cuContains(c.card, x, y)) continue;
+    if (c.hasClaim && cuContains(c.claim, x, y)) return GT_FL_CLAIM + i;
+    for (int k = 0; k < c.rows; k++) if (c.wpOn[k] && cuContains(c.wp[k], x, y)) return GT_FL_WP + i * GT_FL_MAX_DRIVES + k;
+    return GT_FL_NONE;
+  }
+  return GT_FL_NONE;
+}
+
+// A drive's write protect over FluxDrive's own web entry (the one its page uses): POST /api/disk/wp?drive=<d>&on=<0|1>.
+// 200 = done (the body is its status); 400 / 403 / 409 = refused, the body says why ({"ok":false,"err":"..."}: no disk, DF1
+// is off, no motor wire, locked); 503 = busy (the drive is in use; FluxDrive does not keep the change for later); anything
+// else, or no answer (HTTPClient's codes are negative) = failed.
+enum { GT_WP_DONE = 0, GT_WP_REFUSED, GT_WP_BUSY, GT_WP_FAILED };
+inline int gtWpOutcome(int http) {
+  if (http == 200) return GT_WP_DONE;
+  if (http == 400 || http == 403 || http == 409) return GT_WP_REFUSED;
+  if (http == 503) return GT_WP_BUSY;
+  return GT_WP_FAILED;
+}
+inline int gtWpPath(char* buf, size_t cap, int drive, bool on) {
+  if (cap == 0) return 0;
+  const char* d = drive == 1 ? "1" : drive == 2 ? "2" : "0";
+  const char* parts[] = {"/api/disk/wp?drive=", d, "&on=", on ? "1" : "0"};
+  size_t n = 0;
+  for (const char* p : parts) for (; *p && n + 1 < cap; p++) buf[n++] = *p;
+  buf[n] = 0; return (int)n;
+}
+// The "err" string of FluxDrive's JSON answer ("" when there is none); a backslash escape keeps the character after it.
+inline bool gtJsonErr(const char* body, char* out, size_t cap) {
+  if (cap == 0) return false;
+  out[0] = 0;
+  if (body == nullptr) return false;
+  const char* k = strstr(body, "\"err\"");
+  if (k == nullptr) return false;
+  k += 5;
+  while (*k == ' ' || *k == ':') k++;
+  if (*k != '"') return false;
+  k++;
+  size_t n = 0;
+  while (*k && *k != '"' && n + 1 < cap) { if (*k == '\\' && k[1]) { out[n++] = k[1]; k += 2; continue; } out[n++] = *k++; }
+  out[n] = 0;
+  return n > 0;
+}

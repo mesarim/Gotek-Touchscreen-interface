@@ -38,9 +38,9 @@
 // ENROLL in the fleet contract. Same word "claim", a different thing - see the Registry.
 #define PF_CMD_CLAIM   0x0A
 // FluxDrive (v2 writing): + one byte, 1 = write protect the disk in it, 0 = writable. Answer 0x01, or 0x00 without a disk
-// (pfSetWriteProtect, fdWpFailText). Never sent to any other board.
+// (fdWpFailText). Never sent to any other board. A600-aa3: the screen no longer sends it (DF0 only); it uses FluxDrive's
+// POST /api/disk/wp?drive=&on= instead (fleetSetWp), which reaches DF1 too.
 #define PF_CMD_SET_WP  0x10
-#define PF_WP_WAIT_MS  5000   // FluxDrive answers after its re-insert (about 1 s); silent this long = the Amiga is reading
 // A dongle claimed by a club screen answers 0x05 to anyone else. A default panel can
 // still receive that byte - it just has no concept of a claim, so it reports the refusal
 // as what it is to that user rather than naming a lock. Ignoring 0x05 is not an option:
@@ -750,41 +750,8 @@ static bool pfSendCommand(const String &ip, uint16_t port, uint8_t cmd, String &
   return false;
 }
 
-// Write protect on the disk in FluxDrive `peer` (an index into g_pfPeers), v2 writing. BLOCKING, loop() only. FluxDrive
-// makes the change a re-insert (the drive empty for 1 s, then the disk back: AmigaDOS reads the tab when a disk comes in)
-// and answers after it. While the Amiga reads it holds the command and makes the change after the load: the wait here
-// runs out first (err FD_WP_BUSY) and the beacon's "wp" shows the change when it is made - the beacon is what the screen
-// goes by. An 0x01 sets the roster's "wp" at once and drops the beacons queued meanwhile (sent before the answer: the old
-// state, the empty drive of the re-insert); the next beacon says it too. Any other board: nothing is sent.
-static bool pfSetWriteProtect(int peer, bool on, String &err) {
-  if (peer < 0 || peer >= g_pfPeerN || !fdIsFluxDrive(g_pfPeers[peer].board.c_str())) { err = "not a FluxDrive"; return false; }
-  const String ip = g_pfPeers[peer].ip, id = g_pfPeers[peer].id, tag = g_pfPeers[peer].tag;   // copies: the roster may change meanwhile
-  const uint16_t port = g_pfPeers[peer].tcp;
-#if defined(GTI_FLEET)
-  if (pfPeerLockedElsewhere(ip)) { err = "locked to another screen"; return false; }
-#endif
-  WiFiClient c;
-  if (!c.connect(ip.c_str(), port, 5000)) { err = "connect failed"; gLog("[fleet] write protect %s on FluxDrive %s: %s\n", on ? "on" : "off", ip.c_str(), err.c_str()); return false; }
-  c.setNoDelay(true);
-#if defined(GTI_FLEET)
-  if (g_panel_token_ok && pfPeerWantsAuth(ip)) {   // #lock: gated like every other command
-    if (!pfWriteAuth(c, err)) { c.stop(); return false; }
-  }
-#endif
-  const uint8_t f[6] = { 0xFF, 0xFF, 0xFF, 0xFF, PF_CMD_SET_WP, (uint8_t)(on ? 1 : 0) };
-  c.write(f, sizeof f);
-  const uint32_t t0 = millis();
-  while (c.available() < 1 && millis() - t0 < PF_WP_WAIT_MS) { if (!c.connected()) break; delay(5); }
-  const int a = c.available() >= 1 ? c.read() : -1;
-  const uint32_t waited = millis() - t0;
-  c.stop();
-  const char *why = fdWpFailText(a, fdReplyRanOut(a >= 0, waited, PF_WP_WAIT_MS));
-  gLog("[fleet] write protect %s on FluxDrive %s (%s): %s after %u ms\n", on ? "on" : "off", tag.c_str(), ip.c_str(), why ? why : "done", (unsigned)waited);
-  if (why) { err = why; return false; }
-  const int k = pfPeerIdx(id); if (k >= 0) g_pfPeers[k].wp = on;
-  pfDropQueuedBeacons();
-  return true;
-}
+// A600-aa3: write protect is set over FluxDrive's own web entry (the sketch's fleetSetWp, per drive); the TCP SET_WP sender
+// (pfSetWriteProtect) is gone with the old fleet manager.
 
 // #24: set-next-name — tell the dongle the pretty display name before the disk.
 // Best-effort: an old dongle ignores the unknown escape (one-sided safe), so a
