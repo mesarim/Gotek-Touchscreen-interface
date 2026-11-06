@@ -54,7 +54,9 @@
 #include <mdns.h>          // 1.6.11: mdns_delegate_hostname_add - the leader keeps its own name too
 #include <DNSServer.h>     // WEBBY: captive portal in AP mode
 #include <WiFiUdp.h>       // FLEET: UDP discovery beacon (home-WiFi only)
-#include "../shared/webui.h"   // PANEL: the shared SPA, gzipped, straight from firmware/shared (1.6.12: no stale copy per dongle folder)
+#include "../shared/app_page.h"    // UI unity: the one app of every device (FluxDrive's), gzipped (shared/app/make_app.py)
+#include "../shared/app_fonts.h"   // UI unity: Inter, the app's font
+#include "../shared/skin_tokens.h" // UI unity: the skin's eleven colours (/api/skin)
 
 // 1.6.8: ONE source, TWO builds - the SuperMini and the Waveshare S3-Zero differ only in their status light.
 //   0 = SuperMini  : two plain LEDs, red GPIO1 + blue GPIO2. GPIO21 is never touched.   (THIS sketch)
@@ -1126,6 +1128,53 @@ static void loadTheme(){
   String t=f.readStringUntil('\n'); t.trim(); f.close();
   if(t.length()) g_active_theme=t;
 }
+// UI unity: the dongle's skin, its eleven colours only (skin_tokens.h), in /SKIN.JSON as {"name":...,"tokens":{...}};
+// NEO when the file or a token is missing. GET /api/skin is open; POST /api/skin (that JSON, up to 1 KB) and
+// POST /api/skin/reset are owner-gated like every other change.
+static skin::Tokens g_skin = skin::neo();
+static String g_skin_name = "NEO";
+static bool saveSkin(const String& name, const skin::Tokens& t){
+  char tok[320]; skin::to_json(t, tok, sizeof tok);
+  if(!LittleFS.begin(true)) return false;
+  File f=LittleFS.open("/SKIN.JSON","w"); if(!f) return false;
+  f.print(String("{\"name\":\"") + jsonEsc(name) + "\",\"tokens\":" + tok + "}"); f.close();
+  return true;
+}
+static void loadSkin(){
+  if(!LittleFS.begin(true)) return;
+  File f=LittleFS.open("/SKIN.JSON","r"); if(!f) return;
+  const String j=f.readString(); f.close();
+  g_skin = skin::from_json(j.c_str());
+  char nm[32]; if (skin::find_value(j.c_str(), "name", nm, sizeof nm) && nm[0]) g_skin_name = nm;
+}
+static String skinJson(){
+  char tok[320]; skin::to_json(g_skin, tok, sizeof tok);
+  return String("{\"name\":\"") + jsonEsc(g_skin_name) + "\",\"tokens\":" + tok + "}";
+}
+static void apiSkin(){ server.send(200, "application/json", skinJson()); }
+static void apiSkinSave(){
+  if (!webOwnerOk()) { webRefuse(); return; }
+  const String body = server.arg("plain");
+  if (body.length() == 0 || body.length() > 1024) { server.send(400, "application/json", "{\"error\":\"a skin of up to 1 KB\",\"code\":\"bad_skin\"}"); return; }
+  char nm[32] = "";
+  String name = skin::find_value(body.c_str(), "name", nm, sizeof nm) ? String(nm) : String("Custom");
+  name.trim();
+  if (name.length() == 0 || name.length() > 24 || !asciiPrintable(name) || name.indexOf('\\') >= 0 || name.indexOf('"') >= 0) name = "Custom";   // no \ or ": /SKIN.JSON keeps the name as it is
+  const skin::Tokens t = skin::from_json(body.c_str());
+  if (!saveSkin(name, t)) { server.send(503, "application/json", "{\"error\":\"busy\"}"); return; }
+  g_skin = t; g_skin_name = name;
+  server.send(200, "application/json", skinJson());
+}
+static void apiSkinReset(){
+  if (!webOwnerOk()) { webRefuse(); return; }
+  if (!saveSkin("NEO", skin::neo())) { server.send(503, "application/json", "{\"error\":\"busy\"}"); return; }
+  g_skin = skin::neo(); g_skin_name = "NEO";
+  server.send(200, "application/json", skinJson());
+}
+static void sendFont(){
+  server.sendHeader("Cache-Control", "public, max-age=31536000, immutable");
+  server.send_P(200, "font/woff2", (PGM_P)inter_latin_woff2, inter_latin_woff2_len);
+}
 //  Web OTA (added by OMEGAWARE): flash a new firmware over WiFi into the
 // inactive OTA slot. Uses the WebServer upload stream (Webby is not our
 // client-parser firmware). First byte must be 0xE9 (an ESP32 image).
@@ -1228,6 +1277,8 @@ static void apiSystemInfo(){
   j += "\"internet\":"; j += (g_webmode==1 ? "true" : "false"); j += ",";
   j += "\"internet_ssid\":\""; j += (g_webmode==1 ? jsonEsc(g_ssid) : String("")); j += "\",";
   j += "\"internet_ip\":\""; j += (g_webmode==1 ? ip : String("")); j += "\",";
+  j += "\"device\":\"Webby\",\"lang\":\"en\",\"drive_names\":[\"Gotek\"],";   // UI unity: what this dongle can do; the app shows only those tabs and rows
+  j += "\"features\":[\"drives\",\"images:any\",\"skins\",\"ota\",\"wifi\",\"fleet\",\"classic\"],";
   j += "\"has_sd\":false,\"has_display\":false,\"has_ota\":true,";
   j += "\"ftp_enabled\":false,\"dav_enabled\":false,\"log_enabled\":false";
   j += "}";
@@ -1314,12 +1365,11 @@ static void sendDonglePage(){   // size-trim: stored gzipped (dongle_page.h)
   server.send_P(200, "text/html", (PGM_P)dongle_page_gz, dongle_page_gz_len);
 }
 static void handleWebUI(){
-  // In AP/setup mode (not yet on home WiFi) serve the focused setup portal
-  // with the WiFi scan + feedback, not the rich SPA  the SPA is for once
-  // the dongle is on the LAN. Fixes "/" opening the wrong page during setup.
-  if (g_webmode != 1) { sendDonglePage(); return; }
+  // UI unity: the one app in every mode (it has Wi-Fi setup and loading a disk); the setup page with the access point
+  // and ESP-NOW stays at /classic, linked from More.
   server.sendHeader("Content-Encoding","gzip");
-  server.send_P(200, "text/html", (PGM_P)webui_gz, webui_gz_len);
+  server.sendHeader("Cache-Control","no-cache");
+  server.send_P(200, "text/html", (PGM_P)app_page_gz, app_page_gz_len);
 }
 
 static void handleRoot(){ sendDonglePage(); }
@@ -1471,7 +1521,11 @@ static void startWebServer(){
   // PANEL: Dimmy's SPA is the front door; the old simple page stays at /classic.
   server.on("/", HTTP_GET, [](){ if (isPortalProbe()) { sendCaptive(); return; } handleWebUI(); });   // 1.6.11: signpost in the phone's sign-in window
   server.on("/classic", HTTP_GET, handleRoot);
-  server.on("/app", HTTP_GET, [](){ server.sendHeader("Content-Encoding","gzip"); server.send_P(200, "text/html", (PGM_P)webui_gz, webui_gz_len); });   // 1.6.9: the full shared interface in any mode (linked from the setup page)
+  server.on("/app", HTTP_GET, [](){ server.sendHeader("Location", "/"); server.send(302, "text/plain", ""); });   // UI unity: the app is at / now
+  server.on("/fonts/inter-latin.woff2", HTTP_GET, sendFont);
+  server.on("/api/skin",       HTTP_GET,  apiSkin);
+  server.on("/api/skin",       HTTP_POST, apiSkinSave);
+  server.on("/api/skin/reset", HTTP_POST, apiSkinReset);
   // legacy simple endpoints (kept  the /classic page and any old clients use them)
   server.on("/status", HTTP_GET, [](){ server.send(200,"application/json", statusJson()); });
   server.on("/upload", HTTP_POST, handleUploadDone, handleUpload);
@@ -1666,6 +1720,7 @@ void setup() {
   loadWifiCfg();      // WEBBY: home creds + mode
   fixPref();          // 1.6.15: PREF= (or derived from MODE=/SSID= for a file written by older firmware)
   loadTheme();        // PANEL: last-chosen web theme
+  loadSkin();         // UI unity: the app's skin (NEO when none)
 
   // WEBBY: pick the radio mode.
   bool tryWifi = (g_pref == "auto" && g_ssid.length() > 0);
