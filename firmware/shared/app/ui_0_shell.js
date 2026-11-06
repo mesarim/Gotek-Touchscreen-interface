@@ -27,6 +27,16 @@ var UI = (function () {
     });
   };
   ui.post = function (url) { return ui.api(url, { method: 'POST' }); };
+  // A POST of a transfer (a disk from the NAS, onto the stick): an answer that does not come within ms (the drive restarted
+  // or left the network) fails it, so its job ends and the next can start.
+  ui.postJob = function (url, ms) {
+    if (typeof AbortController === 'undefined') return ui.post(url);
+    var c = new AbortController(), t = setTimeout(function () { c.abort(); }, ms || 120000);
+    return ui.api(url, { method: 'POST', signal: c.signal }).then(function (j) { clearTimeout(t); return j; }, function (e) {
+      clearTimeout(t);
+      throw e && e.name === 'AbortError' ? new Error(ui.t('job_timeout')) : e;
+    });
+  };
   ui.q = function (o) {
     return Object.keys(o).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(o[k]); }).join('&');
   };
@@ -200,11 +210,16 @@ var UI = (function () {
   // hide: el shows only while there is something to say.
   ui.jobBind = function (el, key, textEl, disk, hide) {
     var b = { el: el, key: key, text: textEl || null, disk: disk == null ? null : disk, hide: !!hide, fill: document.createElement('i') };
+    bars = bars.filter(function (x) { return x.el.isConnected; });   // rows of views gone by
     el.classList.add('jobbed');
     el.insertBefore(b.fill, el.firstChild);
     bars.push(b);
     paintBar(b);
     return el;
+  };
+  // textEl got its own text after it was bound (a row that looks up its disks): that is the text to come back to.
+  ui.jobText = function (textEl) {
+    bars.forEach(function (b) { if (b.text === textEl && b.saved) { b.orig = textEl.textContent; b.saved = false; paintBar(b); } });
   };
   function paintBars() {
     bars = bars.filter(function (b) { return b.el.isConnected; });

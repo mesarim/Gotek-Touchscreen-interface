@@ -11,7 +11,7 @@
   ui.loadFromStick = function (path, drive) { ui.beforeLoad(drive, function () { stickLoad(path, drive); }); };
   function stickLoad(path, drive) {
     if (!ui.jobStart(path.slice(0, path.lastIndexOf('/')), 'load', [path], [ui.driveName(drive)])) return;
-    ui.post('/api/usb/load?' + ui.q({ path: path, drive: drive })).then(function () {
+    ui.postJob('/api/usb/load?' + ui.q({ path: path, drive: drive }), 30000).then(function () {
       var tries = 0;
       (function wait() {
         ui.api('/status').then(function (s) {

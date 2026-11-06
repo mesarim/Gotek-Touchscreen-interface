@@ -119,12 +119,19 @@
     };
     var join = ui.h('<button class="btn primary" style="width:100%">' + ui.esc(ui.t('join')) + '</button>');
     join.onclick = function () {
+      if ((ui.status || {}).loaded && ui.features.indexOf('classic') >= 0) {   // a dongle restarts to join: its RAM disk goes
+        ui.confirm(ui.t('wifi_lose_q'), ui.t('wifi_lose_s'), ui.t('join'), save);
+        return;
+      }
+      save();
+    };
+    function save() {
       var b = new URLSearchParams();
       b.append('ssid', sel.value);
       b.append('pass', pw.input.value);
       ui.api('/savewifi', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: b.toString() })
         .then(function () { ui.toast(ui.t('saved')); }).catch(ui.fail);
-    };
+    }
     view.appendChild(ui.h('<div class="dim" style="margin-bottom:8px">' + ui.esc(ui.t('network')) + '</div>'));
     view.appendChild(sel);
     view.appendChild(scan);

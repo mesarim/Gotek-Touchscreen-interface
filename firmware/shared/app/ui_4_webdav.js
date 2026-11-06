@@ -27,7 +27,7 @@
       if (!ui.jobStart(dir, 'load', disks, drives.map(ui.driveName))) return;
       (function next(k) {
         if (k >= disks.length) { ui.jobSet({ state: 'ok' }); ui.refresh(); return; }
-        ui.post('/api/dav/load?' + ui.q({ path: join(dir, disks[k]), drive: drives[k] }))
+        ui.postJob('/api/dav/load?' + ui.q({ path: join(dir, disks[k]), drive: drives[k] }))
           .then(function () { ui.jobSet({ done: k + 1 }); ui.refresh(); next(k + 1); })
           .catch(function (e) { ui.jobSet({ state: 'fail', error: ui.errText(e) }); });
       })(0);
@@ -39,7 +39,7 @@
     if (!ui.jobStart(dir, 'keep', disks)) return;
     (function next(i) {
       if (i >= disks.length) { ui.jobSet({ state: 'ok' }); ui.games = null; return; }
-      ui.post('/api/dav/keep?' + ui.q({ path: join(dir, disks[i]) })).then(function () { ui.jobSet({ done: i + 1 }); next(i + 1); })
+      ui.postJob('/api/dav/keep?' + ui.q({ path: join(dir, disks[i]) })).then(function () { ui.jobSet({ done: i + 1 }); next(i + 1); })
         .catch(function (e) {
           if (e.code === 'exists') { ui.jobSet({ done: i + 1 }); next(i + 1); return; }
           ui.jobSet({ state: 'fail', error: ui.errText(e) });
@@ -79,10 +79,11 @@
     lookups.push(function () {
       return list(join(dir, name)).then(function (l) {
         var plan = L.diskPlan(l.files);
-        if (!plan.disks.length) { small.textContent = l.dirs.length ? l.dirs.length + ' ›' : ''; return; }
+        if (!plan.disks.length) { small.textContent = l.dirs.length ? l.dirs.length + ' ›' : ''; ui.jobText(small); return; }
         var only = L.df0Only(name);
         small.textContent = (plan.disks.length === 1 ? ui.t('disk_1') : ui.t('disks_n', plan.disks.length)) +
           (only ? ' · ' + ui.t('df0_only') : '');
+        ui.jobText(small);
         var b0 = ui.h('<button class="btn">DF0</button>');
         b0.onclick = function (e) { e.stopPropagation(); loadGame(join(dir, name), plan, false); };
         btns.appendChild(b0);

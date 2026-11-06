@@ -1159,7 +1159,7 @@ static void apiSkinSave(){
   char nm[32] = "";
   String name = skin::find_value(body.c_str(), "name", nm, sizeof nm) ? String(nm) : String("Custom");
   name.trim();
-  if (name.length() == 0 || name.length() > 24 || !asciiPrintable(name)) name = "Custom";
+  if (name.length() == 0 || name.length() > 24 || !asciiPrintable(name) || name.indexOf('\\') >= 0 || name.indexOf('"') >= 0) name = "Custom";   // no \ or ": /SKIN.JSON keeps the name as it is
   const skin::Tokens t = skin::from_json(body.c_str());
   if (!saveSkin(name, t)) { server.send(503, "application/json", "{\"error\":\"busy\"}"); return; }
   g_skin = t; g_skin_name = name;
