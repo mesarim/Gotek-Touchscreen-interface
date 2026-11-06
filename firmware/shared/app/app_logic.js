@@ -44,7 +44,8 @@ var AppLogic = (function () {
       lose_q: 'Replace the disk in {0}?', lose_s: 'What the Amiga wrote to it is not on the stick and will be lost.', replace: 'Replace',
       keep_failed: 'not kept: the stick refused it', fav: 'Favourite', favs: 'Favourites', no_favs: 'No favourites yet.', contents: 'Contents', reading: 'Reading the disk…', refresh: 'Refresh', df0_only: 'DF0 only', keep_one: 'Only this disk', keep_game: 'Whole game ({0} disks)',
       keep_all: 'Whole game on stick', keeping_n: 'Keeping {0} of {1}…', kept_n: '{0} disks on the stick', dav_https_s: 'Encrypted (the certificate is not checked)', head_pos: 'Head', selftest: 'Self-test', selftest_s: 'The drive checks itself on cylinder 40, head 1',
-      up_any: 'ADF, DSK, IMG, HFE… up to {0} KB', classic: 'Setup page (access point, ESP-NOW)'
+      up_any: 'ADF, DSK, IMG, HFE… up to {0} KB', job_load: 'Disk {0} of {1} → {2}…', job_keep: 'Disk {0} of {1} to the stick…', job_in: 'disk {0} in {1}',
+      job_kept_all: 'All {0} disks on the stick', job_kept_1: 'On the stick', job_fail: 'Disk {0}: {1}', job_busy: 'Wait: another transfer is still running', classic: 'Setup page (access point, ESP-NOW)'
     },
     nl: {
       tab_drives: 'Drives', tab_games: 'Games', tab_files: 'Bestanden', tab_webdav: 'WebDAV', tab_more: 'Meer',
@@ -73,7 +74,8 @@ var AppLogic = (function () {
       lose_q: 'Disk in {0} vervangen?', lose_s: 'Wat de Amiga erop schreef staat niet op de stick en gaat verloren.', replace: 'Vervangen',
       keep_failed: 'niet bewaard: de stick weigerde', fav: 'Favoriet', favs: 'Favorieten', no_favs: 'Nog geen favorieten.', contents: 'Inhoud', reading: 'Disk lezen…', refresh: 'Vernieuwen', df0_only: 'alleen DF0', keep_one: 'Alleen deze disk', keep_game: 'Hele spel ({0} disks)',
       keep_all: 'Hele spel op stick', keeping_n: 'Bewaren {0} van {1}…', kept_n: '{0} disks op de stick', dav_https_s: 'Versleuteld (het certificaat wordt niet gecontroleerd)', head_pos: 'Kop', selftest: 'Zelftest', selftest_s: 'De drive test zichzelf op cilinder 40, kop 1',
-      up_any: 'ADF, DSK, IMG, HFE… tot {0} KB', classic: 'Instelpagina (access point, ESP-NOW)'
+      up_any: 'ADF, DSK, IMG, HFE… tot {0} KB', job_load: 'Disk {0} van {1} → {2}…', job_keep: 'Disk {0} van {1} naar de stick…', job_in: 'disk {0} in {1}',
+      job_kept_all: 'Alle {0} disks staan op de stick', job_kept_1: 'Op de stick', job_fail: 'Disk {0}: {1}', job_busy: 'Wacht: er loopt nog een overdracht', classic: 'Instelpagina (access point, ESP-NOW)'
     }
   };
 
@@ -161,6 +163,22 @@ var AppLogic = (function () {
     card('DF0', st.loaded, st.name, st.wp, st.df0 && st.df0.stick && st.df0.stick.kept, st.stored);
     if (st.df1 && st.df1.on) card('DF1', st.df1.mounted, st.df1.name, st.df1.wp, st.df1.stick && st.df1.stick.kept, st.df1.stored);
     return cards;
+  }
+
+  // A job: one or more disks loaded into drives (kind 'load', to: each disk's drive name) or kept on the stick (kind 'keep'),
+  // done disks finished, part the percent of the current one, state run | ok | fail (error). The bar in the row that
+  // started it fills with jobPct and says jobText, until it is really done (Dimitri 6 Nov).
+  function jobPct(j) {
+    if (j.state === 'ok') return 100;
+    return Math.round((j.done + (j.part || 0) / 100) / j.disks.length * 100);
+  }
+  function jobText(j, lang) {
+    var n = j.disks.length, i = j.done + 1;
+    if (j.state === 'fail') return t('job_fail', lang, [i, j.error || '']);
+    if (j.state === 'run') return j.kind === 'keep' ? t('job_keep', lang, [i, n]) : t('job_load', lang, [i, n, j.to[j.done]]);
+    if (j.kind === 'keep') return n === 1 ? t('job_kept_1', lang) : t('job_kept_all', lang, [n]);
+    var s = j.disks.map(function (d, k) { return t('job_in', lang, [k + 1, j.to[k]]); }).join(', ');
+    return s.charAt(0).toUpperCase() + s.slice(1);
   }
 
   // A load into drive (0 or 1) would lose what the Amiga wrote to the disk there: a NAS disk not kept, or a stick disk
@@ -405,6 +423,6 @@ var AppLogic = (function () {
            driveCards: driveCards, gameTiles: gameTiles, program: program, crumbs: crumbs, fileUrl: fileUrl,
            skinFromFile: skinFromFile, replaceWarning: replaceWarning, letters: letters, pickRows: pickRows,
            diskPlan: diskPlan, gameForDisk: gameForDisk, nasFolder: nasFolder, favKey: favKey, adfDir: adfDir, titleKey: titleKey,
-           df0Only: df0Only, withStick: withStick };
+           df0Only: df0Only, withStick: withStick, jobPct: jobPct, jobText: jobText };
 })();
 if (typeof module !== 'undefined') module.exports = AppLogic;

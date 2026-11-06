@@ -6,21 +6,23 @@
   var search = '';
   var favOnly = false;
 
-  // A load from the stick runs on the device: /status usb.job shows it; the toast says how it ended.
+  // A load from the stick runs on the device: /status usb.job says how far (percent) until done; a job of the disk's
+  // folder, so the game's title bar fills while it runs.
   ui.loadFromStick = function (path, drive) { ui.beforeLoad(drive, function () { stickLoad(path, drive); }); };
   function stickLoad(path, drive) {
-    ui.toast(ui.t('loading'));
-    return ui.post('/api/usb/load?' + ui.q({ path: path, drive: drive })).then(function () {
+    if (!ui.jobStart(path.slice(0, path.lastIndexOf('/')), 'load', [path], [ui.driveName(drive)])) return;
+    ui.post('/api/usb/load?' + ui.q({ path: path, drive: drive })).then(function () {
       var tries = 0;
       (function wait() {
         ui.api('/status').then(function (s) {
           var j = s.usb && s.usb.job;
-          if (j && j.state === 'done') { ui.toast(ui.t('loaded', ui.driveName(drive))); ui.refresh(); return; }
-          if (j && j.state === 'error') { ui.toast(ui.t('failed', j.error), true); return; }
-          if (++tries < 60) setTimeout(wait, 1000);
-        }).catch(function () { if (++tries < 60) setTimeout(wait, 1000); });
+          if (j && j.state === 'done') { ui.jobSet({ done: 1, state: 'ok' }); ui.refresh(); return; }
+          if (j && j.state === 'error') { ui.jobSet({ state: 'fail', error: j.error }); return; }
+          if (j && j.percent) ui.jobSet({ part: j.percent });
+          if (++tries < 120) setTimeout(wait, 1000); else ui.jobSet({ state: 'fail', error: ui.t('busy_try') });
+        }).catch(function () { if (++tries < 120) setTimeout(wait, 1000); else ui.jobSet({ state: 'fail', error: ui.t('busy_try') }); });
       })();
-    }).catch(ui.fail);
+    }).catch(function (e) { ui.jobSet({ state: 'fail', error: ui.errText(e) }); });
   }
 
   function initials(title) {
@@ -65,9 +67,11 @@
   function page(view, g) {
     var p = L.program(g, ui.status, ui.features);
     var cur = Math.max(0, p.inDrive.indexOf('DF0'));
-    var top = ui.h('<div class="bar2"><button class="btn">‹ ' + ui.esc(ui.t('tab_games')) + '</button><h2>' + ui.esc(g.title) + '</h2></div>');
+    var top = ui.h('<div class="bar2"><button class="btn">‹ ' + ui.esc(ui.t('tab_games')) + '</button><h2>' + ui.esc(g.title) +
+      '<small></small></h2></div>');
     top.querySelector('button').onclick = function () { ui.go('games'); };
     top.appendChild(ui.star(L.favKey(g)));
+    ui.jobBind(top, g.folder, top.querySelector('small'));   // fills while a disk of this game loads
     view.appendChild(top);
     var wrap = ui.h('<div class="prog"><div class="cover">' + (g.cover ? '<img alt="" src="' + ui.esc(p.coverUrl) + '">' : '') +
       '</div><div class="info"></div></div>');

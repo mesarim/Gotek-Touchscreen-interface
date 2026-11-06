@@ -171,6 +171,63 @@ var UI = (function () {
     return b;
   };
 
+  // The running (or last) transfer and the bars that show it (AppLogic.jobPct/jobText; Dimitri 6 Nov: a toast went
+  // before the work was done). A bar is a row or line bound to the job's key (a folder): the whole job fills it; a disk's
+  // row (bound with its disk) fills for that disk only. One job at a time; a finished one stays 30 s, a failed one until
+  // the next starts.
+  ui.job = null;
+  var bars = [], jobTimer = null;
+  function paintBar(b) {
+    var j = ui.job, pct = 0, text = null, run = false;
+    if (j && j.key === b.key) {
+      if (b.disk == null) {
+        pct = L.jobPct(j); text = L.jobText(j, ui.lang); run = j.state === 'run';
+      } else {
+        var k = j.disks.indexOf(b.disk);
+        if (k >= 0 && k < j.done) { pct = 100; text = '✓ ' + (j.kind === 'keep' ? ui.t('job_kept_1') : j.to[k]); }
+        else if (k >= 0 && k === j.done && j.state !== 'ok') { pct = j.part || 0; run = j.state === 'run'; text = L.jobText(j, ui.lang); }
+      }
+    }
+    b.fill.style.width = (run && !pct ? 100 : pct) + '%';
+    b.fill.className = 'fill' + (run ? ' run' : '') + (run && !pct ? ' wait' : '') + (text != null && j.state === 'fail' ? ' bad' : '');
+    if (b.text) {
+      if (text != null) { if (!b.saved) { b.orig = b.text.textContent; b.saved = true; } b.text.textContent = text; }
+      else if (b.saved) { b.text.textContent = b.orig; b.saved = false; }
+    }
+    if (b.hide) b.el.hidden = text == null;
+  }
+  // el fills with the job of `key` (of `disk` alone when given); textEl says what it does (its own text comes back after);
+  // hide: el shows only while there is something to say.
+  ui.jobBind = function (el, key, textEl, disk, hide) {
+    var b = { el: el, key: key, text: textEl || null, disk: disk == null ? null : disk, hide: !!hide, fill: document.createElement('i') };
+    el.classList.add('jobbed');
+    el.insertBefore(b.fill, el.firstChild);
+    bars.push(b);
+    paintBar(b);
+    return el;
+  };
+  function paintBars() {
+    bars = bars.filter(function (b) { return b.el.isConnected; });
+    bars.forEach(paintBar);
+  }
+  // A new job (null while one runs: the toast says so). to: each disk's drive name, for a load.
+  ui.jobStart = function (key, kind, disks, to) {
+    if (ui.job && ui.job.state === 'run') { ui.toast(ui.t('job_busy'), true); return null; }
+    clearTimeout(jobTimer);
+    ui.job = { key: key, kind: kind, disks: disks, to: to || [], done: 0, part: 0, state: 'run' };
+    paintBars();
+    return ui.job;
+  };
+  ui.jobSet = function (patch) {
+    var j = ui.job;
+    if (!j) return;
+    Object.keys(patch).forEach(function (k) { j[k] = patch[k]; });
+    paintBars();
+    if (j.state === 'ok' || j.state === 'fail') ui.toast(L.jobText(j, ui.lang), j.state === 'fail');
+    if (j.state === 'ok') jobTimer = setTimeout(function () { if (ui.job === j) { ui.job = null; paintBars(); } }, 30000);
+  };
+  ui.errText = function (e) { return e && e.code === 'motor' ? ui.t('busy_try') : (e && e.message) || String(e); };
+
   ui.applySkin = function (tokens) { L.applySkin(tokens, document.documentElement.style); };
 
   ui.start = function () {

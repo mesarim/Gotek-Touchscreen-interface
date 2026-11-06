@@ -19,38 +19,37 @@
     return ui.api('/api/dav/list?' + ui.q(fresh ? { path: p, fresh: 1 } : { path: p })).then(function (l) { lists[p] = l; return l; });
   }
 
-  function loadNas(full, drive) {
-    return new Promise(function (resolve, reject) {
-      ui.beforeLoad(drive, function () {
-        ui.toast(ui.t('loading'));
-        ui.post('/api/dav/load?' + ui.q({ path: full, drive: drive }))
-          .then(function () { ui.toast(ui.t('loaded', ui.driveName(drive))); ui.refresh(); resolve(); }).catch(function (e) { ui.fail(e); reject(e); });
-      });
-    });
+  // Disks of the NAS folder dir into drives (0, 1), one after the other, as one job: the questions first (a disk that
+  // would lose the Amiga's writes), then the folder's row, its page and each disk's row fill until every disk is in.
+  function loadDisks(dir, disks, drives) {
+    (function ask(i) {
+      if (i < drives.length) { ui.beforeLoad(drives[i], function () { ask(i + 1); }); return; }
+      if (!ui.jobStart(dir, 'load', disks, drives.map(ui.driveName))) return;
+      (function next(k) {
+        if (k >= disks.length) { ui.jobSet({ state: 'ok' }); ui.refresh(); return; }
+        ui.post('/api/dav/load?' + ui.q({ path: join(dir, disks[k]), drive: drives[k] }))
+          .then(function () { ui.jobSet({ done: k + 1 }); ui.refresh(); next(k + 1); })
+          .catch(function (e) { ui.jobSet({ state: 'fail', error: ui.errText(e) }); });
+      })(0);
+    })(0);
   }
-  // Disks of a NAS folder onto the stick, one after the other (each with the folder's cover and notes); one already
-  // there is passed over.
+  // Disks of a NAS folder onto the stick, one after the other (each with the folder's cover and notes), as one job; one
+  // already there is passed over.
   function keepDisks(dir, disks) {
-    var done = 0;
+    if (!ui.jobStart(dir, 'keep', disks)) return;
     (function next(i) {
-      if (i >= disks.length) {
-        ui.toast(disks.length > 1 ? ui.t('kept_n', done) : ui.t('kept'));
-        ui.games = null;
-        return;
-      }
-      ui.toast(disks.length > 1 ? ui.t('keeping_n', i + 1, disks.length) : ui.t('loading'));
-      ui.post('/api/dav/keep?' + ui.q({ path: join(dir, disks[i]) })).then(function () { done++; next(i + 1); })
+      if (i >= disks.length) { ui.jobSet({ state: 'ok' }); ui.games = null; return; }
+      ui.post('/api/dav/keep?' + ui.q({ path: join(dir, disks[i]) })).then(function () { ui.jobSet({ done: i + 1 }); next(i + 1); })
         .catch(function (e) {
-          if (e.code === 'exists') { done++; next(i + 1); return; }
-          ui.fail(e);
+          if (e.code === 'exists') { ui.jobSet({ done: i + 1 }); next(i + 1); return; }
+          ui.jobSet({ state: 'fail', error: ui.errText(e) });
         });
     })(0);
   }
   // A game folder: disk 1 into DF0, and with both: disk 2 into DF1.
   function loadGame(dir, plan, both) {
-    loadNas(join(dir, plan.disks[0]), 0).then(function () {
-      if (both && plan.disks[1]) return loadNas(join(dir, plan.disks[1]), 1);
-    }).catch(function () {});
+    if (both && plan.disks[1]) loadDisks(dir, plan.disks.slice(0, 2), [0, 1]);
+    else loadDisks(dir, [plan.disks[0]], [0]);
   }
 
   function diskSheet(name) {
@@ -58,7 +57,7 @@
     var b = [{ label: ui.t('cancel') }];
     ['DF0', 'DF1'].forEach(function (id) {
       if (id === 'DF1' && ui.features.indexOf('df1') < 0) return;
-      b.push({ label: 'Load ' + id, cls: 'primary', fn: function () { loadNas(full, id === 'DF1' ? 1 : 0).catch(function () {}); } });
+      b.push({ label: 'Load ' + id, cls: 'primary', fn: function () { loadDisks(path, [name], [id === 'DF1' ? 1 : 0]); } });
     });
     if (ui.features.indexOf('storage:usb') >= 0) b.push({ label: ui.t('keep'), keep: true, fn: function () {
       var all = (lists[path] ? L.diskPlan(lists[path].files).disks : [name]);
@@ -75,6 +74,7 @@
       '<span class="btns" style="flex:none"></span></div>');
     var small = r.querySelector('small'), btns = r.querySelector('.btns');
     r.insertBefore(ui.star(L.favKey(null, join(dir, name))), r.firstChild);
+    ui.jobBind(r, join(dir, name), small);
     r.onclick = function () { path = join(dir, name); letter = ''; search = ''; ui.render(); };
     lookups.push(function () {
       return list(join(dir, name)).then(function (l) {
@@ -141,6 +141,8 @@
         acts.appendChild(ka);
       }
       body.appendChild(acts);
+      var jl = ui.h('<div class="jobline"><span class="t"></span></div>');   // the whole job, under the buttons
+      body.appendChild(ui.jobBind(jl, path, jl.firstChild, null, true));
     }
     var rows = ui.h('<div></div>');
     if (big) {
@@ -172,6 +174,7 @@
         var r = ui.h('<div class="row"><div><span class="t">' + ui.esc(f.name) + '</span><small>' +
           Math.round(f.size / 1024) + ' KB</small></div><span class="v">⋯</span></div>');
         r.onclick = function () { diskSheet(f.name); };
+        ui.jobBind(r, path, r.querySelector('small'), f.name);
         rows.appendChild(r);
       });
       lookUp(lookups, me);
