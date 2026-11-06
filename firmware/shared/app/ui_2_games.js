@@ -15,7 +15,7 @@
       (function wait() {
         ui.api('/status').then(function (s) {
           var j = s.usb && s.usb.job;
-          if (j && j.state === 'done') { ui.toast(ui.t('loaded', 'DF' + drive)); ui.refresh(); return; }
+          if (j && j.state === 'done') { ui.toast(ui.t('loaded', ui.driveName(drive))); ui.refresh(); return; }
           if (j && j.state === 'error') { ui.toast(ui.t('failed', j.error), true); return; }
           if (++tries < 60) setTimeout(wait, 1000);
         }).catch(function () { if (++tries < 60) setTimeout(wait, 1000); });

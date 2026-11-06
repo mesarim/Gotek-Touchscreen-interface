@@ -59,7 +59,7 @@ var UI = (function () {
   // Before a load into drive (0 or 1): asked first when what the Amiga wrote to the disk there would be lost.
   ui.beforeLoad = function (drive, fn) {
     if (!L.replaceWarning(ui.status, drive)) { fn(); return; }
-    ui.confirm(ui.t('lose_q', 'DF' + drive), ui.t('lose_s'), ui.t('replace'), fn);
+    ui.confirm(ui.t('lose_q', ui.driveName(drive)), ui.t('lose_s'), ui.t('replace'), fn);
   };
   ui.confirm = function (title, text, label, fn) {
     ui.sheet(title, text, [{ label: ui.t('cancel') }, { label: label, cls: 'danger', fn: fn }]);
@@ -119,13 +119,15 @@ var UI = (function () {
     var strip = $('strip');
     strip.innerHTML = '';
     ui.driveCards().forEach(function (c) {
-      var d = ui.h('<div class="drv' + (c.loaded ? ' in' : '') + (c.dimmed ? ' off' : '') + '"><span><b>' + c.id + '</b>' +
+      var d = ui.h('<div class="drv' + (c.loaded ? ' in' : '') + (c.dimmed ? ' off' : '') + '"><span><b>' + ui.esc(c.label) + '</b>' +
         ui.esc(c.name) + '</span><span class="dim">' + ui.esc(c.line) + '</span></div>');
       d.onclick = function () { ui.go('drives'); };
       strip.appendChild(d);
     });
   };
   ui.driveCards = function () { return []; };   // Task 10 (ui_1_drives.js)
+  // drive 0 or 1 as the device calls it: DF0/DF1, or a dongle's 'Gotek'
+  ui.driveName = function (d) { var n = (ui.info && ui.info.drive_names) || []; return n[d] || 'DF' + d; };
 
   ui.refresh = function () {
     return Promise.all([ui.api('/status'), ui.api('/api/drive').catch(function () { return null; })]).then(function (r) {

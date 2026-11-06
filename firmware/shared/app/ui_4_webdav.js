@@ -24,7 +24,7 @@
       ui.beforeLoad(drive, function () {
         ui.toast(ui.t('loading'));
         ui.post('/api/dav/load?' + ui.q({ path: full, drive: drive }))
-          .then(function () { ui.toast(ui.t('loaded', 'DF' + drive)); ui.refresh(); resolve(); }).catch(function (e) { ui.fail(e); reject(e); });
+          .then(function () { ui.toast(ui.t('loaded', ui.driveName(drive))); ui.refresh(); resolve(); }).catch(function (e) { ui.fail(e); reject(e); });
       });
     });
   }

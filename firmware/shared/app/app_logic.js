@@ -147,14 +147,15 @@ var AppLogic = (function () {
     if (kept === 'failed') return t('keep_failed', lang);
     return '';
   }
-  function driveCards(st, drive, lang) {
+  // names: what the device calls its drives (/api/system/info drive_names; a Webby dongle: ['Gotek']), DF0 and DF1 when none.
+  function driveCards(st, drive, lang, names) {
     st = st || {};
     var busy = !!(drive && drive.motor);
     var cards = [];
     function card(id, loaded, name, wp, kept, stored) {
       var line = keptLine(kept, lang) || (!loaded ? '' : stored === undefined ? Math.round((st.size || 0) / 1024) + ' KB' :
         stored ? t('stored', lang) + ' · 880 KB' : t('storing', lang));
-      cards.push({ id: id, loaded: !!loaded, name: loaded ? name : t('no_disk', lang), wp: !!wp, line: line,
+      cards.push({ id: id, label: (names && names[id === 'DF1' ? 1 : 0]) || id, loaded: !!loaded, name: loaded ? name : t('no_disk', lang), wp: !!wp, line: line,
                    dimmed: busy, reason: busy ? t('amiga_busy', lang) : '' });
     }
     card('DF0', st.loaded, st.name, st.wp, st.df0 && st.df0.stick && st.df0.stick.kept, st.stored);

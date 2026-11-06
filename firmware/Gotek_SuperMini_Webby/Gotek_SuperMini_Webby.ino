@@ -1277,7 +1277,7 @@ static void apiSystemInfo(){
   j += "\"internet\":"; j += (g_webmode==1 ? "true" : "false"); j += ",";
   j += "\"internet_ssid\":\""; j += (g_webmode==1 ? jsonEsc(g_ssid) : String("")); j += "\",";
   j += "\"internet_ip\":\""; j += (g_webmode==1 ? ip : String("")); j += "\",";
-  j += "\"device\":\"Webby\",\"lang\":\"en\",";   // UI unity: what this dongle can do; the app shows only those tabs and rows
+  j += "\"device\":\"Webby\",\"lang\":\"en\",\"drive_names\":[\"Gotek\"],";   // UI unity: what this dongle can do; the app shows only those tabs and rows
   j += "\"features\":[\"drives\",\"images:any\",\"skins\",\"ota\",\"wifi\",\"fleet\",\"classic\"],";
   j += "\"has_sd\":false,\"has_display\":false,\"has_ota\":true,";
   j += "\"ftp_enabled\":false,\"dav_enabled\":false,\"log_enabled\":false";
