@@ -1291,12 +1291,14 @@ RTC_NOINIT_ATTR uint32_t g_bootMagic;
 // A600-calm9: the last panic (see gtiPanicKeep); RTC NOINIT survives the panic's restart.
 RTC_NOINIT_ATTR uint32_t g_pn_magic, g_pn_core, g_pn_exc, g_pn_pc, g_pn_n, g_pn_bt[24];
 RTC_NOINIT_ATTR char g_pn_task[20], g_pn_why[64];   // the running task and the panic's reason
+RTC_NOINIT_ATTR uint32_t g_pn_bad;                  // the backtrace was cut short (corrupt)
 // The Arduino core's panic hook (set_arduino_panic_handler, in setup): it hands over the place and the backtrace before
 // IDF prints them and restarts.
 static void gtiPanicKeep(arduino_panic_info_t *info, void *arg){
   (void)arg;
   g_pn_core=(uint32_t)info->core; g_pn_exc=0; g_pn_pc=(uint32_t)info->pc; g_pn_n=0;
   for(unsigned i=0;i<info->backtrace_len&&g_pn_n<24;i++) g_pn_bt[g_pn_n++]=info->backtrace[i];
+  g_pn_bad=info->backtrace_corrupt?1:0;
   const char*tn=pcTaskGetName(NULL); strlcpy(g_pn_task,tn?tn:"?",sizeof g_pn_task);
   strlcpy(g_pn_why,info->reason?info->reason:"?",sizeof g_pn_why);
   g_pn_magic=0xC0DEDEADu;
@@ -9296,9 +9298,10 @@ void setup(){
     // A600-calm9: the last panic's place and backtrace, kept in RTC memory by gtiPanicKeep (the core's panic hook), so a crash
     // can be decoded without a serial cable: xtensa-esp32s3-elf-addr2line -pfiaC -e <this build's .elf> <the addresses>
     if(g_pn_magic==0xC0DEDEADu){
+      g_pn_task[sizeof g_pn_task-1]=0; g_pn_why[sizeof g_pn_why-1]=0;   // RTC memory: never print past its end
       char bt[400]; int n=snprintf(bt,sizeof bt,"[panic] task %s (%s) core %u pc 0x%08X backtrace",g_pn_task,g_pn_why,(unsigned)g_pn_core,(unsigned)g_pn_pc);
       for(uint32_t i=0;i<g_pn_n&&i<24&&n<(int)sizeof bt-12;i++) n+=snprintf(bt+n,sizeof bt-n," 0x%08X",(unsigned)g_pn_bt[i]);
-      gLog("%s\n",bt);
+      gLog("%s%s\n",bt,g_pn_bad==1?" (corrupt)":"");
       g_pn_magic=0;
     }
     gLog("[sd] clock %d kHz, 1-bit, internal pull-ups on CMD/D0 %s | guard %s (drive %d via %d)\n",g_sd_freq,g_sdpullup_cfg?"ON":"OFF",
@@ -10135,7 +10138,18 @@ static void handleTap(uint16_t px,uint16_t py){
 static void themeRedraw(){   // A600-theme1: after a theme change from the web page
   if(g_car_active){drawCarousel();gfx_flush();} else {drawFullUI();gfx_flush();}
 }
+// The loop task's stack: its lowest free point so far, logged each time it gets lower (checked every 5 s), so the 16 KB
+// can be seen to hold on the device (a send with several drives in reach is the deepest path known).
+static void loopStackWatch(){
+  static uint32_t last=0, low=0xFFFFFFFFu;
+  if(millis()-last<5000) return;
+  last=millis();
+  const uint32_t w=(uint32_t)uxTaskGetStackHighWaterMark(NULL);
+  if(w<low){ low=w; gLog("[stack] loop task: %u bytes never used\n",(unsigned)w); }
+}
+
 void loop(){
+  loopStackWatch();
   { static uint32_t batNext = 0;          // every 5s: 16 ADC samples, nothing needs it faster
     if ((int32_t)(millis() - batNext) >= 0) { batNext = millis() + 5000; battery_poll(); } }
   webPanelService();   // one web client + one queued DAV load per pass (merge step 2)
