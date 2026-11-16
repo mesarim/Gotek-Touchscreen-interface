@@ -352,13 +352,21 @@
     "appOffset": 65536,
     "builds": [
       {
+        "v": "5.9.42-lab8-P4G7",
+        "ch": "lab",
+        "date": "2026-11-16",
+        "full": "firmware/p4g7-lab/manifest-5.9.42-lab8.json",
+        "app": "firmware/p4g7-lab/GTi-P4G7-5.9.42-lab8-update.bin",
+        "note": "LAB - HD (1.76 MB) disks over wireless: before the first HD send the 7\" asks the dongle how big a disk it holds and remembers the answer (needs Webby 1.6.9 or newer on the dongle). Settings > HIVEMIND is always shown in wireless mode, and only blocks HD when there are MuCa dongles to fan out to. HD games show just the amber HD chip. Includes the lab7 Gotek cable fix. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). The Gotek / PC goes on the HIGH-SPEED USB-C (next to the Ethernet jack) - the other port is for flashing only.",
+        "latest": true
+      },
+      {
         "v": "5.9.42-lab7-P4G7",
         "ch": "lab",
         "date": "2026-11-16",
         "full": "firmware/p4g7-lab/manifest-5.9.42-lab7.json",
         "app": "firmware/p4g7-lab/GTi-P4G7-5.9.42-lab7-update.bin",
-        "note": "LAB - Gotek cable fix: the Gotek can now read games over the USB cable (lab6 was seen by the Gotek but could not read a disk; a PC was fine). Tested on an A600 and an A500. Everything else as lab6. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). The Gotek / PC goes on the HIGH-SPEED USB-C (next to the Ethernet jack) - the other port is for flashing only.",
-        "latest": true
+        "note": "LAB - Gotek cable fix: the Gotek can now read games over the USB cable (lab6 was seen by the Gotek but could not read a disk; a PC was fine). Tested on an A600 and an A500. Everything else as lab6. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). The Gotek / PC goes on the HIGH-SPEED USB-C (next to the Ethernet jack) - the other port is for flashing only."
       },
       {
         "v": "5.9.42-lab6-P4G7",
