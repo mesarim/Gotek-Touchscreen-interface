@@ -98,6 +98,7 @@ bool   espnowSendDiskTo(const uint8_t* mac, uint32_t size);   // multicast: send
 bool   espnowSendDiskHome(const String& ssid, const String& pass, String& ioIp, uint32_t size);
 void   espnowSetFlingName(const String& nameWithExt);   // 1.6.3 wireless DSK fix: real filename+ext for the next fling (sent as CMD_SET_NAME)
 void   espnowSendEject();
+bool   espnowProbeDiskMax(uint32_t need);   // lab8-P4G7 (P4 only): does the selected dongle hold an image this big? Asks its /status over Wi-Fi once, then remembers
 // lab3-P4G7 (P4 Wi-Fi-direct only): the sketch registers its save writer once; the radio layer then pulls the dongle's game
 // saves back before every new send to that dongle and on EJECT. Results for the UI after espnowSendEject():
 void   espnowSetSavePersist(SavePersistCb cb);
