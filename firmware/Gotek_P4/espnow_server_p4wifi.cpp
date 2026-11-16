@@ -17,8 +17,8 @@
 //   home-WiFi load (STA + mDNS gotekomega.local), hivemind fan-out (sequential
 //   AP-hop), and save-writeback fetch (escape 0x01 GET_SAVE).
 // What is stubbed (needs ESP-NOW, or a dongle HTTP call — flagged v2):
-//   eject-to-dongle, lock/unlock/unpair, live "online" heartbeat, board-caps (HD)
-//   detection. Loading is the critical path and is fully functional.
+//   eject-to-dongle, lock/unlock/unpair, live "online" heartbeat. Loading is the critical path and is fully functional.
+//   (lab6-P4: HD detection is no longer stubbed - espnowProbeDiskMax asks the dongle's /status over Wi-Fi.)
 //
 // Build: use EITHER this file OR espnow_server_p4stub.cpp, never both (duplicate
 // symbols). Rename the stub to .bak and drop this in.
@@ -58,6 +58,7 @@ volatile uint32_t g_espnow_dirty_size   = 0;
 static uint8_t _dongle_mac[6] = {0};   // the dongle's AP BSSID (WiFi identity on P4)
 static String  _dongle_ip     = "";    // home-mode LAN IP; AP-mode is always 192.168.4.1
 static char    _dongle_ssid[33] = "";  // lab3-P4G7: its real Wi-Fi name (GotekOMEGA-XXXX since Webby 1.6.8), kept in CONFIG.TXT XIAO_SSID=
+static uint32_t _dongle_max = 0;       // lab6-P4: biggest image the selected dongle holds ("max" of its /status, Webby 1.6.9+), CONFIG.TXT XIAO_MAX=; 0 = not asked yet
 static SavePersistCb _persistCb = nullptr;   // lab3-P4G7: the sketch's save writer
 static bool    _diskOut = false;              // lab3-P4G7: this screen sent a disk to _dongle_mac and has not ejected it
 volatile int   g_p4_eject_result = -1;
@@ -96,6 +97,7 @@ static void loadConfig() {
     }
     if (line.startsWith("XIAO_IP=")) _dongle_ip = line.substring(8);
     if (line.startsWith("XIAO_SSID=")) { String v=line.substring(10); strncpy(_dongle_ssid, v.c_str(), 32); _dongle_ssid[32]=0; }   // lab3-P4G7
+    if (line.startsWith("XIAO_MAX=")) _dongle_max = (uint32_t)strtoul(line.c_str()+9, nullptr, 10);   // lab6-P4
   }
   f.close();
 }
@@ -109,10 +111,12 @@ static void saveConfig() {
     if(line.startsWith("XIAO_MAC=")){ lines+="XIAO_MAC="+String(macStr)+"\n"; w1=true; }
     else if(line.startsWith("XIAO_IP=")){ lines+="XIAO_IP="+_dongle_ip+"\n"; w2=true; }
     else if(line.startsWith("XIAO_SSID=")){ lines+="XIAO_SSID="+String(_dongle_ssid)+"\n"; w3=true; }   // lab3-P4G7
+    else if(line.startsWith("XIAO_MAX=")){ continue; }   // lab6-P4: rewritten below (dropped when not known)
     else lines+=line+"\n"; } fr.close(); }
   if(!w1) lines+="XIAO_MAC="+String(macStr)+"\n";
   if(!w2 && _dongle_ip.length()) lines+="XIAO_IP="+_dongle_ip+"\n";
   if(!w3 && _dongle_ssid[0]) lines+="XIAO_SSID="+String(_dongle_ssid)+"\n";
+  if(_dongle_max) lines+="XIAO_MAX="+String((unsigned long)_dongle_max)+"\n";   // lab6-P4
   File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE);
   if(fw){ fw.print(lines); fw.close(); }
 }
@@ -180,6 +184,7 @@ bool espnowScanSelect(int i) {
   memcpy(_dongle_mac, _scanned[i].mac, 6);
   _dongle_ip = String(_scanned[i].ip);
   strncpy(_dongle_ssid, _scanned[i].ssid, 32); _dongle_ssid[32]=0;   // lab3-P4G7: remembered (also in CONFIG.TXT)
+  _dongle_max = 0; g_espnow_dongle_board = 0;   // lab6-P4: a new dongle - its disk size is asked again before the first HD send
   _diskOut = false;
   g_espnow_paired = true;
   g_espnow_link_just_established = true;
@@ -500,11 +505,42 @@ void espnowSendLock(const uint8_t*){}
 void espnowSendUnlock(const uint8_t*){}
 void espnowForgetActive(const uint8_t* mac){
   if (memcmp(_dongle_mac, mac, 6)!=0) return;
-  g_espnow_paired=false; memset(_dongle_mac,0,6); _dongle_ip="";
+  g_espnow_paired=false; memset(_dongle_mac,0,6); _dongle_ip=""; _dongle_max=0; g_espnow_dongle_board=0;   // lab6-P4: + its disk size
   String lines=""; File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
   if(fr){ while(fr.available()){ String line=fr.readStringUntil('\n'); line.trim();
-    if(line.startsWith("XIAO_MAC=")||line.startsWith("XIAO_IP=")) continue; lines+=line+"\n"; } fr.close(); }
+    if(line.startsWith("XIAO_MAC=")||line.startsWith("XIAO_IP=")||line.startsWith("XIAO_MAX=")) continue; lines+=line+"\n"; } fr.close(); }
   File fw=SD_MMC.open("/CONFIG.TXT",FILE_WRITE); if(fw){ fw.print(lines); fw.close(); }
+}
+
+// ── lab6-P4: HD over wireless. The 3.5" learns that a dongle holds HD from its ESP-NOW pairing reply (pad[1], Webby
+// 1.6.12+); the P4 cannot receive ESP-NOW, so g_espnow_dongle_board stayed 0 and every HD send was refused. Instead the
+// P4 asks the dongle itself: join its Wi-Fi, GET /status, read "max" (the biggest image it holds, Webby 1.6.9+). The answer
+// is remembered (CONFIG.TXT XIAO_MAX=), so only the first HD send to a dongle pays for the extra join (~4 s). A remembered
+// size too small is asked again every time (the dongle may have been updated since). No "max" = an older dongle = DD only.
+static uint32_t httpStatusMax(const char* ip){
+  WiFiClient c;
+  if (!c.connect(ip, 80)) { P4LOG("[P4WIFI] size check: no web page on %s\n", ip); return 0; }
+  c.print("GET /status HTTP/1.0\r\nHost: "); c.print(ip); c.print("\r\nConnection: close\r\n\r\n");
+  String body; uint32_t t0=millis();
+  while ((c.connected() || c.available()) && millis()-t0 < 3000) {
+    while (c.available()) { char ch=(char)c.read(); if (body.length() < 4096) body += ch; t0=millis(); }
+    delay(5);
+  }
+  c.stop(); delay(20);
+  int k = body.indexOf("\"max\":");
+  if (k < 0) { P4LOG("[P4WIFI] size check: the dongle does not say (older than Webby 1.6.9)\n"); return 0; }
+  return (uint32_t)strtoul(body.c_str()+k+6, nullptr, 10);
+}
+bool espnowProbeDiskMax(uint32_t need){
+  if (!g_espnow_paired) return false;
+  if (_dongle_max >= need) { g_espnow_dongle_board = 1; return true; }   // known from an earlier check
+  if (!joinDongle(_dongle_mac, 12000, "size check")) return false;
+  uint32_t mx = httpStatusMax(DONGLE_AP_IP);
+  WiFi.disconnect(); delay(50);
+  P4LOG("[P4WIFI] size check: dongle holds up to %lu bytes, this disk needs %lu - %s\n", (unsigned long)mx, (unsigned long)need, mx>=need?"OK":"too small");
+  if (mx && mx != _dongle_max) { _dongle_max = mx; saveConfig(); }
+  g_espnow_dongle_board = (mx >= need) ? 1 : 0;
+  return mx >= need;
 }
 
 // ── Save writeback fetch — AP-direct join + escape 0x01 GET_SAVE (WiFi part of the JC path) ──
