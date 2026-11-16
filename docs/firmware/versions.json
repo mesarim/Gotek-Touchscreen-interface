@@ -352,13 +352,21 @@
     "appOffset": 65536,
     "builds": [
       {
+        "v": "5.9.42-lab7-P4G7",
+        "ch": "lab",
+        "date": "2026-11-16",
+        "full": "firmware/p4g7-lab/manifest-5.9.42-lab7.json",
+        "app": "firmware/p4g7-lab/GTi-P4G7-5.9.42-lab7-update.bin",
+        "note": "LAB - Gotek cable fix: the Gotek can now read games over the USB cable (lab6 was seen by the Gotek but could not read a disk; a PC was fine). Tested on an A600 and an A500. Everything else as lab6. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). The Gotek / PC goes on the HIGH-SPEED USB-C (next to the Ethernet jack) - the other port is for flashing only.",
+        "latest": true
+      },
+      {
         "v": "5.9.42-lab6-P4G7",
         "ch": "lab",
         "date": "2026-10-05",
         "full": "firmware/p4g7-lab/manifest-5.9.42-lab6.json",
         "app": "firmware/p4g7-lab/GTi-P4G7-5.9.42-lab6-update.bin",
-        "note": "LAB - NEO look with a switch: Settings > NEO ON/OFF (CONFIG.TXT NEO=) brings back the classic layout and colour themes. Also: matrix saver fills the whole 1024 px, symmetric synthwave cracktro, the omega GTi brand, disk loads / ejects / USB host logged in gti.log. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). The Gotek / PC goes on the HIGH-SPEED USB-C (next to the Ethernet jack) - the other port is for flashing only.",
-        "latest": true
+        "note": "LAB - NEO look with a switch: Settings > NEO ON/OFF (CONFIG.TXT NEO=) brings back the classic layout and colour themes. Also: matrix saver fills the whole 1024 px, symmetric synthwave cracktro, the omega GTi brand, disk loads / ejects / USB host logged in gti.log. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). The Gotek / PC goes on the HIGH-SPEED USB-C (next to the Ethernet jack) - the other port is for flashing only."
       },
       {
         "v": "5.9.42-lab4-P4G7",
