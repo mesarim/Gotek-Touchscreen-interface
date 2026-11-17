@@ -256,13 +256,21 @@
     "appOffset": 65536,
     "builds": [
       {
+        "v": "5.9.42-lab6-P4",
+        "ch": "lab",
+        "date": "2026-11-17",
+        "full": "firmware/p4-beta/manifest-5.9.42-lab6.json",
+        "app": "firmware/p4-beta/GTi-P4-5.9.42-lab6-update.bin",
+        "note": "LAB - HD (1.76 MB) disks over wireless: before the first HD send the 4.3\" asks the dongle how big a disk it holds and remembers the answer (needs Webby 1.6.9 or newer on the dongle). Settings > HIVEMIND is always shown in wireless mode, and only blocks HD when there are MuCa dongles to fan out to. HD games show just the amber HD chip. Not yet tested on a v1.3 board (the same change is tested on the 7\" and on the 4.3\" chip v3). Plug the P4 into the Gotek after the Amiga has started, or power it from a powered USB hub. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). After flashing, power it off and on once before saving games.",
+        "latest": true
+      },
+      {
         "v": "5.9.42-lab5-P4",
         "ch": "lab",
         "date": "2026-10-10",
         "full": "firmware/p4-beta/manifest-5.9.42-lab5.json",
         "app": "firmware/p4-beta/GTi-P4-5.9.42-lab5-update.bin",
-        "note": "LAB - FIX: loading over the cable now works on a standard Gotek (the P4's USB is High-Speed and told the Gotek 512-byte packets; it now says 64 at Full-Speed, 512 to a PC). Everything else as lab4: NEO look with a switch (Settings > NEO ON/OFF). Plug the P4 into the Gotek after the Amiga has started, or power it from a powered USB hub: at switch-on it can draw more than the Amiga's floppy power line likes. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). After flashing, power it off and on once before saving games.",
-        "latest": true
+        "note": "LAB - FIX: loading over the cable now works on a standard Gotek (the P4's USB is High-Speed and told the Gotek 512-byte packets; it now says 64 at Full-Speed, 512 to a PC). Everything else as lab4: NEO look with a switch (Settings > NEO ON/OFF). Plug the P4 into the Gotek after the Amiga has started, or power it from a powered USB hub: at switch-on it can draw more than the Amiga's floppy power line likes. Full image includes the WiFi co-processor (C6) firmware. For P4 chips revision v1.x (\"Before v3.00\"). After flashing, power it off and on once before saving games."
       },
       {
         "v": "5.9.42-lab4-P4",
