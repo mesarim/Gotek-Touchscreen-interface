@@ -323,13 +323,21 @@
     "appOffset": 65536,
     "builds": [
       {
+        "v": "5.9.42-lab6-P4V3",
+        "ch": "lab",
+        "date": "2026-11-17",
+        "full": "firmware/p4v3-lab/manifest-5.9.42-lab6-P4V3.json",
+        "app": "firmware/p4v3-lab/GTi-P4V3-5.9.42-lab6-update.bin",
+        "note": "LAB - HD (1.76 MB) disks over wireless: before the first HD send the 4.3\" asks the dongle how big a disk it holds and remembers the answer (needs Webby 1.6.9 or newer on the dongle). Settings > HIVEMIND is always shown in wireless mode, and only blocks HD when there are MuCa dongles to fan out to. HD games show just the amber HD chip. Tested on a rev 3.2 board. Its own bootloader (v3). Full image includes the WiFi co-processor (C6) firmware. ONLY for P4 chips revision v3.x (\"v3.00 or after\"); a v1.3 board won't start with it - use the chip v1.3 card. Plug the P4 into the Gotek after the Amiga has started, or use a powered USB hub. After flashing, power it off and on once before saving games.",
+        "latest": true
+      },
+      {
         "v": "5.9.42-lab5-P4V3",
         "ch": "lab",
         "date": "2026-10-19",
         "full": "firmware/p4v3-lab/manifest-5.9.42-lab5-P4V3.json",
         "app": "firmware/p4v3-lab/GTi-P4V3-5.9.42-lab5-update.bin",
-        "note": "LAB - the 4.3\" P4 lab5 for P4 chip v3.x (own sketch Gotek_P4_v3): loading over the cable works on a standard Gotek, NEO look with a switch. Its own bootloader (v3). Full image includes the WiFi co-processor (C6) firmware. ONLY for P4 chips revision v3.x (\"v3.00 or after\"); a v1.3 board won't start with it - use the chip v1.3 card. Plug the P4 into the Gotek after the Amiga has started, or use a powered USB hub. After flashing, power it off and on once before saving games.",
-        "latest": true
+        "note": "LAB - the 4.3\" P4 lab5 for P4 chip v3.x (own sketch Gotek_P4_v3): loading over the cable works on a standard Gotek, NEO look with a switch. Its own bootloader (v3). Full image includes the WiFi co-processor (C6) firmware. ONLY for P4 chips revision v3.x (\"v3.00 or after\"); a v1.3 board won't start with it - use the chip v1.3 card. Plug the P4 into the Gotek after the Amiga has started, or use a powered USB hub. After flashing, power it off and on once before saving games."
       }
     ]
   },
