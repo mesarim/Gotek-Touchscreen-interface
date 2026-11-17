@@ -406,9 +406,17 @@
     "chipFamily": "ESP32-S3",
     "builds": [
       {
-        "v": "Webby-1.6.10-supermini",
+        "v": "Webby-1.6.15-supermini",
         "ch": "stable",
         "latest": true,
+        "date": "2026-11-17",
+        "full": "firmware/supermini-beta/manifest-1.6.15-supermini.json",
+        "note": "STABLE. For the Super Mini (two small LEDs, red + blue); for a Waveshare S3-Zero (one colour LED) use the S3-Zero entry. FIX: the 3.5\" screen can now send HD (1.76 MB) ADFs to the Super Mini over wireless - the dongle tells the screen it holds HD (1.6.10 never did, so the screen said HD - NO WIRELESS); tested by Mez. Also since 1.6.10: a failed send leaves the dongle cleanly empty, the owner lock also guards the disk path, the dongle refuses a firmware image for another board, and MODE per dongle (auto / standalone / link). NEEDS GTi 5.9.41-lab14t or newer on the screen. Pair again after flashing (full wipe)."
+      },
+      {
+        "v": "Webby-1.6.10-supermini",
+        "ch": "stable",
+        "latest": false,
         "date": "2026-10-03",
         "full": "firmware/supermini-beta/manifest-1.6.10-supermini.json",
         "note": "STABLE (4 Oct, with the GTi A600 release). For the Super Mini (two small LEDs, red + blue); for a Waveshare S3-Zero (one colour LED) use the S3-Zero entry. NEEDS GTi 5.9.41-lab14t or newer on the screen. Same as 1.6.9, plus: the dongle's page (192.168.4.1) in Polish (checked by 8-Bitz) and Czech - a phone or browser set to either gets it automatically, or tap PL / CS. Pair again after flashing (full wipe)."
