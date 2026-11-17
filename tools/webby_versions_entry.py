@@ -10,7 +10,7 @@
 # (device key found from the entry), so nobody types a hash by hand. It never creates an entry or touches other fields.
 import argparse, hashlib, json, re, sys, pathlib
 
-BOARD_ID = {"supermini": 1, "zero": 2, "xiao": 3}   # same numbers as pad[2] / board_id on the dongle
+BOARD_ID = {"supermini": 1, "zero": 2, "xiao": 3, "fluxdrive": 4}   # same numbers as pad[2] / board_id on the dongle
 FLASH_MB = {1: 2, 2: 4, 3: 8, 4: 16}                 # flash-size nibble -> MB (esptool header: 0=1,1=2,2=4,3=8,4=16)
 
 def inspect(data):

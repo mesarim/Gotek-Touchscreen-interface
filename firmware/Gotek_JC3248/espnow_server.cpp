@@ -10,6 +10,7 @@
 #include <SD_MMC.h>
 #include <WiFiClient.h>
 #include <ESPmDNS.h>   // home-WiFi transport: resolve the dongle's gotek.local
+#include "fluxdrive_peer.h"
 bool cfgWriteAll(const String& text);   // S8: defined in Gotek_JC3248.ino
 
 #define ESPNOW_CHANNEL 6
@@ -54,6 +55,7 @@ bool espnowXiaoOnline() {
 // ── Save writeback state (v4.8.0) ──
 volatile uint8_t  g_espnow_dongle_caps  = 0;
 volatile uint8_t  g_espnow_dongle_board = 0;
+volatile uint8_t  g_espnow_dongle_kind  = 0;   // pad[2] of the pairing reply: 1 SuperMini, 2 Zero, 3 XIAO, 4 FluxDrive (fluxdrive_peer.h)
 volatile uint32_t g_espnow_load_id      = 0;
 volatile bool     g_espnow_dirty        = false;
 volatile uint32_t g_espnow_dirty_loadid = 0;
@@ -160,6 +162,7 @@ static void handleIncoming(const uint8_t* data, int len) {
     g_espnow_xiao_last_seen = millis();
     g_espnow_dongle_caps  = p->pad[0];   // v3.2.0+ dongles advertise the save protocol here
     g_espnow_dongle_board = p->pad[1];   // v5.x: 1 = HD-capable dongle (XIAO 8MB); 0 = DD-only / old dongle
+    g_espnow_dongle_kind  = p->pad[2];   // Webby 1.6.12+: which board it is; a FluxDrive says 4
 
     // Register XIAO as direct peer
     if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
@@ -179,6 +182,7 @@ static void handleIncoming(const uint8_t* data, int len) {
         if (line.startsWith("XIAO_MAC=")) { lines += "XIAO_MAC=" + String(macStr) + "\n"; written = true; }
         else if (line.startsWith("XIAO_IP=")) { lines += "XIAO_IP=" + _xiao_ip + "\n"; }
         else if (line.startsWith("XIAO_HD=")) { }   // S11: rewritten below
+        else if (line.startsWith("XIAO_KIND=")) { }   // rewritten below
         else if (line.startsWith("XIAO_KEY=") || line.startsWith("XIAO_SSID=")) { }   // lock-a: rewritten below
         else { lines += line + "\n"; }
       }
@@ -186,6 +190,7 @@ static void handleIncoming(const uint8_t* data, int len) {
     }
     if (!written) lines += "XIAO_MAC=" + String(macStr) + "\n";
     lines += "XIAO_HD=" + String((int)g_espnow_dongle_board) + "\n";   // S11: survives a reboot (was reset to 0, so HD flings were refused)
+    lines += "XIAO_KIND=" + String((int)g_espnow_dongle_kind) + "\n";
     if (_xiao_key.length())  lines += "XIAO_KEY="  + _xiao_key  + "\n";   // lock-a
     if (_xiao_ssid.length()) lines += "XIAO_SSID=" + _xiao_ssid + "\n";   // lock-a
     cfgWriteAll(lines);   // S8: tmp + rename (Gotek_JC3248.ino)
@@ -252,6 +257,7 @@ static void loadConfig() {
     }
     if (line.startsWith("XIAO_IP=")) _xiao_ip = line.substring(8);
     if (line.startsWith("XIAO_HD=")) g_espnow_dongle_board = (uint8_t)line.substring(8).toInt();   // S11
+    if (line.startsWith("XIAO_KIND=")) g_espnow_dongle_kind = (uint8_t)line.substring(10).toInt();
     if (line.startsWith("XIAO_KEY="))  _xiao_key  = line.substring(9);    // lock-a
     if (line.startsWith("XIAO_SSID=")) _xiao_ssid = line.substring(10);   // lock-a
   }
@@ -389,9 +395,10 @@ void espnowForgetActive(const uint8_t* mac){
   if (_xiaoPeer) { delete _xiaoPeer; _xiaoPeer = nullptr; }
   String lines=""; File fr=SD_MMC.open("/CONFIG.TXT",FILE_READ);
   if(fr){ while(fr.available()){ String line=fr.readStringUntil('\n'); line.trim();
-    if(line.startsWith("XIAO_MAC=")||line.startsWith("XIAO_IP=")||line.startsWith("XIAO_HD=")||line.startsWith("XIAO_KEY=")||line.startsWith("XIAO_SSID=")) continue; lines+=line+"\n"; } fr.close(); }
+    if(line.startsWith("XIAO_MAC=")||line.startsWith("XIAO_IP=")||line.startsWith("XIAO_HD=")||line.startsWith("XIAO_KIND=")||line.startsWith("XIAO_KEY=")||line.startsWith("XIAO_SSID=")) continue; lines+=line+"\n"; } fr.close(); }
   _xiao_key = ""; _xiao_ssid = "";   // lock-a
   g_espnow_dongle_board = 0;   // S11
+  g_espnow_dongle_kind = 0;
   cfgWriteAll(lines);   // S8: tmp + rename (Gotek_JC3248.ino)
 }
 
@@ -517,6 +524,9 @@ static bool tcpClaim(const char* ip){          // true = go ahead and send
     c.write(esc, 5); c.write(my, 6); c.write(&fl, 1); c.write(&L, 1); c.write((const uint8_t*)nm.c_str(), L);
     uint32_t t0 = millis(); while (!c.available() && millis()-t0 < 1500) delay(5);
     int r = c.available() ? c.read() : -1;
+    // A board without saves to lose would be "in use" (0x03) for its 0x02. Every board has them since FluxDrive v2
+    // (fdHasSaves), and a FluxDrive never answers 0x02 (spec section 6), so this no longer changes anything.
+    if (r == 0x02 && !fdHasSaves(fdBoardForKind(g_espnow_dongle_kind))) r = 0x03;
     if (r == 0x05) { c.stop(); delay(20); g_espnow_lock_refused = true; _claimCancelled = true; Serial.println("[TCP] dongle: not an owner (0x05)"); return false; }   // lock-a
     if (r != 0x02 && r != 0x03) { c.stop(); delay(20); return true; }
     char who[25] = {0}; t0 = millis(); while (!c.available() && millis()-t0 < 500) delay(2);
@@ -711,18 +721,23 @@ bool espnowSendDiskHome(const String& ssid, const String& pass, String& ioIp, ui
   WiFi.mode(WIFI_STA); delay(100);
   WiFi.persistent(false); WiFi.setAutoReconnect(false);
   WiFi.disconnect(false, true); delay(200);
+  // The strongest access point of the home network, not the first one heard (an all-channel scan sorted by signal);
+  // Arduino's setting back to its default after, so the dongle joins below (explicit BSSID + channel) scan as before.
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN); WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
   WiFi.begin(ssid.c_str(), pass.c_str());
+  WiFi.setScanMethod(WIFI_FAST_SCAN);
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) { delay(200); Serial.print("."); }
   Serial.println();
 
   bool ok = false;
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("[HOME] Joined. IP %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("[HOME] Joined. IP %s bssid %s ch %d rssi %d\n", WiFi.localIP().toString().c_str(), WiFi.BSSIDstr().c_str(), (int)WiFi.channel(), (int)WiFi.RSSI());
     String ip = "";                                    // pf4c (#77): only a verified dongle, never a screen
     const bool md = MDNS.begin("gti-remote");
     if (md && g_espnow_paired) {                       // 1. our paired dongle by its own name (it steps aside to this when a screen leads)
-      char h[24]; snprintf(h, sizeof(h), "gotekomega-%02x%02x", _xiao_mac[4], _xiao_mac[5]);
+      // A Webby wears gotekomega-<mac>, a FluxDrive fluxdrive-<mac>; it never answers to the other one.
+      char h[24]; snprintf(h, sizeof(h), "%s-%02x%02x", fdHostPrefix(g_espnow_dongle_kind), _xiao_mac[4], _xiao_mac[5]);
       IPAddress r = MDNS.queryHost(h, 2500);
       if ((uint32_t)r != 0 && homeIsDongle(r.toString())) { ip = r.toString(); Serial.printf("[HOME] %s.local -> %s\n", h, ip.c_str()); }
     }
@@ -896,42 +911,30 @@ int espnowDongleRemoveOwner(const uint8_t* mac){ return dongleCmd(0x0E, mac, 6, 
 String espnowDongleSsid(){ return _xiao_ssid; }
 bool   espnowDongleHasKey(){ return _xiao_key.length() > 0; }
 
-bool espnowFetchSave(SavePersistCb persist) {
-  if (!g_espnow_paired || !persist) return false;
-  String ip = _xiao_ip.length() ? _xiao_ip : String(DONGLE_AP_IP);
-  Serial.printf("[SAVE] Fetching dirty sectors from %s\n", ip.c_str());
-
-  ESP_NOW.end();
-  delay(100);
-  WiFi.mode(WIFI_STA);
-  delay(100);
-  WiFi.persistent(false);
-  WiFi.setAutoReconnect(false);
-  WiFi.disconnect(false, true);
-  delay(200);
-  { String ss = dongleSsid(_xiao_mac); WiFi.begin(ss.c_str(), donglePass(_xiao_mac), ESPNOW_CHANNEL, (uint8_t*)_xiao_mac); }   // lock-a: own password   // lab14s: real Wi-Fi name
-  uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) delay(200);
-  if (WiFi.status() != WL_CONNECTED) { dongleSsidForget(); Serial.println("[SAVE] WiFi join failed"); restoreEspNow(); return false; }
-
-  WiFiClient client;
+// GET_SAVE on a connection that is already open (Webby's save protocol, byte for byte; FluxDrive serves the same):
+// the escape + 0x01, the 14-byte 'SV1' header, the map, the sectors it marks, the CRC32. persist() runs before the ack;
+// the ack is 0x01 only when it returned true, 0x00 on a CRC mismatch, nothing on a short read. The caller connects and
+// stops the client: espnowFetchSave over the dongle's own access point, the panel's LAN fetch (pfFetchSave in the sketch)
+// over home Wi-Fi. True = persisted and acked. replyMs: how long the header, the map and the CRC may keep the panel
+// waiting, sectorsMs the sectors (both counted from the last byte that came); espnowFetchSave uses the defaults, 5 s and
+// 30 s (espnow_server.h), the panel's fetch before a swap a FluxDrive's busy wait (it holds every reply byte while the
+// Amiga's motor runs). drive: 1 = DF1 of a FluxDrive (fd4), anything else DF0.
+bool saveExchange(WiFiClient& client, SavePersistCb persist, uint32_t replyMs, uint32_t sectorsMs, int drive) {
+  if (!persist) return false;
   bool okAll = false;
   uint8_t* mapBuf = nullptr; uint8_t* packed = nullptr;
-  if (client.connect(ip.c_str(), DONGLE_TCP_PORT)) {
-    // No AUTH preamble, on purpose: this path joins the dongle's own AP, and a Webby dongle only
-    // gates on the shared LAN (wtokGateActive = locked && g_webmode==1, where it has no AP).
-    // Adding AUTH here would break the save of a dongle another screen has claimed. A future
-    // LAN save path (such as PR #27's GotekHome) is gated and must send AUTH first, as panel_fleet.h does.
-    uint8_t esc[5] = {0xFF,0xFF,0xFF,0xFF, 0x01};   // command escape + GET_SAVE
-    client.write(esc, 5);
+  {
+    uint8_t esc[6];   // command escape + GET_SAVE; for DF1 of a FluxDrive (fd4) GET_SAVE_DRIVE 1: the same exchange for that drive
+    const size_t escN = fdSaveFrame(drive, esc);
+    client.write(esc, escN);
     uint8_t hdr[14];
-    if (readFull(client, hdr, 14, 5000) && hdr[0]=='S' && hdr[1]=='V' && hdr[2]=='1') {
+    if (readFull(client, hdr, 14, replyMs) && hdr[0]=='S' && hdr[1]=='V' && hdr[2]=='1') {
       uint32_t loadId  = (uint32_t)hdr[4] | ((uint32_t)hdr[5]<<8) | ((uint32_t)hdr[6]<<16) | ((uint32_t)hdr[7]<<24);
       uint32_t imgSize = (uint32_t)hdr[8] | ((uint32_t)hdr[9]<<8) | ((uint32_t)hdr[10]<<16) | ((uint32_t)hdr[11]<<24);
       uint16_t mapLen  = (uint16_t)hdr[12] | ((uint16_t)hdr[13]<<8);
       if (mapLen > 0 && mapLen <= 256) {
         mapBuf = (uint8_t*)malloc(mapLen);
-        if (mapBuf && readFull(client, mapBuf, mapLen, 5000)) {
+        if (mapBuf && readFull(client, mapBuf, mapLen, replyMs)) {
           uint32_t nSec = 0;
           for (uint32_t i = 0; i < (uint32_t)mapLen*8; i++)
             if ((mapBuf[i>>3]>>(i&7))&1) nSec++;
@@ -941,10 +944,10 @@ bool espnowFetchSave(SavePersistCb persist) {
           if (nSec > 0) {
             packed = (uint8_t*)ps_malloc(nSec*512);
             if (!packed) packed = (uint8_t*)malloc(nSec*512);
-            dataOk = packed && readFull(client, packed, nSec*512, 30000);
+            dataOk = packed && readFull(client, packed, nSec*512, sectorsMs);
           }
           uint8_t crcb[4];
-          if (dataOk && readFull(client, crcb, 4, 5000)) {
+          if (dataOk && readFull(client, crcb, 4, replyMs)) {
             uint32_t crcRx = (uint32_t)crcb[0] | ((uint32_t)crcb[1]<<8) | ((uint32_t)crcb[2]<<16) | ((uint32_t)crcb[3]<<24);
             uint32_t crc = crc32sw(0, mapBuf, mapLen);
             if (nSec > 0) crc = crc32sw(crc, packed, nSec*512);
@@ -965,10 +968,40 @@ bool espnowFetchSave(SavePersistCb persist) {
         }
       }
     } else Serial.println("[SAVE] bad header");
-    client.stop();
-  } else Serial.println("[SAVE] TCP connect failed");
+  }
   if (mapBuf) free(mapBuf);
   if (packed) free(packed);
+  return okAll;
+}
+
+bool espnowFetchSave(SavePersistCb persist) {
+  if (!g_espnow_paired || !persist) return false;
+  String ip = _xiao_ip.length() ? _xiao_ip : String(DONGLE_AP_IP);
+  Serial.printf("[SAVE] Fetching dirty sectors from %s\n", ip.c_str());
+
+  ESP_NOW.end();
+  delay(100);
+  WiFi.mode(WIFI_STA);
+  delay(100);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, true);
+  delay(200);
+  { String ss = dongleSsid(_xiao_mac); WiFi.begin(ss.c_str(), donglePass(_xiao_mac), ESPNOW_CHANNEL, (uint8_t*)_xiao_mac); }   // lock-a: own password   // lab14s: real Wi-Fi name
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis()-t0 < 15000) delay(200);
+  if (WiFi.status() != WL_CONNECTED) { dongleSsidForget(); Serial.println("[SAVE] WiFi join failed"); restoreEspNow(); return false; }
+
+  WiFiClient client;
+  bool okAll = false;
+  if (client.connect(ip.c_str(), DONGLE_TCP_PORT)) {
+    // No AUTH preamble, on purpose: this path joins the dongle's own AP, and a Webby dongle only
+    // gates on the shared LAN (wtokGateActive = locked && g_webmode==1, where it has no AP).
+    // Adding AUTH here would break the save of a dongle another screen has claimed. A future
+    // LAN save path (such as PR #27's GotekHome) is gated and must send AUTH first, as panel_fleet.h does.
+    okAll = saveExchange(client, persist);
+    client.stop();
+  } else Serial.println("[SAVE] TCP connect failed");
 
   restoreEspNow();
   Serial.println("[NOW] ESP-NOW restored after save fetch");

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GTi Skin Editor — OMEGAWARE</title>
+<meta name="description" content="Make a skin for the OMEGAWARE GTi touchscreen in your browser: edit the colours and the picture, see the real screens live, download one .gts file.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap">
+<link rel="stylesheet" href="skins/editor/editor.css">
+</head>
+<body>
+<div class="copper-top"></div>
+<header>
+  <a class="back" href="index.html">‹ Back to the flasher</a>
+  <div class="eyebrow">OMEGAWARE · Gotek Touchscreen Interface</div>
+  <h1>Skin <b>Editor</b></h1>
+  <div class="tagline">Your own look for the GTi screen, in one .gts file</div>
+</header>
+
+<main>
+  <p class="intro">
+    A skin is a 256 &times; 192 picture (the <em>atlas</em>: keys, cards and the selected row), a few colours and, if you like,
+    a background photo. Paint the atlas in any program, drop it in here and watch the real screens redraw with it. Nothing is
+    uploaded: the page works on your computer only. Skins work on the JC3248 screen (the 3.5 inch GTi); the slots are explained in
+    <a href="https://github.com/mesarim/Gotek-Touchscreen-interface/blob/main/docs/skins/README.md" target="_blank" rel="noopener">the skin guide</a>.
+  </p>
+
+  <div class="layout">
+    <!-- LIVE PREVIEW -->
+    <section class="card stage" aria-labelledby="h-preview">
+      <h2 id="h-preview">Live preview <span class="hint" id="pv-size"></span></h2>
+      <div class="tabs" role="tablist" aria-label="Screen to preview" id="pv-tabs"></div>
+      <div class="canvas-wrap" id="pv-wrap">
+        <canvas id="pv" width="480" height="320" role="img" aria-label="Preview of the GTi screen with the current skin"></canvas>
+      </div>
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="Orientation">
+          <button type="button" id="o-land" aria-pressed="true">Landscape 480&times;320</button>
+          <button type="button" id="o-port" aria-pressed="false">Portrait 320&times;480</button>
+        </div>
+        <div class="seg" role="group" aria-label="Zoom">
+          <button type="button" id="z-1" aria-pressed="true">1&times;</button>
+          <button type="button" id="z-2" aria-pressed="false">2&times;</button>
+        </div>
+      </div>
+      <p class="note">The preview is drawn with the same 9-slice rules, slot positions and layout as the firmware. Sample data:
+        a FluxDrive with Xenon 2 in DF0 and DF1. Cover pictures, the reel, icons and the battery gauge are not drawn here.</p>
+    </section>
+
+    <!-- CONTROLS -->
+    <div class="controls">
+      <section class="card" aria-labelledby="h-start">
+        <h2 id="h-start"><span class="num">1</span> Start from</h2>
+        <div class="row">
+          <button type="button" class="btn" id="b-starter">NEO starter skin</button>
+          <button type="button" class="btn" id="b-open">Open .gts or atlas PNG…</button>
+          <input type="file" id="f-open" accept=".gts,.png,image/png" hidden>
+        </div>
+        <p class="note">The starter is the calm NEO look, drawn by this page exactly as the panel's Theme Editor draws it. You can also drop a
+          file anywhere on this page.</p>
+        <div class="row fields">
+          <label>Name<input type="text" id="t-name" value="MY_SKIN" maxlength="16" spellcheck="false" autocomplete="off"></label>
+          <label>Author<input type="text" id="t-author" value="" maxlength="40" autocomplete="off"></label>
+        </div>
+        <div class="msg" id="msg" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="card" aria-labelledby="h-col">
+        <h2 id="h-col"><span class="num">2</span> Colours</h2>
+        <p class="note">They colour everything the skin leaves alone. Key text uses <b>Text</b>: if you draw light keys, pick a dark text colour.</p>
+        <div class="row fields">
+          <label class="col">Fill<input type="color" id="c-fill"></label>
+          <label class="col">Highlight<input type="color" id="c-light"></label>
+          <label class="col">Shadow<input type="color" id="c-dark"></label>
+          <label class="col">Text<input type="color" id="c-text"></label>
+          <label class="col">Accent<input type="color" id="c-accent"></label>
+          <label>Preset
+            <select id="c-preset"></select></label>
+        </div>
+        <details>
+          <summary>Also stored in the file (the panel's web editor uses them; the screen does not)</summary>
+          <div class="row fields">
+            <label>Edge
+              <select id="c-bevel"><option value="raised">Raised (Amiga)</option><option value="flat">Flat border</option><option value="none">None</option></select></label>
+            <label>Edge width<input type="number" id="c-bevelw" min="0" max="6" value="1"></label>
+            <label>Corner radius<input type="number" id="c-radius" min="0" max="12" value="10"></label>
+            <label>Text size<input type="number" id="c-scale" min="1" max="4" value="2"></label>
+          </div>
+        </details>
+      </section>
+
+      <section class="card" aria-labelledby="h-atlas">
+        <h2 id="h-atlas"><span class="num">3</span> Atlas <span class="hint">256 &times; 192, RGBA</span></h2>
+        <div class="atlas-wrap"><canvas id="atlas" width="256" height="192" role="img" aria-label="The atlas picture"></canvas></div>
+        <div class="row">
+          <button type="button" class="btn" id="b-atlas">Replace atlas (PNG)…</button>
+          <input type="file" id="f-atlas" accept=".png,image/png" hidden>
+          <label class="check"><input type="checkbox" id="k-slots" checked> Show slots</label>
+          <button type="button" class="btn ghost" id="b-slotmap">Slot map PNG</button>
+        </div>
+        <ul class="slots" id="slot-list"></ul>
+      </section>
+
+      <section class="card" aria-labelledby="h-bg">
+        <h2 id="h-bg"><span class="num">4</span> Backgrounds <span class="hint">optional, JPEG, up to four</span></h2>
+        <p class="note">One picture per size. The page crops your photo to fill the size and saves it as a baseline JPEG. Without a picture
+          for the screen's size and orientation the screen repeats the TILE slot.</p>
+        <div id="bg-list" class="bglist"></div>
+      </section>
+
+      <section class="card" aria-labelledby="h-exp">
+        <h2 id="h-exp"><span class="num">5</span> Export</h2>
+        <div class="row">
+          <button type="button" class="btn primary" id="b-gts">Download .gts</button>
+          <button type="button" class="btn" id="b-png">Atlas PNG</button>
+          <button type="button" class="btn" id="b-map">Slot map PNG</button>
+        </div>
+        <div class="meter" aria-hidden="true"><i id="size-bar"></i></div>
+        <div class="note" id="size-txt"></div>
+      </section>
+    </div>
+  </div>
+
+  <section class="card install" id="install" aria-labelledby="h-inst">
+    <h2 id="h-inst">Put it on the screen</h2>
+    <p>This page cannot send the skin to your GTi: it is served over https and the GTi's own page is plain http, which a browser
+      does not allow. So you do the last step yourself, in one of two ways.</p>
+    <h3>Over Wi-Fi: the GTi's own web page</h3>
+    <ol>
+      <li>Download the <code>.gts</code> above.</li>
+      <li>Open the GTi's page: <code>http://gti-xxxx.local/panel</code> (<code>gti-xxxx</code> is your GTi's own name on the network; use the address you already use for its web page).</li>
+      <li>Go to <b>Themes</b>, open the <b>Theme Editor</b> and press <b>Import skin (PNG or .gts)</b>. Pick your <code>.gts</code>. The panel checks it first and tells you in plain words if something is wrong.</li>
+      <li>It shows up live. Activate it (<b>Save &amp; activate</b>), or pick it on the screen: Settings &rarr; Screen &rarr; Theme.</li>
+    </ol>
+    <h3>By SD card</h3>
+    <ol>
+      <li>Download the <code>.gts</code>. Keep the file name upper case, A&ndash;Z, 0&ndash;9 and <code>_</code> (the editor does that for you): <code>MY_SKIN.gts</code>.</li>
+      <li>Copy it to <code>/GTI/THEMES/</code> on the GTi's SD card (the screen creates the folder if it is missing).</li>
+      <li>Put the card back. The skin is in the list at Settings &rarr; Screen &rarr; Theme. To start with it, put <code>THEME=MY_SKIN</code> in <code>CONFIG.TXT</code>.</li>
+    </ol>
+    <p class="note">Firmware <code>A600-skin1-JC3248</code> or later; the calm screens shown here need <code>A600-calm1</code> or later. A skin cannot hurt: a slot that is empty is
+      drawn the classic way and a file that does not fit is refused. Colour themes and skins share one list of 8 custom entries. More in
+      <a href="https://github.com/mesarim/Gotek-Touchscreen-interface/blob/main/docs/skins/README.md" target="_blank" rel="noopener">the skin guide</a>.</p>
+  </section>
+</main>
+
+<footer>
+  <a href="index.html">← GTi Flasher</a> · <a href="https://github.com/mesarim/Gotek-Touchscreen-interface/blob/main/docs/skins/README.md" target="_blank" rel="noopener">Skin guide</a> · <a href="features.html">Feature list</a> · <a href="help.html">Help &amp; guides</a><br>
+  Runs in your browser only: nothing you open here leaves your computer.
+</footer>
+
+<script src="skins/editor/gts.js"></script>
+<script src="skins/editor/skin-draw.js"></script>
+<script src="skins/editor/editor.js"></script>
+</body>
+</html>
