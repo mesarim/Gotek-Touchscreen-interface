@@ -1,0 +1,9 @@
+/* House style tokens (docs/house-style.md). NEO, the default skin; a skin overrides the eleven colours (GET /api/skin). */
+:root{
+  --bg:#081021;--bar:#080C19;--card:#101831;--line:#42598C;--txt:#EFF3FF;--dim:#94A2BD;
+  --accent:#F7B231;--ok:#52D27B;--warn:#F78E31;--ins:#7BD2F7;--danger:#FF6B6B;
+  --bg-img:linear-gradient(160deg,var(--bg) 0%,color-mix(in srgb,var(--card) 60%,var(--bg)) 100%);
+  --font:Inter,system-ui,"Segoe UI",Roboto,sans-serif;
+  --fs-s:12px;--fs-m:14px;--fs-l:18px;
+  --r:10px;--g1:8px;--g2:16px;--hit:48px;
+}
