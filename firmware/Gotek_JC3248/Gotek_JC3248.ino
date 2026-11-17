@@ -50,7 +50,7 @@
 #include "diskio_sdmmc.h"  // lab14g: ff_diskio_register_sdmmc / ff_diskio_get_pdrv_card
 #include "driver/gpio.h"
 
-#define FW_VERSION "A600-lab2k-JC3248"   // A600-lab2k (Paul Dean, 23 Oct 2026): the paired dongle by name in the top bar - its 4-character ID (GotekOMEGA-XXXX), or its new name once renamed in DONGLE SETUP | A600-lab2j (Paul Dean, 23 Oct 2026): AUTO RESCAN - after SD ACCESS the library is rescanned so games copied on from the PC show up (Settings AUTO RESCAN, CONFIG.TXT AUTOSCAN=ON default; OFF keeps the old list until RESCAN SD) | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
+#define FW_VERSION "A600-lab2l-JC3248"   // A600-lab2l (Mez, 17 Nov; same as the P4 lab8 / lab6): HIVEMIND (on by default) only blocks HD over wireless when there are MuCa dongles to fan out to - with one normal dongle the hidden setting blocked HD; Settings > HIVEMIND is always shown in wireless mode (was hidden without MuCa dongles); HD disks show only the amber HD chip (the red no-A500 roundel is gone) | A600-lab2k (Paul Dean, 23 Oct 2026): the paired dongle by name in the top bar - its 4-character ID (GotekOMEGA-XXXX), or its new name once renamed in DONGLE SETUP | A600-lab2j (Paul Dean, 23 Oct 2026): AUTO RESCAN - after SD ACCESS the library is rescanned so games copied on from the PC show up (Settings AUTO RESCAN, CONFIG.TXT AUTOSCAN=ON default; OFF keeps the old list until RESCAN SD) | A600-lab2i (12 Oct 2026): DONGLE SETUP (Settings, and SETUP in SCAN DONGLES instead of the dead LOCK button) - an owner screen renames the dongle's Wi-Fi, sets its own password or back to the default, lists/removes owners, SHAREs or forgets it (Webby 1.6.13) | A600-lab2h (12 Oct 2026): dongle lock, screen side - SCAN only discovers (no longer enrols this screen in every open dongle), USE is a real pairing handshake (paired only when the dongle answers), the dongle's own AP password + SSID from Webby 1.6.13 are stored (XIAO_KEY/XIAO_SSID) and used, "locked to another screen" when a dongle refuses | A600-lab2g (9 Oct 2026): S13 load-failure messages stay up (3 s minimum, then until tapped, max 10 s) | A600-lab2f (9 Oct 2026): S12 an HD insert blocked only by HIVEMIND=ON says so | A600-lab2e (9 Oct 2026): S11 the dongle's HD capability is remembered (XIAO_HD=) so HD flings work after a reboot | A600-lab2d (9 Oct 2026): S10 a wireless load whose SD read comes up short fails instead of sending stale data | A600-lab2c (9 Oct 2026): S9 web firmware upload via the SD card, installed locally | A600-lab2b (8 Oct 2026): RC1 + review fixes S1-S6, S8 (rescan GENERIC, failed load re-attaches, accented names, ESP-NOW restart on TCP fail, aborted upload/OTA, safe CONFIG.TXT writer) + web P2 (/api/wifi/scan) and P6 (failed upload shown as failed) | A600-lab2 (7 Oct 2026): release candidate = main 5dc518a + NEO and screenshots (preview-neo-shot) + one THEME section and the web Theme Editor (gti-themes) + CRACKTRO style page + custom .gti cracktros + GTi-XXXX mDNS and the home-WiFi dongle checks (panel-fleet-a600 pf4d) + size-trim + Webby 1.6.11 support | one version for this board, with or without the club layer | was A600-theme1 / A600-lab1-crk1 / A600-lab1-pf4d
 
 // -- GTI_FLEET: the club-day layer -- owner tokens, claim/enrol, the election, mDNS
 // contention, orphan release and the fleet routes. OFF by default per #24: a normal
@@ -4104,7 +4104,7 @@ static void drawSaveFloppy(int x,int y){
   gfx_fillRect(x+3,y+8,8,4,TFT_WHITE);          // label
 }
 
-// v4.9: HD (1.76MB) disk indicators. Amber "HD" chip + a "no A500" roundel — an
+// v4.9: HD (1.76MB) disk indicators. Amber "HD" chip (A600-lab2l: the "no A500" roundel was dropped) — an
 // A500 has no HD drive, so it can't read these. isHDImage flags anything over
 // ~1.2MB; extended-DD disks (~900-960KB) stay DD and get no badge (A500 reads them).
 static bool isHDImage(const String&path){String vfs="/sdcard"+path;struct stat st;if(stat(vfs.c_str(),&st)!=0)return false;return (uint32_t)st.st_size>HD_FLAG_BYTES;}
@@ -4115,12 +4115,6 @@ static void drawBookIcon(int cx,int cy,uint16_t col){   // open-book glyph (6x8 
   gfx_hline(cx-6,cy-2,4,col);gfx_hline(cx+3,cy-2,4,col);   // page-text lines, both leaves
   gfx_hline(cx-6,cy+1,4,col);gfx_hline(cx+3,cy+1,4,col);
   gfx_hline(cx-6,cy+4,4,col);gfx_hline(cx+3,cy+4,4,col);
-}
-static void drawNoA500(int cx,int cy,int r,uint16_t ring){
-  gfx_fillCircle(cx,cy,r-1,COL_BG);                         // dark backing so it reads on any cover art
-  gfx_drawCircle(cx,cy,r,ring);gfx_drawCircle(cx,cy,r-1,ring);
-  int d=(r*7)/10;for(int t=-d;t<=d;t++)gfx_fillRect(cx+t-1,cy+t-1,2,2,ring);   // TL->BR slash (no line primitive -> stepped)
-  if(r>=20){gfx_setTextSize(1);gfx_setTextColor(COL_LIT,COL_BG);int tw=gfx_textWidth("A500");gfx_setCursor(cx-tw/2,cy-3);gfx_print("A500");}
 }
 
 // v4.8.2: type-to-search. A little magnifier sits atop the A-Z rail (above # / A);
@@ -4185,7 +4179,7 @@ static void drawCoverPanel(){
    if(!_drew){char ib[2]={(char)toupper(game.name.charAt(0)),0};gfx_setTextSize(2);gfx_setTextColor(COL_LIT,COL_BAR);gfx_setCursor(COVER_ART_X+COVER_ART_W/2-6,COVER_ART_Y+COVER_ART_H/2-8);gfx_print(ib);}}
   // v4.8.0: floppy icon — this game has a save-copy (INSERT will boot the save)
   if(cachedHasSav)drawSaveFloppy(ax+3,ay+3);                     // lab15l: markers follow the (possibly smaller) frame
-  if(cachedHD){drawHDChip(ax+aw-23,ay+3);drawNoA500(ax+15,ay+ah-15,13,TFT_RED);}   // v4.9 HD markers
+  if(cachedHD){drawHDChip(ax+aw-23,ay+3);}   // v4.9 HD marker; A600-lab2l: HD chip only (the red no-A500 roundel is gone)
   if(cachedManual.length()){   // v4.9.2: book button, bottom-right of the cover art — only when a .rtfm exists
     g_manual_bw=26;g_manual_bh=22;g_manual_bx=ax+3;g_manual_by=ay+(ah-g_manual_bh)/2;g_manual_path=cachedManual;   // v4.9.3: bigger + left edge, clear of the fav/HD corners
     gfx_fillRoundRect(g_manual_bx,g_manual_by,g_manual_bw,g_manual_bh,3,COL_ACCENT);gfx_drawRoundRect(g_manual_bx,g_manual_by,g_manual_bw,g_manual_bh,3,COL_AMBER);
@@ -4307,8 +4301,7 @@ static void drawInfoPanel(){
     // lab15p: the GTi's own Wi-Fi - name / password and where the web page is (read-only rows)
     add(String("WIFI ")+espnowApName()+" / "+espnowApPass(), COL_BAR, COL_LIT, IA_NONE);
     add("WEB PAGE: 192.168.4.1", COL_BAR, COL_LIT, IA_NONE);
-    uint8_t mm[64][6]; int mcN=enumMuCaDongles(mm,g_dongle_cap);
-    if(mcN>0) add(String(T(L_CFG_HIVEMIND))+": "+(g_hivemind?T(L_ON):T(L_OFF)), g_hivemind?COL_ACCENT:COL_BAR, g_hivemind?TFT_WHITE:COL_LIT, IA_HIVEMIND);
+    add(String(T(L_CFG_HIVEMIND))+": "+(g_hivemind?T(L_ON):T(L_OFF)), g_hivemind?COL_ACCENT:COL_BAR, g_hivemind?TFT_WHITE:COL_LIT, IA_HIVEMIND);   // A600-lab2l: always shown in wireless mode (was only with MuCa dongles listed - a hidden setting that still blocked HD)
   }
   if(webModePossible()){    // #standalone: home router, web UI and SD access - in STANDALONE as well as WiFi mode
     add(String(T(L_HOME_WIFI))+": "+(g_home_ssid.length()?g_home_ssid:String(T(L_SET_UP))), COL_ACCENT, TFT_WHITE, IA_HOMEWIFI);
@@ -5788,12 +5781,18 @@ static bool doLoadSelected(const String&adfPath){
   // dongles (board 0) still can't hold it, so they stay blocked. Multicast/
   // Hivemind stays blocked too (a mixed fleet may include a DD dongle).
   // Standalone HD load (cable) is unaffected either way.
-  bool hdDongleReady = espnowIsPaired() && g_espnow_dongle_board==1 && !g_hivemind;
+  // A600-lab2l: the fan-out list is read up here (was further down, same call) so the HD rule can use it: HD is blocked
+  // for a Hivemind fan-out only when there IS a fan-out (MuCa dongles listed). HIVEMIND defaults to ON and its Settings
+  // button was hidden without MuCa dongles, so with one normal dongle it blocked HD from a setting nobody could see.
+  uint8_t mcMacs[64][6]; int mcN=0; String wlTag="";
+  if(g_wireless_mode&&g_espnow_started) mcN=enumMuCaDongles(mcMacs,g_dongle_cap);
+  bool hdFanOut = (mcN>0 && g_hivemind);
+  bool hdDongleReady = espnowIsPaired() && g_espnow_dongle_board==1 && !hdFanOut;
   if(g_wireless_mode && !g_link_home && g_mode==MODE_ADF && isHDImage(adfPath) && !hdDongleReady){   // ESP-NOW only: the LAN path checks the peer's own hd flag
     gfx_fillRect(0,STATUS_H,COVER_W,VH-STATUS_H-BOTTOM_H,COL_PANEL);
     gfx_setTextSize(1);gfx_setTextColor(0xE8C4,COL_PANEL);gfx_setCursor(6,STATUS_H+16);gfx_print(T(L_HD_NO_WIRELESS));
     gfx_setTextColor(COL_LIT,COL_PANEL);
-    if(g_hivemind && espnowIsPaired() && g_espnow_dongle_board==1){   // S12: the dongle CAN take HD - HIVEMIND is what blocks it
+    if(hdFanOut && espnowIsPaired() && g_espnow_dongle_board==1){   // S12: the dongle CAN take HD - HIVEMIND is what blocks it (A600-lab2l: only a real fan-out)
       gfx_setCursor(6,STATUS_H+30);gfx_print("HD needs HIVEMIND off");
       gfx_setCursor(6,STATUS_H+42);gfx_print("(Settings > HIVEMIND)");
     } else {
@@ -5812,9 +5811,7 @@ static bool doLoadSelected(const String&adfPath){
   if(g_saves_mode==1&&savExistsFor(adfPath))loadPath=savPathFor(adfPath);
   // lab15i: going to ONE dongle (not a Hivemind fan-out)? Then that dongle gets its OWN save if it has one
   // (Game.sav.XXXX.adf); if not, the cable save / the image as before - its first save starts from that.
-  uint8_t mcMacs[64][6]; int mcN=0; String wlTag="";
-  if(g_wireless_mode&&g_espnow_started){
-    mcN=enumMuCaDongles(mcMacs,g_dongle_cap);                   // (was read further down; same call, moved up)
+  if(g_wireless_mode&&g_espnow_started){                         // (mcN / mcMacs read above, A600-lab2l)
     bool fanOut=(mcN>0&&g_hivemind);
     if(!fanOut&&g_saves_mode!=0){
       wlTag=dongleSavTag();
